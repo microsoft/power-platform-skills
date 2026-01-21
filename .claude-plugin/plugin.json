@@ -19,6 +19,10 @@
     "vue",
     "astro",
     "pac-cli",
-    "dataverse"
+    "dataverse",
+    "odata",
+    "web-api",
+    "tables",
+    "schema"
   ]
 }

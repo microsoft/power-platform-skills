@@ -9,6 +9,26 @@ model: opus
 
 This skill guides makers through creating a complete Power Pages code site (Single Page Application) from scratch, deploying it to Power Pages, and activating it for public access.
 
+## Memory Bank
+
+This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions. See `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md` for full documentation.
+
+### Before Starting
+
+**IMPORTANT**: Check if a memory bank exists before proceeding:
+
+1. If the user has specified a project path, check for `<PROJECT_PATH>/memory-bank.md`
+2. If found, read it to understand:
+   - What steps have already been completed
+   - What user preferences were chosen (framework, style, features)
+   - What the current status is
+3. **Skip completed steps** and resume from where the user left off
+4. Inform the user: "I found your previous session. You completed [X]. Let's continue from [Y]."
+
+### After Each Step
+
+Update the memory bank after completing each major step. This ensures progress is saved even if the session ends unexpectedly.
+
 ## Workflow Overview
 
 ```text
@@ -164,6 +184,60 @@ npm run build
 # Astro
 npm run build
 ```
+
+### Initialize Memory Bank
+
+After the site is created, create `memory-bank.md` in the project root:
+
+```markdown
+# Power Pages Project Memory Bank
+
+> Last Updated: [CURRENT_TIMESTAMP]
+
+## Project Overview
+
+| Property | Value |
+|----------|-------|
+| Project Name | [SITE_NAME from powerpages.config.json] |
+| Project Path | [FULL_PROJECT_PATH] |
+| Framework | [CHOSEN_FRAMEWORK] |
+| Created Date | [CURRENT_DATE] |
+| Status | Site Created |
+
+## User Preferences
+
+### Design Preferences
+- Style: [USER'S STYLE CHOICE]
+- Color Scheme: [USER'S COLOR CHOICE]
+- Special Requirements: [ANY SPECIAL REQUIREMENTS]
+
+### Site Features
+[LIST ALL FEATURES USER REQUESTED]
+
+## Completed Steps
+
+### /create-site
+- [x] Requirements gathered
+- [x] Framework selected: [FRAMEWORK]
+- [x] Site created with features: [FEATURE_LIST]
+- [x] powerpages.config.json created
+- [x] Project built successfully
+- [ ] Prerequisites verified (PAC CLI, Azure CLI)
+- [ ] Uploaded to Power Pages
+- [ ] Site activated
+
+## Current Status
+
+**Last Action**: Site created and built successfully
+
+**Next Step**: Verify prerequisites (PAC CLI, Azure CLI) then upload to Power Pages
+
+## Notes
+
+- [CURRENT_DATE]: Project initialized with [FRAMEWORK] framework
+```
+
+**IMPORTANT**: Update this file after each subsequent step is completed.
 
 ---
 
@@ -337,28 +411,56 @@ Your site should now show as **Active** with a URL.
 
 **Reference**: [Reactivate a website - Microsoft Learn](https://learn.microsoft.com/en-us/power-pages/admin/reactivate-website)
 
+### Update Memory Bank
+
+After activation, update `memory-bank.md`:
+
+1. Mark all `/create-site` steps as complete `[x]`
+2. Add the Website ID and Site URL
+3. Update status to "Site Activated"
+4. Set next step to "Setup Dataverse Tables"
+
+```markdown
+### /create-site
+- [x] Requirements gathered
+- [x] Framework selected: [FRAMEWORK]
+- [x] Site created with features: [FEATURE_LIST]
+- [x] powerpages.config.json created
+- [x] Project built successfully
+- [x] Prerequisites verified (PAC CLI, Azure CLI)
+- [x] Uploaded to Power Pages (Inactive)
+- [x] Site activated
+- Website ID: [GUID_FROM_PAC_PAGES_LIST]
+- Site URL: [URL_FROM_ACTIVATION]
+
+## Current Status
+
+**Last Action**: Site activated successfully
+
+**Next Step**: Run `/setup-dataverse` to create Dataverse tables for your site
+```
+
 ---
 
 ## Next Steps
 
 After the site is active, suggest the maker proceed with:
 
-### Web API Integration
+### Setup Dataverse Tables
 
-> **Recommended Next Step**: Implement Web API to connect your site to Dataverse data.
+> **Recommended Next Step**: Set up Dataverse tables to store and manage your site's data.
 >
 > This will allow your site to:
 >
-> - Read and display data from Dataverse tables
-> - Create, update, and delete records
-> - Implement user-specific data views
+> - Store contact form submissions, user feedback, and other data
+> - Display dynamic content from Dataverse (products, team members, testimonials)
+> - Create, update, and delete records via Web API
 >
-> Use the **configure-web-api** skill to set this up.
+> Run `/setup-dataverse` or type "Set up Dataverse tables for my site" to continue.
 
 ### Additional Enhancements
 
 - **Authentication**: Set up Microsoft Entra ID for user sign-in
-- **Table Permissions**: Configure entity permissions for data access
 - **Custom styling**: Further refine the design
 - **Performance optimization**: Enable caching and CDN
 
