@@ -87,7 +87,12 @@ Update the memory bank after:
 - [x] Integration approach chosen: [MCP/OData]
 - [x] Tables created: [LIST]
 - [x] Sample data inserted
+
+### /setup-webapi
+- [x] Site settings created for Web API
 - [x] Table permissions configured
+- [x] Frontend code updated
+- [x] Project built and uploaded
 
 ## Created Resources
 
@@ -103,7 +108,7 @@ Update the memory bank after:
 | Setting | Value |
 |---------|-------|
 | Webapi/cr_product/enabled | true |
-| Webapi/cr_product/fields | * |
+| Webapi/cr_product/fields | cr_name,cr_description,cr_price,cr_category |
 
 ## Current Status
 
@@ -127,9 +132,10 @@ Update the memory bank after:
 
 To continue working on this project:
 
-1. **Setup Dataverse Tables**: `/setup-dataverse`
-2. **Update Site**: `/create-site` (will recognize existing project)
-3. **Manual**: Navigate to [PROJECT_PATH] and continue development
+1. **Create Site**: `/create-site` (creates new site or updates existing)
+2. **Setup Dataverse Tables**: `/setup-dataverse` (creates tables and sample data)
+3. **Setup Web API**: `/setup-webapi` (enables Web API access and updates frontend)
+4. **Manual**: Navigate to [PROJECT_PATH] and continue development
 ```
 
 ## Reading the Memory Bank
