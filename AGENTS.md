@@ -1,6 +1,6 @@
-# Power Pages Claude Plugin - Development Guidelines
+# Power Platform Claude Plugins - Development Guidelines
 
-This file provides instructions for Claude Code when working on this plugin.
+This file provides instructions for Claude Code when working on this plugin marketplace.
 
 ## Official Documentation
 
@@ -9,20 +9,31 @@ This file provides instructions for Claude Code when working on this plugin.
 - **Skills**: https://code.claude.com/docs/en/skills
 - **Plugins Reference**: https://code.claude.com/docs/en/plugins-reference
 
-## Project Structure
+## Repository Structure
+
+This repository is a **plugin marketplace** containing multiple plugins:
 
 ```
-power-pages-claude-plugin/
+power-platform-claude-plugin/
 ├── .claude-plugin/
-│   └── plugin.json         # Plugin manifest (only file in this folder)
-├── agents/                  # Agent persona files
-├── commands/                # Command entry points
-├── skills/                  # Skill workflows (SKILL.md in subdirectories)
-├── shared/                  # Shared resources and documentation
-└── AGENTS.md               # Architecture documentation
+│   └── marketplace.json      # Marketplace manifest (lists all available plugins)
+├── plugins/                  # Directory containing individual plugins
+│   └── power-pages/          # Power Pages plugin
+│       ├── .claude-plugin/
+│       │   └── plugin.json   # Plugin manifest
+│       ├── .mcp.json         # MCP server configuration
+│       ├── agents/           # Agent persona files
+│       ├── commands/         # Command entry points
+│       ├── shared/           # Shared resources and documentation
+│       └── skills/           # Skill workflows (SKILL.md in subdirectories)
+├── AGENTS.md                 # Development guidelines
+└── README.md                 # Repository overview
 ```
 
-**Important**: Components must be at plugin root, not inside `.claude-plugin/`. Only `plugin.json` belongs in `.claude-plugin/`.
+**Important**:
+- The root `.claude-plugin/marketplace.json` defines the marketplace and lists available plugins
+- Each plugin in `plugins/` has its own `.claude-plugin/plugin.json` manifest
+- Plugin components (agents, commands, skills, shared) must be at the plugin root, not inside `.claude-plugin/`
 
 ## When Modifying Skills
 
@@ -70,9 +81,9 @@ Use these in skills, hooks, and scripts:
 
 ## Memory Bank System
 
-This plugin uses a memory bank (`memory-bank.md`) to persist state across sessions.
+Plugins use a memory bank (`memory-bank.md`) to persist state across sessions.
 
-- See `shared/memory-bank.md` for documentation
+- Each plugin has its own memory bank at `plugins/<plugin-name>/shared/memory-bank.md`
 - Skills should read memory bank at start
 - Skills should update memory bank after major steps
 
@@ -92,11 +103,12 @@ After modifying plugin files:
 2. Test skill invocation with `/skill-name`
 3. Verify tool restrictions work as expected
 
-## Architecture Documentation
+## Adding a New Plugin
 
-See `AGENTS.md` for comprehensive architecture documentation including:
+To add a new plugin to this marketplace:
 
-- Component relationships
-- Workflow diagrams
-- Extension guide
-- Full frontmatter reference
+1. Create a new directory under `plugins/` (e.g., `plugins/power-apps`)
+2. Add `.claude-plugin/plugin.json` with required manifest fields
+3. Add components: `agents/`, `commands/`, `skills/`, `shared/`
+4. Update `marketplace.json` at root to include the new plugin
+5. Update `README.md` to document the new plugin
