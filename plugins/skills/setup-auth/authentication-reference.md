@@ -819,6 +819,63 @@ export { getCurrentUser, isAuthenticated, login, logout };
 window.PowerPagesAuth = { getCurrentUser, isAuthenticated, login, logout };
 ```
 
+## Site Settings
+
+When implementing authentication, configure these site settings in Power Pages to customize the login behavior.
+
+### Disable Profile Page Redirect
+
+**IMPORTANT**: By default, Power Pages redirects users to the built-in profile page (`/profile`) after login. For code sites (SPAs), you should disable this so users are redirected to your app's home page instead.
+
+| Setting Name | Value | Description |
+|--------------|-------|-------------|
+| `Authentication/Registration/ProfileRedirectEnabled` | `false` | Disables redirect to profile page after login |
+
+#### How to Configure
+
+1. **Via Power Pages Admin Center**:
+   - Go to **Set up** > **Site Settings**
+   - Click **+ New setting**
+   - Name: `Authentication/Registration/ProfileRedirectEnabled`
+   - Value: `false`
+   - Click **Save**
+
+2. **Via PAC CLI**:
+   ```powershell
+   # Create site setting using PAC CLI
+   pac paportal download --path ./portal-data --modelVersion 2
+   # Add the setting to the site settings file and upload
+   pac paportal upload --path ./portal-data
+   ```
+
+3. **Via Dataverse Web API**:
+   ```typescript
+   // Create site setting record
+   await fetch(`${dataverseUrl}/api/data/v9.2/adx_sitesettings`, {
+     method: 'POST',
+     headers: {
+       'Content-Type': 'application/json',
+       'Authorization': `Bearer ${accessToken}`
+     },
+     body: JSON.stringify({
+       'adx_name': 'Authentication/Registration/ProfileRedirectEnabled',
+       'adx_value': 'false',
+       'adx_websiteid@odata.bind': `/adx_websites(${websiteId})`
+     })
+   });
+   ```
+
+> **Note**: After setting this, users will be redirected to the `returnUrl` specified in the login form (see `login()` function in the Authentication Service section above), which defaults to the current page or home page.
+
+### Other Useful Authentication Settings
+
+| Setting Name | Value | Description |
+|--------------|-------|-------------|
+| `Authentication/Registration/Enabled` | `true` | Enable/disable registration |
+| `Authentication/Registration/OpenRegistrationEnabled` | `true`/`false` | Allow open registration |
+| `Authentication/Registration/InvitationEnabled` | `true`/`false` | Require invitation for registration |
+| `Authentication/Registration/LocalLoginEnabled` | `true`/`false` | Enable local account login |
+
 ## Important Notes
 
 ### Local Development

@@ -320,6 +320,16 @@ Then run `pac auth list` again to verify and ask for confirmation again.
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 ```
 
+### Configure Site Settings
+
+**IMPORTANT**: Configure the following site setting to ensure users are redirected to your app's home page after login (instead of Power Pages' default profile page):
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `Authentication/Registration/ProfileRedirectEnabled` | `false` | Redirect to home page instead of profile page after login |
+
+**📖 See [authentication-reference.md](./authentication-reference.md#site-settings)** for detailed instructions on how to configure this setting via Power Pages Admin Center, PAC CLI, or Dataverse Web API.
+
 ### Verify Authentication
 
 1. Open the site in a browser
