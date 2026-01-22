@@ -58,18 +58,28 @@ This skill uses a **memory bank** (`memory-bank.md`) to persist context across s
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  STEP 5: Create Tables in Dependency Order                                  │
+│  STEP 5: Review Existing Tables & Identify Reusable Tables                  │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Create reference/lookup tables first (no dependencies)                   │
-│  • Create intermediate tables next (only reference lookup tables)           │
-│  • Create dependent tables last (reference other custom tables)             │
+│  • Query all existing custom tables in the environment                      │
+│  • Compare existing tables against recommended schema                       │
+│  • Identify tables that can be reused (matching or similar schema)          │
+│  • Present options: reuse existing, extend existing, or create new          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 6: Create/Extend Tables in Dependency Order                           │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  • Skip tables marked for reuse                                             │
+│  • Extend existing tables with missing columns if needed                    │
+│  • Create only new tables that don't exist                                  │
 │  • Add relationship columns (lookups) after both tables exist               │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  STEP 6: Add Sample Data with Referential Integrity                         │
+│  STEP 7: Add Sample Data with Referential Integrity                         │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Insert reference/lookup data first                                       │
+│  • Check for existing data in reused tables                                 │
+│  • Insert reference/lookup data first (skip if exists)                      │
 │  • Insert dependent records with valid foreign keys                         │
 │  • Verify relationships are correctly established                           │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -458,37 +468,438 @@ az login
 
 ---
 
-## STEP 5: Create Tables in Dependency Order
+## STEP 5: Review Existing Tables & Identify Reusable Tables
 
-**CRITICAL**: Create tables in the correct order based on the dependency graph from STEP 3. This ensures that lookup targets exist before creating lookup columns.
+**CRITICAL**: Before creating any tables, you MUST review existing tables in the Dataverse environment. This prevents duplicate tables, leverages existing schema, and follows best practices for enterprise data management.
 
-### Creation Order Protocol
+### Query Existing Custom Tables
+
+Use the Dataverse Web API to retrieve all existing custom tables:
+
+```powershell
+# Get all custom tables (entities) in the environment
+# Custom tables typically have a publisher prefix (e.g., cr_, new_, contoso_)
+
+$existingTables = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions?`$filter=IsCustomEntity eq true&`$select=SchemaName,LogicalName,DisplayName,Description,PrimaryNameAttribute" -Headers $headers
+
+Write-Host "Found $($existingTables.value.Count) custom tables in the environment:" -ForegroundColor Cyan
+$existingTables.value | ForEach-Object {
+    $displayName = $_.DisplayName.UserLocalizedLabel.Label
+    Write-Host "  - $($_.SchemaName) ($displayName)" -ForegroundColor Yellow
+}
+```
+
+### Get Table Details with Columns
+
+For each potentially reusable table, retrieve its columns to compare against your schema:
+
+```powershell
+function Get-TableSchema {
+    param([string]$TableLogicalName)
+
+    # Get table metadata with attributes
+    $tableInfo = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$TableLogicalName')?`$expand=Attributes(`$select=SchemaName,LogicalName,AttributeType,DisplayName,MaxLength)" -Headers $headers
+
+    Write-Host "`nTable: $($tableInfo.SchemaName)" -ForegroundColor Cyan
+    Write-Host "Display Name: $($tableInfo.DisplayName.UserLocalizedLabel.Label)"
+    Write-Host "Primary Column: $($tableInfo.PrimaryNameAttribute)"
+    Write-Host "Columns:" -ForegroundColor Yellow
+
+    $tableInfo.Attributes | Where-Object {
+        # Filter out system columns
+        $_.SchemaName -notmatch '^(Created|Modified|Owner|State|Status|Version|Import|Overridden|TimeZone|UTCConversion|Traversed)'
+    } | ForEach-Object {
+        $displayName = if ($_.DisplayName.UserLocalizedLabel) { $_.DisplayName.UserLocalizedLabel.Label } else { $_.SchemaName }
+        Write-Host "    - $($_.SchemaName) ($($_.AttributeType)) - $displayName"
+    }
+
+    return $tableInfo
+}
+
+# Example: Check if a category table already exists
+$existingCategory = Get-TableSchema -TableLogicalName "cr_category"
+```
+
+### Compare Existing vs Required Tables
+
+Build a comparison matrix to identify reusable tables:
+
+```powershell
+function Compare-TableSchemas {
+    param(
+        [hashtable]$RequiredTables,  # Schema name -> array of required columns
+        [array]$ExistingTables       # From EntityDefinitions query
+    )
+
+    $comparison = @{
+        Reusable = @()      # Existing tables that match or exceed requirements
+        Extendable = @()    # Existing tables that need additional columns
+        CreateNew = @()     # Tables that don't exist and must be created
+    }
+
+    foreach ($tableName in $RequiredTables.Keys) {
+        $existing = $ExistingTables | Where-Object { $_.SchemaName -eq $tableName -or $_.LogicalName -eq $tableName }
+
+        if ($existing) {
+            # Table exists - check if it has all required columns
+            $tableSchema = Get-TableSchema -TableLogicalName $existing.LogicalName
+            $existingColumns = $tableSchema.Attributes | Select-Object -ExpandProperty SchemaName
+            $requiredColumns = $RequiredTables[$tableName]
+
+            $missingColumns = $requiredColumns | Where-Object { $_ -notin $existingColumns }
+
+            if ($missingColumns.Count -eq 0) {
+                $comparison.Reusable += @{
+                    TableName = $tableName
+                    ExistingTable = $existing
+                    Message = "All required columns present"
+                }
+            } else {
+                $comparison.Extendable += @{
+                    TableName = $tableName
+                    ExistingTable = $existing
+                    MissingColumns = $missingColumns
+                    Message = "Missing columns: $($missingColumns -join ', ')"
+                }
+            }
+        } else {
+            $comparison.CreateNew += @{
+                TableName = $tableName
+                RequiredColumns = $RequiredTables[$tableName]
+            }
+        }
+    }
+
+    return $comparison
+}
+
+# Example usage
+$requiredTables = @{
+    "cr_category" = @("cr_name", "cr_description", "cr_displayorder", "cr_isactive")
+    "cr_product" = @("cr_name", "cr_description", "cr_price", "cr_imageurl", "cr_categoryid")
+    "cr_contactsubmission" = @("cr_name", "cr_email", "cr_message", "cr_submissiondate")
+}
+
+$comparison = Compare-TableSchemas -RequiredTables $requiredTables -ExistingTables $existingTables.value
+```
+
+### Present Reuse Options
+
+After comparing schemas, present the findings to the user:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  TABLE CREATION PROTOCOL                                                    │
+│  EXISTING TABLE ANALYSIS                                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  PHASE 1: Create all tables (structure only, no relationships)              │
+│  ✅ REUSABLE (no changes needed):                                           │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Create TIER 0 tables first (reference/lookup tables)                     │
-│  • Create TIER 1 tables next                                                │
-│  • Continue through all tiers                                               │
-│  • Only create primary columns in this phase                                │
+│  • cr_category - Has all required columns                                   │
+│  • cr_status - Has all required columns                                     │
 │                                                                             │
-│  PHASE 2: Add non-lookup columns to all tables                              │
+│  🔧 EXTENDABLE (need additional columns):                                   │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Add string, number, date, boolean columns                                │
-│  • Add choice/picklist columns                                              │
-│  • These can be done in any order                                           │
+│  • cr_product - Missing: cr_imageurl, cr_isactive                           │
+│  • cr_teammember - Missing: cr_linkedin, cr_displayorder                    │
 │                                                                             │
-│  PHASE 3: Create relationships (lookup columns)                             │
+│  🆕 CREATE NEW (don't exist):                                               │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Now that all tables exist, create the lookup relationships               │
-│  • Order matters: create lookups to TIER 0 first, then TIER 1, etc.         │
-│  • This creates the actual foreign key references                           │
+│  • cr_testimonial                                                           │
+│  • cr_contactsubmission                                                     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Use `AskUserQuestion` to confirm the approach:
+
+> **Existing Tables Found**
+>
+> I found existing tables that may be reused. Here's my recommendation:
+>
+> **Reuse as-is:** cr_category, cr_status
+> **Extend with new columns:** cr_product (needs: cr_imageurl, cr_isactive)
+> **Create new:** cr_testimonial, cr_contactsubmission
+>
+> How would you like to proceed?
+
+| Option | Description |
+|--------|-------------|
+| **Use recommendations** | Reuse existing tables, extend where needed, create only new tables |
+| **Create all new** | Create new tables with unique names (e.g., cr_site_category) |
+| **Review each table** | Let me decide for each table individually |
+
+### Check for Similar Tables
+
+Sometimes tables exist with different names but similar purposes. Search for these:
+
+```powershell
+function Find-SimilarTables {
+    param(
+        [string]$Purpose,  # e.g., "category", "product", "contact"
+        [array]$ExistingTables
+    )
+
+    # Common naming patterns to search for
+    $patterns = @{
+        "category" = @("category", "categories", "type", "types", "classification")
+        "product" = @("product", "products", "item", "items", "service", "services", "offering")
+        "contact" = @("contact", "contacts", "submission", "inquiry", "lead", "leads")
+        "team" = @("team", "employee", "staff", "member", "person", "people")
+        "testimonial" = @("testimonial", "review", "feedback", "rating")
+    }
+
+    $searchTerms = $patterns[$Purpose]
+    if (-not $searchTerms) { $searchTerms = @($Purpose) }
+
+    $matches = $ExistingTables | Where-Object {
+        $tableName = $_.SchemaName.ToLower()
+        $displayName = $_.DisplayName.UserLocalizedLabel.Label.ToLower()
+
+        foreach ($term in $searchTerms) {
+            if ($tableName -match $term -or $displayName -match $term) {
+                return $true
+            }
+        }
+        return $false
+    }
+
+    return $matches
+}
+
+# Example: Find tables that might serve as category tables
+$similarCategories = Find-SimilarTables -Purpose "category" -ExistingTables $existingTables.value
+if ($similarCategories) {
+    Write-Host "Found similar tables that could be used for categories:" -ForegroundColor Yellow
+    $similarCategories | ForEach-Object {
+        Write-Host "  - $($_.SchemaName): $($_.DisplayName.UserLocalizedLabel.Label)"
+    }
+}
+```
+
+### Check Existing Relationships
+
+When reusing tables, verify existing relationships don't conflict:
+
+```powershell
+function Get-TableRelationships {
+    param([string]$TableLogicalName)
+
+    # Get 1:N relationships where this table is referenced
+    $oneToMany = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$TableLogicalName')/OneToManyRelationships" -Headers $headers
+
+    # Get N:1 relationships where this table references others
+    $manyToOne = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$TableLogicalName')/ManyToOneRelationships" -Headers $headers
+
+    Write-Host "`nRelationships for $TableLogicalName:" -ForegroundColor Cyan
+
+    Write-Host "  Referenced by (1:N):" -ForegroundColor Yellow
+    $oneToMany.value | ForEach-Object {
+        Write-Host "    - $($_.ReferencingEntity).$($_.ReferencingAttribute)"
+    }
+
+    Write-Host "  References (N:1):" -ForegroundColor Yellow
+    $manyToOne.value | ForEach-Object {
+        Write-Host "    - $($_.ReferencedEntity) via $($_.ReferencingAttribute)"
+    }
+
+    return @{
+        OneToMany = $oneToMany.value
+        ManyToOne = $manyToOne.value
+    }
+}
+```
+
+### Update Memory Bank with Reuse Decisions
+
+Document which tables are being reused vs created:
+
+```markdown
+### Table Decisions
+
+| Required Table | Decision | Existing Table | Notes |
+|----------------|----------|----------------|-------|
+| cr_category | REUSE | cr_category | All columns present |
+| cr_product | EXTEND | cr_product | Adding cr_imageurl, cr_isactive |
+| cr_testimonial | CREATE | - | New table |
+| cr_contactsubmission | REUSE | cr_inquiry | Renaming to match site usage |
+```
+
+---
+
+## STEP 6: Create/Extend Tables in Dependency Order
+
+**CRITICAL**: Based on the analysis from STEP 5, create only new tables and extend existing tables as needed. Tables marked for reuse should be skipped.
+
+### Creation/Extension Protocol
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  TABLE CREATION/EXTENSION PROTOCOL                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  PHASE 1: Process tables based on STEP 5 decisions                          │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  • REUSABLE tables: Skip creation, use existing table                       │
+│  • EXTENDABLE tables: Add missing columns to existing table                 │
+│  • CREATE NEW tables: Create in dependency order (TIER 0 → TIER 1 → ...)    │
+│                                                                             │
+│  PHASE 2: Add non-lookup columns                                            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  • For NEW tables: Add all required columns                                 │
+│  • For EXTENDED tables: Add only missing columns                            │
+│  • Skip columns that already exist                                          │
+│                                                                             │
+│  PHASE 3: Create/verify relationships (lookup columns)                      │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  • Check if relationship already exists before creating                     │
+│  • Create only missing relationships                                        │
+│  • Verify existing relationships point to correct tables                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Helper Function: Check If Table Exists
+
+```powershell
+function Test-TableExists {
+    param([string]$TableLogicalName)
+
+    try {
+        $result = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$TableLogicalName')?`$select=LogicalName" -Headers $headers -ErrorAction Stop
+        return $true
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 404) {
+            return $false
+        }
+        throw
+    }
+}
+
+function Test-ColumnExists {
+    param(
+        [string]$TableLogicalName,
+        [string]$ColumnLogicalName
+    )
+
+    try {
+        $result = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$TableLogicalName')/Attributes(LogicalName='$ColumnLogicalName')?`$select=LogicalName" -Headers $headers -ErrorAction Stop
+        return $true
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 404) {
+            return $false
+        }
+        throw
+    }
+}
+
+function Test-RelationshipExists {
+    param([string]$RelationshipSchemaName)
+
+    try {
+        $result = Invoke-RestMethod -Uri "$baseUrl/RelationshipDefinitions(SchemaName='$RelationshipSchemaName')?`$select=SchemaName" -Headers $headers -ErrorAction Stop
+        return $true
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 404) {
+            return $false
+        }
+        throw
+    }
+}
+```
+
+### Safe Table Creation (Skip If Exists)
+
+```powershell
+function New-DataverseTableIfNotExists {
+    param(
+        [string]$SchemaName,
+        [string]$DisplayName,
+        [string]$PluralDisplayName,
+        [string]$Description = "",
+        [string]$PrimaryColumnName = "cr_name",
+        [string]$PrimaryColumnDisplayName = "Name"
+    )
+
+    $logicalName = $SchemaName.ToLower()
+
+    if (Test-TableExists -TableLogicalName $logicalName) {
+        Write-Host "  ⏭️  Table '$SchemaName' already exists - skipping creation" -ForegroundColor Yellow
+        return @{ Skipped = $true; Reason = "Already exists" }
+    }
+
+    Write-Host "  🆕 Creating table '$SchemaName'..." -ForegroundColor Cyan
+    $result = New-DataverseTable -SchemaName $SchemaName -DisplayName $DisplayName `
+        -PluralDisplayName $PluralDisplayName -Description $Description `
+        -PrimaryColumnName $PrimaryColumnName -PrimaryColumnDisplayName $PrimaryColumnDisplayName
+
+    Write-Host "  ✅ Table '$SchemaName' created successfully" -ForegroundColor Green
+    return @{ Skipped = $false; Result = $result }
+}
+```
+
+### Safe Column Addition (Skip If Exists)
+
+```powershell
+function Add-DataverseColumnIfNotExists {
+    param(
+        [string]$TableName,
+        [string]$SchemaName,
+        [string]$DisplayName,
+        [string]$Type,
+        [int]$MaxLength = 100
+    )
+
+    $columnLogicalName = $SchemaName.ToLower()
+    $tableLogicalName = $TableName.ToLower()
+
+    if (Test-ColumnExists -TableLogicalName $tableLogicalName -ColumnLogicalName $columnLogicalName) {
+        Write-Host "    ⏭️  Column '$SchemaName' already exists on '$TableName' - skipping" -ForegroundColor Yellow
+        return @{ Skipped = $true; Reason = "Already exists" }
+    }
+
+    Write-Host "    🆕 Adding column '$SchemaName' to '$TableName'..." -ForegroundColor Cyan
+    $result = Add-DataverseColumn -TableName $TableName -SchemaName $SchemaName `
+        -DisplayName $DisplayName -Type $Type -MaxLength $MaxLength
+
+    Write-Host "    ✅ Column '$SchemaName' added successfully" -ForegroundColor Green
+    return @{ Skipped = $false; Result = $result }
+}
+```
+
+### Safe Relationship Creation (Skip If Exists)
+
+```powershell
+function Add-DataverseLookupIfNotExists {
+    param(
+        [string]$SourceTable,
+        [string]$TargetTable,
+        [string]$LookupSchemaName,
+        [string]$LookupDisplayName,
+        [string]$RelationshipName
+    )
+
+    if (Test-RelationshipExists -RelationshipSchemaName $RelationshipName) {
+        Write-Host "    ⏭️  Relationship '$RelationshipName' already exists - skipping" -ForegroundColor Yellow
+        return @{ Skipped = $true; Reason = "Already exists" }
+    }
+
+    # Also check if the lookup column already exists (might be from a different relationship)
+    $lookupLogicalName = $LookupSchemaName.ToLower()
+    $sourceLogicalName = $SourceTable.ToLower()
+
+    if (Test-ColumnExists -TableLogicalName $sourceLogicalName -ColumnLogicalName $lookupLogicalName) {
+        Write-Host "    ⏭️  Lookup column '$LookupSchemaName' already exists on '$SourceTable' - skipping" -ForegroundColor Yellow
+        return @{ Skipped = $true; Reason = "Lookup column already exists" }
+    }
+
+    Write-Host "    🆕 Creating relationship '$RelationshipName' ($SourceTable → $TargetTable)..." -ForegroundColor Cyan
+    $result = Add-DataverseLookup -SourceTable $SourceTable -TargetTable $TargetTable `
+        -LookupSchemaName $LookupSchemaName -LookupDisplayName $LookupDisplayName `
+        -RelationshipName $RelationshipName
+
+    Write-Host "    ✅ Relationship '$RelationshipName' created successfully" -ForegroundColor Green
+    return @{ Skipped = $false; Result = $result }
+}
 ```
 
 ### Set Up API Connection
@@ -821,109 +1232,129 @@ function Add-DataverseManyToMany {
 
 ---
 
-### Dependency-Ordered Creation Example
+### Dependency-Ordered Creation Example (With Reuse Checks)
 
-Here's a complete example showing proper creation order for an e-commerce schema:
+Here's a complete example showing proper creation order with existing table checks:
 
 ```powershell
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 1: Create all tables (TIER 0 first, then TIER 1, then TIER 2)
+# PHASE 1: Create/Skip tables based on STEP 5 decisions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# --- TIER 0: Reference/Lookup Tables (no dependencies) ---
-Write-Host "Creating TIER 0 tables..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "PHASE 1: Processing Tables (Create New / Skip Existing)" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
-New-DataverseTable -SchemaName "cr_category" -DisplayName "Category" -PluralDisplayName "Categories" `
+# --- TIER 0: Reference/Lookup Tables (no dependencies) ---
+Write-Host "Processing TIER 0 tables (Reference/Lookup)..." -ForegroundColor Cyan
+
+New-DataverseTableIfNotExists -SchemaName "cr_category" -DisplayName "Category" -PluralDisplayName "Categories" `
     -Description "Product and content categories"
 
-New-DataverseTable -SchemaName "cr_department" -DisplayName "Department" -PluralDisplayName "Departments" `
+New-DataverseTableIfNotExists -SchemaName "cr_department" -DisplayName "Department" -PluralDisplayName "Departments" `
     -Description "Organization departments"
 
-New-DataverseTable -SchemaName "cr_status" -DisplayName "Status" -PluralDisplayName "Statuses" `
+New-DataverseTableIfNotExists -SchemaName "cr_status" -DisplayName "Status" -PluralDisplayName "Statuses" `
     -Description "Status values for various entities"
 
 # --- TIER 1: Primary Entity Tables (depend only on TIER 0) ---
-Write-Host "Creating TIER 1 tables..." -ForegroundColor Cyan
+Write-Host "`nProcessing TIER 1 tables (Primary Entities)..." -ForegroundColor Cyan
 
-New-DataverseTable -SchemaName "cr_product" -DisplayName "Product" -PluralDisplayName "Products" `
+New-DataverseTableIfNotExists -SchemaName "cr_product" -DisplayName "Product" -PluralDisplayName "Products" `
     -Description "Products and services offered"
 
-New-DataverseTable -SchemaName "cr_teammember" -DisplayName "Team Member" -PluralDisplayName "Team Members" `
+New-DataverseTableIfNotExists -SchemaName "cr_teammember" -DisplayName "Team Member" -PluralDisplayName "Team Members" `
     -Description "Team members displayed on the website"
 
 # --- TIER 2: Dependent Tables (depend on TIER 1) ---
-Write-Host "Creating TIER 2 tables..." -ForegroundColor Cyan
+Write-Host "`nProcessing TIER 2 tables (Dependent)..." -ForegroundColor Cyan
 
-New-DataverseTable -SchemaName "cr_testimonial" -DisplayName "Testimonial" -PluralDisplayName "Testimonials" `
+New-DataverseTableIfNotExists -SchemaName "cr_testimonial" -DisplayName "Testimonial" -PluralDisplayName "Testimonials" `
     -Description "Customer testimonials and reviews"
 
-New-DataverseTable -SchemaName "cr_contactsubmission" -DisplayName "Contact Submission" -PluralDisplayName "Contact Submissions" `
+New-DataverseTableIfNotExists -SchemaName "cr_contactsubmission" -DisplayName "Contact Submission" -PluralDisplayName "Contact Submissions" `
     -Description "Contact form submissions from the website"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 2: Add non-lookup columns to all tables
+# PHASE 2: Add/Skip columns (only adds missing columns)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "Adding columns to tables..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "PHASE 2: Processing Columns (Add Missing / Skip Existing)" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
 # Category columns
-Add-DataverseColumn -TableName "cr_category" -SchemaName "cr_description" -DisplayName "Description" -Type "Memo" -MaxLength 1000
-Add-DataverseColumn -TableName "cr_category" -SchemaName "cr_displayorder" -DisplayName "Display Order" -Type "Integer"
-Add-DataverseColumn -TableName "cr_category" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
+Write-Host "Processing columns for cr_category..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_category" -SchemaName "cr_description" -DisplayName "Description" -Type "Memo" -MaxLength 1000
+Add-DataverseColumnIfNotExists -TableName "cr_category" -SchemaName "cr_displayorder" -DisplayName "Display Order" -Type "Integer"
+Add-DataverseColumnIfNotExists -TableName "cr_category" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
 
 # Department columns
-Add-DataverseColumn -TableName "cr_department" -SchemaName "cr_code" -DisplayName "Code" -Type "String" -MaxLength 10
+Write-Host "`nProcessing columns for cr_department..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_department" -SchemaName "cr_code" -DisplayName "Code" -Type "String" -MaxLength 10
 
 # Product columns (non-lookup)
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_description" -DisplayName "Description" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_price" -DisplayName "Price" -Type "Money"
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_imageurl" -DisplayName "Image URL" -Type "Url"
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
+Write-Host "`nProcessing columns for cr_product..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_product" -SchemaName "cr_description" -DisplayName "Description" -Type "Memo" -MaxLength 4000
+Add-DataverseColumnIfNotExists -TableName "cr_product" -SchemaName "cr_price" -DisplayName "Price" -Type "Money"
+Add-DataverseColumnIfNotExists -TableName "cr_product" -SchemaName "cr_imageurl" -DisplayName "Image URL" -Type "Url"
+Add-DataverseColumnIfNotExists -TableName "cr_product" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
 
 # Team Member columns (non-lookup)
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_title" -DisplayName "Job Title" -Type "String"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_bio" -DisplayName "Bio" -Type "Memo" -MaxLength 4000
+Write-Host "`nProcessing columns for cr_teammember..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_teammember" -SchemaName "cr_title" -DisplayName "Job Title" -Type "String"
+Add-DataverseColumnIfNotExists -TableName "cr_teammember" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
+Add-DataverseColumnIfNotExists -TableName "cr_teammember" -SchemaName "cr_bio" -DisplayName "Bio" -Type "Memo" -MaxLength 4000
 
 # Testimonial columns (non-lookup)
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_quote" -DisplayName "Quote" -Type "Memo" -MaxLength 2000
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_company" -DisplayName "Company" -Type "String"
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_rating" -DisplayName "Rating" -Type "Integer"
+Write-Host "`nProcessing columns for cr_testimonial..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_testimonial" -SchemaName "cr_quote" -DisplayName "Quote" -Type "Memo" -MaxLength 2000
+Add-DataverseColumnIfNotExists -TableName "cr_testimonial" -SchemaName "cr_company" -DisplayName "Company" -Type "String"
+Add-DataverseColumnIfNotExists -TableName "cr_testimonial" -SchemaName "cr_rating" -DisplayName "Rating" -Type "Integer"
 
 # Contact Submission columns (non-lookup)
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_message" -DisplayName "Message" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_submissiondate" -DisplayName "Submission Date" -Type "DateTime"
+Write-Host "`nProcessing columns for cr_contactsubmission..." -ForegroundColor Cyan
+Add-DataverseColumnIfNotExists -TableName "cr_contactsubmission" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
+Add-DataverseColumnIfNotExists -TableName "cr_contactsubmission" -SchemaName "cr_message" -DisplayName "Message" -Type "Memo" -MaxLength 4000
+Add-DataverseColumnIfNotExists -TableName "cr_contactsubmission" -SchemaName "cr_submissiondate" -DisplayName "Submission Date" -Type "DateTime"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 3: Create relationships (lookup columns) - ORDER MATTERS!
+# PHASE 3: Create/Skip relationships (only creates missing relationships)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "Creating relationships..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "PHASE 3: Processing Relationships (Create Missing / Skip Existing)" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
 # --- First: Lookups from TIER 1 → TIER 0 ---
+Write-Host "Processing TIER 1 → TIER 0 relationships..." -ForegroundColor Cyan
+
 # Product → Category
-Add-DataverseLookup -SourceTable "cr_product" -TargetTable "cr_category" `
+Add-DataverseLookupIfNotExists -SourceTable "cr_product" -TargetTable "cr_category" `
     -LookupSchemaName "cr_categoryid" -LookupDisplayName "Category" `
     -RelationshipName "cr_category_product"
 
 # Team Member → Department
-Add-DataverseLookup -SourceTable "cr_teammember" -TargetTable "cr_department" `
+Add-DataverseLookupIfNotExists -SourceTable "cr_teammember" -TargetTable "cr_department" `
     -LookupSchemaName "cr_departmentid" -LookupDisplayName "Department" `
     -RelationshipName "cr_department_teammember"
 
 # Contact Submission → Status
-Add-DataverseLookup -SourceTable "cr_contactsubmission" -TargetTable "cr_status" `
+Add-DataverseLookupIfNotExists -SourceTable "cr_contactsubmission" -TargetTable "cr_status" `
     -LookupSchemaName "cr_statusid" -LookupDisplayName "Status" `
     -RelationshipName "cr_status_contactsubmission"
 
 # --- Then: Lookups from TIER 2 → TIER 1 ---
+Write-Host "`nProcessing TIER 2 → TIER 1 relationships..." -ForegroundColor Cyan
+
 # Testimonial → Product (optional relationship for product-specific testimonials)
-Add-DataverseLookup -SourceTable "cr_testimonial" -TargetTable "cr_product" `
+Add-DataverseLookupIfNotExists -SourceTable "cr_testimonial" -TargetTable "cr_product" `
     -LookupSchemaName "cr_productid" -LookupDisplayName "Related Product" `
     -RelationshipName "cr_product_testimonial"
 
-Write-Host "Schema creation complete!" -ForegroundColor Green
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "Schema processing complete!" -ForegroundColor Green
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Green
 ```
 
 ---
@@ -989,9 +1420,9 @@ Add-DataverseColumn -TableName "cr_faq" -SchemaName "cr_isactive" -DisplayName "
 
 ---
 
-## STEP 6: Add Sample Data with Referential Integrity
+## STEP 7: Add Sample Data with Referential Integrity
 
-After creating tables and relationships, add sample data **in the correct order** to maintain referential integrity.
+After creating/extending tables and relationships, add sample data **in the correct order** to maintain referential integrity. If tables were reused, check for existing data first.
 
 **CRITICAL**: Insert data in the same order as table creation - reference/lookup data first, then dependent data with valid foreign keys.
 
@@ -999,12 +1430,18 @@ After creating tables and relationships, add sample data **in the correct order*
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  SAMPLE DATA INSERTION ORDER                                                │
+│  SAMPLE DATA INSERTION ORDER (WITH EXISTING DATA CHECKS)                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  0. Check for existing data in reused tables                                │
+│     • Query record counts in each table                                     │
+│     • If data exists, ask user: skip, add more, or replace                  │
+│     • Collect existing record IDs for use as foreign keys                   │
 │                                                                             │
 │  1. Insert TIER 0 data (reference/lookup tables)                            │
 │     • Categories, Statuses, Departments, etc.                               │
-│     • Store the returned record IDs for use in foreign keys                 │
+│     • Skip if records with same name already exist                          │
+│     • Store the returned/existing record IDs for use in foreign keys        │
 │                                                                             │
 │  2. Insert TIER 1 data with valid lookups                                   │
 │     • Products (with Category lookup)                                       │
@@ -1020,6 +1457,99 @@ After creating tables and relationships, add sample data **in the correct order*
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Check Existing Data Before Inserting
+
+```powershell
+function Get-ExistingRecordCount {
+    param([string]$EntitySetName)
+
+    $result = Invoke-RestMethod -Uri "$baseUrl/$EntitySetName/`$count" -Headers $headers
+    return [int]$result
+}
+
+function Get-ExistingRecordByName {
+    param(
+        [string]$EntitySetName,
+        [string]$NameColumn,  # Usually "cr_name" or the primary name attribute
+        [string]$NameValue
+    )
+
+    $filter = "$NameColumn eq '$NameValue'"
+    $result = Invoke-RestMethod -Uri "$baseUrl/$EntitySetName`?`$filter=$filter&`$top=1" -Headers $headers
+
+    if ($result.value.Count -gt 0) {
+        return $result.value[0]
+    }
+    return $null
+}
+
+function New-DataverseRecordIfNotExists {
+    param(
+        [string]$EntitySetName,
+        [hashtable]$Data,
+        [string]$NameColumn = "cr_name"
+    )
+
+    $nameValue = $Data[$NameColumn]
+    $existing = Get-ExistingRecordByName -EntitySetName $EntitySetName -NameColumn $NameColumn -NameValue $nameValue
+
+    if ($existing) {
+        Write-Host "    ⏭️  Record '$nameValue' already exists - using existing" -ForegroundColor Yellow
+        return @{
+            Skipped = $true
+            Record = $existing
+        }
+    }
+
+    Write-Host "    🆕 Creating record '$nameValue'..." -ForegroundColor Cyan
+    $body = $Data | ConvertTo-Json -Depth 5
+    $response = Invoke-RestMethod -Uri "$baseUrl/$EntitySetName" -Method Post -Headers $headers -Body $body
+    Write-Host "    ✅ Record '$nameValue' created" -ForegroundColor Green
+
+    return @{
+        Skipped = $false
+        Record = $response
+    }
+}
+
+# Check existing data counts
+Write-Host "`nChecking existing data in tables..." -ForegroundColor Cyan
+$existingDataCounts = @{
+    "cr_categories" = Get-ExistingRecordCount -EntitySetName "cr_categories"
+    "cr_statuses" = Get-ExistingRecordCount -EntitySetName "cr_statuses"
+    "cr_departments" = Get-ExistingRecordCount -EntitySetName "cr_departments"
+    "cr_products" = Get-ExistingRecordCount -EntitySetName "cr_products"
+    "cr_teammembers" = Get-ExistingRecordCount -EntitySetName "cr_teammembers"
+    "cr_testimonials" = Get-ExistingRecordCount -EntitySetName "cr_testimonials"
+    "cr_contactsubmissions" = Get-ExistingRecordCount -EntitySetName "cr_contactsubmissions"
+}
+
+Write-Host "`nExisting record counts:" -ForegroundColor Yellow
+$existingDataCounts.GetEnumerator() | ForEach-Object {
+    $status = if ($_.Value -gt 0) { "⚠️" } else { "✅" }
+    Write-Host "  $status $($_.Key): $($_.Value) records"
+}
+```
+
+### Present Existing Data Options
+
+If existing data is found, use `AskUserQuestion`:
+
+> **Existing Data Found**
+>
+> Some tables already contain data:
+> - cr_categories: 5 records
+> - cr_products: 12 records
+>
+> How would you like to handle sample data?
+
+| Option | Description |
+|--------|-------------|
+| **Skip tables with data** | Only add sample data to empty tables |
+| **Add to existing data** | Add sample data alongside existing records (may create duplicates) |
+| **Replace existing data** | Clear existing records and insert fresh sample data (destructive!) |
+| **Skip all sample data** | Don't add any sample data, keep existing records |
 
 ### Using OData API via PowerShell
 
@@ -1054,16 +1584,18 @@ function New-DataverseRecord {
 }
 ```
 
-### Complete Sample Data Script (Dependency-Ordered)
+### Complete Sample Data Script (Dependency-Ordered with Reuse)
 
-This script demonstrates proper insertion order with foreign key relationships:
+This script demonstrates proper insertion order with foreign key relationships, skipping records that already exist:
 
 ```powershell
 # ═══════════════════════════════════════════════════════════════════════════════
-# TIER 0: Insert Reference/Lookup Data FIRST
+# TIER 0: Insert/Reuse Reference/Lookup Data FIRST
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "Inserting TIER 0 data (reference tables)..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "TIER 0: Processing Reference/Lookup Data" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
 # --- Categories ---
 $categoryIds = @{}
@@ -1074,10 +1606,10 @@ $categories = @(
     @{ cr_name = "Products"; cr_description = "Physical and digital products"; cr_displayorder = 3; cr_isactive = $true }
 )
 
+Write-Host "Processing categories..." -ForegroundColor Cyan
 foreach ($cat in $categories) {
-    $response = New-DataverseRecord -EntitySetName "cr_categories" -Data $cat
-    $categoryIds[$cat.cr_name] = $response.cr_categoryid
-    Write-Host "  Created category: $($cat.cr_name) (ID: $($response.cr_categoryid))"
+    $result = New-DataverseRecordIfNotExists -EntitySetName "cr_categories" -Data $cat -NameColumn "cr_name"
+    $categoryIds[$cat.cr_name] = $result.Record.cr_categoryid
 }
 
 # --- Statuses ---
@@ -1090,10 +1622,10 @@ $statuses = @(
     @{ cr_name = "Closed"; cr_displayorder = 4 }
 )
 
+Write-Host "`nProcessing statuses..." -ForegroundColor Cyan
 foreach ($status in $statuses) {
-    $response = New-DataverseRecord -EntitySetName "cr_statuses" -Data $status
-    $statusIds[$status.cr_name] = $response.cr_statusid
-    Write-Host "  Created status: $($status.cr_name) (ID: $($response.cr_statusid))"
+    $result = New-DataverseRecordIfNotExists -EntitySetName "cr_statuses" -Data $status -NameColumn "cr_name"
+    $statusIds[$status.cr_name] = $result.Record.cr_statusid
 }
 
 # --- Departments ---
@@ -1106,17 +1638,19 @@ $departments = @(
     @{ cr_name = "Sales"; cr_code = "SALES" }
 )
 
+Write-Host "`nProcessing departments..." -ForegroundColor Cyan
 foreach ($dept in $departments) {
-    $response = New-DataverseRecord -EntitySetName "cr_departments" -Data $dept
-    $departmentIds[$dept.cr_name] = $response.cr_departmentid
-    Write-Host "  Created department: $($dept.cr_name) (ID: $($response.cr_departmentid))"
+    $result = New-DataverseRecordIfNotExists -EntitySetName "cr_departments" -Data $dept -NameColumn "cr_name"
+    $departmentIds[$dept.cr_name] = $result.Record.cr_departmentid
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TIER 1: Insert Primary Entity Data (with TIER 0 lookups)
+# TIER 1: Insert/Reuse Primary Entity Data (with TIER 0 lookups)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "`nInserting TIER 1 data (with lookups to TIER 0)..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "TIER 1: Processing Primary Entity Data (with TIER 0 lookups)" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
 # --- Products (with Category lookup) ---
 $productIds = @{}
@@ -1149,10 +1683,10 @@ $products = @(
     }
 )
 
+Write-Host "Processing products..." -ForegroundColor Cyan
 foreach ($product in $products) {
-    $response = New-DataverseRecord -EntitySetName "cr_products" -Data $product
-    $productIds[$product.cr_name] = $response.cr_productid
-    Write-Host "  Created product: $($product.cr_name) → Category: $($product.'cr_categoryid@odata.bind')"
+    $result = New-DataverseRecordIfNotExists -EntitySetName "cr_products" -Data $product -NameColumn "cr_name"
+    $productIds[$product.cr_name] = $result.Record.cr_productid
 }
 
 # --- Team Members (with Department lookup) ---
@@ -1191,17 +1725,19 @@ $team = @(
     }
 )
 
+Write-Host "`nProcessing team members..." -ForegroundColor Cyan
 foreach ($member in $team) {
-    $response = New-DataverseRecord -EntitySetName "cr_teammembers" -Data $member
-    $teamMemberIds[$member.cr_name] = $response.cr_teammemberid
-    Write-Host "  Created team member: $($member.cr_name) → Department: $($member.'cr_departmentid@odata.bind')"
+    $result = New-DataverseRecordIfNotExists -EntitySetName "cr_teammembers" -Data $member -NameColumn "cr_name"
+    $teamMemberIds[$member.cr_name] = $result.Record.cr_teammemberid
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TIER 2: Insert Dependent Data (with TIER 0 and TIER 1 lookups)
+# TIER 2: Insert/Reuse Dependent Data (with TIER 0 and TIER 1 lookups)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "`nInserting TIER 2 data (with lookups to TIER 0 and TIER 1)..." -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "TIER 2: Processing Dependent Data (with TIER 0 and TIER 1 lookups)" -ForegroundColor Magenta
+Write-Host "════════════════════════════════════════════════════════════════`n" -ForegroundColor Magenta
 
 # --- Contact Submissions (with Status lookup) ---
 $contacts = @(
@@ -1228,9 +1764,9 @@ $contacts = @(
     }
 )
 
+Write-Host "Processing contact submissions..." -ForegroundColor Cyan
 foreach ($contact in $contacts) {
-    New-DataverseRecord -EntitySetName "cr_contactsubmissions" -Data $contact
-    Write-Host "  Created contact submission: $($contact.cr_name) → Status: $($contact.'cr_statusid@odata.bind')"
+    New-DataverseRecordIfNotExists -EntitySetName "cr_contactsubmissions" -Data $contact -NameColumn "cr_name"
 }
 
 # --- Testimonials (with optional Product lookup) ---
@@ -1269,14 +1805,15 @@ $testimonials = @(
     }
 )
 
+Write-Host "`nProcessing testimonials..." -ForegroundColor Cyan
 foreach ($testimonial in $testimonials) {
-    New-DataverseRecord -EntitySetName "cr_testimonials" -Data $testimonial
-    $productRef = if ($testimonial.'cr_productid@odata.bind') { $testimonial.'cr_productid@odata.bind' } else { "(no product)" }
-    Write-Host "  Created testimonial: $($testimonial.cr_name) → Product: $productRef"
+    New-DataverseRecordIfNotExists -EntitySetName "cr_testimonials" -Data $testimonial -NameColumn "cr_name"
 }
 
-Write-Host "`nSample data insertion complete!" -ForegroundColor Green
-Write-Host "Total records created:" -ForegroundColor Yellow
+Write-Host "`n════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "Sample data processing complete!" -ForegroundColor Green
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "`nRecords processed (created or reused):" -ForegroundColor Yellow
 Write-Host "  - Categories: $($categoryIds.Count)"
 Write-Host "  - Statuses: $($statusIds.Count)"
 Write-Host "  - Departments: $($departmentIds.Count)"
@@ -1333,17 +1870,28 @@ After setting up Dataverse tables with sample data, the next step is to configur
 
 ## Update Memory Bank
 
-After completing this skill, update `memory-bank.md` with the Dataverse setup details including the data architecture:
+After completing this skill, update `memory-bank.md` with the Dataverse setup details including the data architecture and reuse decisions:
 
 ```markdown
 ### /setup-dataverse
 - [x] Site analyzed for data requirements
 - [x] Data architecture designed with dependency graph
-- [x] Tables created in dependency order
+- [x] Existing tables reviewed and analyzed
+- [x] Reuse decisions made (reuse/extend/create)
+- [x] Tables created/extended in dependency order
 - [x] Relationships (lookups) established
-- [x] Sample data inserted with referential integrity
+- [x] Sample data inserted with referential integrity (skipped existing)
 
 ## Data Architecture
+
+### Existing Table Analysis
+
+| Required Table | Decision | Existing Table | Action Taken |
+|----------------|----------|----------------|--------------|
+| cr_category | REUSE | cr_category | Used existing table |
+| cr_product | EXTEND | cr_product | Added cr_imageurl, cr_isactive columns |
+| cr_testimonial | CREATE | - | Created new table |
+| cr_contactsubmission | CREATE | - | Created new table |
 
 ### Dependency Graph
 ```text
@@ -1427,6 +1975,20 @@ TIER 2 (Dependent Tables):
 
 ## Troubleshooting
 
+### Existing Table Detection Issues
+
+- **Tables not found**: Ensure the filter `IsCustomEntity eq true` is correct for your needs
+- **Wrong publisher prefix**: Tables may have different prefixes (e.g., `new_`, `contoso_` instead of `cr_`)
+- **System tables included**: Add additional filters to exclude system tables if needed
+- **Case sensitivity**: Table logical names are case-insensitive but schema names preserve case
+
+### Table Reuse Issues
+
+- **Existing table has different schema**: Consider creating a new table with a unique name instead
+- **Column type mismatch**: Cannot change column types; may need to create new column with different name
+- **Relationship conflicts**: Verify existing relationships don't prevent your intended lookups
+- **Missing required columns on reused table**: Use `Add-DataverseColumnIfNotExists` to add only missing columns
+
 ### Dataverse Web API Errors
 
 - Verify Azure CLI is logged in: `az login`
@@ -1454,10 +2016,19 @@ TIER 2 (Dependent Tables):
 - **"Foreign key violation"**: The referenced record doesn't exist
   - Insert TIER 0 data first, then TIER 1, then TIER 2
   - Verify the lookup ID is correct (GUIDs are case-insensitive)
+  - If reusing existing lookup tables, query for existing record IDs first
 - **"Invalid @odata.bind syntax"**: Format must be `/entitysetname(guid)`
   - Example: `"cr_categoryid@odata.bind" = "/cr_categories(12345678-1234-1234-1234-123456789012)"`
 - **"Entity set not found"**: Use the plural entity set name, not the logical name
   - Table `cr_product` has entity set `cr_products` (usually plural)
+- **Duplicate record errors**: If using `New-DataverseRecordIfNotExists`, records with the same name are skipped
+  - Check for unique constraints on other columns if inserts still fail
+
+### Existing Data Conflicts
+
+- **Stale record IDs**: If reusing tables, always query for current record IDs; don't use cached values
+- **Data format differences**: Existing records may have different formats (e.g., dates, currency)
+- **Orphaned lookups**: When reusing tables, verify that lookup values still exist in referenced tables
 
 ### Verifying Relationships
 

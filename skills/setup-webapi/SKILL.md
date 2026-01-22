@@ -51,7 +51,8 @@ This skill uses a **memory bank** (`memory-bank.md`) to persist context across s
 │  ─────────────────────────────────────────────────────────────────────────  │
 │  • Create API service/utility for /_api calls                               │
 │  • Update components to fetch data dynamically                              │
-│  • Replace static data with Web API calls                                   │
+│  • Replace ALL mock/static data with Web API calls                          │
+│  • Verify no hardcoded data remains for configured tables                   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -126,20 +127,11 @@ Site settings in Power Pages are stored in the `.powerpages-site/site-settings` 
 <PROJECT_ROOT>/
 ├── .powerpages-site/
 │   ├── site-settings/
-│   │   ├── <uuid1>.yml    # Webapi/cr_product/enabled
-│   │   ├── <uuid2>.yml    # Webapi/cr_product/fields
-│   │   ├── <uuid3>.yml    # Webapi/cr_teammember/enabled
+│   │   ├── Webapi-cr_product-enabled.sitesetting.yml
+│   │   ├── Webapi-cr_product-fields.sitesetting.yml
+│   │   ├── Webapi-cr_teammember-enabled.sitesetting.yml
 │   │   └── ...
 │   └── ...
-```
-
-### Generate UUIDs
-
-Use PowerShell to generate UUIDs for each site setting:
-
-```powershell
-# Generate a new UUID
-[guid]::NewGuid().ToString()
 ```
 
 ### Site Setting File Format
@@ -152,6 +144,10 @@ name: <SETTING_NAME>
 value: <SETTING_VALUE>
 ```
 
+**File naming convention**: `<SETTING_NAME_WITH_DASHES>.sitesetting.yml`
+- Replace `/` with `-` in the setting name
+- Example: Setting `Webapi/cr_product/enabled` → File `Webapi-cr_product-enabled.sitesetting.yml`
+
 ### Required Site Settings for Each Table
 
 For each table that needs Web API access, create these settings:
@@ -159,15 +155,16 @@ For each table that needs Web API access, create these settings:
 #### 1. Enable Web API for Table
 
 ```yaml
-# File: <PROJECT_ROOT>/.powerpages-site/site-settings/<uuid>.yml
+# File: <PROJECT_ROOT>/.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-enabled.sitesetting.yml
 id: <GENERATE_UUID>
 name: Webapi/<TABLE_LOGICAL_NAME>/enabled
-value: true
+value: true  # Boolean, not string
 ```
 
 **Example** for `cr_product` table:
 
 ```yaml
+# File: Webapi-cr_product-enabled.sitesetting.yml
 id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 name: Webapi/cr_product/enabled
 value: true
@@ -178,7 +175,7 @@ value: true
 **SECURITY REQUIREMENT**: Always specify explicit field names. Never use `*` as it exposes all fields including sensitive system columns. Only include fields that are needed by the frontend.
 
 ```yaml
-# File: <PROJECT_ROOT>/.powerpages-site/site-settings/<uuid>.yml
+# File: <PROJECT_ROOT>/.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-fields.sitesetting.yml
 id: <GENERATE_UUID>
 name: Webapi/<TABLE_LOGICAL_NAME>/fields
 value: cr_name,cr_description,cr_price,cr_imageurl,cr_isactive
@@ -191,9 +188,10 @@ Specify comma-separated field logical names that your frontend actually needs.
 For debugging purposes, enable detailed error messages:
 
 ```yaml
+# File: Webapi-error-innererror.sitesetting.yml
 id: <GENERATE_UUID>
 name: Webapi/error/innererror
-value: true
+value: true  # Boolean, not string
 ```
 
 **IMPORTANT**: Disable this in production by setting value to `false` or removing the setting.
@@ -229,13 +227,14 @@ function New-WebApiSiteSettings {
     $enabledUuid = [guid]::NewGuid().ToString()
     $fieldsUuid = [guid]::NewGuid().ToString()
 
-    # Create enabled setting
+    # Create enabled setting (value is boolean true, not string "true")
     $enabledContent = @"
 id: $enabledUuid
 name: Webapi/$TableLogicalName/enabled
 value: true
 "@
-    $enabledPath = Join-Path $siteSettingsPath "$enabledUuid.yml"
+    $enabledFileName = "Webapi-$TableLogicalName-enabled.sitesetting.yml"
+    $enabledPath = Join-Path $siteSettingsPath $enabledFileName
     Set-Content -Path $enabledPath -Value $enabledContent -Encoding UTF8
     Write-Host "Created: $enabledPath"
 
@@ -245,14 +244,15 @@ id: $fieldsUuid
 name: Webapi/$TableLogicalName/fields
 value: $Fields
 "@
-    $fieldsPath = Join-Path $siteSettingsPath "$fieldsUuid.yml"
+    $fieldsFileName = "Webapi-$TableLogicalName-fields.sitesetting.yml"
+    $fieldsPath = Join-Path $siteSettingsPath $fieldsFileName
     Set-Content -Path $fieldsPath -Value $fieldsContent -Encoding UTF8
     Write-Host "Created: $fieldsPath"
 
     return @{
         TableName = $TableLogicalName
-        EnabledUuid = $enabledUuid
-        FieldsUuid = $fieldsUuid
+        EnabledFile = $enabledFileName
+        FieldsFile = $fieldsFileName
     }
 }
 
@@ -288,12 +288,14 @@ function New-WebApiErrorSetting {
     $siteSettingsPath = Join-Path $ProjectRoot ".powerpages-site\site-settings"
     $errorUuid = [guid]::NewGuid().ToString()
 
+    # Value is boolean true/false, not string
     $errorContent = @"
 id: $errorUuid
 name: Webapi/error/innererror
 value: $($Enabled.ToString().ToLower())
 "@
-    $errorPath = Join-Path $siteSettingsPath "$errorUuid.yml"
+    $errorFileName = "Webapi-error-innererror.sitesetting.yml"
+    $errorPath = Join-Path $siteSettingsPath $errorFileName
     Set-Content -Path $errorPath -Value $errorContent -Encoding UTF8
     Write-Host "Created error setting: $errorPath"
 }
@@ -429,6 +431,22 @@ if ($anonymousRole.value.Count -gt 0) {
 
 Now update the frontend code to use the Power Pages Web API (`/_api` endpoint) to fetch data dynamically.
 
+**IMPORTANT: Replace ALL Mock Data**
+
+When integrating Web APIs, you must ensure that **all mock/static data is replaced** with Web API calls:
+
+1. **Search the codebase** for any hardcoded arrays, objects, or static data files that represent the data now stored in Dataverse tables
+2. **Identify all components** that display data from the configured tables (products, team members, testimonials, FAQs, etc.)
+3. **Replace each instance** with the appropriate Web API call using the data fetching patterns below
+4. **Remove or comment out** the old mock data to prevent confusion
+5. **Verify no static data remains** - the site should fetch all dynamic content from Dataverse
+
+Common places to check for mock data:
+- `src/data/` or `src/mock/` folders
+- Constants files with hardcoded arrays
+- Component files with inline data definitions
+- JSON files used as data sources
+
 ### Web API Endpoint Format
 
 The Power Pages Web API follows OData conventions:
@@ -448,6 +466,15 @@ PATCH /_api/cr_products(<guid>)                  # Update product
 DELETE /_api/cr_products(<guid>)                 # Delete product
 ```
 
+### CSRF Token Requirement
+
+**IMPORTANT**: Power Pages requires a CSRF (Cross-Site Request Forgery) anti-forgery token for all non-GET requests (POST, PATCH, DELETE).
+
+- The token must be fetched from `/_layout/tokenhtml`
+- Include the token in the `__RequestVerificationToken` header
+- GET requests do not require this token
+- The token may expire, so handle 403 errors by refreshing the token
+
 ### Create API Service (React Example)
 
 Create a reusable API service for Web API calls:
@@ -466,18 +493,85 @@ interface QueryOptions {
   expand?: string;
 }
 
+// Cache for the anti-forgery token
+let cachedToken: string | null = null;
+
+/**
+ * Fetches the CSRF anti-forgery token required for non-GET requests.
+ * Power Pages requires this token in the __RequestVerificationToken header
+ * for POST, PATCH, and DELETE operations.
+ */
+async function fetchAntiForgeryToken(): Promise<string> {
+  // Return cached token if available
+  if (cachedToken) {
+    return cachedToken;
+  }
+
+  try {
+    const tokenEndpoint = '/_layout/tokenhtml';
+    const response = await fetch(tokenEndpoint, {});
+
+    if (response.status !== 200) {
+      throw new Error(`Failed to fetch token: ${response.status}`);
+    }
+
+    const tokenResponse = await response.text();
+    const valueString = 'value="';
+    const terminalString = '" />';
+    const valueIndex = tokenResponse.indexOf(valueString);
+
+    if (valueIndex === -1) {
+      throw new Error('Token not found in response');
+    }
+
+    const requestVerificationToken = tokenResponse.substring(
+      valueIndex + valueString.length,
+      tokenResponse.indexOf(terminalString, valueIndex)
+    );
+
+    cachedToken = requestVerificationToken || '';
+    return cachedToken;
+  } catch (error) {
+    console.warn('[Web API] Failed to fetch anti-forgery token:', error);
+    return '';
+  }
+}
+
+/**
+ * Clears the cached token. Call this if you receive a 403 error
+ * which may indicate the token has expired.
+ */
+function clearTokenCache(): void {
+  cachedToken = null;
+}
+
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const method = options.method?.toUpperCase() || 'GET';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    ...options.headers as Record<string, string>,
+  };
+
+  // Add anti-forgery token for non-GET requests (POST, PATCH, DELETE)
+  if (method !== 'GET') {
+    const token = await fetchAntiForgeryToken();
+    if (token) {
+      headers['__RequestVerificationToken'] = token;
+    }
+  }
+
   const response = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...options.headers,
-    },
+    headers,
     credentials: 'include', // Important for authenticated requests
   });
 
   if (!response.ok) {
+    // If we get a 403, the token may have expired - clear the cache
+    if (response.status === 403) {
+      clearTokenCache();
+    }
     const error = await response.json().catch(() => ({ message: response.statusText }));
     throw new Error(error.message || `API Error: ${response.status}`);
   }
@@ -887,18 +981,20 @@ fetch('/_api/cr_products?$filter=cr_isactive eq true&$select=cr_name,cr_price')
 
 | Issue | Solution |
 |-------|----------|
-| `403 Forbidden` | Table permission not configured or not linked to web role |
+| `403 Forbidden` | Table permission not configured, not linked to web role, or missing/expired CSRF token |
 | `404 Not Found` | Web API not enabled for table (check site setting) |
 | `400 Bad Request` | Invalid OData query syntax or field not in allowed fields |
 | `500 Server Error` | Enable `Webapi/error/innererror` to see details |
+| `CSRF Token Error` | Ensure `__RequestVerificationToken` header is included for POST/PATCH/DELETE requests |
 
 ### Debug Web API Issues
 
 1. **Enable detailed errors**:
    ```yaml
+   # File: Webapi-error-innererror.sitesetting.yml
    id: <uuid>
    name: Webapi/error/innererror
-   value: true
+   value: true  # Boolean, not string
    ```
 
 2. **Check site settings were applied**:
@@ -923,6 +1019,7 @@ After completing this skill, update `memory-bank.md`:
 - [x] Web API enabled for tables: [LIST]
 - [x] Table permissions created
 - [x] Frontend code updated with Web API service
+- [x] All mock/static data replaced with Web API calls
 - [x] Project built successfully
 - [x] Uploaded to Power Pages
 - [x] Web API verified working
@@ -933,10 +1030,10 @@ After completing this skill, update `memory-bank.md`:
 
 | Setting | Value | File |
 |---------|-------|------|
-| Webapi/cr_product/enabled | true | <uuid>.yml |
-| Webapi/cr_product/fields | cr_name,cr_description,cr_price,... | <uuid>.yml |
-| Webapi/cr_teammember/enabled | true | <uuid>.yml |
-| Webapi/cr_teammember/fields | cr_name,cr_title,cr_bio,... | <uuid>.yml |
+| Webapi/cr_product/enabled | true | Webapi-cr_product-enabled.sitesetting.yml |
+| Webapi/cr_product/fields | cr_name,cr_description,cr_price,... | Webapi-cr_product-fields.sitesetting.yml |
+| Webapi/cr_teammember/enabled | true | Webapi-cr_teammember-enabled.sitesetting.yml |
+| Webapi/cr_teammember/fields | cr_name,cr_title,cr_bio,... | Webapi-cr_teammember-fields.sitesetting.yml |
 | [ADD MORE AS CREATED] |
 
 ### Table Permissions
@@ -955,6 +1052,14 @@ After completing this skill, update `memory-bank.md`:
 | src/services/dataverseApi.ts | Created Web API service |
 | src/components/ProductList.tsx | Updated to use Web API |
 | [ADD MORE AS MODIFIED] |
+
+### Removed/Replaced Mock Data
+
+| Location | Description | Replaced With |
+|----------|-------------|---------------|
+| src/data/products.ts | Static product array | productsApi.getActive() |
+| src/data/team.json | Team member JSON | teamMembersApi.getAll() |
+| [ADD MORE AS REPLACED] |
 
 ## Current Status
 
@@ -985,6 +1090,26 @@ After completing this skill, update `memory-bank.md`:
 2. Check permission is linked to correct web role (Anonymous Users for public access)
 3. Ensure user is in the appropriate web role (for authenticated access)
 4. Verify permission has the correct scope (Global for public data)
+5. **For POST/PATCH/DELETE**: Ensure the `__RequestVerificationToken` header is included with a valid CSRF token
+
+### CSRF Token Issues
+
+If you're getting 403 errors on write operations (POST, PATCH, DELETE):
+
+1. **Fetch the token** from `/_layout/tokenhtml` endpoint
+2. **Parse the token** from the HTML response (look for `value="..."`)
+3. **Include in header**: Add `__RequestVerificationToken: <token>` to your request headers
+4. **Token expiration**: If requests start failing, clear your cached token and fetch a new one
+5. **Test manually**:
+   ```javascript
+   // In browser console, test token fetch
+   fetch('/_layout/tokenhtml')
+     .then(r => r.text())
+     .then(html => {
+       const match = html.match(/value="([^"]+)"/);
+       console.log('Token:', match ? match[1] : 'Not found');
+     });
+   ```
 
 ### Web API Returns 404 Not Found
 
