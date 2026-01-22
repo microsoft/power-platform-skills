@@ -253,6 +253,149 @@ $linkedRoles.value | ForEach-Object {
 }
 ```
 
+## PAC CLI Table Permission Files
+
+When working with Power Platform CLI (`pac paportal download`), table permissions are stored as YAML files.
+
+### File Naming Convention
+
+```
+<Permission-Name>.tablepermission.yml
+```
+
+Example: `Product-Read-Permission.tablepermission.yml`
+
+### YAML File Structure
+
+```yaml
+append: false
+appendto: false
+create: false
+delete: false
+entitylogicalname: cr_product
+entityname: Product Read Permission
+entitypermission_webrole:
+- 18c1fdce-684b-f011-877a-7c1e520c8613
+id: 71ecf203-dfe2-4c1e-9db2-112ed3925a52
+parententitypermission:
+read: true
+scope: 756150000
+write: false
+```
+
+### YAML Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entitylogicalname` | string | Dataverse table logical name (e.g., `cr_product`) |
+| `entityname` | string | Display name for the permission |
+| `id` | GUID | Unique identifier for this permission |
+| `scope` | int | Permission scope (see values below) |
+| `read` | bool | Can retrieve/query records |
+| `create` | bool | Can create new records |
+| `write` | bool | Can update existing records |
+| `delete` | bool | Can delete records |
+| `append` | bool | Can associate records to this entity |
+| `appendto` | bool | Can associate this entity to other records |
+| `entitypermission_webrole` | list | GUIDs of web roles with this permission |
+| `parententitypermission` | GUID | Parent permission ID for hierarchical access |
+
+### Scope Values for YAML
+
+| Scope Name | Value | Description |
+|------------|-------|-------------|
+| Global | 756150000 | All records accessible |
+| Contact | 756150001 | Records linked to current contact |
+| Account | 756150002 | Records linked to user's account |
+| Parent | 756150003 | Records linked via parent relationship |
+| Self | 756150004 | Only records owned by current user |
+
+### Example: Read-Only Public Permission
+
+```yaml
+append: false
+appendto: false
+create: false
+delete: false
+entitylogicalname: cr_product
+entityname: Product - Anonymous Read
+entitypermission_webrole:
+- <anonymous-users-webrole-guid>
+id: <new-guid>
+parententitypermission:
+read: true
+scope: 756150000
+write: false
+```
+
+### Example: User Self-Access Permission
+
+```yaml
+append: false
+appendto: false
+create: true
+delete: false
+entitylogicalname: cr_userprofile
+entityname: User Profile - Self Access
+entitypermission_webrole:
+- <authenticated-users-webrole-guid>
+id: <new-guid>
+parententitypermission:
+read: true
+scope: 756150004
+write: true
+```
+
+### Parent-Child Table Permissions
+
+When tables have relationships (e.g., Order → Order Items), you can create hierarchical permissions using the `parententitypermission` field and `Parent` scope.
+
+> **Important**: Parent permissions must be created before child permissions. The child permission references the parent's ID in the `parententitypermission` field.
+
+**Creation Order:**
+1. Create the parent table permission first (e.g., for `cr_order`)
+2. Note the parent permission's `id` (GUID)
+3. Create child permission with `parententitypermission` set to parent's ID
+4. Set child's `scope` to `756150003` (Parent)
+
+#### Example: Parent Permission (Order)
+
+```yaml
+append: true
+appendto: false
+create: true
+delete: false
+entitylogicalname: cr_order
+entityname: Order - User Access
+entitypermission_webrole:
+- <authenticated-users-webrole-guid>
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+parententitypermission:
+read: true
+scope: 756150001
+write: true
+```
+
+#### Example: Child Permission (Order Items)
+
+```yaml
+append: false
+appendto: true
+create: true
+delete: true
+entitylogicalname: cr_orderitem
+entityname: Order Item - Parent Access
+entitypermission_webrole:
+- <authenticated-users-webrole-guid>
+id: <new-guid>
+parententitypermission: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+read: true
+scope: 756150003
+write: true
+```
+
+In this example, users can only access order items that belong to orders they have access to.
+
 ## Security Best Practices
 
 1. **Least Privilege**: Grant only the minimum permissions needed
