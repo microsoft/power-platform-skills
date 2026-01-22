@@ -199,32 +199,55 @@ export const webApi = {
 
 ## Entity-Specific Services
 
-Create typed wrappers for each entity:
+Create typed wrappers for each entity.
+
+**IMPORTANT**: Always include `$select` with the fields configured in site settings. Power Pages Web API returns an error if you request fields not listed in the `Webapi/<table>/fields` site setting. Omitting `$select` attempts to fetch all fields, which fails.
 
 ```typescript
 // Entity-specific services
+// IMPORTANT: The 'select' array must match the fields in your Webapi/<table>/fields site setting
+
 export const productsApi = {
   getAll: (options?: QueryOptions) =>
-    webApi.getAll<Product>('cr_products', options),
+    webApi.getAll<Product>('cr_products', {
+      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
+      ...options,
+    }),
   getById: (id: string) =>
-    webApi.getById<Product>('cr_products', id),
+    webApi.getById<Product>('cr_products', id, {
+      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
+    }),
   getActive: () =>
-    webApi.getAll<Product>('cr_products', { filter: 'cr_isactive eq true', orderBy: 'cr_name' }),
+    webApi.getAll<Product>('cr_products', {
+      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
+      filter: 'cr_isactive eq true',
+      orderBy: 'cr_name',
+    }),
 };
 
 export const teamMembersApi = {
   getAll: () =>
-    webApi.getAll<TeamMember>('cr_teammembers', { orderBy: 'cr_displayorder' }),
+    webApi.getAll<TeamMember>('cr_teammembers', {
+      select: ['cr_teammemberid', 'cr_name', 'cr_title', 'cr_email', 'cr_bio', 'cr_photourl', 'cr_linkedin', 'cr_displayorder'],
+      orderBy: 'cr_displayorder',
+    }),
 };
 
 export const testimonialsApi = {
   getActive: () =>
-    webApi.getAll<Testimonial>('cr_testimonials', { filter: 'cr_isactive eq true' }),
+    webApi.getAll<Testimonial>('cr_testimonials', {
+      select: ['cr_testimonialid', 'cr_name', 'cr_quote', 'cr_company', 'cr_role', 'cr_rating', 'cr_photourl', 'cr_isactive'],
+      filter: 'cr_isactive eq true',
+    }),
 };
 
 export const faqsApi = {
   getActive: () =>
-    webApi.getAll<FAQ>('cr_faqs', { filter: 'cr_isactive eq true', orderBy: 'cr_displayorder' }),
+    webApi.getAll<FAQ>('cr_faqs', {
+      select: ['cr_faqid', 'cr_question', 'cr_answer', 'cr_category', 'cr_displayorder', 'cr_isactive'],
+      filter: 'cr_isactive eq true',
+      orderBy: 'cr_displayorder',
+    }),
 };
 
 export const contactApi = {
@@ -584,6 +607,7 @@ function ProductList() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // productsApi.getActive() already includes $select with allowed fields
     productsApi.getActive().then(setProducts).finally(() => setLoading(false));
   }, []);
 

@@ -8,9 +8,10 @@ This document covers common issues when setting up Power Pages Web API and their
 |-------|----------|
 | `403 Forbidden` | Table permission not configured, not linked to web role, or missing/expired CSRF token |
 | `404 Not Found` | Web API not enabled for table (check site setting) |
-| `400 Bad Request` | Invalid OData query syntax or field not in allowed fields |
+| `400 Bad Request` | Invalid OData query syntax, missing `$select`, or field not in allowed list |
 | `500 Server Error` | Enable `Webapi/error/innererror` to see details |
 | `CSRF Token Error` | Ensure `__RequestVerificationToken` header is included for POST/PATCH/DELETE requests |
+| `Field not allowed` | Add `$select` param with only fields listed in `Webapi/<table>/fields` setting |
 
 ## Site Settings Not Being Applied
 
@@ -175,7 +176,35 @@ fetch('/_layout/tokenhtml')
    /_api/cr_products?$filter=cr_isactive eq true
    ```
 
-2. **Field not in allowed fields list**
+2. **Missing $select when fields are restricted** (Most Common)
+
+   When `Webapi/<table>/fields` site setting specifies allowed fields, you **must** use `$select` in your query. Without `$select`, the API tries to return all fields and fails because only configured fields are allowed.
+
+   ```text
+   # Site setting
+   name: Webapi/cr_product/fields
+   value: cr_name,cr_price,cr_isactive
+
+   # Incorrect (no $select - tries to fetch all fields)
+   /_api/cr_products
+   /_api/cr_products?$filter=cr_isactive eq true
+
+   # Correct (only requests allowed fields)
+   /_api/cr_products?$select=cr_name,cr_price,cr_isactive
+   /_api/cr_products?$select=cr_name,cr_price,cr_isactive&$filter=cr_isactive eq true
+   ```
+
+   **Solution**: Always include `$select` with fields that match your `Webapi/<table>/fields` site setting:
+
+   ```typescript
+   // Always specify select with allowed fields
+   webApi.getAll<Product>('cr_products', {
+     select: ['cr_name', 'cr_price', 'cr_isactive'],
+     filter: 'cr_isactive eq true',
+   });
+   ```
+
+3. **Field not in allowed fields list**
    - Check `Webapi/<table>/fields` setting
    - Add missing fields to the comma-separated list
 
@@ -288,6 +317,7 @@ Use this checklist to systematically debug Web API issues:
 - [ ] Permission has correct CRUD flags?
 - [ ] CSRF token included for write operations?
 - [ ] OData query syntax correct? (`$filter`, `$select`, etc.)
+- [ ] **`$select` included with allowed fields?** (Required when `Webapi/<table>/fields` is set)
 - [ ] Fields in allowed fields list?
 - [ ] Entity set name correct? (pluralized)
 - [ ] Data exists in Dataverse?
