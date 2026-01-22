@@ -124,6 +124,8 @@ Use this decision matrix to determine which web roles you need:
 
 ## Create Web Role Function
 
+**IMPORTANT**: Always use `mspp_webroles` (not `adx_webroles`) for creating and querying web roles.
+
 ```powershell
 function New-WebRole {
     param(
@@ -135,23 +137,29 @@ function New-WebRole {
 
         [string]$Description = "",
 
-        [bool]$AuthenticatedUsersRole = $false
+        [bool]$AuthenticatedUsersRole = $false,
+
+        [bool]$AnonymousUsersRole = $false
     )
 
+    # Generate unique ID for the web role (see alternatives below for non-PowerShell)
+    $webRoleId = [guid]::NewGuid().ToString()
+
     $webRole = @{
-        "adx_name" = $Name
-        "adx_description" = $Description
-        "adx_authenticatedusersrole" = $AuthenticatedUsersRole
-        "adx_websiteid@odata.bind" = "/adx_websites($WebsiteId)"
+        "mspp_webroleid" = $webRoleId
+        "mspp_name" = $Name
+        "mspp_description" = $Description
+        "mspp_authenticatedusersrole" = $AuthenticatedUsersRole
+        "mspp_anonymoususersrole" = $AnonymousUsersRole
+        "mspp_websiteid@odata.bind" = "/mspp_websites($WebsiteId)"
     }
 
     $body = $webRole | ConvertTo-Json -Depth 5
 
     try {
-        $response = Invoke-WebRequest -Uri "$baseUrl/adx_webroles" -Method Post -Headers $headers -Body $body
-        $roleId = $response.Headers["OData-EntityId"] -replace ".*\(([^)]+)\).*", '$1'
-        Write-Host "Created web role '$Name' with ID: $roleId"
-        return $roleId
+        Invoke-RestMethod -Uri "$baseUrl/mspp_webroles" -Method Post -Headers $headers -Body $body
+        Write-Host "Created web role '$Name' with ID: $webRoleId"
+        return $webRoleId
     }
     catch {
         Write-Host "Error creating web role '$Name': $_"
@@ -160,6 +168,23 @@ function New-WebRole {
 }
 ```
 
+### Alternative UUID Generation Methods
+
+If not using PowerShell, generate UUIDs using:
+
+**Bash/Linux/Mac**:
+```bash
+uuidgen | tr '[:upper:]' '[:lower:]'
+```
+
+**Python**:
+```python
+import uuid
+print(str(uuid.uuid4()))
+```
+
+**Online**: Use any UUID generator website
+
 ## Common Web Role Patterns
 
 ### Pattern 1: Public Website (Anonymous + Admin)
@@ -167,14 +192,14 @@ function New-WebRole {
 For simple public websites with admin management:
 
 ```powershell
-# Anonymous Users - already exists, just verify
+# Anonymous Users - already exists, just verify (use mspp_webroles)
 $anonymousRole = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq 'Anonymous Users' and _adx_websiteid_value eq $websiteId" `
+    -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq 'Anonymous Users' and _mspp_websiteid_value eq $websiteId" `
     -Headers $headers
 
 # Administrators - already exists, just verify
 $adminRole = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq 'Administrators' and _adx_websiteid_value eq $websiteId" `
+    -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq 'Administrators' and _mspp_websiteid_value eq $websiteId" `
     -Headers $headers
 
 Write-Host "Using existing roles: Anonymous Users, Administrators"
@@ -185,9 +210,9 @@ Write-Host "Using existing roles: Anonymous Users, Administrators"
 For sites requiring user sign-in:
 
 ```powershell
-# Verify Authenticated Users role exists
+# Verify Authenticated Users role exists (use mspp_webroles)
 $authRole = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq 'Authenticated Users' and _adx_websiteid_value eq $websiteId" `
+    -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq 'Authenticated Users' and _mspp_websiteid_value eq $websiteId" `
     -Headers $headers
 
 if ($authRole.value.Count -eq 0) {
@@ -279,8 +304,9 @@ function Get-WebRoles {
         [string]$WebsiteId
     )
 
+    # Use mspp_webroles (not adx_webroles)
     $roles = Invoke-RestMethod `
-        -Uri "$baseUrl/adx_webroles?`$filter=_adx_websiteid_value eq $WebsiteId&`$select=adx_webroleid,adx_name,adx_description,adx_authenticatedusersrole" `
+        -Uri "$baseUrl/mspp_webroles?`$filter=_mspp_websiteid_value eq $WebsiteId&`$select=mspp_webroleid,mspp_name,mspp_description,mspp_authenticatedusersrole,mspp_anonymoususersrole" `
         -Headers $headers
 
     return $roles.value
@@ -289,7 +315,7 @@ function Get-WebRoles {
 # Get all roles for the website
 $allRoles = Get-WebRoles -WebsiteId $websiteId
 $allRoles | ForEach-Object {
-    Write-Host "Role: $($_.adx_name) | ID: $($_.adx_webroleid) | Auth Required: $($_.adx_authenticatedusersrole)"
+    Write-Host "Role: $($_.mspp_name) | ID: $($_.mspp_webroleid) | Auth Required: $($_.mspp_authenticatedusersrole) | Anonymous: $($_.mspp_anonymoususersrole)"
 }
 ```
 
@@ -305,12 +331,13 @@ function Get-WebRoleId {
         [string]$WebsiteId
     )
 
+    # Use mspp_webroles (not adx_webroles)
     $role = Invoke-RestMethod `
-        -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq '$RoleName' and _adx_websiteid_value eq $WebsiteId&`$select=adx_webroleid" `
+        -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq '$RoleName' and _mspp_websiteid_value eq $WebsiteId&`$select=mspp_webroleid" `
         -Headers $headers
 
     if ($role.value.Count -gt 0) {
-        return $role.value[0].adx_webroleid
+        return $role.value[0].mspp_webroleid
     }
     return $null
 }
@@ -340,8 +367,9 @@ function Add-ContactToWebRole {
     }
 
     try {
+        # Use mspp_webroles (not adx_webroles)
         Invoke-RestMethod `
-            -Uri "$baseUrl/adx_webroles($WebRoleId)/adx_webrole_contact/`$ref" `
+            -Uri "$baseUrl/mspp_webroles($WebRoleId)/mspp_webrole_contact/`$ref" `
             -Method Post `
             -Headers $headers `
             -Body ($association | ConvertTo-Json)
@@ -371,8 +399,9 @@ function Remove-ContactFromWebRole {
     )
 
     try {
+        # Use mspp_webroles (not adx_webroles)
         Invoke-RestMethod `
-            -Uri "$baseUrl/adx_webroles($WebRoleId)/adx_webrole_contact($ContactId)/`$ref" `
+            -Uri "$baseUrl/mspp_webroles($WebRoleId)/mspp_webrole_contact($ContactId)/`$ref" `
             -Method Delete `
             -Headers $headers
         Write-Host "Removed contact $ContactId from web role $WebRoleId"
@@ -428,7 +457,7 @@ $headers = @{
 
 $baseUrl = "$envUrl/api/data/v9.2"
 
-# Verify default roles exist
+# Verify default roles exist (use mspp_webroles)
 Write-Host "`n=== Verifying Default Web Roles ===" -ForegroundColor Cyan
 
 $defaultRoles = @("Anonymous Users", "Authenticated Users", "Administrators")
@@ -436,11 +465,11 @@ $roleIds = @{}
 
 foreach ($roleName in $defaultRoles) {
     $role = Invoke-RestMethod `
-        -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq '$roleName' and _adx_websiteid_value eq $WebsiteId" `
+        -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq '$roleName' and _mspp_websiteid_value eq $WebsiteId" `
         -Headers $headers
 
     if ($role.value.Count -gt 0) {
-        $roleIds[$roleName] = $role.value[0].adx_webroleid
+        $roleIds[$roleName] = $role.value[0].mspp_webroleid
         Write-Host "✓ Found: $roleName (ID: $($roleIds[$roleName]))" -ForegroundColor Green
     } else {
         Write-Host "✗ Missing: $roleName" -ForegroundColor Yellow
@@ -453,7 +482,7 @@ if ($CustomRoles.Count -gt 0) {
 
     foreach ($customRole in $CustomRoles) {
         $existingRole = Invoke-RestMethod `
-            -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq '$customRole' and _adx_websiteid_value eq $WebsiteId" `
+            -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq '$customRole' and _mspp_websiteid_value eq $WebsiteId" `
             -Headers $headers
 
         if ($existingRole.value.Count -eq 0) {
@@ -463,7 +492,7 @@ if ($CustomRoles.Count -gt 0) {
                 Write-Host "✓ Created: $customRole" -ForegroundColor Green
             }
         } else {
-            $roleIds[$customRole] = $existingRole.value[0].adx_webroleid
+            $roleIds[$customRole] = $existingRole.value[0].mspp_webroleid
             Write-Host "→ Already exists: $customRole" -ForegroundColor Yellow
         }
     }

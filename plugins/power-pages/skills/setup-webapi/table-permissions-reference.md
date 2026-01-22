@@ -72,7 +72,11 @@ function New-TablePermission {
         [bool]$AppendTo = $false
     )
 
+    # Generate unique ID for the permission
+    $permissionId = [guid]::NewGuid().ToString()
+
     $permission = @{
+        "adx_entitypermissionid" = $permissionId
         "adx_entityname" = $TableLogicalName
         "adx_entitylogicalname" = $TableLogicalName
         "adx_scope" = $Scope
@@ -89,8 +93,11 @@ function New-TablePermission {
 
     try {
         $result = Invoke-RestMethod -Uri "$baseUrl/adx_entitypermissions" -Method Post -Headers $headers -Body $body
-        Write-Host "Created table permission for: $TableLogicalName"
-        return $result
+        Write-Host "Created table permission for: $TableLogicalName (ID: $permissionId)"
+        return @{
+            "Id" = $permissionId
+            "Result" = $result
+        }
     }
     catch {
         Write-Host "Error creating permission for $TableLogicalName : $_"
@@ -159,31 +166,89 @@ New-TablePermission -Name "Admin Orders" `
 
 Table permissions must be linked to web roles to take effect.
 
-### Get Anonymous Users Role
+### Get or Create Web Role
+
+**IMPORTANT**: Always use `mspp_webroles` (not `adx_webroles`) for fetching web role IDs. If the role doesn't exist, create it first before proceeding with table permissions.
 
 ```powershell
-# Get the Anonymous Users web role ID
-$anonymousRole = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_webroles?`$filter=adx_name eq 'Anonymous Users' and _adx_websiteid_value eq $websiteId&`$select=adx_webroleid" `
-    -Headers $headers
+function Get-OrCreateWebRole {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$RoleName,
+        [Parameter(Mandatory=$true)]
+        [string]$WebsiteId,
+        [string]$Description = ""
+    )
 
-if ($anonymousRole.value.Count -gt 0) {
-    $roleId = $anonymousRole.value[0].adx_webroleid
-    Write-Host "Anonymous Users Role ID: $roleId"
+    # Try to get existing role using mspp_webroles
+    try {
+        $existingRole = Invoke-RestMethod `
+            -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq '$RoleName' and _mspp_websiteid_value eq $WebsiteId&`$select=mspp_webroleid" `
+            -Headers $headers
+
+        if ($existingRole.value.Count -gt 0) {
+            $roleId = $existingRole.value[0].mspp_webroleid
+            Write-Host "Found existing web role '$RoleName' with ID: $roleId"
+            return $roleId
+        }
+    }
+    catch {
+        Write-Host "Error checking for existing role: $_"
+    }
+
+    # Role doesn't exist - create it
+    Write-Host "Web role '$RoleName' not found. Creating..."
+
+    $newRoleId = [guid]::NewGuid().ToString()
+    $webRole = @{
+        "mspp_webroleid" = $newRoleId
+        "mspp_name" = $RoleName
+        "mspp_description" = $Description
+        "mspp_websiteid@odata.bind" = "/mspp_websites($WebsiteId)"
+    }
+
+    try {
+        Invoke-RestMethod -Uri "$baseUrl/mspp_webroles" -Method Post -Headers $headers -Body ($webRole | ConvertTo-Json -Depth 5)
+        Write-Host "Created web role '$RoleName' with ID: $newRoleId"
+        return $newRoleId
+    }
+    catch {
+        Write-Host "Error creating web role '$RoleName': $_"
+        return $null
+    }
 }
+
+# Example: Get or create Anonymous Users role
+$roleId = Get-OrCreateWebRole -RoleName "Anonymous Users" -WebsiteId $websiteId -Description "Unauthenticated site visitors"
+
+if (-not $roleId) {
+    Write-Host "ERROR: Unable to get or create web role. Cannot proceed with table permission creation." -ForegroundColor Red
+    return
+}
+
+Write-Host "Web Role ID: $roleId"
 ```
 
 ### Associate Permission with Role
 
+**IMPORTANT**: Only create table permissions if you have a valid web role ID. If role retrieval/creation fails, do NOT create the permission.
+
 ```powershell
 function Add-PermissionToRole {
     param(
+        [Parameter(Mandatory=$true)]
         [string]$PermissionId,
+        [Parameter(Mandatory=$true)]
         [string]$RoleId
     )
 
+    if (-not $RoleId) {
+        Write-Host "ERROR: No valid role ID provided. Cannot associate permission." -ForegroundColor Red
+        return $false
+    }
+
     $association = @{
-        "@odata.id" = "$baseUrl/adx_webroles($RoleId)"
+        "@odata.id" = "$baseUrl/mspp_webroles($RoleId)"
     }
 
     try {
@@ -193,9 +258,11 @@ function Add-PermissionToRole {
             -Headers $headers `
             -Body ($association | ConvertTo-Json)
         Write-Host "Associated permission $PermissionId with role $RoleId"
+        return $true
     }
     catch {
         Write-Host "Error associating permission: $_"
+        return $false
     }
 }
 ```
@@ -310,7 +377,54 @@ write: false
 | Parent | 756150003 | Records linked via parent relationship |
 | Self | 756150004 | Only records owned by current user |
 
+### Generating Unique IDs
+
+**IMPORTANT**: Every table permission YAML file must have a unique `id` field (UUID/GUID format).
+
+**When creating YAML files directly**: Generate a valid UUID in the format `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` where each `x` is a hexadecimal character (0-9, a-f). Each permission must have a different UUID.
+
+**PowerShell** (if running scripts):
+```powershell
+[guid]::NewGuid().ToString()
+```
+
+**Bash/Linux/Mac**:
+```bash
+uuidgen | tr '[:upper:]' '[:lower:]'
+# or
+cat /proc/sys/kernel/random/uuid
+```
+
+**Python**:
+```python
+import uuid
+print(str(uuid.uuid4()))
+```
+
+**Online**: Use any UUID generator website
+
+**Example UUIDs** (do NOT reuse these - generate new ones):
+- `71ecf203-dfe2-4c1e-9db2-112ed3925a52`
+- `82fde314-eff3-5d2f-0ec3-223fe4036b63`
+- `93gef425-fgg4-6e3g-1fd4-334gf5147c74`
+
 ### Example: Read-Only Public Permission
+
+**Before creating**, ensure you have the web role GUID. Query `mspp_webroles` to get the ID:
+
+```powershell
+# Get Anonymous Users role ID (use mspp_webroles, NOT adx_webroles)
+$anonymousRole = Invoke-RestMethod `
+    -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq 'Anonymous Users' and _mspp_websiteid_value eq $websiteId&`$select=mspp_webroleid" `
+    -Headers $headers
+
+if ($anonymousRole.value.Count -eq 0) {
+    Write-Host "ERROR: Anonymous Users role not found. Create the role first or skip this permission." -ForegroundColor Red
+    return
+}
+
+$anonymousRoleGuid = $anonymousRole.value[0].mspp_webroleid
+```
 
 ```yaml
 append: false
@@ -320,8 +434,8 @@ delete: false
 entitylogicalname: cr_product
 entityname: Product - Anonymous Read
 entitypermission_webrole:
-- <anonymous-users-webrole-guid>
-id: <new-guid>
+- 18c1fdce-684b-f011-877a-7c1e520c8613  # Anonymous Users role GUID from mspp_webroles query
+id: 71ecf203-dfe2-4c1e-9db2-112ed3925a52  # Generate with [guid]::NewGuid().ToString()
 parententitypermission:
 read: true
 scope: 756150000
@@ -338,8 +452,8 @@ delete: false
 entitylogicalname: cr_userprofile
 entityname: User Profile - Self Access
 entitypermission_webrole:
-- <authenticated-users-webrole-guid>
-id: <new-guid>
+- 29d2gedf-795c-g122-988b-8d2f631d9724  # Authenticated Users role GUID from mspp_webroles query
+id: 82fde314-eff3-5d2f-0ec3-223fe4036b63  # Generate with [guid]::NewGuid().ToString()
 parententitypermission:
 read: true
 scope: 756150004
@@ -368,8 +482,8 @@ delete: false
 entitylogicalname: cr_order
 entityname: Order - User Access
 entitypermission_webrole:
-- <authenticated-users-webrole-guid>
-id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+- 29d2gedf-795c-g122-988b-8d2f631d9724  # Authenticated Users role GUID from mspp_webroles query
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890  # Generate with [guid]::NewGuid().ToString()
 parententitypermission:
 read: true
 scope: 756150001
@@ -386,9 +500,9 @@ delete: true
 entitylogicalname: cr_orderitem
 entityname: Order Item - Parent Access
 entitypermission_webrole:
-- <authenticated-users-webrole-guid>
-id: <new-guid>
-parententitypermission: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+- 29d2gedf-795c-g122-988b-8d2f631d9724  # Same role GUID from mspp_webroles query
+id: b2c3d4e5-f6g7-8901-bcde-fg2345678901  # Generate with [guid]::NewGuid().ToString()
+parententitypermission: a1b2c3d4-e5f6-7890-abcd-ef1234567890  # Parent permission ID from above
 read: true
 scope: 756150003
 write: true

@@ -31,6 +31,28 @@ value: <SETTING_VALUE>
 - Replace `/` with `-` in the setting name
 - Example: Setting `Webapi/cr_product/enabled` → File `Webapi-cr_product-enabled.sitesetting.yml`
 
+### Generating Unique IDs
+
+Each site setting must have a unique `id` field (UUID/GUID format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+
+**When creating YAML files directly**: Generate a valid UUID where each `x` is a hexadecimal character (0-9, a-f).
+
+**PowerShell**:
+```powershell
+[guid]::NewGuid().ToString()
+```
+
+**Bash/Linux/Mac**:
+```bash
+uuidgen | tr '[:upper:]' '[:lower:]'
+```
+
+**Python**:
+```python
+import uuid
+print(str(uuid.uuid4()))
+```
+
 ## Required Site Settings for Each Table
 
 For each table that needs Web API access, create these settings:

@@ -33,36 +33,49 @@ Create and deploy Power Pages sites using modern development approaches.
 
 **Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
 
-| Skill | Description |
-|-------|-------------|
-| `/create-site` | Create, upload, and activate a Power Pages code site |
-| `/setup-dataverse` | Configure Dataverse tables and relationships |
-| `/setup-webapi` | Set up Web API integration for data access |
-
-**Prerequisites:**
-- PAC CLI (v1.44+) installed and authenticated
-- Azure CLI installed for API authentication
-- Node.js (v18+) for building frontend projects
-- Power Pages environment with admin privileges
-
 ## Installation
 
-To use a plugin from this marketplace, reference it in your Claude Code configuration:
+### Add from GitHub Marketplace
 
-```json
-{
-  "plugins": ["./plugins/power-pages"]
-}
-```
+To use a plugin from this marketplace:
 
-## Workflow Example (Power Pages)
+1. Add the marketplace to your Claude Code instance
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  1. Design  │ ──▶ │  2. Build   │ ──▶ │  3. Upload  │ ──▶ │ 4. Activate │
-│   & Create  │     │   Project   │     │  (Inactive) │     │  (Go Live)  │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-```
+    ```bash
+    /plugin marketplace add microsoft/power-platform-claude-plugin
+    ```
+
+2. Install the desired plugin
+
+    ```bash
+    /plugin install power-pages@power-platform-claude-plugin
+    ```
+
+### Add from local path
+
+1. Clone this repository
+1. Add the marketplace to your Claude Code instance
+
+    ```bash
+    /plugin marketplace add /path/to/power-platform-claude-plugin
+    ```
+
+1. Install the desired plugin (installs to user scope by default)
+
+    ```bash
+    /plugin install power-pages@power-platform-claude-plugin
+    ```
+
+## Local Development
+
+To develop and test plugins locally, follow these steps:
+
+1. Clone this repository
+1. Launch Claude Code with plugin path:
+
+    ```bash
+    claude --plugin-dir /path/to/power-platform-claude-plugin/plugins/power-pages
+    ```
 
 ## Documentation
 
@@ -92,4 +105,3 @@ trademarks or logos is subject to and must follow
 [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
 Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
 Any use of third-party trademarks or logos are subject to those third-party's policies.
-
