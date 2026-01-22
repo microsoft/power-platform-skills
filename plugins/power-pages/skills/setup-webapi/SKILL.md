@@ -261,12 +261,15 @@ Table permissions control which users can access data. Create via Dataverse API 
 
 Update the frontend to use Power Pages Web API instead of mock data.
 
+**CRITICAL**: This step is NOT complete until ALL mock/static data has been replaced with Web API calls. Do not proceed to Step 6 until verification is complete.
+
 ### Key Points
 
-- Create `dataverseApi.ts` service with CRUD operations
+- Create `webApi.ts` service with CRUD operations
 - Implement CSRF token handling for write operations
 - Create typed wrappers for each entity
 - Replace **ALL** static/mock data with API calls
+- **VERIFY** no hardcoded data remains
 
 ### CSRF Token Requirement
 
@@ -274,21 +277,57 @@ POST, PATCH, DELETE requests require `__RequestVerificationToken` header. The re
 
 ### Actions
 
-1. Create `src/services/dataverseApi.ts` (copy from reference)
+1. Create `src/services/webApi.ts` (copy from reference)
 2. Create type definitions for your entities
 3. Create entity-specific API wrappers
-4. Optionally create `useDataverse` React hook
-5. Update each component to use Web API
-6. Search and remove all mock data
+4. Optionally create `useWebApi` React hook
+5. **Systematically search for ALL mock data** (see below)
+6. Update each component to use Web API
+7. **Delete mock data files/folders** after replacement
+8. **Run verification checks** before proceeding
 
-### Mock Data Checklist
+### Mock Data Search (REQUIRED)
 
-Search these locations for mock data to replace:
+You MUST search for and replace ALL mock data. Use these searches:
 
-- [ ] `src/data/` or `src/mock/` folders
-- [ ] Constants files with hardcoded arrays
-- [ ] Component files with inline data
-- [ ] JSON files used as data sources
+```powershell
+# 1. Find mock data folders
+Get-ChildItem -Path ./src -Directory -Recurse | Where-Object { $_.Name -match "^(mock|data|fixtures|fake|dummy)$" }
+
+# 2. Find data files
+Get-ChildItem -Path ./src -Recurse -Include "*.data.ts","*.data.js","*mock*.ts","*mock*.js"
+
+# 3. Find inline array declarations (review each match)
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "const\s+\w+\s*=\s*\[" | Where-Object { $_.Line -match "\{" }
+
+# 4. Find JSON imports
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "from ['\"].*\.json['\"]"
+```
+
+### Mock Data Verification (REQUIRED)
+
+Before proceeding to Step 6, verify:
+
+- [ ] No `src/data/` or `src/mock/` folders exist (or are empty)
+- [ ] No `*.data.ts` or `*mock*.ts` files remain with active exports
+- [ ] No components have inline hardcoded arrays for configured tables
+- [ ] No JSON files are imported as data sources for configured tables
+- [ ] All components displaying data use the `webApi` service
+- [ ] All form components use the `webApi` service for submissions
+
+**If any mock data remains, replace it before continuing.**
+
+### Entity-Specific Checklist
+
+For each table configured for Web API, verify:
+
+| Table | Mock Data Replaced | Component Updated | Verified Working |
+|-------|-------------------|-------------------|------------------|
+| Products | [ ] | [ ] | [ ] |
+| Team Members | [ ] | [ ] | [ ] |
+| Testimonials | [ ] | [ ] | [ ] |
+| FAQs | [ ] | [ ] | [ ] |
+| Contact Form | [ ] | [ ] | [ ] |
 
 ---
 
@@ -408,7 +447,7 @@ After completing this skill, update `memory-bank.md`:
 
 | File | Changes |
 |------|---------|
-| src/services/dataverseApi.ts | Created Web API service |
+| src/services/webApi.ts | Created Power Pages Web API service |
 | [ADD MORE AS MODIFIED] |
 
 ### Removed/Replaced Mock Data

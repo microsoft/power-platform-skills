@@ -30,11 +30,11 @@ DELETE /_api/cr_products(<guid>)                 # Delete product
 - GET requests do not require this token
 - The token may expire, so handle 403 errors by refreshing the token
 
-## Dataverse API Service (TypeScript)
+## Power Pages Web API Service (TypeScript)
 
 Create a reusable API service for Web API calls.
 
-**File: `src/services/dataverseApi.ts`**
+**File: `src/services/webApi.ts`**
 
 ```typescript
 // Power Pages Web API Service
@@ -158,7 +158,7 @@ function buildQueryString(options: QueryOptions): string {
 }
 
 // Generic CRUD operations
-export const dataverseApi = {
+export const webApi = {
   // GET all records
   async getAll<T>(entitySet: string, options: QueryOptions = {}): Promise<T[]> {
     const queryString = buildQueryString(options);
@@ -205,31 +205,31 @@ Create typed wrappers for each entity:
 // Entity-specific services
 export const productsApi = {
   getAll: (options?: QueryOptions) =>
-    dataverseApi.getAll<Product>('cr_products', options),
+    webApi.getAll<Product>('cr_products', options),
   getById: (id: string) =>
-    dataverseApi.getById<Product>('cr_products', id),
+    webApi.getById<Product>('cr_products', id),
   getActive: () =>
-    dataverseApi.getAll<Product>('cr_products', { filter: 'cr_isactive eq true', orderBy: 'cr_name' }),
+    webApi.getAll<Product>('cr_products', { filter: 'cr_isactive eq true', orderBy: 'cr_name' }),
 };
 
 export const teamMembersApi = {
   getAll: () =>
-    dataverseApi.getAll<TeamMember>('cr_teammembers', { orderBy: 'cr_displayorder' }),
+    webApi.getAll<TeamMember>('cr_teammembers', { orderBy: 'cr_displayorder' }),
 };
 
 export const testimonialsApi = {
   getActive: () =>
-    dataverseApi.getAll<Testimonial>('cr_testimonials', { filter: 'cr_isactive eq true' }),
+    webApi.getAll<Testimonial>('cr_testimonials', { filter: 'cr_isactive eq true' }),
 };
 
 export const faqsApi = {
   getActive: () =>
-    dataverseApi.getAll<FAQ>('cr_faqs', { filter: 'cr_isactive eq true', orderBy: 'cr_displayorder' }),
+    webApi.getAll<FAQ>('cr_faqs', { filter: 'cr_isactive eq true', orderBy: 'cr_displayorder' }),
 };
 
 export const contactApi = {
   submit: (data: ContactSubmission) =>
-    dataverseApi.create<ContactSubmission>('cr_contactsubmissions', {
+    webApi.create<ContactSubmission>('cr_contactsubmissions', {
       ...data,
       cr_submissiondate: new Date().toISOString(),
       cr_status: 1, // New
@@ -292,11 +292,11 @@ export interface ContactSubmission {
 
 ## React Hook for Data Fetching
 
-**File: `src/hooks/useDataverse.ts`**
+**File: `src/hooks/useWebApi.ts`**
 
 ```typescript
 import { useState, useEffect, useCallback } from 'react';
-import { dataverseApi, QueryOptions } from '../services/dataverseApi';
+import { webApi, QueryOptions } from '../services/webApi';
 
 interface UseDataverseResult<T> {
   data: T[];
@@ -305,7 +305,7 @@ interface UseDataverseResult<T> {
   refetch: () => Promise<void>;
 }
 
-export function useDataverse<T>(
+export function useWebApi<T>(
   entitySet: string,
   options: QueryOptions = {},
   deps: any[] = []
@@ -318,7 +318,7 @@ export function useDataverse<T>(
     setLoading(true);
     setError(null);
     try {
-      const result = await dataverseApi.getAll<T>(entitySet, options);
+      const result = await webApi.getAll<T>(entitySet, options);
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
@@ -335,7 +335,7 @@ export function useDataverse<T>(
 }
 
 // Usage example:
-// const { data: products, loading, error } = useDataverse<Product>('cr_products', { filter: 'cr_isactive eq true' });
+// const { data: products, loading, error } = useWebApi<Product>('cr_products', { filter: 'cr_isactive eq true' });
 ```
 
 ## Component Examples
@@ -365,7 +365,7 @@ function ProductList() {
 
 ```tsx
 import { useState, useEffect } from 'react';
-import { productsApi, Product } from '../services/dataverseApi';
+import { productsApi, Product } from '../services/webApi';
 
 function ProductList() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -403,7 +403,7 @@ function ProductList() {
 
 ```tsx
 import { useState } from 'react';
-import { contactApi, ContactSubmission } from '../services/dataverseApi';
+import { contactApi, ContactSubmission } from '../services/webApi';
 
 function ContactForm() {
   const [formData, setFormData] = useState<ContactSubmission>({
@@ -486,22 +486,172 @@ function ContactForm() {
 }
 ```
 
-## Mock Data Replacement Checklist
+## Mock Data Replacement Guide
 
-When integrating Web APIs, you must replace **all** mock/static data:
+**CRITICAL**: The Web API setup is NOT complete until ALL mock/static data has been replaced with Web API calls. This section provides systematic instructions to find and replace every instance.
 
-1. **Search the codebase** for hardcoded arrays, objects, or static data files
-2. **Identify all components** that display data from configured tables
-3. **Replace each instance** with the appropriate Web API call
-4. **Remove or comment out** old mock data
-5. **Verify no static data remains**
+### Step 1: Search for Mock Data Files
+
+Search for dedicated mock data files and folders:
+
+```bash
+# Find common mock data folders
+find . -type d -name "mock*" -o -name "data" -o -name "fixtures" -o -name "fake*" -o -name "dummy*" 2>/dev/null
+
+# Find data files
+find . -type f \( -name "*.data.ts" -o -name "*.data.js" -o -name "*mock*.ts" -o -name "*mock*.js" -o -name "*.json" \) -path "*/src/*" 2>/dev/null
+```
+
+**PowerShell equivalent:**
+```powershell
+# Find mock data folders
+Get-ChildItem -Path . -Directory -Recurse | Where-Object { $_.Name -match "mock|data|fixtures|fake|dummy" }
+
+# Find data files in src
+Get-ChildItem -Path ./src -Recurse -Include "*.data.ts","*.data.js","*mock*.ts","*mock*.js","*.json"
+```
+
+### Step 2: Search for Inline Mock Data Patterns
+
+Search for common patterns that indicate hardcoded data:
+
+```bash
+# Arrays of objects (common mock data pattern)
+grep -rn "^\s*\[\s*{" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" src/
+
+# Const arrays with data
+grep -rn "const.*=\s*\[" --include="*.ts" --include="*.tsx" src/
+
+# Export const arrays
+grep -rn "export const.*\[\|export default \[" --include="*.ts" --include="*.tsx" src/
+```
+
+**PowerShell equivalent:**
+```powershell
+# Search for array declarations that look like mock data
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "const\s+\w+\s*=\s*\[" | Where-Object { $_.Line -notmatch "useState|useEffect" }
+
+# Search for exported arrays
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "export (const|default)\s+.*\["
+```
+
+### Step 3: Identify Data by Entity Type
+
+For each table configured for Web API, search for related mock data:
+
+| Table | Search Patterns |
+|-------|-----------------|
+| Products | `product`, `products`, `item`, `items`, `catalog` |
+| Team Members | `team`, `member`, `staff`, `employee`, `people` |
+| Testimonials | `testimonial`, `review`, `feedback`, `quote` |
+| FAQs | `faq`, `question`, `answer`, `help` |
+| Contact | `contact`, `submission`, `inquiry`, `message` |
+
+**Example search:**
+```powershell
+# Find all references to products data
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "products?\s*[:=]?\s*\[" -CaseSensitive:$false
+```
+
+### Step 4: Replace Each Instance
+
+For each mock data instance found:
+
+**Before (mock data):**
+```typescript
+// src/data/products.ts
+export const products = [
+  { id: 1, name: 'Widget', price: 29.99 },
+  { id: 2, name: 'Gadget', price: 49.99 },
+];
+
+// src/components/ProductList.tsx
+import { products } from '../data/products';
+
+function ProductList() {
+  return products.map(p => <ProductCard key={p.id} product={p} />);
+}
+```
+
+**After (Web API):**
+```typescript
+// src/components/ProductList.tsx
+import { useState, useEffect } from 'react';
+import { productsApi, Product } from '../services/webApi';
+
+function ProductList() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    productsApi.getActive().then(setProducts).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <LoadingSpinner />;
+  return products.map(p => <ProductCard key={p.cr_productid} product={p} />);
+}
+```
+
+### Step 5: Delete or Archive Mock Data Files
+
+After replacing all usages:
+
+1. **Delete mock data files** that are no longer imported anywhere
+2. **Remove mock data folders** if empty
+3. **Update any barrel exports** (index.ts files) that re-exported mock data
+
+```powershell
+# Verify no imports remain for a mock file before deleting
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "from ['\"].*products\.data"
+
+# If no results, safe to delete
+Remove-Item -Path "src\data\products.data.ts"
+```
+
+### Step 6: Verify Complete Replacement
+
+**IMPORTANT**: Run these verification checks before marking the skill complete:
+
+```powershell
+# 1. Check for any remaining mock/data folders
+Get-ChildItem -Path ./src -Directory -Recurse | Where-Object { $_.Name -match "^(mock|data|fixtures|fake|dummy)$" }
+
+# 2. Check for suspicious const array declarations (review each match)
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "const\s+\w+\s*:\s*\w+\[\]\s*=\s*\[" | Where-Object { $_.Line -match "\{" }
+
+# 3. Check for JSON imports that might be mock data
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "from ['\"].*\.json['\"]"
+
+# 4. Verify all components use the webApi service
+Select-String -Path "src\**\*.ts","src\**\*.tsx" -Pattern "webApi|productsApi|teamMembersApi|testimonialsApi|faqsApi|contactApi"
+```
 
 ### Common Locations for Mock Data
 
-- `src/data/` or `src/mock/` folders
-- Constants files with hardcoded arrays
-- Component files with inline data definitions
-- JSON files used as data sources
+| Location | Description | Action |
+|----------|-------------|--------|
+| `src/data/` | Dedicated data folder | Replace all, then delete folder |
+| `src/mock/` | Mock data folder | Replace all, then delete folder |
+| `src/constants/` | May contain data arrays | Review and replace data arrays |
+| `src/fixtures/` | Test fixtures with data | Replace with API calls or test mocks |
+| `*.json` in src | JSON data files | Replace imports with API calls |
+| Component files | Inline const arrays | Move to useEffect with API calls |
+| Context providers | Initial state with data | Initialize empty, fetch in useEffect |
+
+### Mock Data Replacement Tracking
+
+Track replacements in the memory bank:
+
+```markdown
+### Removed/Replaced Mock Data
+
+| Location | Description | Replaced With | Verified |
+|----------|-------------|---------------|----------|
+| src/data/products.ts | Static product array | productsApi.getActive() | ✅ |
+| src/data/team.ts | Team member list | teamMembersApi.getAll() | ✅ |
+| src/components/FAQ.tsx | Inline FAQ array | faqsApi.getActive() | ✅ |
+| src/data/ folder | Mock data folder | DELETED | ✅ |
+```
 
 ## OData Query Reference
 
