@@ -1,6 +1,6 @@
 # Memory Bank Instructions
 
-This document defines the memory bank system used to persist context across conversations and skill invocations.
+This document defines the memory bank system used to persist context across conversations and skill invocations. **All skills in this plugin follow these instructions.**
 
 ## Overview
 
@@ -16,27 +16,76 @@ The memory bank (`memory-bank.md`) is a markdown file stored in the project root
 
 The memory bank is always stored at: `<PROJECT_ROOT>/memory-bank.md`
 
-## When to Read
+---
 
-**ALWAYS** read the memory bank at the start of any skill execution:
+## Before Starting Any Skill
 
-1. Check if `memory-bank.md` exists in the project root
-2. If it exists, read it to understand prior context
-3. Use this context to:
-   - Skip already-completed steps
-   - Apply previously-chosen preferences
-   - Understand what resources already exist
-   - Continue from where the user left off
+**IMPORTANT**: Every skill MUST check for and read the memory bank before proceeding.
 
-## When to Write
+### Step 1: Locate the Memory Bank
 
-Update the memory bank after:
+1. If the user has specified a project path, check `<PROJECT_PATH>/memory-bank.md`
+2. If continuing from a previous skill in the same session, use the known project path
+3. If no path is known, ask the user for the project path
 
-1. Completing any major step
-2. User makes a significant decision
-3. Creating or modifying resources
-4. Encountering errors or issues
-5. Before ending a session
+### Step 2: Read and Parse Context
+
+If the memory bank exists, extract:
+
+| Information | Purpose |
+|-------------|---------|
+| Project path, name, framework | Know what you're working with |
+| Completed steps (checkboxes) | Skip steps already done |
+| User preferences | Don't re-ask answered questions |
+| Created resources | Know what tables/settings exist |
+| Current status | Understand where to resume |
+
+### Step 3: Resume or Continue
+
+- **If the current skill's steps are already marked complete**: Ask if they want to modify, add more, or skip to next steps
+- **If partially complete**: Inform the user and resume from the incomplete step
+- **If not started**: Begin from the first step
+
+### Step 4: Inform the User
+
+Always tell the user what you found:
+
+> "I found your project memory bank. [Summary: project name, framework, what's been completed]. Let's continue from [next step]."
+
+---
+
+## After Each Major Step
+
+Update the memory bank immediately after completing each major step. This ensures progress is saved even if the session ends unexpectedly.
+
+### What to Update
+
+1. **Mark completed steps** with `[x]`
+2. **Record created resources** (tables, settings, files)
+3. **Save user decisions** (framework choice, integration approach, etc.)
+4. **Update current status** and next step
+5. **Add timestamp** to "Last Updated"
+6. **Add notes** for important context or decisions
+
+### Update Frequency
+
+Update after:
+
+- Completing any workflow step
+- User makes a significant decision
+- Creating or modifying resources
+- Encountering errors or issues worth noting
+- Before ending a session
+
+---
+
+## When to Create vs Update
+
+| Scenario | Action |
+|----------|--------|
+| Memory bank doesn't exist | Create it after the first major step (e.g., after site creation) |
+| Memory bank exists | Update it - preserve existing content, add new information |
+| Continuing previous session | Read first, then update as you progress |
 
 ## Template Structure
 

@@ -11,23 +11,12 @@ This skill guides makers through creating a complete Power Pages code site (Sing
 
 ## Memory Bank
 
-This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions. See `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md` for full documentation.
+This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions.
 
-### Before Starting
-
-**IMPORTANT**: Check if a memory bank exists before proceeding:
-
-1. If the user has specified a project path, check for `<PROJECT_PATH>/memory-bank.md`
-2. If found, read it to understand:
-   - What steps have already been completed
-   - What user preferences were chosen (framework, style, features)
-   - What the current status is
-3. **Skip completed steps** and resume from where the user left off
-4. Inform the user: "I found your previous session. You completed [X]. Let's continue from [Y]."
-
-### After Each Step
-
-Update the memory bank after completing each major step. This ensures progress is saved even if the session ends unexpectedly.
+**Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md`** for:
+- Checking and reading the memory bank before starting
+- Skipping completed steps and resuming progress
+- Updating the memory bank after each major step
 
 ## Workflow Overview
 

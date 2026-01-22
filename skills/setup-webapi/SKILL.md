@@ -11,29 +11,12 @@ This skill guides makers through configuring Web API access for their Power Page
 
 ## Memory Bank
 
-This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions. See `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md` for full documentation.
+This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions.
 
-### Before Starting
-
-**IMPORTANT**: Check the memory bank before proceeding:
-
-1. Look for `memory-bank.md` in the project root (path from previous session or user-provided)
-2. If found, read it to understand:
-   - Project path, name, and framework
-   - Tables created in `/setup-dataverse` step
-   - Whether `/setup-webapi` steps were already started
-3. **Skip completed steps** - if Web API was already configured, offer to modify or add more tables
-4. **Apply saved preferences** - don't re-ask questions that were already answered
-5. Inform the user: "I found your project memory bank. [Summary of what's been done]"
-
-### After Each Step
-
-Update the memory bank after completing each major step:
-
-1. Mark completed steps with `[x]`
-2. Record created site settings
-3. Record files modified for Web API integration
-4. Update current status and next steps
+**Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md`** for:
+- Checking and reading the memory bank before starting
+- Skipping completed steps and resuming progress
+- Updating the memory bank after each major step
 
 ## Workflow Overview
 

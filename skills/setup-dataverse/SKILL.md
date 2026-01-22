@@ -11,30 +11,12 @@ This skill guides makers through setting up Dataverse tables and schema for thei
 
 ## Memory Bank
 
-This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions. See `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md` for full documentation.
+This skill uses a **memory bank** (`memory-bank.md`) to persist context across sessions.
 
-### Before Starting
-
-**IMPORTANT**: Check the memory bank before proceeding:
-
-1. Look for `memory-bank.md` in the project root (path from previous session or user-provided)
-2. If found, read it to understand:
-   - Project path, name, and framework
-   - Features that were implemented (helps recommend tables)
-   - Whether `/setup-dataverse` steps were already started
-   - User's data integration preference (MCP vs OData)
-3. **Skip completed steps** - if tables were already created, offer to add more or modify
-4. **Apply saved preferences** - don't re-ask questions that were already answered
-5. Inform the user: "I found your project memory bank. [Summary of what's been done]"
-
-### After Each Step
-
-Update the memory bank after completing each major step:
-
-1. Mark completed steps with `[x]`
-2. Record created tables and their columns
-3. Record the data integration approach chosen
-4. Update current status and next steps
+**Follow the instructions in `${CLAUDE_PLUGIN_ROOT}/shared/memory-bank.md`** for:
+- Checking and reading the memory bank before starting
+- Skipping completed steps and resuming progress
+- Updating the memory bank after each major step
 
 ## Workflow Overview
 
