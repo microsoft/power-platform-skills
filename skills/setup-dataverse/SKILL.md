@@ -1,7 +1,7 @@
 ---
-description: Setup Dataverse tables and schema for your Power Pages site. Analyzes your site to recommend tables, offers MCP server or OData API approach, creates tables with sample data.
+description: Setup Dataverse tables and schema for your Power Pages site. Analyzes your site to recommend tables, creates tables using OData Web API, and adds sample data.
 user-invocable: true
-allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
+allowed-tools: Bash(pac:*), Bash(az:*)
 model: sonnet
 ---
 
@@ -38,11 +38,11 @@ This skill uses a **memory bank** (`memory-bank.md`) to persist context across s
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  STEP 3: Choose Data Integration Approach                                   │
+│  STEP 3: Set Up OData Web API Authentication                                │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  • Option A: Dataverse MCP Server (recommended for rich interaction)        │
-│  • Option B: OData Web API (direct HTTP calls)                              │
-│  • Configure chosen approach                                                │
+│  • Configure Azure CLI authentication                                       │
+│  • Get environment URL and access token                                     │
+│  • Set up API headers for Dataverse calls                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -192,182 +192,30 @@ After analysis, present the recommended schema using `AskUserQuestion`:
 
 ---
 
-## STEP 3: Choose Data Integration Approach
+## STEP 3: Set Up OData Web API Authentication
 
-**IMPORTANT**: Ask the user which approach they prefer for interacting with Dataverse.
-
-### Present Options
-
-Use `AskUserQuestion` with these options:
-
-> **How would you like to manage Dataverse data?**
->
-> Choose your preferred approach for creating and managing tables:
-
-| Option | Description |
-|--------|-------------|
-| **Dataverse MCP Server (Recommended)** | Rich Claude integration for natural language data operations. Requires one-time setup. Best for ongoing development and data management. |
-| **OData Web API** | Direct HTTP calls via PAC CLI and REST API. No additional setup. Good for quick operations. |
-
----
-
-### Option A: Configure Dataverse MCP Server
-
-If the user chooses MCP Server, guide them through the official Microsoft Dataverse MCP setup.
-
-**Reference**: [Dataverse MCP Server Documentation](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients)
-
-#### Step A1: Prerequisites
-
-1. **Enable Dataverse MCP** for your environment through Power Platform Admin Center (PPAC) settings
-2. **.NET SDK 8.0** must be installed
-
-```powershell
-# Check if .NET 8 SDK is installed
-dotnet --list-sdks
-
-# If not installed or version < 8.0, install it
-winget install Microsoft.DotNet.SDK.8
-```
-
-#### Step A2: Create a Dataverse Connection
-
-1. Go to [Power Automate](https://make.powerautomate.com) and ensure you're in the correct environment
-2. Select **Connections** on the left navigation pane
-3. Select **+ New connection**
-4. Search for "Dataverse" and select **Microsoft Dataverse** connector
-5. Complete the connection setup with your credentials
-6. Note the username shown in the connection **Name**
-7. **Important**: Open the connection and copy the URL from the browser address bar - you'll need this for configuration
-
-The connection URL will look like:
-```
-https://make.powerautomate.com/environments/<env-id>/connections?apiName=shared_commondataserviceforapps&connectionName=<connection-id>
-```
-
-#### Step A3: Install the Dataverse MCP Server Local Proxy
-
-```powershell
-# Install the official Microsoft Dataverse MCP local proxy
-dotnet tool install --global --add-source https://api.nuget.org/v3/index.json Microsoft.PowerPlatform.Dataverse.MCP
-```
-
-To update an existing installation:
-
-```powershell
-dotnet tool update --global Microsoft.PowerPlatform.Dataverse.MCP
-```
-
-#### Step A4: Get Your Tenant ID
-
-1. Go to [Power Apps](https://make.powerapps.com)
-2. Select **Settings** (gear icon) → **Session details**
-3. Copy the **Tenant ID** value (a GUID like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)
-4. Save this for the configuration step
-
-#### Step A5: Configure Claude Code Settings
-
-Add the MCP server to Claude Code settings. Edit your settings file:
-
-**Settings file location**:
-- Windows: `%USERPROFILE%\.claude\settings.json`
-- macOS/Linux: `~/.claude/settings.json`
-
-Add this configuration (replace placeholders with your values):
-
-```json
-{
-  "mcpServers": {
-    "dataverse": {
-      "command": "Microsoft.PowerPlatform.Dataverse.MCP",
-      "args": [
-        "--ConnectionUrl",
-        "<YOUR_CONNECTION_URL>",
-        "--MCPServerName",
-        "DataverseMCPServer",
-        "--TenantId",
-        "<YOUR_TENANT_ID>",
-        "--EnableHttpLogging",
-        "true",
-        "--EnableMsalLogging",
-        "false",
-        "--Debug",
-        "false",
-        "--BackendProtocol",
-        "HTTP"
-      ]
-    }
-  }
-}
-```
-
-**Example with actual values:**
-
-```json
-{
-  "mcpServers": {
-    "dataverse": {
-      "command": "Microsoft.PowerPlatform.Dataverse.MCP",
-      "args": [
-        "--ConnectionUrl",
-        "https://make.powerautomate.com/environments/fb6637eb-601d-e9d2-b7f0-1613fca29e7e/connections?apiName=shared_commondataserviceforapps&connectionName=64244f45b6f045299463becb30bcd9b8",
-        "--MCPServerName",
-        "DataverseMCPServer",
-        "--TenantId",
-        "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        "--EnableHttpLogging",
-        "true",
-        "--EnableMsalLogging",
-        "false",
-        "--Debug",
-        "false",
-        "--BackendProtocol",
-        "HTTP"
-      ]
-    }
-  }
-}
-```
-
-#### Step A6: Verify MCP Connection
-
-1. **Restart Claude Code** (exit completely and reopen)
-2. When prompted, **sign in** with your Dataverse environment credentials
-3. Verify the MCP server is connected by checking available tools
-
-**Test the connection** with prompts like:
-- "List tables in Dataverse"
-- "Describe the account table"
-- "How many contacts are in my environment?"
-
-> **Verification**: I should now have access to Dataverse tools through the MCP server. Let me test the connection by listing available tables.
-
-**Troubleshooting**:
-- If connection fails, verify your Tenant ID is correct
-- Ensure the Dataverse connection in Power Automate is active
-- Check that Dataverse MCP is enabled in your environment's PPAC settings
-- Try setting `--Debug` to `true` in the configuration for more verbose logging
-
----
-
-### Option B: Use OData Web API
-
-If the user chooses OData API, no additional setup is required beyond Azure CLI authentication. Operations will use:
+This skill uses the Dataverse OData Web API for all table and data operations. Operations will use:
 
 1. **Dataverse Web API** for table creation, schema management, and data operations
 2. **Azure CLI** for authentication (`az account get-access-token`)
 3. **PowerShell** for scripting API calls
 4. **Client-side `/_api/` calls** from the Power Pages site for runtime data access
 
-This approach is simpler to set up but requires manual API calls for each operation.
+Ensure Azure CLI is authenticated before proceeding:
+
+```powershell
+# Verify Azure CLI is logged in
+az account show
+
+# If not logged in, run:
+az login
+```
 
 ---
 
 ## STEP 4: Create Tables in Dataverse
 
-### Using Dataverse OData Web API
-
-Create tables using the Dataverse Web API. First, set up authentication:
+Create tables using the Dataverse Web API. First, set up the API connection:
 
 ```powershell
 # Get the environment URL
@@ -916,7 +764,6 @@ After completing this skill, update `memory-bank.md` with the Dataverse setup de
 ### /setup-dataverse
 - [x] Site analyzed for data requirements
 - [x] Schema recommended and approved
-- [x] Integration approach chosen: [MCP Server / OData API]
 - [x] Tables created: [LIST OF TABLES]
 - [x] Sample data inserted: [NUMBER] records per table
 
@@ -930,9 +777,8 @@ After completing this skill, update `memory-bank.md` with the Dataverse setup de
 | cr_product | Product | name, description, price, category, imageurl, isactive | 3 records |
 | [ADD MORE TABLES AS CREATED] |
 
-### Technical Preferences
-- Data Integration: [MCP Server / OData API]
-- MCP Server Configured: [Yes/No]
+### Technical Details
+- Data Integration: OData Web API
 - Environment URL: [URL from pac org who]
 
 ## Current Status
@@ -949,14 +795,6 @@ After completing this skill, update `memory-bank.md` with the Dataverse setup de
 ---
 
 ## Troubleshooting
-
-### MCP Server Connection Issues
-
-- Verify your Tenant ID is correct (get from Power Apps → Settings → Session details)
-- Ensure the Dataverse connection in Power Automate is active
-- Check that Dataverse MCP is enabled in your environment's PPAC settings
-- Try setting `--Debug` to `true` in the configuration for verbose logging
-- Restart Claude Code after configuration changes
 
 ### Dataverse Web API Errors
 
@@ -975,7 +813,6 @@ After completing this skill, update `memory-bank.md` with the Dataverse setup de
 
 ## Reference Documentation
 
-- [Dataverse MCP Server Setup](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients)
 - [Dataverse Web API](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/overview)
 - [Dataverse Entity Metadata](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api)
 - [OData Query Options](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-data-web-api)
