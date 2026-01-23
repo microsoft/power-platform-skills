@@ -79,6 +79,35 @@ Use these in skills, hooks, and scripts:
 - `${CLAUDE_SESSION_ID}` - Current session ID
 - `$ARGUMENTS` - Arguments passed to skill
 
+## DRY Principle (Don't Repeat Yourself)
+
+**Always follow the DRY principle when creating or modifying plugin content.**
+
+### Guidelines
+
+1. **Use shared reference files** for common instructions, documentation, or code that multiple skills need
+2. **Create files in `shared/` folder** for content used across multiple skills
+3. **Reference shared files** using `${CLAUDE_PLUGIN_ROOT}/shared/<filename>` instead of duplicating content
+4. **Never copy-paste** the same instructions into multiple skill files
+
+### Example
+
+Instead of duplicating cleanup instructions in each skill:
+
+```markdown
+## Cleanup Helper Files
+
+**📖 See: [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md)**
+
+Remove any temporary helper files created during this skill's execution.
+```
+
+### Shared Resources Location
+
+Common resources should be placed in:
+- `plugins/<plugin-name>/shared/` - Plugin-specific shared files
+- Reference using `${CLAUDE_PLUGIN_ROOT}/shared/<filename>`
+
 ## Memory Bank System
 
 Plugins use a memory bank (`memory-bank.md`) to persist state across sessions.

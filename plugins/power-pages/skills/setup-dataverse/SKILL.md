@@ -332,6 +332,14 @@ $products = Invoke-RestMethod -Uri "$baseUrl/cr_products?`$expand=cr_categoryid(
 
 ---
 
+## STEP 8: Cleanup Helper Files
+
+**📖 See: [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md)**
+
+Remove any temporary helper files created during this skill's execution. Verify tables are created and data is inserted correctly before cleanup.
+
+---
+
 ## Next Steps
 
 After setting up Dataverse tables with sample data, configure table permissions so Power Pages can access the data.

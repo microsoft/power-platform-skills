@@ -222,6 +222,12 @@ After activation, update memory-bank.md with:
 - All completed steps marked `[x]`
 - Next step: `/setup-dataverse`
 
+### Cleanup Helper Files
+
+**📖 See: [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md)**
+
+Remove any temporary helper files created during this skill's execution.
+
 ---
 
 ## Next Steps

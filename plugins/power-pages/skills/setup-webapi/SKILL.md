@@ -402,6 +402,14 @@ fetch('/_api/cr_products')
 
 ---
 
+## STEP 7: Cleanup Helper Files
+
+**📖 See: [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md)**
+
+Remove any temporary helper files created during this skill's execution. Verify the setup is working before cleanup.
+
+---
+
 ## Update Memory Bank
 
 After completing this skill, update `memory-bank.md`:
