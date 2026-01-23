@@ -1,5 +1,5 @@
 ---
-description: Create a Power Pages code site (SPA) using modern frontend frameworks like React, Angular, Vue, or Astro. Guides through design, build, upload, and activation.
+description: Create a Power Pages code site, website, portal, or SPA using modern frontend frameworks like React, Angular, Vue, or Astro. Use this skill when you need to create a new Power Pages site, build a website, set up a portal, scaffold a project, design pages, upload site to Power Pages, or activate a site for public access.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*)
 model: opus

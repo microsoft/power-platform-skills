@@ -1,5 +1,5 @@
 ---
-description: Configure authentication and role-based authorization for your Power Pages site. Implements server-side AAD login, user session management, and conditional UI rendering based on user roles.
+description: Configure authentication, login, logout, and role-based authorization for Power Pages. Use this skill when you need to set up user login, implement authentication, configure Azure AD/Entra ID login, add logout functionality, manage user sessions, implement role-based access control, protect routes, or add conditional UI rendering based on user roles and permissions.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
 model: sonnet

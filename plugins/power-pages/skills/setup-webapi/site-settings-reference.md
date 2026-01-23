@@ -1,10 +1,10 @@
 # Site Settings Reference
 
-This document describes how to create and configure site settings for Power Pages Web API access.
+This document describes how to create and configure site settings for Power Pages code sites.
 
 ## Folder Structure
 
-Site settings in Power Pages are stored in the `.powerpages-site/site-settings` folder. Each setting is a separate YAML file with a unique ID.
+Site settings in Power Pages code sites are stored in the `.powerpages-site/site-settings` folder. Each setting is a separate YAML file with a unique ID.
 
 ```text
 <PROJECT_ROOT>/
@@ -22,10 +22,22 @@ Site settings in Power Pages are stored in the `.powerpages-site/site-settings` 
 Each site setting file follows this YAML format:
 
 ```yaml
+description: <OPTIONAL_DESCRIPTION>
 id: <UUID>
 name: <SETTING_NAME>
 value: <SETTING_VALUE>
 ```
+
+**Important**: Field names do NOT include the `adx_` prefix (e.g., use `name` not `adx_name`).
+
+### YAML Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | GUID | Yes | Unique identifier for this setting |
+| `name` | string | Yes | Setting name (key) |
+| `value` | string | Yes | Setting value |
+| `description` | string | No | Optional description of the setting |
 
 **File naming convention**: `<SETTING_NAME_WITH_DASHES>.sitesetting.yml`
 - Replace `/` with `-` in the setting name
@@ -59,17 +71,20 @@ For each table that needs Web API access, create these settings:
 
 ### 1. Enable Web API for Table
 
+**File**: `.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-enabled.sitesetting.yml`
+
 ```yaml
-# File: <PROJECT_ROOT>/.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-enabled.sitesetting.yml
+description: Enable Web API access for the table
 id: <GENERATE_UUID>
 name: Webapi/<TABLE_LOGICAL_NAME>/enabled
-value: true  # Boolean, not string
+value: true
 ```
 
 **Example** for `cr_product` table:
 
+**File**: `.powerpages-site/site-settings/Webapi-cr_product-enabled.sitesetting.yml`
 ```yaml
-# File: Webapi-cr_product-enabled.sitesetting.yml
+description: Enable Web API access for the cr_product table
 id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 name: Webapi/cr_product/enabled
 value: true
@@ -79,8 +94,10 @@ value: true
 
 **SECURITY REQUIREMENT**: Always specify explicit field names. Never use `*` as it exposes all fields including sensitive system columns. Only include fields that are needed by the frontend.
 
+**File**: `.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-fields.sitesetting.yml`
+
 ```yaml
-# File: <PROJECT_ROOT>/.powerpages-site/site-settings/Webapi-<TABLE_LOGICAL_NAME>-fields.sitesetting.yml
+description: Allowed fields for Web API access
 id: <GENERATE_UUID>
 name: Webapi/<TABLE_LOGICAL_NAME>/fields
 value: cr_name,cr_description,cr_price,cr_imageurl,cr_isactive
@@ -92,11 +109,13 @@ Specify comma-separated field logical names that your frontend actually needs.
 
 For debugging purposes, enable detailed error messages:
 
+**File**: `.powerpages-site/site-settings/Webapi-error-innererror.sitesetting.yml`
+
 ```yaml
-# File: Webapi-error-innererror.sitesetting.yml
+description: Enable detailed error messages for debugging
 id: <GENERATE_UUID>
 name: Webapi/error/innererror
-value: true  # Boolean, not string
+value: true
 ```
 
 **IMPORTANT**: Disable this in production by setting value to `false` or removing the setting.
@@ -132,8 +151,9 @@ function New-WebApiSiteSettings {
     $enabledUuid = [guid]::NewGuid().ToString()
     $fieldsUuid = [guid]::NewGuid().ToString()
 
-    # Create enabled setting (value is boolean true, not string "true")
+    # Create enabled setting
     $enabledContent = @"
+description: Enable Web API access for $TableLogicalName table
 id: $enabledUuid
 name: Webapi/$TableLogicalName/enabled
 value: true
@@ -145,6 +165,7 @@ value: true
 
     # Create fields setting
     $fieldsContent = @"
+description: Allowed fields for $TableLogicalName Web API access
 id: $fieldsUuid
 name: Webapi/$TableLogicalName/fields
 value: $Fields
@@ -195,12 +216,13 @@ function New-WebApiErrorSetting {
 
     $siteSettingsPath = Join-Path $ProjectRoot ".powerpages-site\site-settings"
     $errorUuid = [guid]::NewGuid().ToString()
+    $enabledValue = if ($Enabled) { "true" } else { "false" }
 
-    # Value is boolean true/false, not string
     $errorContent = @"
+description: Enable detailed error messages for debugging
 id: $errorUuid
 name: Webapi/error/innererror
-value: $($Enabled.ToString().ToLower())
+value: $enabledValue
 "@
     $errorFileName = "Webapi-error-innererror.sitesetting.yml"
     $errorPath = Join-Path $siteSettingsPath $errorFileName
@@ -226,6 +248,9 @@ Before uploading:
 
 - [ ] All YAML files have valid syntax
 - [ ] Each file has a unique UUID for the `id` field
+- [ ] Fields are alphabetically sorted in the YAML file
 - [ ] File extensions are `.yml` (not `.yaml`)
+- [ ] Field names do NOT include `adx_` prefix
+- [ ] Boolean values are unquoted (`true` not `"true"`)
 - [ ] Field lists use explicit names (no wildcards)
 - [ ] Error setting is disabled for production

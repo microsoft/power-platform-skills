@@ -1,5 +1,5 @@
 ---
-description: Setup Dataverse tables and schema for your Power Pages site. Analyzes your site to recommend tables, creates tables using OData Web API, and adds sample data.
+description: Setup Dataverse tables, schema, entities, and data model for Power Pages. Use this skill when you need to create Dataverse tables, define table columns, set up entity relationships, create lookup fields, design database schema, add sample data, or configure table structure for your Power Pages site.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*)
 model: sonnet

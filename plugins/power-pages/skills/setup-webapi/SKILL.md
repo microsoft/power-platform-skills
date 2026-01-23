@@ -1,5 +1,5 @@
 ---
-description: Configure Web API access for your Power Pages site. Creates site settings to enable table access via /_api endpoint, sets up entity permissions, and updates frontend code to use Power Pages Web API.
+description: Configure Web API access, table permissions, entity permissions, and web roles for Power Pages. Use this skill when you need to set up table permissions, create entity permissions, configure web roles, enable API access, set CRUD permissions (read/write/create/delete), create site settings for Web API, or update frontend code to fetch data from Dataverse tables.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
 model: sonnet
