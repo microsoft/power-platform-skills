@@ -1,6 +1,6 @@
 # Power Platform Claude Plugins - Development Guidelines
 
-This file provides instructions for Claude Code when working on this plugin marketplace.
+This file provides generic instructions for Claude Code when working on this plugin marketplace. For plugin-specific guidelines, see the `AGENTS.md` file in each plugin's folder.
 
 ## Official Documentation
 
@@ -14,25 +14,26 @@ This file provides instructions for Claude Code when working on this plugin mark
 This repository is a **plugin marketplace** containing multiple plugins:
 
 ```
-power-platform-claude-plugin/
+power-platform-claude-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json      # Marketplace manifest (lists all available plugins)
 ├── plugins/                  # Directory containing individual plugins
-│   └── power-pages/          # Power Pages plugin
+│   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
 │       ├── .claude-plugin/
 │       │   └── plugin.json   # Plugin manifest
-│       ├── .mcp.json         # MCP server configuration
+│       ├── AGENTS.md         # Plugin-specific development guidelines
 │       ├── agents/           # Agent persona files
 │       ├── commands/         # Command entry points
 │       ├── shared/           # Shared resources and documentation
 │       └── skills/           # Skill workflows (SKILL.md in subdirectories)
-├── AGENTS.md                 # Development guidelines
+├── AGENTS.md                 # Generic development guidelines (this file)
 └── README.md                 # Repository overview
 ```
 
 **Important**:
 - The root `.claude-plugin/marketplace.json` defines the marketplace and lists available plugins
 - Each plugin in `plugins/` has its own `.claude-plugin/plugin.json` manifest
+- Each plugin has its own `AGENTS.md` with plugin-specific guidelines
 - Plugin components (agents, commands, skills, shared) must be at the plugin root, not inside `.claude-plugin/`
 
 ## When Modifying Skills
@@ -45,7 +46,7 @@ name: skill-name                    # Optional: defaults to directory name
 description: What this skill does   # Recommended: Claude uses for auto-loading
 user-invocable: true                # Optional: default true
 disable-model-invocation: false     # Optional: default false
-allowed-tools: Read, Bash(pac:*)    # Optional: tool restrictions
+allowed-tools: Read, Bash(cmd:*)    # Optional: tool restrictions
 argument-hint: [project-path]       # Optional: autocomplete hint
 context: fork                       # Optional: run in subagent
 agent: Explore                      # Optional: subagent type
@@ -90,17 +91,19 @@ Use these in skills, hooks, and scripts:
 3. **Reference shared files** using `${CLAUDE_PLUGIN_ROOT}/shared/<filename>` instead of duplicating content
 4. **Never copy-paste** the same instructions into multiple skill files
 
-### Example
+### When to Create a Shared File
 
-Instead of duplicating cleanup instructions in each skill:
+Create a new file in `shared/` **BEFORE** adding content to skill files when:
 
-```markdown
-## Cleanup Helper Files
+- The same instructions apply to 2+ skills
+- The content is a cross-cutting concern (applies during multiple workflows)
+- The logic, script, or documentation would otherwise be duplicated
+- The content describes a reusable pattern
 
-**📖 See: [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md)**
-
-Remove any temporary helper files created during this skill's execution.
-```
+**Decision process:**
+1. Identify where the content is needed
+2. If needed in multiple places → create shared file first
+3. Then add references to the shared file in each skill
 
 ### Shared Resources Location
 
@@ -108,21 +111,39 @@ Common resources should be placed in:
 - `plugins/<plugin-name>/shared/` - Plugin-specific shared files
 - Reference using `${CLAUDE_PLUGIN_ROOT}/shared/<filename>`
 
-## Memory Bank System
+## Meta Shared Instructions Pattern
 
-Plugins use a memory bank (`memory-bank.md`) to persist state across sessions.
+Each plugin should have a **meta shared instructions file** (`shared/shared-instructions.md`) that aggregates all cross-cutting concerns:
 
-- Each plugin has its own memory bank at `plugins/<plugin-name>/shared/memory-bank.md`
-- Skills should read memory bank at start
-- Skills should update memory bank after major steps
+```
+plugins/<plugin-name>/shared/
+├── shared-instructions.md    # Meta file - referenced by ALL skills
+├── planning-policy.md        # Sub-instruction (example)
+├── memory-bank.md            # Sub-instruction (example)
+└── ...other shared files
+```
 
-## Tool Restrictions
+**How it works:**
+1. Each SKILL.md references ONLY `shared-instructions.md` at the top
+2. `shared-instructions.md` references all cross-cutting sub-instructions
+3. When adding new shared concerns, update only `shared-instructions.md`
+4. No changes needed to individual SKILL.md files
 
-Skills in this plugin use restricted tools for security:
+**Example SKILL.md header:**
+```markdown
+---
+description: What this skill does
+---
 
-- `Bash(pac:*)` - PAC CLI commands only
-- `Bash(az:*)` - Azure CLI commands only
-- `Bash(dotnet:*)` - .NET CLI commands only
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+
+# Skill Title
+```
+
+**Adding new shared instructions:**
+1. Create the new file in `shared/` (e.g., `new-policy.md`)
+2. Add a section to `shared-instructions.md` referencing it
+3. Done - all skills automatically pick up the new instruction
 
 ## Testing Changes
 
@@ -138,6 +159,8 @@ To add a new plugin to this marketplace:
 
 1. Create a new directory under `plugins/` (e.g., `plugins/power-apps`)
 2. Add `.claude-plugin/plugin.json` with required manifest fields
-3. Add components: `agents/`, `commands/`, `skills/`, `shared/`
-4. Update `marketplace.json` at root to include the new plugin
-5. Update `README.md` to document the new plugin
+3. Add `AGENTS.md` with plugin-specific development guidelines
+4. Add components: `agents/`, `commands/`, `skills/`, `shared/`
+5. Create `shared/shared-instructions.md` for cross-cutting concerns
+6. Update `marketplace.json` at root to include the new plugin
+7. Update `README.md` to document the new plugin

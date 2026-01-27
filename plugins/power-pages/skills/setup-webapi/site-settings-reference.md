@@ -241,6 +241,15 @@ New-WebApiErrorSetting -ProjectRoot $projectRoot -Enabled $true
 | `Webapi/<table>/enabled` | Enable Web API for table | `true` |
 | `Webapi/<table>/fields` | Allowed fields (comma-separated) | `cr_name,cr_price` |
 | `Webapi/error/innererror` | Show detailed errors (dev only) | `true` |
+| `Site/AuthoringTool` | Tracks which tool created the site | `ClaudeCodeCLI` or `ClaudeCodeVSCode` |
+
+## Authoring Tool Site Setting
+
+When a site is created using Claude Code, a site setting must be added to track the authoring tool used.
+
+**📖 See: [authoring-tool-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/authoring-tool-reference.md)**
+
+This setting identifies whether the site was created using Claude Code CLI or VS Code extension.
 
 ## Validation Checklist
 

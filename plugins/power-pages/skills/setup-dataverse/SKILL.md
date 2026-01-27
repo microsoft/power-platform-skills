@@ -5,6 +5,8 @@ allowed-tools: Bash(pac:*), Bash(az:*)
 model: sonnet
 ---
 
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
+
 # Setup Dataverse Tables
 
 This skill guides makers through setting up Dataverse tables and schema for their Power Pages site. It analyzes the site created in the previous step, recommends appropriate tables, and helps create them with sample data.

@@ -5,6 +5,8 @@ allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
 model: sonnet
 ---
 
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
+
 # Setup Web API
 
 This skill guides makers through configuring Web API access for their Power Pages site. It creates site settings to enable data access via the `/_api` endpoint and updates the frontend code to fetch data dynamically.
@@ -163,9 +165,10 @@ For each table that needs Web API access, create two site setting files:
 ### Actions
 
 1. Create the site-settings folder if it doesn't exist
-2. Use the PowerShell `New-WebApiSiteSettings` function from the reference
-3. Create settings for each table from the memory bank
-4. Create error setting for development
+2. **Create the authoring tool setting** (📖 See: [authoring-tool-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/authoring-tool-reference.md))
+3. Use the PowerShell `New-WebApiSiteSettings` function from the reference
+4. Create settings for each table from the memory bank
+5. Create error setting for development
 
 ---
 

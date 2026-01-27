@@ -5,6 +5,8 @@ allowed-tools: Bash(pac:*), Bash(az:*)
 model: opus
 ---
 
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
+
 # Create Power Pages Code Site
 
 This skill guides makers through creating a complete Power Pages code site (Single Page Application) from scratch, deploying it to Power Pages, and activating it for public access.

@@ -5,6 +5,8 @@ allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
 model: sonnet
 ---
 
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
+
 # Setup Authentication & Authorization
 
 This skill guides makers through implementing authentication (user login/logout) and authorization (role-based access control) for their Power Pages site. It uses Power Pages' built-in server-side authentication with Azure Active Directory and role-based UI conditional rendering.
