@@ -2,7 +2,7 @@
 description: Configure authentication, login, logout, and role-based authorization for Power Pages. Use this skill when you need to set up user login, implement authentication, configure Azure AD/Entra ID login, add logout functionality, manage user sessions, implement role-based access control, protect routes, or add conditional UI rendering based on user roles and permissions.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
-model: sonnet
+model: opus
 ---
 
 **📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.

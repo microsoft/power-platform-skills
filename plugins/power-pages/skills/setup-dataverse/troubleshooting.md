@@ -11,15 +11,19 @@ This document covers common issues and solutions when setting up Dataverse table
 
 ### Wrong publisher prefix
 
-Tables may have different prefixes depending on the solution:
+Tables may have different prefixes depending on the solution. **Always use `Initialize-DataverseApi` to fetch the correct prefix dynamically:**
 
 ```powershell
+# Get the default publisher prefix
+$api = Initialize-DataverseApi -EnvironmentUrl $envUrl
+$publisherPrefix = $api.PublisherPrefix  # e.g., "cr", "contoso", "new"
+
 # Search for tables with any custom prefix
 $allCustomTables = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions?`$filter=IsCustomEntity eq true" -Headers $headers
 $allCustomTables.value | ForEach-Object { Write-Host $_.SchemaName }
 ```
 
-Common prefixes: `cr_`, `new_`, `contoso_`, `msft_`
+Common prefixes: `cr_`, `new_`, `contoso_`, `msft_` - but always fetch dynamically to ensure consistency.
 
 ### System tables included
 
@@ -39,7 +43,7 @@ Table logical names are case-insensitive but schema names preserve case. Always 
 
 If the existing table's schema is too different:
 
-- Consider creating a new table with a unique name (e.g., `cr_site_category` instead of `cr_category`)
+- Consider creating a new table with a unique name (e.g., `${publisherPrefix}_site_category` instead of `${publisherPrefix}_category`)
 - Or extend the existing table and use only the columns you need
 
 ### Column type mismatch
@@ -55,7 +59,7 @@ Cannot change column types after creation. Options:
 Verify existing relationships don't prevent your intended lookups:
 
 ```powershell
-Get-TableRelationships -TableLogicalName "cr_product"
+Get-TableRelationships -TableLogicalName "${publisherPrefix}_product"
 ```
 
 ### Missing required columns on reused table
@@ -138,7 +142,7 @@ Error: "The schema name is invalid"
 
 **Solutions:**
 
-- Verify schema name uses valid publisher prefix (e.g., `cr_`)
+- Verify schema name uses the correct publisher prefix from `Initialize-DataverseApi` (e.g., `${publisherPrefix}_tablename`)
 - Schema names must start with a letter
 - Only alphanumeric characters and underscores allowed
 - Maximum 128 characters
@@ -175,7 +179,7 @@ Ensure all required metadata fields are included:
 ### Referenced entity not found
 
 ```text
-Error: "Referenced entity 'cr_category' not found"
+Error: "Referenced entity '{prefix}_category' not found"
 ```
 
 **Solutions:**
@@ -183,6 +187,7 @@ Error: "Referenced entity 'cr_category' not found"
 - Ensure the target table exists BEFORE creating the lookup
 - Check creation order: TIER 0 tables must exist before TIER 1, etc.
 - Verify the table logical name is correct (case-insensitive)
+- Ensure you're using the correct publisher prefix from `Initialize-DataverseApi`
 
 ### Duplicate relationship name
 
@@ -213,10 +218,10 @@ Error: "Invalid target entity for relationship"
 
 ```powershell
 # Step 1: Create table
-New-DataverseTable -SchemaName "cr_employee" ...
+New-DataverseTable -SchemaName "${publisherPrefix}_employee" ...
 
 # Step 2: Add self-referential lookup (table now exists)
-Add-DataverseLookup -SourceTable "cr_employee" -TargetTable "cr_employee" ...
+Add-DataverseLookup -SourceTable "${publisherPrefix}_employee" -TargetTable "${publisherPrefix}_employee" ...
 ```
 
 ## Sample Data Insertion Fails
@@ -244,33 +249,34 @@ Error: "Invalid @odata.bind value"
 Format must be exactly: `/entitysetname(guid)`
 
 ```powershell
-# Correct
-"cr_categoryid@odata.bind" = "/cr_categories(12345678-1234-1234-1234-123456789012)"
+# Correct (using $publisherPrefix variable)
+"${publisherPrefix}_categoryid@odata.bind" = "/${publisherPrefix}_categories(12345678-1234-1234-1234-123456789012)"
 
 # Wrong - missing leading slash
-"cr_categoryid@odata.bind" = "cr_categories(12345678-1234-1234-1234-123456789012)"
+"${publisherPrefix}_categoryid@odata.bind" = "${publisherPrefix}_categories(12345678-1234-1234-1234-123456789012)"
 
 # Wrong - using logical name instead of entity set name
-"cr_categoryid@odata.bind" = "/cr_category(12345678-1234-1234-1234-123456789012)"
+"${publisherPrefix}_categoryid@odata.bind" = "/${publisherPrefix}_category(12345678-1234-1234-1234-123456789012)"
 ```
 
 ### Entity set not found
 
 ```text
-Error: "Resource not found for segment 'cr_product'"
+Error: "Resource not found for segment '{prefix}_product'"
 ```
 
 **Solutions:**
 
 Use the plural entity set name, not the logical name:
 
-- Table `cr_product` has entity set `cr_products` (usually adds 's')
-- Table `cr_category` has entity set `cr_categories` (adds 'ies')
+- Table `{prefix}_product` has entity set `{prefix}_products` (usually adds 's')
+- Table `{prefix}_category` has entity set `{prefix}_categories` (adds 'ies')
 
 Find the correct entity set name:
 
 ```powershell
-$table = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='cr_product')?`$select=EntitySetName" -Headers $headers
+$tableName = "${publisherPrefix}_product"
+$table = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$tableName')?`$select=EntitySetName" -Headers $headers
 Write-Host "Entity set name: $($table.EntitySetName)"
 ```
 
@@ -289,9 +295,9 @@ If reusing tables, always query for current record IDs; don't use cached values:
 
 ```powershell
 # Always get fresh IDs before inserting dependent records
-$categories = Invoke-RestMethod -Uri "$baseUrl/cr_categories?`$select=cr_categoryid,cr_name" -Headers $headers
+$categories = Invoke-RestMethod -Uri "$baseUrl/${publisherPrefix}_categories?`$select=${publisherPrefix}_categoryid,${publisherPrefix}_name" -Headers $headers
 $categoryIds = @{}
-$categories.value | ForEach-Object { $categoryIds[$_.cr_name] = $_.cr_categoryid }
+$categories.value | ForEach-Object { $categoryIds[$_."${publisherPrefix}_name"] = $_."${publisherPrefix}_categoryid" }
 ```
 
 ### Data format differences
@@ -308,9 +314,9 @@ When reusing tables, verify that lookup values still exist:
 
 ```powershell
 # Check for orphaned references
-$products = Invoke-RestMethod -Uri "$baseUrl/cr_products?`$select=cr_name&`$expand=cr_categoryid(`$select=cr_name)" -Headers $headers
-$products.value | Where-Object { $_.cr_categoryid -eq $null } | ForEach-Object {
-    Write-Host "Orphaned product (no category): $($_.cr_name)" -ForegroundColor Yellow
+$products = Invoke-RestMethod -Uri "$baseUrl/${publisherPrefix}_products?`$select=${publisherPrefix}_name&`$expand=${publisherPrefix}_categoryid(`$select=${publisherPrefix}_name)" -Headers $headers
+$products.value | Where-Object { $_."${publisherPrefix}_categoryid" -eq $null } | ForEach-Object {
+    Write-Host "Orphaned product (no category): $($_."${publisherPrefix}_name")" -ForegroundColor Yellow
 }
 ```
 
@@ -318,7 +324,8 @@ $products.value | Where-Object { $_.cr_categoryid -eq $null } | ForEach-Object {
 
 ```powershell
 # Check if a relationship exists
-$relations = Invoke-RestMethod -Uri "$baseUrl/RelationshipDefinitions?`$filter=SchemaName eq 'cr_category_product'" -Headers $headers
+$relationshipName = "${publisherPrefix}_category_product"
+$relations = Invoke-RestMethod -Uri "$baseUrl/RelationshipDefinitions?`$filter=SchemaName eq '$relationshipName'" -Headers $headers
 if ($relations.value.Count -gt 0) {
     Write-Host "Relationship exists"
 } else {
@@ -326,7 +333,8 @@ if ($relations.value.Count -gt 0) {
 }
 
 # List all relationships for a table
-$tableRelations = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='cr_product')/OneToManyRelationships" -Headers $headers
+$tableName = "${publisherPrefix}_product"
+$tableRelations = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$tableName')/OneToManyRelationships" -Headers $headers
 $tableRelations.value | ForEach-Object { Write-Host $_.SchemaName }
 ```
 

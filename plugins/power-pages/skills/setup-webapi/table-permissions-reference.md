@@ -108,16 +108,33 @@ function New-TablePermission {
 
 ## Common Permission Patterns
 
+### Using Table Name Mapping
+
+**IMPORTANT**: Use the `$tableMap` from `/setup-dataverse` to get the correct table logical names. This is critical because:
+- **Reused/Extended tables** have their actual logical names from Dataverse (may differ from `${publisherPrefix}_tablename`)
+- **New tables** use the `${publisherPrefix}_tablename` pattern
+
+```powershell
+# Get table logical names from the mapping built in /setup-dataverse
+# The $tableMap should be retrieved from memory-bank.md or rebuilt
+function Get-TableLogicalName { param([string]$Purpose) return $tableMap[$Purpose].LogicalName }
+
+$productTable = Get-TableLogicalName "product"           # e.g., "contoso_items" or "cr_product"
+$teammemberTable = Get-TableLogicalName "teammember"     # e.g., "existing_staff" or "cr_teammember"
+$testimonialTable = Get-TableLogicalName "testimonial"
+$faqTable = Get-TableLogicalName "faq"
+```
+
 ### Read-Only Public Data
 
 For tables like products, testimonials, FAQs that should be publicly readable:
 
 ```powershell
-# Read-only Global scope for public data
-New-TablePermission -Name "Product Read" -TableLogicalName "cr_product" -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "Team Member Read" -TableLogicalName "cr_teammember" -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "Testimonial Read" -TableLogicalName "cr_testimonial" -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "FAQ Read" -TableLogicalName "cr_faq" -WebsiteId $websiteId -Read $true
+# Read-only Global scope for public data (using actual table names from mapping)
+New-TablePermission -Name "Product Read" -TableLogicalName $productTable -WebsiteId $websiteId -Read $true
+New-TablePermission -Name "Team Member Read" -TableLogicalName $teammemberTable -WebsiteId $websiteId -Read $true
+New-TablePermission -Name "Testimonial Read" -TableLogicalName $testimonialTable -WebsiteId $websiteId -Read $true
+New-TablePermission -Name "FAQ Read" -TableLogicalName $faqTable -WebsiteId $websiteId -Read $true
 ```
 
 ### Create-Only (Form Submissions)
@@ -127,7 +144,7 @@ For contact forms where users can submit but not read others' submissions:
 ```powershell
 # Create only - users can submit but not read others
 New-TablePermission -Name "Contact Submission Create" `
-    -TableLogicalName "cr_contactsubmission" `
+    -TableLogicalName "${publisherPrefix}_contactsubmission" `
     -WebsiteId $websiteId `
     -Read $false `
     -Create $true
@@ -140,7 +157,7 @@ For data that users should only see their own records:
 ```powershell
 # Self scope - users see only their own records
 New-TablePermission -Name "User Profile" `
-    -TableLogicalName "cr_userprofile" `
+    -TableLogicalName "${publisherPrefix}_userprofile" `
     -WebsiteId $websiteId `
     -Scope 756150004 `  # Self
     -Read $true `
@@ -154,7 +171,7 @@ For authenticated users who need complete control:
 ```powershell
 # Full CRUD access (use with caution)
 New-TablePermission -Name "Admin Orders" `
-    -TableLogicalName "cr_order" `
+    -TableLogicalName "${publisherPrefix}_order" `
     -WebsiteId $websiteId `
     -Read $true `
     -Create $true `
@@ -271,8 +288,9 @@ function Add-PermissionToRole {
 
 ```powershell
 # Get permission ID for a specific table
+$tableName = "${publisherPrefix}_product"
 $permissions = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_entitypermissions?`$filter=adx_entitylogicalname eq 'cr_product'&`$select=adx_entitypermissionid" `
+    -Uri "$baseUrl/adx_entitypermissions?`$filter=adx_entitylogicalname eq '$tableName'&`$select=adx_entitypermissionid" `
     -Headers $headers
 
 if ($permissions.value.Count -gt 0) {
@@ -346,6 +364,10 @@ Example: `Product-Read-Permission.tablepermission.yml`
 
 ### YAML File Structure
 
+**NOTE**: Use the **actual table logical name** from the `$tableMap` built in `/setup-dataverse`:
+- For **reused/extended tables**: Use the existing logical name (e.g., `contoso_items`, `existing_productcategory`)
+- For **new tables**: Use `{prefix}_tablename` pattern (e.g., `cr_product`)
+
 ```yaml
 accountrelationship:
 adx_entitypermission_webrole:
@@ -355,7 +377,7 @@ appendto: false
 contactrelationship:
 create: false
 delete: false
-entitylogicalname: cr_product
+entitylogicalname: {actual_table_logical_name_from_mapping}
 entityname: Product Read Permission
 id: b5d8334f-45fa-464c-ac1d-f7088325f697
 parententitypermission:
@@ -372,7 +394,7 @@ write: false
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | GUID | Yes | Unique identifier for this permission |
-| `entitylogicalname` | string | Yes | Dataverse table logical name (e.g., `cr_product`) |
+| `entitylogicalname` | string | Yes | Dataverse table logical name (e.g., `{prefix}_product`) |
 | `entityname` | string | Yes | Display name for the permission |
 | `scope` | int | Yes | Permission scope (see values below) |
 | `read` | bool | No | Can retrieve/query records |
@@ -448,7 +470,7 @@ append: false
 appendto: false
 create: false
 delete: false
-entitylogicalname: cr_product
+entitylogicalname: {prefix}_product
 entityname: Product - Anonymous Read
 id: 71ecf203-dfe2-4c1e-9db2-112ed3925a52
 parententitypermission:
@@ -475,7 +497,7 @@ append: false
 appendto: false
 create: true
 delete: false
-entitylogicalname: cr_userprofile
+entitylogicalname: {prefix}_userprofile
 entityname: User Profile - Self Access
 id: 82fde314-eff3-5d2f-0ec3-223fe4036b63
 parententitypermission:
@@ -491,7 +513,7 @@ When tables have relationships (e.g., Order → Order Items), you can create hie
 > **Important**: Parent permissions must be created before child permissions. The child permission references the parent's ID in the `parententitypermission` field.
 
 **Creation Order:**
-1. Create the parent table permission first (e.g., for `cr_order`)
+1. Create the parent table permission first (e.g., for `{prefix}_order`)
 2. Note the parent permission's `id` (GUID)
 3. Create child permission with `parententitypermission` set to parent's ID
 4. Set child's `scope` to `756150003` (Parent)
@@ -507,7 +529,7 @@ append: true
 appendto: false
 create: true
 delete: false
-entitylogicalname: cr_order
+entitylogicalname: {prefix}_order
 entityname: Order - User Access
 id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 parententitypermission:
@@ -527,11 +549,11 @@ append: false
 appendto: true
 create: true
 delete: true
-entitylogicalname: cr_orderitem
+entitylogicalname: {prefix}_orderitem
 entityname: Order Item - Parent Access
 id: b2c3d4e5-f6a7-8901-bcde-fa2345678901
 parententitypermission: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-parentrelationship: cr_order_orderitems
+parentrelationship: {prefix}_order_orderitems
 read: true
 scope: 756150003
 write: true

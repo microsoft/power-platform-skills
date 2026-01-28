@@ -68,6 +68,37 @@ $baseUrl = "$envUrl/api/data/v9.2"
 | `MSCRM.SolutionUniqueName` | Solution name | Add created items to a solution |
 | `Prefer` | `return=representation` | Return created record with ID |
 
+## Get Default Publisher Prefix
+
+The publisher prefix is used for naming custom tables and columns. Fetch it dynamically to ensure consistency:
+
+```powershell
+function Get-DefaultPublisherPrefix {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$BaseUrl,
+
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Headers
+    )
+
+    # Query the CDS Default Publisher directly
+    $defaultPublisher = Invoke-RestMethod -Uri "$BaseUrl/publishers?`$filter=friendlyname eq 'CDS Default Publisher'&`$select=customizationprefix,friendlyname" -Headers $Headers
+
+    if ($defaultPublisher.value.Count -eq 0) {
+        throw "Could not find CDS Default Publisher in the environment"
+    }
+
+    $prefix = $defaultPublisher.value[0].customizationprefix
+    $publisherName = $defaultPublisher.value[0].friendlyname
+
+    Write-Host "Default Publisher: $publisherName" -ForegroundColor Cyan
+    Write-Host "Customization Prefix: $prefix" -ForegroundColor Cyan
+
+    return $prefix
+}
+```
+
 ## Complete Setup Script
 
 ```powershell
@@ -102,17 +133,23 @@ function Initialize-DataverseApi {
 
     $baseUrl = "$EnvironmentUrl/api/data/v9.2"
 
+    # Get the default publisher prefix
+    $publisherPrefix = Get-DefaultPublisherPrefix -BaseUrl $baseUrl -Headers $headers
+
     # Store in script-level variables for reuse
     $script:DataverseHeaders = $headers
     $script:DataverseBaseUrl = $baseUrl
+    $script:PublisherPrefix = $publisherPrefix
 
     Write-Host "Dataverse API initialized successfully" -ForegroundColor Green
     Write-Host "  Environment: $EnvironmentUrl" -ForegroundColor Cyan
     Write-Host "  Base URL: $baseUrl" -ForegroundColor Cyan
+    Write-Host "  Publisher Prefix: $publisherPrefix" -ForegroundColor Cyan
 
     return @{
         Headers = $headers
         BaseUrl = $baseUrl
+        PublisherPrefix = $publisherPrefix
     }
 }
 
@@ -120,6 +157,7 @@ function Initialize-DataverseApi {
 # $api = Initialize-DataverseApi -EnvironmentUrl "https://orgname.crm.dynamics.com"
 # $headers = $api.Headers
 # $baseUrl = $api.BaseUrl
+# $publisherPrefix = $api.PublisherPrefix
 ```
 
 ## Token Refresh

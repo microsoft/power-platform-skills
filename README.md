@@ -52,13 +52,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your Claude Code instance
 
     ```bash
-    /plugin marketplace add microsoft/power-platform-claude-plugin
+    /plugin marketplace add microsoft/power-platform-claude-plugins
     ```
 
 2. Install the desired plugin
 
     ```bash
-    /plugin install power-pages@power-platform-claude-plugin
+    /plugin install power-pages@power-platform-claude-plugins
     ```
 
 ### Add from local path
@@ -67,13 +67,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your Claude Code instance
 
     ```bash
-    /plugin marketplace add /path/to/power-platform-claude-plugin
+    /plugin marketplace add /path/to/power-platform-claude-plugins
     ```
 
 1. Install the desired plugin (installs to user scope by default)
 
     ```bash
-    /plugin install power-pages@power-platform-claude-plugin
+    /plugin install power-pages@power-platform-claude-plugins
     ```
 
 ## Local Development

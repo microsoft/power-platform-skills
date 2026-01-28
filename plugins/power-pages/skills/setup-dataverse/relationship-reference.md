@@ -196,18 +196,30 @@ When creating relationships, you can configure cascade behavior:
 
 ## Relationship Naming Conventions
 
-Follow this naming pattern for consistency:
+Follow this naming pattern for consistency, using the `$publisherPrefix` retrieved from `Initialize-DataverseApi`:
 
 ```text
-{publisher}_{targetTable}_{sourceTable}
+{publisherPrefix}_{targetTable}_{sourceTable}
 
-Examples:
-- cr_category_product       (Product -> Category)
-- cr_department_teammember  (TeamMember -> Department)
-- cr_status_contactsubmission (ContactSubmission -> Status)
+Examples (where $publisherPrefix = "cr"):
+- {publisherPrefix}_category_product       (Product -> Category)
+- {publisherPrefix}_department_teammember  (TeamMember -> Department)
+- {publisherPrefix}_status_contactsubmission (ContactSubmission -> Status)
 ```
 
 ## Complete Example: Creating Relationships in Dependency Order
+
+**IMPORTANT**: Use the `$tableMap` from `Build-TableNameMapping` to get the correct table names. This ensures:
+- **Reused/Extended tables**: Use their actual logical names from Dataverse
+- **New tables**: Use the publisher prefix pattern
+
+```powershell
+$api = Initialize-DataverseApi -EnvironmentUrl "https://orgname.crm.dynamics.com"
+$publisherPrefix = $api.PublisherPrefix
+
+# $tableMap should be built in STEP 5 using Build-TableNameMapping
+# It maps table purposes to actual logical names
+```
 
 ```powershell
 # ============================================
@@ -216,34 +228,50 @@ Examples:
 
 Write-Host "`n=== Processing Relationships ===" -ForegroundColor Magenta
 
+# Helper to get actual table name from mapping
+function Get-TableName { param([string]$Purpose) return $tableMap[$Purpose].LogicalName }
+
 # --- TIER 1 -> TIER 0 Relationships ---
 Write-Host "Processing TIER 1 -> TIER 0 relationships..." -ForegroundColor Cyan
 
-# Product -> Category
-Add-DataverseLookupIfNotExists -SourceTable "cr_product" -TargetTable "cr_category" `
-    -LookupSchemaName "cr_categoryid" -LookupDisplayName "Category" `
-    -RelationshipName "cr_category_product"
+# Product -> Category (uses actual table names from mapping)
+$productTable = Get-TableName "product"
+$categoryTable = Get-TableName "category"
+Add-DataverseLookupIfNotExists -SourceTable $productTable -TargetTable $categoryTable `
+    -LookupSchemaName "${publisherPrefix}_categoryid" -LookupDisplayName "Category" `
+    -RelationshipName "${publisherPrefix}_${categoryTable}_${productTable}"
 
 # Team Member -> Department
-Add-DataverseLookupIfNotExists -SourceTable "cr_teammember" -TargetTable "cr_department" `
-    -LookupSchemaName "cr_departmentid" -LookupDisplayName "Department" `
-    -RelationshipName "cr_department_teammember"
+$teammemberTable = Get-TableName "teammember"
+$departmentTable = Get-TableName "department"
+Add-DataverseLookupIfNotExists -SourceTable $teammemberTable -TargetTable $departmentTable `
+    -LookupSchemaName "${publisherPrefix}_departmentid" -LookupDisplayName "Department" `
+    -RelationshipName "${publisherPrefix}_${departmentTable}_${teammemberTable}"
 
 # Contact Submission -> Status
-Add-DataverseLookupIfNotExists -SourceTable "cr_contactsubmission" -TargetTable "cr_status" `
-    -LookupSchemaName "cr_statusid" -LookupDisplayName "Status" `
-    -RelationshipName "cr_status_contactsubmission"
+$contactsubmissionTable = Get-TableName "contactsubmission"
+$statusTable = Get-TableName "status"
+Add-DataverseLookupIfNotExists -SourceTable $contactsubmissionTable -TargetTable $statusTable `
+    -LookupSchemaName "${publisherPrefix}_statusid" -LookupDisplayName "Status" `
+    -RelationshipName "${publisherPrefix}_${statusTable}_${contactsubmissionTable}"
 
 # --- TIER 2 -> TIER 1 Relationships ---
 Write-Host "`nProcessing TIER 2 -> TIER 1 relationships..." -ForegroundColor Cyan
 
 # Testimonial -> Product (optional relationship)
-Add-DataverseLookupIfNotExists -SourceTable "cr_testimonial" -TargetTable "cr_product" `
-    -LookupSchemaName "cr_productid" -LookupDisplayName "Related Product" `
-    -RelationshipName "cr_product_testimonial"
+$testimonialTable = Get-TableName "testimonial"
+Add-DataverseLookupIfNotExists -SourceTable $testimonialTable -TargetTable $productTable `
+    -LookupSchemaName "${publisherPrefix}_productid" -LookupDisplayName "Related Product" `
+    -RelationshipName "${publisherPrefix}_${productTable}_${testimonialTable}"
 
 Write-Host "`n=== Relationship processing complete ===" -ForegroundColor Green
 ```
+
+**NOTE**: When reusing existing tables, their logical names may differ from the expected pattern:
+- New table: `cr_category` (follows `${publisherPrefix}_purpose` pattern)
+- Reused table: `contoso_productcategory` or `existing_categories` (actual name from Dataverse)
+
+The `$tableMap` handles this automatically by storing the actual logical names.
 
 ## Self-Referential Lookups
 
@@ -251,22 +279,23 @@ For tables that reference themselves (e.g., Employee -> Manager):
 
 ```powershell
 # First, create the table
-New-DataverseTable -SchemaName "cr_employee" -DisplayName "Employee" -PluralDisplayName "Employees"
+New-DataverseTable -SchemaName "${publisherPrefix}_employee" -DisplayName "Employee" -PluralDisplayName "Employees"
 
 # Add regular columns
-Add-DataverseColumn -TableName "cr_employee" -SchemaName "cr_title" -DisplayName "Job Title" -Type "String"
+Add-DataverseColumn -TableName "${publisherPrefix}_employee" -SchemaName "${publisherPrefix}_title" -DisplayName "Job Title" -Type "String"
 
 # Then add self-referential lookup (table must exist first!)
-Add-DataverseLookup -SourceTable "cr_employee" -TargetTable "cr_employee" `
-    -LookupSchemaName "cr_managerid" -LookupDisplayName "Manager" `
-    -RelationshipName "cr_employee_manager"
+Add-DataverseLookup -SourceTable "${publisherPrefix}_employee" -TargetTable "${publisherPrefix}_employee" `
+    -LookupSchemaName "${publisherPrefix}_managerid" -LookupDisplayName "Manager" `
+    -RelationshipName "${publisherPrefix}_employee_manager"
 ```
 
 ## Verifying Relationships
 
 ```powershell
 # Check if a relationship exists
-$relations = Invoke-RestMethod -Uri "$baseUrl/RelationshipDefinitions?`$filter=SchemaName eq 'cr_category_product'" -Headers $headers
+$relationshipName = "${publisherPrefix}_category_product"
+$relations = Invoke-RestMethod -Uri "$baseUrl/RelationshipDefinitions?`$filter=SchemaName eq '$relationshipName'" -Headers $headers
 if ($relations.value.Count -gt 0) {
     Write-Host "Relationship exists" -ForegroundColor Green
     Write-Host "  Referenced Entity: $($relations.value[0].ReferencedEntity)"
@@ -276,8 +305,9 @@ if ($relations.value.Count -gt 0) {
 }
 
 # List all relationships for a table
-$tableRelations = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='cr_product')/ManyToOneRelationships" -Headers $headers
-Write-Host "Lookups on cr_product:" -ForegroundColor Cyan
+$tableName = "${publisherPrefix}_product"
+$tableRelations = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions(LogicalName='$tableName')/ManyToOneRelationships" -Headers $headers
+Write-Host "Lookups on ${tableName}:" -ForegroundColor Cyan
 $tableRelations.value | ForEach-Object {
     Write-Host "  $($_.SchemaName): -> $($_.ReferencedEntity)"
 }

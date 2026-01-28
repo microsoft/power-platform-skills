@@ -117,22 +117,25 @@ Creation Order: Category -> Product, Supplier, Customer -> Order -> OrderLine
 
 ### Example Dependency Resolution
 
+**NOTE**: Use `$publisherPrefix` from `Initialize-DataverseApi` for all table schema names.
+
 ```powershell
 # Example: Building dependency graph in PowerShell
+# Assumes $publisherPrefix has been set (e.g., "cr", "contoso", "new")
 $tables = @{
-    "cr_category" = @()                           # No dependencies - TIER 0
-    "cr_status" = @()                             # No dependencies - TIER 0
-    "cr_department" = @()                         # No dependencies - TIER 0
-    "cr_product" = @("cr_category")               # Depends on category - TIER 1
-    "cr_teammember" = @("cr_department")          # Depends on department - TIER 1
-    "cr_testimonial" = @("cr_product")            # Depends on product - TIER 2
-    "cr_contactsubmission" = @("cr_status")       # Depends on status - TIER 1
+    "${publisherPrefix}_category" = @()                                    # No dependencies - TIER 0
+    "${publisherPrefix}_status" = @()                                      # No dependencies - TIER 0
+    "${publisherPrefix}_department" = @()                                  # No dependencies - TIER 0
+    "${publisherPrefix}_product" = @("${publisherPrefix}_category")        # Depends on category - TIER 1
+    "${publisherPrefix}_teammember" = @("${publisherPrefix}_department")   # Depends on department - TIER 1
+    "${publisherPrefix}_testimonial" = @("${publisherPrefix}_product")     # Depends on product - TIER 2
+    "${publisherPrefix}_contactsubmission" = @("${publisherPrefix}_status")# Depends on status - TIER 1
 }
 
 # Topological sort result (creation order):
-# 1. cr_category, cr_status, cr_department (can be parallel)
-# 2. cr_product, cr_teammember, cr_contactsubmission (after their deps)
-# 3. cr_testimonial (after cr_product)
+# 1. {prefix}_category, {prefix}_status, {prefix}_department (can be parallel)
+# 2. {prefix}_product, {prefix}_teammember, {prefix}_contactsubmission (after their deps)
+# 3. {prefix}_testimonial (after {prefix}_product)
 ```
 
 ## Validation Rules
@@ -146,34 +149,37 @@ Before proceeding to table creation, validate:
 
 ## Example Analysis Output Format
 
+**NOTE**: Replace `{prefix}` with the actual publisher prefix (e.g., `cr`, `contoso`, `new`) obtained from `Initialize-DataverseApi`.
+
 ```text
 DATA ARCHITECTURE FOR: [Site Name]
+PUBLISHER PREFIX: {prefix}
 
 TIER 0 - Reference Tables (No Dependencies)
-  1. cr_category        - Product/content categories
-  2. cr_status          - Status values for various entities
-  3. cr_department      - Team member departments
+  1. {prefix}_category        - Product/content categories
+  2. {prefix}_status          - Status values for various entities
+  3. {prefix}_department      - Team member departments
 
 TIER 1 - Primary Entity Tables
-  4. cr_product         - Products (-> cr_category)
-  5. cr_teammember      - Team members (-> cr_department)
-  6. cr_blogpost        - Blog posts (-> cr_category)
+  4. {prefix}_product         - Products (-> {prefix}_category)
+  5. {prefix}_teammember      - Team members (-> {prefix}_department)
+  6. {prefix}_blogpost        - Blog posts (-> {prefix}_category)
 
 TIER 2 - Dependent Tables
-  7. cr_testimonial     - Testimonials (-> cr_product, optional)
-  8. cr_contactsubmission - Contact submissions (-> cr_status)
+  7. {prefix}_testimonial     - Testimonials (-> {prefix}_product, optional)
+  8. {prefix}_contactsubmission - Contact submissions (-> {prefix}_status)
 
 RELATIONSHIP DIAGRAM
 
-  cr_category --+---> cr_product ---> cr_testimonial
-                +---> cr_blogpost
+  {prefix}_category --+---> {prefix}_product ---> {prefix}_testimonial
+                      +---> {prefix}_blogpost
 
-  cr_department ---> cr_teammember
+  {prefix}_department ---> {prefix}_teammember
 
-  cr_status -------> cr_contactsubmission
+  {prefix}_status -------> {prefix}_contactsubmission
 
 CREATION ORDER
-  1. cr_category, cr_status, cr_department (parallel - no deps)
-  2. cr_product, cr_teammember, cr_blogpost (after tier 0)
-  3. cr_testimonial, cr_contactsubmission (after their references)
+  1. {prefix}_category, {prefix}_status, {prefix}_department (parallel - no deps)
+  2. {prefix}_product, {prefix}_teammember, {prefix}_blogpost (after tier 0)
+  3. {prefix}_testimonial, {prefix}_contactsubmission (after their references)
 ```

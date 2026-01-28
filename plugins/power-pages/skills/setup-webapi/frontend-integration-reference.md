@@ -4,21 +4,29 @@ This document provides code patterns for integrating Power Pages Web API into fr
 
 ## Web API Endpoint Format
 
-The Power Pages Web API follows OData conventions:
+The Power Pages Web API follows OData conventions.
+
+**IMPORTANT - Table Names**: Use the **actual table logical names** from the `$tableMap` built in `/setup-dataverse`:
+- For **reused/extended tables**: Use the existing logical name from Dataverse (e.g., `contoso_items`, `existing_productcategory`)
+- For **new tables**: Use `{prefix}_tablename` pattern (e.g., `cr_product`)
+
+The entity set name (used in URLs) is typically the pluralized form of the logical name.
+
+**NOTE**: Replace `{prefix}` with your publisher prefix from `Initialize-DataverseApi` (e.g., `cr`, `contoso`, `new`).
 
 ```text
 Base URL: https://<site-url>/_api/<entity-set-name>
 
 Examples:
-GET  /_api/cr_products                           # List all products
-GET  /_api/cr_products(<guid>)                   # Get single product
-GET  /_api/cr_products?$select=cr_name,cr_price  # Select specific fields
-GET  /_api/cr_products?$filter=cr_isactive eq true  # Filter records
-GET  /_api/cr_products?$orderby=cr_name          # Order results
-GET  /_api/cr_products?$top=10                   # Limit results
-POST /_api/cr_products                           # Create new product
-PATCH /_api/cr_products(<guid>)                  # Update product
-DELETE /_api/cr_products(<guid>)                 # Delete product
+GET  /_api/{prefix}_products                           # List all products
+GET  /_api/{prefix}_products(<guid>)                   # Get single product
+GET  /_api/{prefix}_products?$select={prefix}_name,{prefix}_price  # Select specific fields
+GET  /_api/{prefix}_products?$filter={prefix}_isactive eq true  # Filter records
+GET  /_api/{prefix}_products?$orderby={prefix}_name          # Order results
+GET  /_api/{prefix}_products?$top=10                   # Limit results
+POST /_api/{prefix}_products                           # Create new product
+PATCH /_api/{prefix}_products(<guid>)                  # Update product
+DELETE /_api/{prefix}_products(<guid>)                 # Delete product
 ```
 
 ## CSRF Token Requirement
@@ -203,113 +211,120 @@ Create typed wrappers for each entity.
 
 **IMPORTANT**: Always include `$select` with the fields configured in site settings. Power Pages Web API returns an error if you request fields not listed in the `Webapi/<table>/fields` site setting. Omitting `$select` attempts to fetch all fields, which fails.
 
+**NOTE**: Replace `{prefix}` with your publisher prefix (e.g., `cr`, `contoso`, `new`). The prefix is determined by your Dataverse environment's default publisher.
+
 ```typescript
 // Entity-specific services
 // IMPORTANT: The 'select' array must match the fields in your Webapi/<table>/fields site setting
+// NOTE: Replace {prefix} with your actual publisher prefix (e.g., 'cr', 'contoso', 'new')
 
 export const productsApi = {
   getAll: (options?: QueryOptions) =>
-    webApi.getAll<Product>('cr_products', {
-      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
+    webApi.getAll<Product>('{prefix}_products', {
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
       ...options,
     }),
   getById: (id: string) =>
-    webApi.getById<Product>('cr_products', id, {
-      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
+    webApi.getById<Product>('{prefix}_products', id, {
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
     }),
   getActive: () =>
-    webApi.getAll<Product>('cr_products', {
-      select: ['cr_productid', 'cr_name', 'cr_description', 'cr_price', 'cr_category', 'cr_imageurl', 'cr_isactive'],
-      filter: 'cr_isactive eq true',
-      orderBy: 'cr_name',
+    webApi.getAll<Product>('{prefix}_products', {
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
+      filter: '{prefix}_isactive eq true',
+      orderBy: '{prefix}_name',
     }),
 };
 
 export const teamMembersApi = {
   getAll: () =>
-    webApi.getAll<TeamMember>('cr_teammembers', {
-      select: ['cr_teammemberid', 'cr_name', 'cr_title', 'cr_email', 'cr_bio', 'cr_photourl', 'cr_linkedin', 'cr_displayorder'],
-      orderBy: 'cr_displayorder',
+    webApi.getAll<TeamMember>('{prefix}_teammembers', {
+      select: ['{prefix}_teammemberid', '{prefix}_name', '{prefix}_title', '{prefix}_email', '{prefix}_bio', '{prefix}_photourl', '{prefix}_linkedin', '{prefix}_displayorder'],
+      orderBy: '{prefix}_displayorder',
     }),
 };
 
 export const testimonialsApi = {
   getActive: () =>
-    webApi.getAll<Testimonial>('cr_testimonials', {
-      select: ['cr_testimonialid', 'cr_name', 'cr_quote', 'cr_company', 'cr_role', 'cr_rating', 'cr_photourl', 'cr_isactive'],
-      filter: 'cr_isactive eq true',
+    webApi.getAll<Testimonial>('{prefix}_testimonials', {
+      select: ['{prefix}_testimonialid', '{prefix}_name', '{prefix}_quote', '{prefix}_company', '{prefix}_role', '{prefix}_rating', '{prefix}_photourl', '{prefix}_isactive'],
+      filter: '{prefix}_isactive eq true',
     }),
 };
 
 export const faqsApi = {
   getActive: () =>
-    webApi.getAll<FAQ>('cr_faqs', {
-      select: ['cr_faqid', 'cr_question', 'cr_answer', 'cr_category', 'cr_displayorder', 'cr_isactive'],
-      filter: 'cr_isactive eq true',
-      orderBy: 'cr_displayorder',
+    webApi.getAll<FAQ>('{prefix}_faqs', {
+      select: ['{prefix}_faqid', '{prefix}_question', '{prefix}_answer', '{prefix}_category', '{prefix}_displayorder', '{prefix}_isactive'],
+      filter: '{prefix}_isactive eq true',
+      orderBy: '{prefix}_displayorder',
     }),
 };
 
 export const contactApi = {
   submit: (data: ContactSubmission) =>
-    webApi.create<ContactSubmission>('cr_contactsubmissions', {
+    webApi.create<ContactSubmission>('{prefix}_contactsubmissions', {
       ...data,
-      cr_submissiondate: new Date().toISOString(),
-      cr_status: 1, // New
+      {prefix}_submissiondate: new Date().toISOString(),
+      {prefix}_status: 1, // New
     }),
 };
 ```
 
 ## Type Definitions
 
+**NOTE**: Replace `{prefix}` with your publisher prefix (e.g., `cr`, `contoso`, `new`).
+
 ```typescript
+// NOTE: Replace {prefix} with your actual publisher prefix
+
 export interface Product {
-  cr_productid: string;
-  cr_name: string;
-  cr_description: string;
-  cr_price: number;
-  cr_category: string;
-  cr_imageurl: string;
-  cr_isactive: boolean;
+  {prefix}_productid: string;
+  {prefix}_name: string;
+  {prefix}_description: string;
+  {prefix}_price: number;
+  {prefix}_category: string;
+  {prefix}_imageurl: string;
+  {prefix}_isactive: boolean;
 }
 
 export interface TeamMember {
-  cr_teammemberid: string;
-  cr_name: string;
-  cr_title: string;
-  cr_email: string;
-  cr_bio: string;
-  cr_photourl: string;
-  cr_linkedin: string;
-  cr_displayorder: number;
+  {prefix}_teammemberid: string;
+  {prefix}_name: string;
+  {prefix}_title: string;
+  {prefix}_email: string;
+  {prefix}_bio: string;
+  {prefix}_photourl: string;
+  {prefix}_linkedin: string;
+  {prefix}_displayorder: number;
 }
 
 export interface Testimonial {
-  cr_testimonialid: string;
-  cr_name: string;
-  cr_quote: string;
-  cr_company: string;
-  cr_role: string;
-  cr_rating: number;
-  cr_photourl: string;
-  cr_isactive: boolean;
+  {prefix}_testimonialid: string;
+  {prefix}_name: string;
+  {prefix}_quote: string;
+  {prefix}_company: string;
+  {prefix}_role: string;
+  {prefix}_rating: number;
+  {prefix}_photourl: string;
+  {prefix}_isactive: boolean;
 }
 
 export interface FAQ {
-  cr_faqid: string;
-  cr_question: string;
-  cr_answer: string;
-  cr_category: string;
-  cr_displayorder: number;
-  cr_isactive: boolean;
+  {prefix}_faqid: string;
+  {prefix}_question: string;
+  {prefix}_answer: string;
+  {prefix}_category: string;
+  {prefix}_displayorder: number;
+  {prefix}_isactive: boolean;
 }
 
 export interface ContactSubmission {
-  cr_name: string;
-  cr_email: string;
-  cr_message: string;
-  cr_submissiondate?: string;
-  cr_status?: number;
+  {prefix}_name: string;
+  {prefix}_email: string;
+  {prefix}_message: string;
+  {prefix}_submissiondate?: string;
+  {prefix}_status?: number;
 }
 ```
 
@@ -357,8 +372,8 @@ export function useWebApi<T>(
   return { data, loading, error, refetch: fetchData };
 }
 
-// Usage example:
-// const { data: products, loading, error } = useWebApi<Product>('cr_products', { filter: 'cr_isactive eq true' });
+// Usage example (replace {prefix} with your publisher prefix):
+// const { data: products, loading, error } = useWebApi<Product>('{prefix}_products', { filter: '{prefix}_isactive eq true' });
 ```
 
 ## Component Examples
@@ -415,7 +430,7 @@ function ProductList() {
   return (
     <div className="products-grid">
       {products.map(product => (
-        <ProductCard key={product.cr_productid} product={product} />
+        <ProductCard key={product.{prefix}_productid} product={product} />
       ))}
     </div>
   );
@@ -429,10 +444,11 @@ import { useState } from 'react';
 import { contactApi, ContactSubmission } from '../services/webApi';
 
 function ContactForm() {
+  // NOTE: Replace {prefix} with your actual publisher prefix
   const [formData, setFormData] = useState<ContactSubmission>({
-    cr_name: '',
-    cr_email: '',
-    cr_message: '',
+    {prefix}_name: '',
+    {prefix}_email: '',
+    {prefix}_message: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -446,7 +462,7 @@ function ContactForm() {
     try {
       await contactApi.submit(formData);
       setSubmitted(true);
-      setFormData({ cr_name: '', cr_email: '', cr_message: '' });
+      setFormData({ {prefix}_name: '', {prefix}_email: '', {prefix}_message: '' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit form');
     } finally {
@@ -473,8 +489,8 @@ function ContactForm() {
         <input
           id="name"
           type="text"
-          value={formData.cr_name}
-          onChange={e => setFormData({ ...formData, cr_name: e.target.value })}
+          value={formData.{prefix}_name}
+          onChange={e => setFormData({ ...formData, {prefix}_name: e.target.value })}
           required
         />
       </div>
@@ -484,8 +500,8 @@ function ContactForm() {
         <input
           id="email"
           type="email"
-          value={formData.cr_email}
-          onChange={e => setFormData({ ...formData, cr_email: e.target.value })}
+          value={formData.{prefix}_email}
+          onChange={e => setFormData({ ...formData, {prefix}_email: e.target.value })}
           required
         />
       </div>
@@ -494,8 +510,8 @@ function ContactForm() {
         <label htmlFor="message">Message</label>
         <textarea
           id="message"
-          value={formData.cr_message}
-          onChange={e => setFormData({ ...formData, cr_message: e.target.value })}
+          value={formData.{prefix}_message}
+          onChange={e => setFormData({ ...formData, {prefix}_message: e.target.value })}
           required
           rows={5}
         />
@@ -612,7 +628,7 @@ function ProductList() {
   }, []);
 
   if (loading) return <LoadingSpinner />;
-  return products.map(p => <ProductCard key={p.cr_productid} product={p} />);
+  return products.map(p => <ProductCard key={p.{prefix}_productid} product={p} />);
 }
 ```
 
@@ -679,27 +695,29 @@ Track replacements in the memory bank:
 
 ## OData Query Reference
 
+**NOTE**: Replace `{prefix}` with your publisher prefix (e.g., `cr`, `contoso`, `new`).
+
 | Operation | Query String | Example |
 |-----------|-------------|---------|
-| Select fields | `$select=field1,field2` | `$select=cr_name,cr_price` |
-| Filter | `$filter=condition` | `$filter=cr_isactive eq true` |
-| Order by | `$orderby=field [asc\|desc]` | `$orderby=cr_name desc` |
+| Select fields | `$select=field1,field2` | `$select={prefix}_name,{prefix}_price` |
+| Filter | `$filter=condition` | `$filter={prefix}_isactive eq true` |
+| Order by | `$orderby=field [asc\|desc]` | `$orderby={prefix}_name desc` |
 | Top N | `$top=N` | `$top=10` |
 | Skip | `$skip=N` | `$skip=20` |
-| Expand | `$expand=relationship` | `$expand=cr_category` |
+| Expand | `$expand=relationship` | `$expand={prefix}_category` |
 
 ### Filter Operators
 
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `eq` | Equal | `cr_isactive eq true` |
-| `ne` | Not equal | `cr_status ne 0` |
-| `gt` | Greater than | `cr_price gt 100` |
-| `ge` | Greater or equal | `cr_price ge 100` |
-| `lt` | Less than | `cr_price lt 50` |
-| `le` | Less or equal | `cr_price le 50` |
-| `and` | Logical AND | `cr_isactive eq true and cr_price gt 0` |
-| `or` | Logical OR | `cr_category eq 'A' or cr_category eq 'B'` |
-| `contains` | Contains string | `contains(cr_name,'search')` |
-| `startswith` | Starts with | `startswith(cr_name,'Pro')` |
-| `endswith` | Ends with | `endswith(cr_email,'@example.com')` |
+| `eq` | Equal | `{prefix}_isactive eq true` |
+| `ne` | Not equal | `{prefix}_status ne 0` |
+| `gt` | Greater than | `{prefix}_price gt 100` |
+| `ge` | Greater or equal | `{prefix}_price ge 100` |
+| `lt` | Less than | `{prefix}_price lt 50` |
+| `le` | Less or equal | `{prefix}_price le 50` |
+| `and` | Logical AND | `{prefix}_isactive eq true and {prefix}_price gt 0` |
+| `or` | Logical OR | `{prefix}_category eq 'A' or {prefix}_category eq 'B'` |
+| `contains` | Contains string | `contains({prefix}_name,'search')` |
+| `startswith` | Starts with | `startswith({prefix}_name,'Pro')` |
+| `endswith` | Ends with | `endswith({prefix}_email,'@example.com')` |

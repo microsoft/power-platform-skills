@@ -2,6 +2,8 @@
 
 This document covers common issues when setting up Power Pages Web API and their solutions.
 
+**NOTE**: All examples use `{prefix}` as a placeholder for your publisher prefix. Replace it with your actual prefix from `Initialize-DataverseApi` (e.g., `cr`, `contoso`, `new`).
+
 ## Quick Reference
 
 | Issue | Solution |
@@ -27,7 +29,7 @@ This document covers common issues when setting up Power Pages Web API and their
    ```yaml
    # Correct
    id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-   name: Webapi/cr_product/enabled
+   name: Webapi/{prefix}_product/enabled
    value: true
 
    # Incorrect (missing quotes can cause issues in some cases)
@@ -63,7 +65,7 @@ This document covers common issues when setting up Power Pages Web API and their
    ```powershell
    # Check permissions in Dataverse
    $baseUrl = "<ENV_URL>/api/data/v9.2"
-   Invoke-RestMethod -Uri "$baseUrl/adx_entitypermissions?`$filter=adx_entitylogicalname eq 'cr_product'" -Headers $headers
+   Invoke-RestMethod -Uri "$baseUrl/adx_entitypermissions?`$filter=adx_entitylogicalname eq '{prefix}_product'" -Headers $headers
    ```
 
 2. **Check permission is linked to correct web role**
@@ -92,7 +94,7 @@ This document covers common issues when setting up Power Pages Web API and their
    const token = match ? match[1] : null;
 
    // Include in request
-   fetch('/_api/cr_products', {
+   fetch('/_api/{prefix}_products', {
      method: 'POST',
      headers: {
        'Content-Type': 'application/json',
@@ -141,13 +143,13 @@ fetch('/_layout/tokenhtml')
 1. **Verify site setting exists and is enabled**
 
    ```yaml
-   name: Webapi/cr_product/enabled
+   name: Webapi/{prefix}_product/enabled
    value: true  # Must be boolean true, not string "true"
    ```
 
 2. **Check entity set name is correct**
    - Use pluralized logical name
-   - Example: `cr_product` table → `cr_products` entity set
+   - Example: `{prefix}_product` table → `{prefix}_products` entity set
 
 3. **Ensure table exists in Dataverse**
 
@@ -170,10 +172,10 @@ fetch('/_layout/tokenhtml')
 
    ```text
    # Incorrect
-   /_api/cr_products?filter=cr_isactive eq true
+   /_api/{prefix}_products?filter={prefix}_isactive eq true
 
    # Correct ($ prefix required)
-   /_api/cr_products?$filter=cr_isactive eq true
+   /_api/{prefix}_products?$filter={prefix}_isactive eq true
    ```
 
 2. **Missing $select when fields are restricted** (Most Common)
@@ -182,25 +184,25 @@ fetch('/_layout/tokenhtml')
 
    ```text
    # Site setting
-   name: Webapi/cr_product/fields
-   value: cr_name,cr_price,cr_isactive
+   name: Webapi/{prefix}_product/fields
+   value: {prefix}_name,{prefix}_price,{prefix}_isactive
 
    # Incorrect (no $select - tries to fetch all fields)
-   /_api/cr_products
-   /_api/cr_products?$filter=cr_isactive eq true
+   /_api/{prefix}_products
+   /_api/{prefix}_products?$filter={prefix}_isactive eq true
 
    # Correct (only requests allowed fields)
-   /_api/cr_products?$select=cr_name,cr_price,cr_isactive
-   /_api/cr_products?$select=cr_name,cr_price,cr_isactive&$filter=cr_isactive eq true
+   /_api/{prefix}_products?$select={prefix}_name,{prefix}_price,{prefix}_isactive
+   /_api/{prefix}_products?$select={prefix}_name,{prefix}_price,{prefix}_isactive&$filter={prefix}_isactive eq true
    ```
 
    **Solution**: Always include `$select` with fields that match your `Webapi/<table>/fields` site setting:
 
    ```typescript
    // Always specify select with allowed fields
-   webApi.getAll<Product>('cr_products', {
-     select: ['cr_name', 'cr_price', 'cr_isactive'],
-     filter: 'cr_isactive eq true',
+   webApi.getAll<Product>('{prefix}_products', {
+     select: ['{prefix}_name', '{prefix}_price', '{prefix}_isactive'],
+     filter: '{prefix}_isactive eq true',
    });
    ```
 
@@ -212,20 +214,20 @@ fetch('/_layout/tokenhtml')
 
    ```text
    # Incorrect (string needs quotes)
-   $filter=cr_category eq Electronics
+   $filter={prefix}_category eq Electronics
 
    # Correct
-   $filter=cr_category eq 'Electronics'
+   $filter={prefix}_category eq 'Electronics'
    ```
 
 4. **Invalid data type in request body**
 
    ```javascript
    // Incorrect
-   { "cr_price": "99.99" }  // String instead of number
+   { "{prefix}_price": "99.99" }  // String instead of number
 
    // Correct
-   { "cr_price": 99.99 }
+   { "{prefix}_price": 99.99 }
    ```
 
 ## Web API Returns 500 Server Error
@@ -267,10 +269,10 @@ Power Pages Web API should not have CORS issues when called from the same origin
 
    ```javascript
    // Correct
-   fetch('/_api/cr_products')
+   fetch('/_api/{prefix}_products')
 
    // Incorrect (may cause CORS issues)
-   fetch('https://site.powerappsportals.com/_api/cr_products')
+   fetch('https://site.powerappsportals.com/_api/{prefix}_products')
    ```
 
 2. **Check HTTP vs HTTPS**
@@ -292,18 +294,18 @@ Power Pages Web API should not have CORS issues when called from the same origin
 3. **Test API directly in browser**
 
    ```text
-   https://<site-url>/_api/cr_products
+   https://<site-url>/_api/{prefix}_products
    ```
 
 4. **Check field name mapping**
    - Ensure frontend uses Dataverse column logical names
-   - Example: `cr_productid` not `id`
+   - Example: `{prefix}_productid` not `id`
 
 5. **Verify data exists in Dataverse**
 
    ```powershell
    # Query via Dataverse API
-   Invoke-RestMethod -Uri "$baseUrl/cr_products" -Headers $headers
+   Invoke-RestMethod -Uri "$baseUrl/{prefix}_products" -Headers $headers
    ```
 
 ## Debug Checklist

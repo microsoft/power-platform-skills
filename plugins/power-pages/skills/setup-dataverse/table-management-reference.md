@@ -48,7 +48,7 @@ function Get-TableSchema {
 ```powershell
 function Compare-TableSchemas {
     param(
-        [hashtable]$RequiredTables,  # Schema name -> array of required columns
+        [hashtable]$RequiredTables,  # Purpose name -> array of required columns (e.g., "category", "product")
         [array]$ExistingTables       # From EntityDefinitions query
     )
 
@@ -58,26 +58,31 @@ function Compare-TableSchemas {
         CreateNew = @()     # Tables that don't exist and must be created
     }
 
-    foreach ($tableName in $RequiredTables.Keys) {
-        $existing = $ExistingTables | Where-Object { $_.SchemaName -eq $tableName -or $_.LogicalName -eq $tableName }
+    foreach ($tablePurpose in $RequiredTables.Keys) {
+        # Search for existing tables that match this purpose (by name patterns)
+        $existing = Find-SimilarTables -Purpose $tablePurpose -ExistingTables $ExistingTables | Select-Object -First 1
 
         if ($existing) {
             # Table exists - check if it has all required columns
             $tableSchema = Get-TableSchema -TableLogicalName $existing.LogicalName
             $existingColumns = $tableSchema.Attributes | Select-Object -ExpandProperty SchemaName
-            $requiredColumns = $RequiredTables[$tableName]
+            $requiredColumns = $RequiredTables[$tablePurpose]
 
             $missingColumns = $requiredColumns | Where-Object { $_ -notin $existingColumns }
 
             if ($missingColumns.Count -eq 0) {
                 $comparison.Reusable += @{
-                    TableName = $tableName
+                    TablePurpose = $tablePurpose                    # Intended purpose (e.g., "category")
+                    ActualLogicalName = $existing.LogicalName       # Actual name in Dataverse (e.g., "cr_productcategory")
+                    ActualSchemaName = $existing.SchemaName         # Schema name (e.g., "cr_ProductCategory")
                     ExistingTable = $existing
                     Message = "All required columns present"
                 }
             } else {
                 $comparison.Extendable += @{
-                    TableName = $tableName
+                    TablePurpose = $tablePurpose
+                    ActualLogicalName = $existing.LogicalName
+                    ActualSchemaName = $existing.SchemaName
                     ExistingTable = $existing
                     MissingColumns = $missingColumns
                     Message = "Missing columns: $($missingColumns -join ', ')"
@@ -85,8 +90,11 @@ function Compare-TableSchemas {
             }
         } else {
             $comparison.CreateNew += @{
-                TableName = $tableName
-                RequiredColumns = $RequiredTables[$tableName]
+                TablePurpose = $tablePurpose
+                # New tables will use the publisher prefix pattern
+                NewSchemaName = "${publisherPrefix}_$tablePurpose"
+                NewLogicalName = "${publisherPrefix}_$tablePurpose".ToLower()
+                RequiredColumns = $RequiredTables[$tablePurpose]
             }
         }
     }
@@ -94,6 +102,73 @@ function Compare-TableSchemas {
     return $comparison
 }
 ```
+
+## Build Table Name Mapping
+
+After comparing tables and getting user decisions, build a mapping that tracks the actual logical names to use for each table purpose. This is **critical** for correctly referencing tables throughout the workflow.
+
+```powershell
+function Build-TableNameMapping {
+    param(
+        [object]$ComparisonResult,  # From Compare-TableSchemas
+        [string]$PublisherPrefix    # From Initialize-DataverseApi
+    )
+
+    # Maps table purpose -> actual logical name and entity set name
+    # This ensures we use existing table names when reusing, and new names when creating
+    $tableMapping = @{}
+
+    # Tables being reused - use their ACTUAL logical names
+    foreach ($table in $ComparisonResult.Reusable) {
+        $tableMapping[$table.TablePurpose] = @{
+            LogicalName = $table.ActualLogicalName
+            SchemaName = $table.ActualSchemaName
+            EntitySetName = $table.ActualLogicalName + "es"  # Pluralized for OData (may need adjustment)
+            Source = "Reused"
+        }
+        Write-Host "  [REUSE] $($table.TablePurpose) -> $($table.ActualLogicalName)" -ForegroundColor Yellow
+    }
+
+    # Tables being extended - use their ACTUAL logical names
+    foreach ($table in $ComparisonResult.Extendable) {
+        $tableMapping[$table.TablePurpose] = @{
+            LogicalName = $table.ActualLogicalName
+            SchemaName = $table.ActualSchemaName
+            EntitySetName = $table.ActualLogicalName + "es"
+            Source = "Extended"
+        }
+        Write-Host "  [EXTEND] $($table.TablePurpose) -> $($table.ActualLogicalName)" -ForegroundColor Cyan
+    }
+
+    # Tables being created - use the publisher prefix pattern
+    foreach ($table in $ComparisonResult.CreateNew) {
+        $logicalName = "${PublisherPrefix}_$($table.TablePurpose)".ToLower()
+        $schemaName = "${PublisherPrefix}_$($table.TablePurpose)"
+        $tableMapping[$table.TablePurpose] = @{
+            LogicalName = $logicalName
+            SchemaName = $schemaName
+            EntitySetName = $logicalName + "s"  # Standard pluralization for new tables
+            Source = "Created"
+        }
+        Write-Host "  [CREATE] $($table.TablePurpose) -> $logicalName" -ForegroundColor Green
+    }
+
+    return $tableMapping
+}
+
+# Example usage:
+# $comparison = Compare-TableSchemas -RequiredTables $requiredTables -ExistingTables $existingTables.value
+# $tableMap = Build-TableNameMapping -ComparisonResult $comparison -PublisherPrefix $publisherPrefix
+#
+# # Later, when referencing tables, use the mapping:
+# $categoryTable = $tableMap["category"].LogicalName      # e.g., "existing_productcategory" or "cr_category"
+# $categoryEntitySet = $tableMap["category"].EntitySetName  # e.g., "existing_productcategories" or "cr_categorys"
+```
+
+**IMPORTANT**: Always use the `$tableMap` to get the correct table names throughout the workflow:
+- For relationships: `$tableMap["product"].LogicalName` instead of `"${publisherPrefix}_product"`
+- For data queries: `$tableMap["category"].EntitySetName` instead of `"${publisherPrefix}_categories"`
+- For column additions: `$tableMap["teammember"].LogicalName` instead of `"${publisherPrefix}_teammember"`
 
 ## Find Similar Tables
 
@@ -171,6 +246,8 @@ function Test-ColumnExists {
 
 ## Create Table Helper Function
 
+**IMPORTANT**: Use the `$publisherPrefix` variable (retrieved via `Initialize-DataverseApi`) for all table and column schema names. Never hardcode prefixes.
+
 ```powershell
 function New-DataverseTable {
     param(
@@ -178,7 +255,7 @@ function New-DataverseTable {
         [string]$DisplayName,
         [string]$PluralDisplayName,
         [string]$Description = "",
-        [string]$PrimaryColumnName = "cr_name",
+        [string]$PrimaryColumnName = "${publisherPrefix}_name",
         [string]$PrimaryColumnDisplayName = "Name"
     )
 
@@ -231,7 +308,7 @@ function New-DataverseTableIfNotExists {
         [string]$DisplayName,
         [string]$PluralDisplayName,
         [string]$Description = "",
-        [string]$PrimaryColumnName = "cr_name",
+        [string]$PrimaryColumnName = "${publisherPrefix}_name",
         [string]$PrimaryColumnDisplayName = "Name"
     )
 
@@ -360,7 +437,7 @@ function Add-DataversePicklist {
 }
 
 # Example usage:
-# Add-DataversePicklist -TableName "cr_contactsubmission" -SchemaName "cr_status" -DisplayName "Status" -Options @(
+# Add-DataversePicklist -TableName "${publisherPrefix}_contactsubmission" -SchemaName "${publisherPrefix}_status" -DisplayName "Status" -Options @(
 #     @{ Value = 1; Label = "New" },
 #     @{ Value = 2; Label = "Reviewed" },
 #     @{ Value = 3; Label = "Responded" },
@@ -370,60 +447,66 @@ function Add-DataversePicklist {
 
 ## Common Table Templates
 
+**NOTE**: All examples below use `$publisherPrefix` variable. Initialize it first using:
+```powershell
+$api = Initialize-DataverseApi -EnvironmentUrl "https://orgname.crm.dynamics.com"
+$publisherPrefix = $api.PublisherPrefix  # e.g., "cr", "contoso", "new"
+```
+
 ### Product/Service Table
 
 ```powershell
-New-DataverseTable -SchemaName "cr_product" -DisplayName "Product" -PluralDisplayName "Products" -Description "Products and services offered"
+New-DataverseTable -SchemaName "${publisherPrefix}_product" -DisplayName "Product" -PluralDisplayName "Products" -Description "Products and services offered"
 
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_description" -DisplayName "Description" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_price" -DisplayName "Price" -Type "Money"
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_imageurl" -DisplayName "Image URL" -Type "Url"
-Add-DataverseColumn -TableName "cr_product" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
+Add-DataverseColumn -TableName "${publisherPrefix}_product" -SchemaName "${publisherPrefix}_description" -DisplayName "Description" -Type "Memo" -MaxLength 4000
+Add-DataverseColumn -TableName "${publisherPrefix}_product" -SchemaName "${publisherPrefix}_price" -DisplayName "Price" -Type "Money"
+Add-DataverseColumn -TableName "${publisherPrefix}_product" -SchemaName "${publisherPrefix}_imageurl" -DisplayName "Image URL" -Type "Url"
+Add-DataverseColumn -TableName "${publisherPrefix}_product" -SchemaName "${publisherPrefix}_isactive" -DisplayName "Is Active" -Type "Boolean"
 ```
 
 ### Team Member Table
 
 ```powershell
-New-DataverseTable -SchemaName "cr_teammember" -DisplayName "Team Member" -PluralDisplayName "Team Members" -Description "Team members displayed on the website"
+New-DataverseTable -SchemaName "${publisherPrefix}_teammember" -DisplayName "Team Member" -PluralDisplayName "Team Members" -Description "Team members displayed on the website"
 
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_title" -DisplayName "Job Title" -Type "String"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_bio" -DisplayName "Bio" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_photourl" -DisplayName "Photo URL" -Type "Url"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_linkedin" -DisplayName "LinkedIn" -Type "Url"
-Add-DataverseColumn -TableName "cr_teammember" -SchemaName "cr_displayorder" -DisplayName "Display Order" -Type "Integer"
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_title" -DisplayName "Job Title" -Type "String"
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_email" -DisplayName "Email" -Type "Email"
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_bio" -DisplayName "Bio" -Type "Memo" -MaxLength 4000
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_photourl" -DisplayName "Photo URL" -Type "Url"
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_linkedin" -DisplayName "LinkedIn" -Type "Url"
+Add-DataverseColumn -TableName "${publisherPrefix}_teammember" -SchemaName "${publisherPrefix}_displayorder" -DisplayName "Display Order" -Type "Integer"
 ```
 
 ### Testimonial Table
 
 ```powershell
-New-DataverseTable -SchemaName "cr_testimonial" -DisplayName "Testimonial" -PluralDisplayName "Testimonials" -Description "Customer testimonials and reviews"
+New-DataverseTable -SchemaName "${publisherPrefix}_testimonial" -DisplayName "Testimonial" -PluralDisplayName "Testimonials" -Description "Customer testimonials and reviews"
 
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_quote" -DisplayName "Quote" -Type "Memo" -MaxLength 2000
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_company" -DisplayName "Company" -Type "String"
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_role" -DisplayName "Role" -Type "String"
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_rating" -DisplayName "Rating" -Type "Integer"
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_photourl" -DisplayName "Photo URL" -Type "Url"
-Add-DataverseColumn -TableName "cr_testimonial" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_quote" -DisplayName "Quote" -Type "Memo" -MaxLength 2000
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_company" -DisplayName "Company" -Type "String"
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_role" -DisplayName "Role" -Type "String"
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_rating" -DisplayName "Rating" -Type "Integer"
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_photourl" -DisplayName "Photo URL" -Type "Url"
+Add-DataverseColumn -TableName "${publisherPrefix}_testimonial" -SchemaName "${publisherPrefix}_isactive" -DisplayName "Is Active" -Type "Boolean"
 ```
 
 ### Contact Submission Table
 
 ```powershell
-New-DataverseTable -SchemaName "cr_contactsubmission" -DisplayName "Contact Submission" -PluralDisplayName "Contact Submissions" -Description "Contact form submissions from the website"
+New-DataverseTable -SchemaName "${publisherPrefix}_contactsubmission" -DisplayName "Contact Submission" -PluralDisplayName "Contact Submissions" -Description "Contact form submissions from the website"
 
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_email" -DisplayName "Email" -Type "Email"
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_message" -DisplayName "Message" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_contactsubmission" -SchemaName "cr_submissiondate" -DisplayName "Submission Date" -Type "DateTime"
+Add-DataverseColumn -TableName "${publisherPrefix}_contactsubmission" -SchemaName "${publisherPrefix}_email" -DisplayName "Email" -Type "Email"
+Add-DataverseColumn -TableName "${publisherPrefix}_contactsubmission" -SchemaName "${publisherPrefix}_message" -DisplayName "Message" -Type "Memo" -MaxLength 4000
+Add-DataverseColumn -TableName "${publisherPrefix}_contactsubmission" -SchemaName "${publisherPrefix}_submissiondate" -DisplayName "Submission Date" -Type "DateTime"
 ```
 
 ### FAQ Table
 
 ```powershell
-New-DataverseTable -SchemaName "cr_faq" -DisplayName "FAQ" -PluralDisplayName "FAQs" -Description "Frequently asked questions" -PrimaryColumnName "cr_question" -PrimaryColumnDisplayName "Question"
+New-DataverseTable -SchemaName "${publisherPrefix}_faq" -DisplayName "FAQ" -PluralDisplayName "FAQs" -Description "Frequently asked questions" -PrimaryColumnName "${publisherPrefix}_question" -PrimaryColumnDisplayName "Question"
 
-Add-DataverseColumn -TableName "cr_faq" -SchemaName "cr_answer" -DisplayName "Answer" -Type "Memo" -MaxLength 4000
-Add-DataverseColumn -TableName "cr_faq" -SchemaName "cr_category" -DisplayName "Category" -Type "String"
-Add-DataverseColumn -TableName "cr_faq" -SchemaName "cr_displayorder" -DisplayName "Display Order" -Type "Integer"
-Add-DataverseColumn -TableName "cr_faq" -SchemaName "cr_isactive" -DisplayName "Is Active" -Type "Boolean"
+Add-DataverseColumn -TableName "${publisherPrefix}_faq" -SchemaName "${publisherPrefix}_answer" -DisplayName "Answer" -Type "Memo" -MaxLength 4000
+Add-DataverseColumn -TableName "${publisherPrefix}_faq" -SchemaName "${publisherPrefix}_category" -DisplayName "Category" -Type "String"
+Add-DataverseColumn -TableName "${publisherPrefix}_faq" -SchemaName "${publisherPrefix}_displayorder" -DisplayName "Display Order" -Type "Integer"
+Add-DataverseColumn -TableName "${publisherPrefix}_faq" -SchemaName "${publisherPrefix}_isactive" -DisplayName "Is Active" -Type "Boolean"
 ```

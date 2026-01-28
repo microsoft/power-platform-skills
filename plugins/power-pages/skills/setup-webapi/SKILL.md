@@ -2,7 +2,7 @@
 description: Configure Web API access, table permissions, entity permissions, and web roles for Power Pages. Use this skill when you need to set up table permissions, create entity permissions, configure web roles, enable API access, set CRUD permissions (read/write/create/delete), create site settings for Web API, or update frontend code to fetch data from Dataverse tables.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*), Bash(dotnet:*)
-model: sonnet
+model: opus
 ---
 
 **📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
@@ -104,9 +104,27 @@ This skill uses a **memory bank** (`memory-bank.md`) to persist context across s
 3. Read `<PROJECT_PATH>/memory-bank.md` if it exists
 4. Extract:
    - Project name and framework
+   - **Table Name Mapping** (critical for correct table names)
    - Tables created in `/setup-dataverse`
    - Website ID and environment URL
    - Any previously configured Web API settings
+
+### Table Name Mapping (Critical)
+
+The **Table Name Mapping** from `/setup-dataverse` is essential for this skill. It tracks:
+- **Reused/Extended tables**: Their actual logical names from Dataverse (may differ from `${publisherPrefix}_tablename`)
+- **New tables**: Use the `${publisherPrefix}_tablename` pattern
+
+**Example from memory bank:**
+```
+| Purpose | Actual Logical Name | Source |
+|---------|---------------------|--------|
+| category | contoso_productcategory | Reused |
+| product | cr_product | Created |
+| teammember | existing_staff | Extended |
+```
+
+**ALWAYS use the actual logical names** when configuring site settings and table permissions.
 
 If the memory bank shows `/setup-webapi` steps already completed:
 
@@ -393,7 +411,8 @@ pac pages list --verbose
 3. Test a Web API call in the console:
 
 ```javascript
-fetch('/_api/cr_products')
+// Replace {prefix} with your publisher prefix (e.g., 'cr', 'contoso', 'new')
+fetch('/_api/{prefix}_products')
   .then(r => r.json())
   .then(data => console.log('Products:', data.value))
   .catch(err => console.error('Error:', err));
@@ -431,11 +450,14 @@ After completing this skill, update `memory-bank.md`:
 
 ## Created Resources
 
+### Publisher Prefix
+`{prefix}` (fetched from Default solution's publisher)
+
 ### Site Settings
 
 | Setting | Value | File |
 |---------|-------|------|
-| Webapi/cr_product/enabled | true | Webapi-cr_product-enabled.sitesetting.yml |
+| Webapi/{prefix}_product/enabled | true | Webapi-{prefix}_product-enabled.sitesetting.yml |
 | [ADD MORE AS CREATED] |
 
 ### Web Roles
@@ -451,7 +473,7 @@ After completing this skill, update `memory-bank.md`:
 
 | Table | Scope | Permissions | Web Role |
 |-------|-------|-------------|----------|
-| cr_product | Global | Read | Anonymous Users |
+| {prefix}_product | Global | Read | Anonymous Users |
 | [ADD MORE AS CREATED] |
 
 ### Modified Files

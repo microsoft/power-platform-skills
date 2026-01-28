@@ -7,7 +7,7 @@
     "url": "https://www.microsoft.com"
   },
   "homepage": "https://learn.microsoft.com/power-pages/configure/create-code-sites",
-  "repository": "https://github.com/microsoft/power-pages-claude-plugin",
+  "repository": "https://github.com/microsoft/power-pages-claude-plugins",
   "license": "MIT",
   "keywords": [
     "power-pages",

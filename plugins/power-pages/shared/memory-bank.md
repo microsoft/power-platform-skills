@@ -145,19 +145,24 @@ Update after:
 
 ## Created Resources
 
+### Publisher Prefix
+
+The publisher prefix is fetched dynamically from the Default solution's publisher via `Initialize-DataverseApi`:
+- **Prefix**: `{prefix}` (e.g., `cr`, `contoso`, `new`)
+
 ### Dataverse Tables
 
 | Table Name | Display Name | Columns | Sample Data |
 |------------|--------------|---------|-------------|
-| cr_contactsubmission | Contact Submission | name, email, message, status | 3 records |
-| cr_product | Product | name, description, price, category | 5 records |
+| {prefix}_contactsubmission | Contact Submission | name, email, message, status | 3 records |
+| {prefix}_product | Product | name, description, price, category | 5 records |
 
 ### Site Settings
 
 | Setting | Value |
 |---------|-------|
-| Webapi/cr_product/enabled | true |
-| Webapi/cr_product/fields | cr_name,cr_description,cr_price,cr_category |
+| Webapi/{prefix}_product/enabled | true |
+| Webapi/{prefix}_product/fields | {prefix}_name,{prefix}_description,{prefix}_price,{prefix}_category |
 
 ## Current Status
 

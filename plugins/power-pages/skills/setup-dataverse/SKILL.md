@@ -2,7 +2,7 @@
 description: Setup Dataverse tables, schema, entities, and data model for Power Pages. Use this skill when you need to create Dataverse tables, define table columns, set up entity relationships, create lookup fields, design database schema, add sample data, or configure table structure for your Power Pages site.
 user-invocable: true
 allowed-tools: Bash(pac:*), Bash(az:*)
-model: sonnet
+model: opus
 ---
 
 **📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
@@ -179,14 +179,16 @@ Ask the user:
 
 ### Data Pattern Recognition
 
+**NOTE**: Replace `{prefix}` with the publisher prefix from `Initialize-DataverseApi`.
+
 | Pattern | Recommended Table | Likely Relationships |
 |---------|-------------------|---------------------|
-| Contact form | `cr_contactsubmission` | -> `cr_contactstatus` (lookup) |
-| Product/service cards | `cr_product` | -> `cr_category` (lookup) |
-| Team member section | `cr_teammember` | -> `cr_department` (lookup) |
-| Testimonials/Reviews | `cr_testimonial` | -> `cr_product` (optional) |
-| Blog/News section | `cr_blogpost` | -> `cr_category`, -> `cr_author` |
-| FAQ section | `cr_faq` | -> `cr_faqcategory` (lookup) |
+| Contact form | `{prefix}_contactsubmission` | -> `{prefix}_contactstatus` (lookup) |
+| Product/service cards | `{prefix}_product` | -> `{prefix}_category` (lookup) |
+| Team member section | `{prefix}_teammember` | -> `{prefix}_department` (lookup) |
+| Testimonials/Reviews | `{prefix}_testimonial` | -> `{prefix}_product` (optional) |
+| Blog/News section | `{prefix}_blogpost` | -> `{prefix}_category`, -> `{prefix}_author` |
+| FAQ section | `{prefix}_faq` | -> `{prefix}_faqcategory` (lookup) |
 
 ### Actions
 
@@ -230,21 +232,20 @@ az account show
 # Get environment URL
 pac org who
 
-# Get access token
+# Initialize API with automatic publisher prefix detection
 $envUrl = "https://<org>.crm.dynamics.com"
-$token = (az account get-access-token --resource $envUrl --query accessToken -o tsv)
+$api = Initialize-DataverseApi -EnvironmentUrl $envUrl
 
-# Set up headers
-$headers = @{
-    "Authorization" = "Bearer $token"
-    "Content-Type" = "application/json"
-    "OData-MaxVersion" = "4.0"
-    "OData-Version" = "4.0"
-    "Prefer" = "return=representation"
-}
+# Extract variables for use throughout the script
+$headers = $api.Headers
+$baseUrl = $api.BaseUrl
+$publisherPrefix = $api.PublisherPrefix  # e.g., "cr", "contoso", "new"
 
-$baseUrl = "$envUrl/api/data/v9.2"
+# The publisher prefix is automatically fetched from the Default solution's publisher
+# Use $publisherPrefix for all table and column schema names
 ```
+
+**IMPORTANT**: The `$publisherPrefix` variable must be used for all table and column schema names to ensure consistency with the environment's default publisher.
 
 ---
 
@@ -259,11 +260,33 @@ $baseUrl = "$envUrl/api/data/v9.2"
 ### Actions
 
 1. Query all existing custom tables using `EntityDefinitions` API
-2. Compare existing tables against recommended schema
+2. Compare existing tables against recommended schema using `Compare-TableSchemas`
 3. Present reuse options to user:
    - **Reuse as-is**: Table has all required columns
    - **Extend**: Table exists but needs additional columns
    - **Create new**: Table doesn't exist
+4. **Build the table name mapping** using `Build-TableNameMapping`
+
+### Build Table Name Mapping
+
+**IMPORTANT**: After getting user decisions, build the `$tableMap` using `Build-TableNameMapping`. This mapping tracks:
+- **Reused/Extended tables**: Use their ACTUAL logical names from Dataverse
+- **New tables**: Use the `${publisherPrefix}_tablename` pattern
+
+```powershell
+# Build the mapping based on comparison results
+$tableMap = Build-TableNameMapping -ComparisonResult $comparison -PublisherPrefix $publisherPrefix
+
+# Example output:
+#   [REUSE] category -> existing_productcategory
+#   [EXTEND] product -> contoso_items
+#   [CREATE] testimonial -> cr_testimonial
+```
+
+**Use `$tableMap` throughout the rest of the workflow** instead of hardcoding `${publisherPrefix}_tablename`:
+- `$tableMap["category"].LogicalName` - Actual table logical name
+- `$tableMap["category"].EntitySetName` - For OData queries
+- `$tableMap["category"].Source` - "Reused", "Extended", or "Created"
 
 ### Present Options
 
@@ -316,11 +339,13 @@ Insert data **in the correct order** to maintain referential integrity.
 
 ### Foreign Key Syntax
 
+**NOTE**: Use `$publisherPrefix` from `Initialize-DataverseApi` for all field and table names.
+
 ```powershell
 # Use @odata.bind to reference related records
 $product = @{
-    cr_name = "Professional Consultation"
-    "cr_categoryid@odata.bind" = "/cr_categories($categoryId)"
+    "${publisherPrefix}_name" = "Professional Consultation"
+    "${publisherPrefix}_categoryid@odata.bind" = "/${publisherPrefix}_categories($categoryId)"
 }
 ```
 
@@ -329,7 +354,7 @@ $product = @{
 After inserting, verify relationships using `$expand`:
 
 ```powershell
-$products = Invoke-RestMethod -Uri "$baseUrl/cr_products?`$expand=cr_categoryid(`$select=cr_name)" -Headers $headers
+$products = Invoke-RestMethod -Uri "$baseUrl/${publisherPrefix}_products?`$expand=${publisherPrefix}_categoryid(`$select=${publisherPrefix}_name)" -Headers $headers
 ```
 
 ---
@@ -360,27 +385,45 @@ After completing this skill, update `memory-bank.md`:
 - [x] Data architecture designed with dependency graph
 - [x] Existing tables reviewed and analyzed
 - [x] Reuse decisions made (reuse/extend/create)
+- [x] Table name mapping built
 - [x] Tables created/extended in dependency order
 - [x] Relationships (lookups) established
 - [x] Sample data inserted with referential integrity
 
 ## Data Architecture
 
+### Publisher Prefix
+`{prefix}` (fetched from Default solution's publisher via Initialize-DataverseApi)
+
+### Table Name Mapping
+
+**IMPORTANT**: This mapping tracks actual table names. For reused/extended tables, these are the existing logical names from Dataverse. For new tables, these use the publisher prefix pattern.
+
+| Purpose | Actual Logical Name | Source | Entity Set Name |
+|---------|---------------------|--------|-----------------|
+| category | {actual_category_table} | Reused/Extended/Created | {entity_set} |
+| status | {actual_status_table} | Reused/Extended/Created | {entity_set} |
+| department | {actual_department_table} | Reused/Extended/Created | {entity_set} |
+| product | {actual_product_table} | Reused/Extended/Created | {entity_set} |
+| teammember | {actual_teammember_table} | Reused/Extended/Created | {entity_set} |
+| testimonial | {actual_testimonial_table} | Reused/Extended/Created | {entity_set} |
+| contactsubmission | {actual_contactsubmission_table} | Reused/Extended/Created | {entity_set} |
+
 ### Tables by Tier
 
-| Tier | Tables |
-|------|--------|
-| TIER 0 | cr_category, cr_status, cr_department |
-| TIER 1 | cr_product, cr_teammember |
-| TIER 2 | cr_testimonial, cr_contactsubmission |
+| Tier | Tables (using actual logical names from mapping) |
+|------|--------------------------------------------------|
+| TIER 0 | category, status, department |
+| TIER 1 | product, teammember |
+| TIER 2 | testimonial, contactsubmission |
 
 ### Relationships
 
-| Source | Target | Lookup Column |
-|--------|--------|---------------|
-| cr_product | cr_category | cr_categoryid |
-| cr_teammember | cr_department | cr_departmentid |
-| cr_testimonial | cr_product | cr_productid |
+| Source (Actual Name) | Target (Actual Name) | Lookup Column |
+|----------------------|----------------------|---------------|
+| {product_table} | {category_table} | {prefix}_categoryid |
+| {teammember_table} | {department_table} | {prefix}_departmentid |
+| {testimonial_table} | {product_table} | {prefix}_productid |
 
 ## Current Status
 
