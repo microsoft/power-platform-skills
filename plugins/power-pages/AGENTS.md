@@ -44,12 +44,35 @@ This plugin's shared resources are in `shared/`:
 
 ## Skills
 
+### Core Skills
+
 | Skill | Description |
 |-------|-------------|
 | `/create-site` | Create a Power Pages code site with modern frameworks |
 | `/setup-dataverse` | Set up Dataverse tables and schema |
-| `/setup-webapi` | Configure Web API access and permissions |
+| `/setup-webapi` | Configure Web API permissions and site settings |
+| `/integrate-webapi` | Connect frontend code to Web API (replace mock data) |
 | `/setup-auth` | Implement authentication and authorization |
+
+### Optional Enhancement Skills
+
+| Skill | Description | After |
+|-------|-------------|-------|
+| `/add-seo` | Add SEO assets (meta tags, robots.txt, sitemap) | `/create-site` |
+| `/add-tests` | Add unit tests (Vitest) and E2E tests (Playwright) | `/create-site` |
+| `/add-sample-data` | Insert sample data with foreign key relationships | `/setup-dataverse` |
+
+### Workflow Sequence
+
+```
+/create-site → /add-seo (optional) → /add-tests (optional)
+     ↓
+/setup-dataverse → /add-sample-data (optional)
+     ↓
+/setup-webapi → /integrate-webapi
+     ↓
+/setup-auth
+```
 
 ### Skill Structure
 
@@ -58,8 +81,9 @@ Each skill follows this structure:
 ```
 skills/<skill-name>/
 ├── SKILL.md                    # Main skill workflow
-├── <topic>-reference.md        # Detailed reference files
-└── troubleshooting.md          # Common issues and solutions
+└── references/                 # Detailed reference files
+    ├── <topic>-reference.md
+    └── troubleshooting.md
 ```
 
 ### Skill Header Pattern
@@ -113,7 +137,7 @@ Site settings control the behavior of your Power Pages site...
 **Example - GOOD (concise):**
 ```markdown
 ## Site Settings
-Create YAML files in `.powerpages-site/site-settings/`. See [site-settings-reference.md](./site-settings-reference.md) for format details.
+Create YAML files in `.powerpages-site/site-settings/`. See [site-settings-reference.md](./references/site-settings-reference.md) for format details.
 ```
 
 ## Agents

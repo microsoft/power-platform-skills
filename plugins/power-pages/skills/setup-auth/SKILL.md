@@ -10,7 +10,7 @@ model: opus
 
 # Setup Authentication & Authorization
 
-**References:** [authentication](./authentication-reference.md) | [authorization](./authorization-reference.md)
+**References:** [authentication](./references/authentication-reference.md) | [authorization](./references/authorization-reference.md)
 
 ## Workflow
 
@@ -39,7 +39,7 @@ Use `AskUserQuestion`:
 
 ## Step 2: Create Auth Service
 
-See [authentication-reference.md](./authentication-reference.md).
+See [authentication-reference.md](./references/authentication-reference.md).
 
 Power Pages auth is **server-side** (session cookies, not client tokens):
 - **Login**: POST to `/Account/Login/ExternalLogin` with anti-forgery token from `/_layout/tokenhtml`
@@ -54,7 +54,7 @@ Create:
 
 ## Step 3: Create Authorization Utils
 
-See [authorization-reference.md](./authorization-reference.md).
+See [authorization-reference.md](./references/authorization-reference.md).
 
 Create `src/utils/authorization.ts`:
 - Role checking functions (case-insensitive)
@@ -105,7 +105,7 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 
 See [authoring-tool-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/authoring-tool-reference.md) for helper function.
 
-**Required site setting**: `Authentication/Registration/ProfileRedirectEnabled` = `false` (redirects to home instead of profile after login). See [authentication-reference.md](./authentication-reference.md#site-settings).
+**Required site setting**: `Authentication/Registration/ProfileRedirectEnabled` = `false` (redirects to home instead of profile after login). See [authentication-reference.md](./references/authentication-reference.md#site-settings).
 
 **Verify**: Sign in → check user name displays → check roles → sign out.
 

@@ -1,6 +1,6 @@
 ---
 name: setting-up-web-api
-description: Configures Web API access, table permissions, web roles, and site settings for Power Pages. Use when setting up table permissions, entity permissions, CRUD access, site settings for Web API, or updating frontend to fetch from Dataverse.
+description: Configures Web API access, table permissions, web roles, and site settings for Power Pages. Use when setting up table permissions, entity permissions, CRUD access, or site settings for Web API.
 user-invocable: true
 allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
 model: opus
@@ -10,7 +10,7 @@ model: opus
 
 # Setup Web API
 
-**References:** [site-settings](./site-settings-reference.md) | [web-roles](./web-roles-reference.md) | [table-permissions](./table-permissions-reference.md) | [frontend-integration](./frontend-integration-reference.md) | [troubleshooting](./troubleshooting.md)
+**References:** [site-settings](./references/site-settings-reference.md) | [web-roles](./references/web-roles-reference.md) | [table-permissions](./references/table-permissions-reference.md) | [troubleshooting](./references/troubleshooting.md)
 
 ## Workflow
 
@@ -18,8 +18,7 @@ model: opus
 2. **Create Site Settings** → `Webapi/{table}/enabled` and `fields` for each table
 3. **Create Web Roles** → Verify/create Anonymous, Authenticated, custom roles
 4. **Create Table Permissions** → Link to web roles with appropriate scope
-5. **Update Frontend** → Replace ALL mock data with `/_api` calls
-6. **Build and Upload** → Deploy and verify
+5. **Build and Upload** → Deploy and verify
 
 ---
 
@@ -33,7 +32,7 @@ If continuing from `/setup-dataverse`, list tables to configure. Otherwise ask f
 
 ## Step 2: Create Site Settings
 
-See [site-settings-reference.md](./site-settings-reference.md).
+See [site-settings-reference.md](./references/site-settings-reference.md).
 
 For each table, create in `.powerpages-site/site-settings/`:
 1. `Webapi-<table>-enabled.sitesetting.yml`
@@ -45,7 +44,7 @@ Also create authoring tool setting per [authoring-tool-reference.md](${CLAUDE_PL
 
 ## Step 3: Create Web Roles
 
-See [web-roles-reference.md](./web-roles-reference.md).
+See [web-roles-reference.md](./references/web-roles-reference.md).
 
 Create roles **before** table permissions using YAML files in `.powerpages-site/web-roles/`.
 
@@ -71,7 +70,7 @@ Create roles **before** table permissions using YAML files in `.powerpages-site/
 
 ## Step 4: Create Table Permissions
 
-See [table-permissions-reference.md](./table-permissions-reference.md).
+See [table-permissions-reference.md](./references/table-permissions-reference.md).
 
 | Data Type | Scope | Permissions | Role |
 |-----------|-------|-------------|------|
@@ -83,28 +82,7 @@ Use `New-TablePermission` and link to web roles from Step 3.
 
 ---
 
-## Step 5: Update Frontend
-
-See [frontend-integration-reference.md](./frontend-integration-reference.md).
-
-1. Create `src/services/webApi.ts` with CSRF token handling
-2. Create entity-specific wrappers
-3. **Replace ALL mock data** - search and destroy:
-
-```powershell
-# Find mock folders/files
-Get-ChildItem -Path ./src -Directory -Recurse | Where-Object { $_.Name -match "^(mock|data|fixtures)$" }
-Get-ChildItem -Path ./src -Recurse -Include "*.data.ts","*mock*.ts"
-```
-
-**Verify before Step 6:**
-- [ ] No mock folders/files remain
-- [ ] No inline hardcoded arrays
-- [ ] All components use `webApi` service
-
----
-
-## Step 6: Build and Upload
+## Step 5: Build and Upload
 
 ```powershell
 pac auth list  # Show available environments
@@ -127,3 +105,11 @@ fetch('/_api/{prefix}_products').then(r => r.json()).then(d => console.log(d.val
 ```
 
 Update memory-bank.md. Cleanup per [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md).
+
+---
+
+## Next Steps
+
+Run `/integrate-webapi` to connect frontend code to the Web API (replace mock data with API calls).
+
+Then run `/setup-auth` to add authentication and authorization.

@@ -1,6 +1,6 @@
 ---
 name: setting-up-dataverse-tables
-description: Creates Dataverse tables, columns, relationships, and sample data for Power Pages. Use when creating tables, defining schema, setting up entity relationships, lookup fields, or adding sample data.
+description: Creates Dataverse tables, columns, and relationships for Power Pages. Use when creating tables, defining schema, setting up entity relationships, or lookup fields.
 user-invocable: true
 allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
 model: opus
@@ -10,7 +10,7 @@ model: opus
 
 # Setup Dataverse Tables
 
-**References:** [data-architecture](./data-architecture-reference.md) | [api-auth](./api-authentication-reference.md) | [table-management](./table-management-reference.md) | [relationships](./relationship-reference.md) | [sample-data](./sample-data-reference.md) | [troubleshooting](./troubleshooting.md)
+**References:** [data-architecture](./references/data-architecture-reference.md) | [api-auth](./references/api-authentication-reference.md) | [table-management](./references/table-management-reference.md) | [relationships](./references/relationship-reference.md) | [troubleshooting](./references/troubleshooting.md)
 
 Tables are created in **topological order** (referenced tables first) to maintain referential integrity.
 
@@ -22,7 +22,6 @@ Tables are created in **topological order** (referenced tables first) to maintai
 4. **Setup API Auth** → Get token and publisher prefix
 5. **Review Existing Tables** → Reuse, extend, or create new
 6. **Create Tables** → In dependency order with relationships
-7. **Add Sample Data** → With valid foreign keys
 
 ---
 
@@ -142,25 +141,7 @@ Options:
 
 ---
 
-## Step 7: Add Sample Data
-
-Insert in tier order:
-1. TIER 0 (categories, statuses) - skip if data exists
-2. TIER 1 (products, team members) with valid lookups
-3. TIER 2 (testimonials, submissions)
-
-```powershell
-$product = @{
-    "${publisherPrefix}_name" = "Consultation"
-    "${publisherPrefix}_categoryid@odata.bind" = "/${publisherPrefix}_categories($categoryId)"
-}
-```
-
-Verify with `$expand`. Update memory-bank.md with table mapping.
-
----
-
-## Step 8: Create Skill Tracking Setting and Upload
+## Step 7: Create Skill Tracking Setting and Upload
 
 Create `Site/AI/SetupDataverse` site setting to track skill usage:
 
@@ -173,6 +154,13 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 See [authoring-tool-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/authoring-tool-reference.md) for helper function.
 
 Cleanup per [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md).
+
+---
+
+## Optional Enhancements
+
+After table creation, suggest:
+- `/add-sample-data` - Insert sample data with proper foreign key relationships
 
 ---
 

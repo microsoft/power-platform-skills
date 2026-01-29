@@ -10,12 +10,12 @@ model: opus
 
 # Create Power Pages Code Site
 
-**References:** [requirements](./requirements-reference.md) | [site-creation](./site-creation-reference.md) | [seo](./seo-reference.md) | [testing](./testing-reference.md) | [upload-activation](./upload-activation-reference.md) | [troubleshooting](./troubleshooting.md)
+**References:** [requirements](./references/requirements-reference.md) | [site-creation](./references/site-creation-reference.md) | [upload-activation](./references/upload-activation-reference.md) | [troubleshooting](./references/troubleshooting.md)
 
 ## Workflow
 
 1. **Gather Requirements** → Ask framework, features, design preferences
-2. **Create Site** → Use frontend-design skill, add SEO, write tests, build
+2. **Create Site** → Use frontend-design skill, configure for Power Pages
 3. **Preview & Approve** → User reviews site locally before upload
 4. **Check Prerequisites** → Verify PAC CLI and Azure CLI
 5. **Upload (Inactive)** → `pac pages upload-code-site`
@@ -39,10 +39,8 @@ Use `AskUserQuestion` to ask:
 
 1. Invoke `frontend-design` skill with Vite + no SSR constraints
 2. Create `powerpages.config.json` with correct `compiledPath`
-3. Add SEO: meta tags, robots.txt, sitemap.xml, favicon (see [seo-reference.md](./seo-reference.md))
-4. Write unit tests (Vitest) and E2E tests (Playwright) - **all must pass**
-5. `npm run build`
-6. Create `memory-bank.md`
+3. `npm run build`
+4. Create `memory-bank.md`
 
 ---
 
@@ -90,7 +88,7 @@ pac org who
 
 1. Ask user for subdomain via `AskUserQuestion`
 2. Get IDs: `pac org who`
-3. Call CreateWebsite API via `az rest` (see [upload-activation-reference.md](./upload-activation-reference.md))
+3. Call CreateWebsite API via `az rest` (see [upload-activation-reference.md](./references/upload-activation-reference.md))
 4. Poll operation status until complete
 5. Verify: `pac pages list --verbose`
 6. Fallback: Manual activation at make.powerpages.microsoft.com
@@ -98,6 +96,14 @@ pac org who
 Update memory-bank.md with Website ID, URL, completed steps.
 
 Cleanup helper files per [cleanup-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/cleanup-reference.md).
+
+---
+
+## Optional Enhancements
+
+After site creation, suggest these optional skills:
+- `/add-seo` - Add SEO assets (meta tags, robots.txt, sitemap.xml, favicon)
+- `/add-tests` - Add unit tests (Vitest) and E2E tests (Playwright)
 
 ---
 
