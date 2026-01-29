@@ -1,8 +1,6 @@
 # Troubleshooting Guide
 
-This document covers common issues when setting up Power Pages Web API and their solutions.
-
-**NOTE**: All examples use `{prefix}` as a placeholder for your publisher prefix. Replace it with your actual prefix from `Initialize-DataverseApi` (e.g., `cr`, `contoso`, `new`).
+**NOTE**: Replace `{prefix}` with your publisher prefix from `Initialize-DataverseApi`.
 
 ## Quick Reference
 

@@ -1,35 +1,8 @@
 # Authorization Reference
 
-This document provides code patterns for implementing role-based access control in Power Pages sites.
+User roles available at `window.Microsoft.Dynamic365.Portal.User.userRoles` (array of role names).
 
-## How Power Pages Authorization Works
-
-Power Pages provides user roles through the portal object:
-
-```javascript
-window.Microsoft.Dynamic365.Portal.User.userRoles  // Array of role names
-```
-
-Common built-in roles:
-- **Anonymous Users** - Unauthenticated visitors
-- **Authenticated Users** - Any logged-in user
-- **Administrators** - Full admin access
-
-Custom roles can be created in Power Pages Portal Management app.
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                 User Roles in Power Pages                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  window.Microsoft.Dynamic365.Portal.User.userRoles = [         │
-│    "Authenticated Users",                                       │
-│    "Administrators",                                            │
-│    "Premium Members"                                            │
-│  ]                                                              │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Built-in roles**: Anonymous Users, Authenticated Users, Administrators. Custom roles via Portal Management app.
 
 ## Authorization Utilities
 
@@ -843,34 +816,12 @@ function Dashboard() {
 
 ## Security Considerations
 
-### Client-Side Authorization is for UX Only
+**Client-side authorization is for UX only, not security.**
 
-**IMPORTANT**: Client-side role checks are for **user experience** only, not security.
+- Client-side: Hide/show UI elements (if bypassed: bad UX)
+- Server-side: Table permissions enforce actual data access (if bypassed: security breach)
 
-- They hide/show UI elements based on roles
-- They do NOT prevent unauthorized access to data
-- All data access must be protected by **table permissions** in Power Pages
-
-### Always Enforce Server-Side
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                    Security Layers                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  CLIENT-SIDE (UX only)        SERVER-SIDE (Security)           │
-│  ─────────────────────        ─────────────────────             │
-│  • Hide admin buttons         • Table permissions               │
-│  • Show/hide nav items        • Entity permissions              │
-│  • Conditional rendering      • Web roles in Power Pages        │
-│  • Route guards (redirect)    • Actual data access control      │
-│                                                                 │
-│  If bypassed: Bad UX          If bypassed: Security breach      │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Example: Proper Security Setup
+### Proper Security Setup
 
 1. **Client-side** (this reference): Hide edit button for non-admins
 2. **Server-side** (via `/setup-webapi`): Table permission allows only Administrators to PATCH records

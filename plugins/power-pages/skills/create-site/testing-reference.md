@@ -1,10 +1,8 @@
 # Testing Reference
 
-This document describes how to set up and write unit tests and end-to-end tests for your Power Pages code site.
-
 ## Unit Tests
 
-### Install Testing Dependencies
+### Install Dependencies
 
 ```powershell
 # React (Vite) - Vitest + React Testing Library
@@ -62,33 +60,6 @@ Add test scripts to `package.json`:
     "test:coverage": "vitest run --coverage"
   }
 }
-```
-
-### What to Test
-
-| Category | What to Test |
-|----------|--------------|
-| Components | Rendering, user interactions, props |
-| Utility functions | Data transformations, validators, formatters |
-| Custom hooks | State management, side effects |
-| Form validation | Validation rules, error messages |
-| API services | Dataverse Web API wrapper functions (mock the API) |
-
-### Test File Structure
-
-```text
-/src
-├── components/
-│   ├── Header.tsx
-│   └── Header.test.tsx       # Component test
-├── utils/
-│   ├── formatters.ts
-│   └── formatters.test.ts    # Utility test
-├── hooks/
-│   ├── useDataverse.ts
-│   └── useDataverse.test.ts  # Hook test
-└── test/
-    └── setup.ts              # Test setup file
 ```
 
 ### Example Component Test (React)
@@ -251,17 +222,6 @@ Add E2E test scripts to `package.json`:
 └── fixtures/
     └── test-data.ts          # Shared test data
 ```
-
-### What to Test with E2E
-
-| Category | What to Test |
-|----------|--------------|
-| Page Navigation | All links work, routes load correctly |
-| Form Submissions | Contact forms, search, filters work end-to-end |
-| Responsive Design | Site works on mobile, tablet, and desktop |
-| Interactive Elements | Modals, dropdowns, accordions function properly |
-| Accessibility | Keyboard navigation, focus states |
-| Error States | Error pages and validation messages |
 
 ### Example: Home Page Test
 

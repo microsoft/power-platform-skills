@@ -1,7 +1,5 @@
 # Relationship Reference
 
-This document covers creating and managing relationships between Dataverse tables.
-
 ## Relationship Types
 
 | Type | Description | Use Case |

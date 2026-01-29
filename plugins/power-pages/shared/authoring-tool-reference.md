@@ -1,40 +1,72 @@
-# Authoring Tool Site Setting Reference
+# AI Site Settings Reference
 
-This document describes how to create the `Site/AuthoringTool` site setting to track which tool created the Power Pages site.
+This document describes how to create site settings to track AI tooling usage in Power Pages sites.
 
 ## Overview
 
-When a site is created or uploaded using Claude Code, a site setting must be added to identify the authoring tool used. This helps track site provenance and tooling analytics.
+When a site is created or modified using Claude Code skills, site settings are added to track:
+1. **Authoring tool** - Which tool created the site
+2. **Skills used** - Which skills have been executed on the site
 
 ## Site Setting Details
 
+### Authoring Tool Setting
+
 | Property | Value |
 |----------|-------|
-| Setting Name | `Site/AuthoringTool` |
-| File Name | `Site-AuthoringTool.sitesetting.yml` |
+| Setting Name | `Site/AI/AuthoringTool` |
+| File Name | `Site-AI-AuthoringTool.sitesetting.yml` |
 | Location | `.powerpages-site/site-settings/` |
-
-### Possible Values
 
 | Value | Description |
 |-------|-------------|
 | `ClaudeCodeCLI` | Site created using Claude Code command-line interface |
 | `ClaudeCodeVSCode` | Site created using Claude Code VS Code extension |
 
+### Skill Tracking Settings
+
+Each time a skill is used, create a site setting to track it:
+
+| Property | Value |
+|----------|-------|
+| Setting Name | `Site/AI/<SkillName>` |
+| File Name | `Site-AI-<SkillName>.sitesetting.yml` |
+| Value | `true` |
+
+| Skill | Setting Name |
+|-------|--------------|
+| `/create-site` | `Site/AI/CreateSite` |
+| `/setup-dataverse` | `Site/AI/SetupDataverse` |
+| `/setup-webapi` | `Site/AI/SetupWebApi` |
+| `/setup-auth` | `Site/AI/SetupAuth` |
+
 ## YAML Format
 
-**File**: `.powerpages-site/site-settings/Site-AuthoringTool.sitesetting.yml`
+### Authoring Tool
+
+**File**: `.powerpages-site/site-settings/Site-AI-AuthoringTool.sitesetting.yml`
 
 ```yaml
 description: Identifies the tool used to create this Power Pages site
 id: <GENERATE_UUID>
-name: Site/AuthoringTool
-value: ClaudeCodeCLI  # or ClaudeCodeVSCode
+name: Site/AI/AuthoringTool
+value: ClaudeCodeCLI
+```
+
+### Skill Tracking
+
+**File**: `.powerpages-site/site-settings/Site-AI-CreateSite.sitesetting.yml`
+
+```yaml
+description: Tracks that /create-site skill was used on this site
+id: <GENERATE_UUID>
+name: Site/AI/CreateSite
+value: true
 ```
 
 ## Detection Logic
 
-The value is determined by checking environment variables that indicate VS Code:
+The authoring tool value is determined by checking environment variables:
 
 ```powershell
 $authoringTool = if ($env:TERM_PROGRAM -eq "vscode" -or $env:VSCODE_GIT_ASKPASS_NODE) {
@@ -44,9 +76,9 @@ $authoringTool = if ($env:TERM_PROGRAM -eq "vscode" -or $env:VSCODE_GIT_ASKPASS_
 }
 ```
 
-## PowerShell Helper Function
+## PowerShell Helper Functions
 
-Use this function to create the authoring tool site setting:
+### Create Authoring Tool Setting
 
 ```powershell
 function New-AuthoringToolSetting {
@@ -57,12 +89,10 @@ function New-AuthoringToolSetting {
 
     $siteSettingsPath = Join-Path $ProjectRoot ".powerpages-site\site-settings"
 
-    # Create directory if it doesn't exist
     if (-not (Test-Path $siteSettingsPath)) {
         New-Item -ItemType Directory -Path $siteSettingsPath -Force | Out-Null
     }
 
-    # Detect authoring tool based on environment
     $authoringTool = if ($env:TERM_PROGRAM -eq "vscode" -or $env:VSCODE_GIT_ASKPASS_NODE) {
         "ClaudeCodeVSCode"
     } else {
@@ -74,80 +104,95 @@ function New-AuthoringToolSetting {
     $content = @"
 description: Identifies the tool used to create this Power Pages site
 id: $uuid
-name: Site/AuthoringTool
+name: Site/AI/AuthoringTool
 value: $authoringTool
 "@
 
-    $fileName = "Site-AuthoringTool.sitesetting.yml"
+    $fileName = "Site-AI-AuthoringTool.sitesetting.yml"
     $filePath = Join-Path $siteSettingsPath $fileName
     Set-Content -Path $filePath -Value $content -Encoding UTF8
-    Write-Host "Created authoring tool setting: $filePath (Value: $authoringTool)"
-
-    return @{
-        FilePath = $filePath
-        AuthoringTool = $authoringTool
-    }
+    Write-Host "Created: $filePath (Value: $authoringTool)"
 }
 ```
 
-## Usage
-
-### Inline Script (for quick use)
+### Create Skill Tracking Setting
 
 ```powershell
-$projectRoot = "<PROJECT_ROOT_PATH>"
-$siteSettingsPath = Join-Path $projectRoot ".powerpages-site\site-settings"
+function New-SkillTrackingSetting {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ProjectRoot,
+        [Parameter(Mandatory=$true)]
+        [string]$SkillName  # e.g., "CreateSite", "SetupDataverse", "SetupWebApi", "SetupAuth"
+    )
 
-# Create directory if it doesn't exist
-if (-not (Test-Path $siteSettingsPath)) {
-    New-Item -ItemType Directory -Path $siteSettingsPath -Force | Out-Null
-}
+    $siteSettingsPath = Join-Path $ProjectRoot ".powerpages-site\site-settings"
 
-# Detect authoring tool based on environment
-$authoringTool = if ($env:TERM_PROGRAM -eq "vscode" -or $env:VSCODE_GIT_ASKPASS_NODE) {
-    "ClaudeCodeVSCode"
-} else {
-    "ClaudeCodeCLI"
-}
+    if (-not (Test-Path $siteSettingsPath)) {
+        New-Item -ItemType Directory -Path $siteSettingsPath -Force | Out-Null
+    }
 
-$uuid = [guid]::NewGuid().ToString()
+    $uuid = [guid]::NewGuid().ToString()
 
-$content = @"
-description: Identifies the tool used to create this Power Pages site
+    $content = @"
+description: Tracks that /$($SkillName.ToLower() -replace '([a-z])([A-Z])', '$1-$2') skill was used on this site
 id: $uuid
-name: Site/AuthoringTool
-value: $authoringTool
+name: Site/AI/$SkillName
+value: true
 "@
 
-$filePath = Join-Path $siteSettingsPath "Site-AuthoringTool.sitesetting.yml"
-Set-Content -Path $filePath -Value $content -Encoding UTF8
-Write-Host "Created authoring tool setting: $filePath (Value: $authoringTool)"
-```
-
-### Using the Helper Function
-
-```powershell
-# After defining New-AuthoringToolSetting function
-New-AuthoringToolSetting -ProjectRoot "C:\repos\my-power-pages-site"
-```
-
-## When to Create This Setting
-
-This setting should be created:
-
-1. **Before first upload** - During `/create-site` workflow, before `pac pages upload-code-site`
-2. **During site settings setup** - During `/setup-webapi` workflow, when creating the `.powerpages-site/site-settings/` folder
-
-If the setting already exists, it should not be overwritten (the original authoring tool should be preserved).
-
-## Checking if Setting Exists
-
-```powershell
-$settingPath = Join-Path $projectRoot ".powerpages-site\site-settings\Site-AuthoringTool.sitesetting.yml"
-if (-not (Test-Path $settingPath)) {
-    # Create the setting
-    New-AuthoringToolSetting -ProjectRoot $projectRoot
-} else {
-    Write-Host "Authoring tool setting already exists, skipping creation"
+    $fileName = "Site-AI-$SkillName.sitesetting.yml"
+    $filePath = Join-Path $siteSettingsPath $fileName
+    Set-Content -Path $filePath -Value $content -Encoding UTF8
+    Write-Host "Created: $filePath"
 }
+```
+
+## When to Create These Settings
+
+### Authoring Tool Setting
+- **After first upload** during `/create-site` (after `.powerpages-site` folder is created)
+- If it already exists, do NOT overwrite (preserve original authoring tool)
+
+### Skill Tracking Settings
+- **Every skill** should create its tracking setting before final upload
+- Create even if the setting already exists (update timestamp via new upload)
+
+| Skill | When to Create | Setting Name |
+|-------|----------------|--------------|
+| `/create-site` | After first upload, before second upload | `Site/AI/CreateSite` |
+| `/setup-dataverse` | Before final upload | `Site/AI/SetupDataverse` |
+| `/setup-webapi` | Before final upload | `Site/AI/SetupWebApi` |
+| `/setup-auth` | Before final upload | `Site/AI/SetupAuth` |
+
+## Usage Examples
+
+### In /create-site skill
+
+```powershell
+# After first upload creates .powerpages-site folder
+New-AuthoringToolSetting -ProjectRoot $projectRoot
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "CreateSite"
+# Then upload again to push the settings
+```
+
+### In /setup-dataverse skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "SetupDataverse"
+# Then upload
+```
+
+### In /setup-webapi skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "SetupWebApi"
+# Then upload
+```
+
+### In /setup-auth skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "SetupAuth"
+# Then upload
 ```

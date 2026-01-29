@@ -1,12 +1,8 @@
 # Table Permissions Reference
 
-This document describes how to create table permissions (entity permissions) for Power Pages Web API access.
+Table permissions control Web API data access. Create YAML files in `.powerpages-site/table-permissions/` and link to web roles.
 
-## Understanding Table Permissions
-
-Table permissions control which users can access data through the Web API. These must be created in Dataverse and linked to web roles.
-
-### Permission Scopes
+## Permission Scopes
 
 | Scope | Value | Description | Use Case |
 |-------|-------|-------------|----------|
@@ -16,333 +12,18 @@ Table permissions control which users can access data through the Web API. These
 | **Parent** | 756150003 | Records linked via parent relationship | Hierarchical data |
 | **Self** | 756150004 | Only records owned by current user | Private user data |
 
-### CRUD Permissions
-
-| Permission | Description |
-|------------|-------------|
-| `adx_read` | Can retrieve/query records |
-| `adx_create` | Can create new records |
-| `adx_write` | Can update existing records |
-| `adx_delete` | Can delete records |
-| `adx_append` | Can associate records to this entity |
-| `adx_appendto` | Can associate this entity to other records |
-
-## Prerequisites
-
-Before creating table permissions, ensure you have:
-
-1. Environment URL from `pac org who`
-2. Website ID from `pac pages list --verbose`
-3. Azure CLI authenticated (`az login`)
-
-## PowerShell Setup
-
-```powershell
-# Get environment URL and access token
-$envUrl = (pac org who --json | ConvertFrom-Json).OrgUrl
-$token = (az account get-access-token --resource $envUrl --query accessToken -o tsv)
-
-$headers = @{
-    "Authorization" = "Bearer $token"
-    "Content-Type" = "application/json"
-    "OData-MaxVersion" = "4.0"
-    "OData-Version" = "4.0"
-}
-
-$baseUrl = "$envUrl/api/data/v9.2"
-
-# Set your Website ID (from pac pages list)
-$websiteId = "<WEBSITE_ID_FROM_MEMORY_BANK>"
-```
-
-## Create Table Permission Function
-
-```powershell
-function New-TablePermission {
-    param(
-        [string]$Name,
-        [string]$TableLogicalName,
-        [string]$WebsiteId,
-        [int]$Scope = 756150000,  # Global
-        [bool]$Read = $true,
-        [bool]$Create = $false,
-        [bool]$Write = $false,
-        [bool]$Delete = $false,
-        [bool]$Append = $false,
-        [bool]$AppendTo = $false
-    )
-
-    # Generate unique ID for the permission
-    $permissionId = [guid]::NewGuid().ToString()
-
-    $permission = @{
-        "adx_entitypermissionid" = $permissionId
-        "adx_entityname" = $TableLogicalName
-        "adx_entitylogicalname" = $TableLogicalName
-        "adx_scope" = $Scope
-        "adx_read" = $Read
-        "adx_create" = $Create
-        "adx_write" = $Write
-        "adx_delete" = $Delete
-        "adx_append" = $Append
-        "adx_appendto" = $AppendTo
-        "adx_websiteid@odata.bind" = "/adx_websites($WebsiteId)"
-    }
-
-    $body = $permission | ConvertTo-Json -Depth 5
-
-    try {
-        $result = Invoke-RestMethod -Uri "$baseUrl/adx_entitypermissions" -Method Post -Headers $headers -Body $body
-        Write-Host "Created table permission for: $TableLogicalName (ID: $permissionId)"
-        return @{
-            "Id" = $permissionId
-            "Result" = $result
-        }
-    }
-    catch {
-        Write-Host "Error creating permission for $TableLogicalName : $_"
-        return $null
-    }
-}
-```
-
-## Common Permission Patterns
-
-### Using Table Name Mapping
-
-**IMPORTANT**: Use the `$tableMap` from `/setup-dataverse` to get the correct table logical names. This is critical because:
-- **Reused/Extended tables** have their actual logical names from Dataverse (may differ from `${publisherPrefix}_tablename`)
-- **New tables** use the `${publisherPrefix}_tablename` pattern
-
-```powershell
-# Get table logical names from the mapping built in /setup-dataverse
-# The $tableMap should be retrieved from memory-bank.md or rebuilt
-function Get-TableLogicalName { param([string]$Purpose) return $tableMap[$Purpose].LogicalName }
-
-$productTable = Get-TableLogicalName "product"           # e.g., "contoso_items" or "cr_product"
-$teammemberTable = Get-TableLogicalName "teammember"     # e.g., "existing_staff" or "cr_teammember"
-$testimonialTable = Get-TableLogicalName "testimonial"
-$faqTable = Get-TableLogicalName "faq"
-```
-
-### Read-Only Public Data
-
-For tables like products, testimonials, FAQs that should be publicly readable:
-
-```powershell
-# Read-only Global scope for public data (using actual table names from mapping)
-New-TablePermission -Name "Product Read" -TableLogicalName $productTable -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "Team Member Read" -TableLogicalName $teammemberTable -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "Testimonial Read" -TableLogicalName $testimonialTable -WebsiteId $websiteId -Read $true
-New-TablePermission -Name "FAQ Read" -TableLogicalName $faqTable -WebsiteId $websiteId -Read $true
-```
-
-### Create-Only (Form Submissions)
-
-For contact forms where users can submit but not read others' submissions:
-
-```powershell
-# Create only - users can submit but not read others
-New-TablePermission -Name "Contact Submission Create" `
-    -TableLogicalName "${publisherPrefix}_contactsubmission" `
-    -WebsiteId $websiteId `
-    -Read $false `
-    -Create $true
-```
-
-### User-Specific Data (Self Scope)
-
-For data that users should only see their own records:
-
-```powershell
-# Self scope - users see only their own records
-New-TablePermission -Name "User Profile" `
-    -TableLogicalName "${publisherPrefix}_userprofile" `
-    -WebsiteId $websiteId `
-    -Scope 756150004 `  # Self
-    -Read $true `
-    -Write $true
-```
-
-### Full CRUD Access
-
-For authenticated users who need complete control:
-
-```powershell
-# Full CRUD access (use with caution)
-New-TablePermission -Name "Admin Orders" `
-    -TableLogicalName "${publisherPrefix}_order" `
-    -WebsiteId $websiteId `
-    -Read $true `
-    -Create $true `
-    -Write $true `
-    -Delete $true
-```
-
-## Assign Permissions to Web Roles
-
-Table permissions must be linked to web roles to take effect.
-
-### Get or Create Web Role
-
-**IMPORTANT**: Always use `mspp_webroles` (not `adx_webroles`) for fetching web role IDs. If the role doesn't exist, create it first before proceeding with table permissions.
-
-```powershell
-function Get-OrCreateWebRole {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$RoleName,
-        [Parameter(Mandatory=$true)]
-        [string]$WebsiteId,
-        [string]$Description = ""
-    )
-
-    # Try to get existing role using mspp_webroles
-    try {
-        $existingRole = Invoke-RestMethod `
-            -Uri "$baseUrl/mspp_webroles?`$filter=mspp_name eq '$RoleName' and _mspp_websiteid_value eq $WebsiteId&`$select=mspp_webroleid" `
-            -Headers $headers
-
-        if ($existingRole.value.Count -gt 0) {
-            $roleId = $existingRole.value[0].mspp_webroleid
-            Write-Host "Found existing web role '$RoleName' with ID: $roleId"
-            return $roleId
-        }
-    }
-    catch {
-        Write-Host "Error checking for existing role: $_"
-    }
-
-    # Role doesn't exist - create it
-    Write-Host "Web role '$RoleName' not found. Creating..."
-
-    $newRoleId = [guid]::NewGuid().ToString()
-    $webRole = @{
-        "mspp_webroleid" = $newRoleId
-        "mspp_name" = $RoleName
-        "mspp_description" = $Description
-        "mspp_websiteid@odata.bind" = "/mspp_websites($WebsiteId)"
-    }
-
-    try {
-        Invoke-RestMethod -Uri "$baseUrl/mspp_webroles" -Method Post -Headers $headers -Body ($webRole | ConvertTo-Json -Depth 5)
-        Write-Host "Created web role '$RoleName' with ID: $newRoleId"
-        return $newRoleId
-    }
-    catch {
-        Write-Host "Error creating web role '$RoleName': $_"
-        return $null
-    }
-}
-
-# Example: Get or create Anonymous Users role
-$roleId = Get-OrCreateWebRole -RoleName "Anonymous Users" -WebsiteId $websiteId -Description "Unauthenticated site visitors"
-
-if (-not $roleId) {
-    Write-Host "ERROR: Unable to get or create web role. Cannot proceed with table permission creation." -ForegroundColor Red
-    return
-}
-
-Write-Host "Web Role ID: $roleId"
-```
-
-### Associate Permission with Role
-
-**IMPORTANT**: Only create table permissions if you have a valid web role ID. If role retrieval/creation fails, do NOT create the permission.
-
-```powershell
-function Add-PermissionToRole {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$PermissionId,
-        [Parameter(Mandatory=$true)]
-        [string]$RoleId
-    )
-
-    if (-not $RoleId) {
-        Write-Host "ERROR: No valid role ID provided. Cannot associate permission." -ForegroundColor Red
-        return $false
-    }
-
-    $association = @{
-        "@odata.id" = "$baseUrl/mspp_webroles($RoleId)"
-    }
-
-    try {
-        Invoke-RestMethod `
-            -Uri "$baseUrl/adx_entitypermissions($PermissionId)/adx_webrole_entitypermission/`$ref" `
-            -Method Post `
-            -Headers $headers `
-            -Body ($association | ConvertTo-Json)
-        Write-Host "Associated permission $PermissionId with role $RoleId"
-        return $true
-    }
-    catch {
-        Write-Host "Error associating permission: $_"
-        return $false
-    }
-}
-```
-
-### Complete Example: Associate Permission
-
-```powershell
-# Get permission ID for a specific table
-$tableName = "${publisherPrefix}_product"
-$permissions = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_entitypermissions?`$filter=adx_entitylogicalname eq '$tableName'&`$select=adx_entitypermissionid" `
-    -Headers $headers
-
-if ($permissions.value.Count -gt 0) {
-    $permissionId = $permissions.value[0].adx_entitypermissionid
-
-    # Associate with Anonymous Users role
-    Add-PermissionToRole -PermissionId $permissionId -RoleId $roleId
-}
-```
-
-## Web Roles Reference
-
-| Role | Description | Use Case |
-|------|-------------|----------|
-| **Anonymous Users** | Unauthenticated visitors | Public content access |
-| **Authenticated Users** | Any logged-in user | Basic member features |
-| **Administrators** | Full admin access | Site management |
-
-## Verify Permissions
-
-### List Existing Permissions
-
-```powershell
-# List all table permissions for the website
-$existingPermissions = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_entitypermissions?`$filter=_adx_websiteid_value eq $websiteId&`$select=adx_entitylogicalname,adx_scope,adx_read,adx_create,adx_write,adx_delete" `
-    -Headers $headers
-
-$existingPermissions.value | ForEach-Object {
-    Write-Host "Table: $($_.adx_entitylogicalname), Read: $($_.adx_read), Create: $($_.adx_create)"
-}
-```
-
-### Check Role Associations
-
-```powershell
-# Check which roles are linked to a permission
-$permissionId = "<PERMISSION_ID>"
-$linkedRoles = Invoke-RestMethod `
-    -Uri "$baseUrl/adx_entitypermissions($permissionId)/adx_webrole_entitypermission" `
-    -Headers $headers
-
-$linkedRoles.value | ForEach-Object {
-    Write-Host "Linked Role: $($_.adx_name)"
-}
-```
-
-## Code Site Table Permission Files
-
-Table permissions for Power Pages code sites are stored as YAML files in the `.powerpages-site/table-permissions/` folder.
-
-### Folder Structure
+## CRUD Permissions
+
+| Field | Description |
+|-------|-------------|
+| `read` | Can retrieve/query records |
+| `create` | Can create new records |
+| `write` | Can update existing records |
+| `delete` | Can delete records |
+| `append` | Can associate records to this entity |
+| `appendto` | Can associate this entity to other records |
+
+## Folder Structure
 
 ```
 <PROJECT_ROOT>/
@@ -351,10 +32,14 @@ Table permissions for Power Pages code sites are stored as YAML files in the `.p
 │   │   ├── Product-Read-Permission.tablepermission.yml
 │   │   ├── Contact-Self-Access.tablepermission.yml
 │   │   └── ...
+│   ├── web-roles/
+│   │   ├── Anonymous-Users.webrole.yml
+│   │   ├── Authenticated-Users.webrole.yml
+│   │   └── ...
 │   └── ...
 ```
 
-### File Naming Convention
+## File Naming Convention
 
 ```
 <Permission-Name>.tablepermission.yml
@@ -362,11 +47,7 @@ Table permissions for Power Pages code sites are stored as YAML files in the `.p
 
 Example: `Product-Read-Permission.tablepermission.yml`
 
-### YAML File Structure
-
-**NOTE**: Use the **actual table logical name** from the `$tableMap` built in `/setup-dataverse`:
-- For **reused/extended tables**: Use the existing logical name (e.g., `contoso_items`, `existing_productcategory`)
-- For **new tables**: Use `{prefix}_tablename` pattern (e.g., `cr_product`)
+## YAML File Structure
 
 ```yaml
 accountrelationship:
@@ -377,7 +58,7 @@ appendto: false
 contactrelationship:
 create: false
 delete: false
-entitylogicalname: {actual_table_logical_name_from_mapping}
+entitylogicalname: cr_product
 entityname: Product Read Permission
 id: b5d8334f-45fa-464c-ac1d-f7088325f697
 parententitypermission:
@@ -387,16 +68,19 @@ scope: 756150000
 write: false
 ```
 
-**Important**: Field names do NOT include the `adx_` prefix (e.g., use `read` not `adx_read`), EXCEPT for many-to-many relationship fields like `adx_entitypermission_webrole` which retain the full name.
+**Important**:
+- Fields are alphabetically sorted
+- Field names do NOT include the `adx_` prefix (use `read` not `adx_read`)
+- Exception: `adx_entitypermission_webrole` retains the full name (many-to-many relationship)
 
-### YAML Field Reference
+## YAML Field Reference
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | GUID | Yes | Unique identifier for this permission |
-| `entitylogicalname` | string | Yes | Dataverse table logical name (e.g., `{prefix}_product`) |
+| `entitylogicalname` | string | Yes | Dataverse table logical name |
 | `entityname` | string | Yes | Display name for the permission |
-| `scope` | int | Yes | Permission scope (see values below) |
+| `scope` | int | Yes | Permission scope (see values above) |
 | `read` | bool | No | Can retrieve/query records |
 | `create` | bool | No | Can create new records |
 | `write` | bool | No | Can update existing records |
@@ -409,52 +93,28 @@ write: false
 | `accountrelationship` | string | No | Relationship name for account filtering |
 | `contactrelationship` | string | No | Relationship name for contact filtering |
 
-### Scope Values for YAML
-
-| Scope Name | Value | Description |
-|------------|-------|-------------|
-| Global | 756150000 | All records accessible |
-| Contact | 756150001 | Records linked to current contact |
-| Account | 756150002 | Records linked to user's account |
-| Parent | 756150003 | Records linked via parent relationship |
-| Self | 756150004 | Only records owned by current user |
-
-### Generating Unique IDs
+## Generating Unique IDs
 
 **IMPORTANT**: Every table permission YAML file must have a unique `id` field (UUID/GUID format).
 
-**When creating YAML files directly**: Generate a valid UUID in the format `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` where each `x` is a hexadecimal character (0-9, a-f). Each permission must have a different UUID.
+**Claude Code MUST generate UUIDs by running a CLI command** - never write UUID values directly. Use the Bash tool to execute the appropriate command based on the user's shell/platform:
 
-**PowerShell** (if running scripts):
-```powershell
-[guid]::NewGuid().ToString()
-```
+| Shell/Platform | Command |
+|----------------|---------|
+| **PowerShell** (Windows) | `[guid]::NewGuid().ToString()` |
+| **Bash** (Linux) | `cat /proc/sys/kernel/random/uuid` |
+| **Bash/Zsh** (macOS) | `uuidgen \| tr '[:upper:]' '[:lower:]'` |
 
-**Bash/Linux/Mac**:
-```bash
-uuidgen | tr '[:upper:]' '[:lower:]'
-# or
-cat /proc/sys/kernel/random/uuid
-```
+**Workflow:**
+1. Run the UUID generation command via Bash tool
+2. Capture the output
+3. Use that value when writing the YAML file
 
-**Python**:
-```python
-import uuid
-print(str(uuid.uuid4()))
-```
+## Getting Web Role GUIDs
 
-**Online**: Use any UUID generator website
+Before creating table permissions, get the web role GUID from `.powerpages-site/web-roles/`. Each web role has a `.webrole.yml` file containing its `id`.
 
-**Example UUIDs** (do NOT reuse these - generate new ones):
-- `71ecf203-dfe2-4c1e-9db2-112ed3925a52`
-- `82fde314-eff3-5d2f-0ec3-223fe4036b63`
-- `93gef425-fgg4-6e3g-1fd4-334gf5147c74`
-
-### Example: Read-Only Public Permission
-
-**Before creating**, get the web role GUID from the `.powerpages-site/web-roles/` folder. Each web role has a `.webrole.yml` file containing its `id`.
-
-**Web Role File Format** (`.powerpages-site/web-roles/Anonymous-Users.webrole.yml`):
+**Example web role file** (`.powerpages-site/web-roles/Anonymous-Users.webrole.yml`):
 ```yaml
 anonymoususersrole: true
 authenticatedusersrole: false
@@ -462,69 +122,121 @@ id: f0323770-7314-4f33-b904-21523abfbcb7
 name: Anonymous Users
 ```
 
-**Table Permission File** (`.powerpages-site/table-permissions/Product-Anonymous-Read.tablepermission.yml`):
+| Role | Description | Use Case |
+|------|-------------|----------|
+| **Anonymous Users** | Unauthenticated visitors | Public content access |
+| **Authenticated Users** | Any logged-in user | Basic member features |
+| **Administrators** | Full admin access | Site management |
+
+## Using Table Name Mapping
+
+**IMPORTANT**: Use the `$tableMap` from `/setup-dataverse` (stored in `memory-bank.md`) to get the correct table logical names:
+- **Reused/Extended tables**: Use existing logical name (e.g., `contoso_items`)
+- **New tables**: Use `{prefix}_tablename` pattern (e.g., `cr_product`)
+
+## Common Permission Patterns
+
+### Read-Only Public Data (Global Scope)
+
+For tables like products, testimonials, FAQs that should be publicly readable.
+
+**File**: `.powerpages-site/table-permissions/Product-Anonymous-Read.tablepermission.yml`
 ```yaml
 adx_entitypermission_webrole:
-- f0323770-7314-4f33-b904-21523abfbcb7
+- <ANONYMOUS_USERS_ROLE_ID>
 append: false
 appendto: false
 create: false
 delete: false
-entitylogicalname: {prefix}_product
+entitylogicalname: <TABLE_LOGICAL_NAME>
 entityname: Product - Anonymous Read
-id: 71ecf203-dfe2-4c1e-9db2-112ed3925a52
+id: <GENERATE_UUID>
 parententitypermission:
 read: true
 scope: 756150000
 write: false
 ```
 
-### Example: User Self-Access Permission
+### Create-Only (Form Submissions)
 
-**Web Role File** (`.powerpages-site/web-roles/Authenticated-Users.webrole.yml`):
-```yaml
-anonymoususersrole: false
-authenticatedusersrole: true
-id: ecac9573-effb-4d63-9b27-15861f70f3de
-name: Authenticated Users
-```
+For contact forms where users can submit but not read others' submissions.
 
-**Table Permission File** (`.powerpages-site/table-permissions/User-Profile-Self-Access.tablepermission.yml`):
+**File**: `.powerpages-site/table-permissions/Contact-Submission-Create.tablepermission.yml`
 ```yaml
 adx_entitypermission_webrole:
-- ecac9573-effb-4d63-9b27-15861f70f3de
+- <ANONYMOUS_USERS_ROLE_ID>
 append: false
 appendto: false
 create: true
 delete: false
-entitylogicalname: {prefix}_userprofile
+entitylogicalname: <TABLE_LOGICAL_NAME>
+entityname: Contact Submission - Create Only
+id: <GENERATE_UUID>
+parententitypermission:
+read: false
+scope: 756150000
+write: false
+```
+
+### User-Specific Data (Self Scope)
+
+For data that users should only see their own records.
+
+**File**: `.powerpages-site/table-permissions/User-Profile-Self-Access.tablepermission.yml`
+```yaml
+adx_entitypermission_webrole:
+- <AUTHENTICATED_USERS_ROLE_ID>
+append: false
+appendto: false
+create: true
+delete: false
+entitylogicalname: <TABLE_LOGICAL_NAME>
 entityname: User Profile - Self Access
-id: 82fde314-eff3-5d2f-0ec3-223fe4036b63
+id: <GENERATE_UUID>
 parententitypermission:
 read: true
 scope: 756150004
 write: true
 ```
 
-### Parent-Child Table Permissions
+### Full CRUD Access
 
-When tables have relationships (e.g., Order → Order Items), you can create hierarchical permissions using the `parententitypermission` field and `Parent` scope.
+For authenticated users who need complete control (use with caution).
 
-> **Important**: Parent permissions must be created before child permissions. The child permission references the parent's ID in the `parententitypermission` field.
+**File**: `.powerpages-site/table-permissions/Order-Full-Access.tablepermission.yml`
+```yaml
+adx_entitypermission_webrole:
+- <AUTHENTICATED_USERS_ROLE_ID>
+append: true
+appendto: true
+create: true
+delete: true
+entitylogicalname: <TABLE_LOGICAL_NAME>
+entityname: Order - Full Access
+id: <GENERATE_UUID>
+parententitypermission:
+read: true
+scope: 756150001
+write: true
+```
+
+## Parent-Child Table Permissions
+
+When tables have relationships (e.g., Order → Order Items), use hierarchical permissions with the `parententitypermission` field and `Parent` scope.
 
 **Creation Order:**
-1. Create the parent table permission first (e.g., for `{prefix}_order`)
+1. Create parent table permission first (e.g., for `{prefix}_order`)
 2. Note the parent permission's `id` (GUID)
 3. Create child permission with `parententitypermission` set to parent's ID
 4. Set child's `scope` to `756150003` (Parent)
 5. Set `parentrelationship` to the relationship name between child and parent tables
 
-#### Example: Parent Permission (Order)
+### Example: Parent Permission (Order)
 
 **File**: `.powerpages-site/table-permissions/Order-User-Access.tablepermission.yml`
 ```yaml
 adx_entitypermission_webrole:
-- ecac9573-effb-4d63-9b27-15861f70f3de
+- <AUTHENTICATED_USERS_ROLE_ID>
 append: true
 appendto: false
 create: true
@@ -539,12 +251,12 @@ scope: 756150001
 write: true
 ```
 
-#### Example: Child Permission (Order Items)
+### Example: Child Permission (Order Items)
 
 **File**: `.powerpages-site/table-permissions/Order-Item-Parent-Access.tablepermission.yml`
 ```yaml
 adx_entitypermission_webrole:
-- ecac9573-effb-4d63-9b27-15861f70f3de
+- <AUTHENTICATED_USERS_ROLE_ID>
 append: false
 appendto: true
 create: true
@@ -559,15 +271,15 @@ scope: 756150003
 write: true
 ```
 
-In this example, users can only access order items that belong to orders they have access to.
+Users can only access order items that belong to orders they have access to.
 
 ## Validation Checklist
 
 Before uploading:
 
 - [ ] All YAML files have valid syntax
-- [ ] Each file has a unique UUID for the `id` field
-- [ ] Fields are alphabetically sorted in the YAML file
+- [ ] Each file has a unique UUID for the `id` field (generated via CLI command)
+- [ ] Fields are alphabetically sorted
 - [ ] File extensions are `.yml` (not `.yaml`)
 - [ ] Field names do NOT include `adx_` prefix (except `adx_entitypermission_webrole`)
 - [ ] Boolean values are unquoted (`true` not `"true"`)
