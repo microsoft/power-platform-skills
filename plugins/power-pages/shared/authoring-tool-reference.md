@@ -25,19 +25,23 @@ When a site is created or modified using Claude Code skills, site settings are a
 
 ### Skill Tracking Settings
 
-Each time a skill is used, create a site setting to track it:
+Each time a skill is used, create or update a site setting to track usage count:
 
 | Property | Value |
 |----------|-------|
 | Setting Name | `Site/AI/<SkillName>` |
 | File Name | `Site-AI-<SkillName>.sitesetting.yml` |
-| Value | `true` |
+| Value | Integer count (increments each time skill is used) |
 
 | Skill | Setting Name |
 |-------|--------------|
 | `/create-site` | `Site/AI/CreateSite` |
+| `/add-seo` | `Site/AI/AddSeo` |
+| `/add-tests` | `Site/AI/AddTests` |
 | `/setup-dataverse` | `Site/AI/SetupDataverse` |
+| `/add-sample-data` | `Site/AI/AddSampleData` |
 | `/setup-webapi` | `Site/AI/SetupWebApi` |
+| `/integrate-webapi` | `Site/AI/IntegrateWebApi` |
 | `/setup-auth` | `Site/AI/SetupAuth` |
 
 ## YAML Format
@@ -58,11 +62,13 @@ value: ClaudeCodeCLI
 **File**: `.powerpages-site/site-settings/Site-AI-CreateSite.sitesetting.yml`
 
 ```yaml
-description: Tracks that /create-site skill was used on this site
+description: Tracks usage count of /create-site skill on this site
 id: <GENERATE_UUID>
 name: Site/AI/CreateSite
-value: true
+value: 1
 ```
+
+**Note**: The `value` is an integer that increments each time the skill is used (1, 2, 3, etc.).
 
 ## Detection Logic
 
@@ -115,7 +121,7 @@ value: $authoringTool
 }
 ```
 
-### Create Skill Tracking Setting
+### Create/Update Skill Tracking Setting
 
 ```powershell
 function New-SkillTrackingSetting {
@@ -123,7 +129,7 @@ function New-SkillTrackingSetting {
         [Parameter(Mandatory=$true)]
         [string]$ProjectRoot,
         [Parameter(Mandatory=$true)]
-        [string]$SkillName  # e.g., "CreateSite", "SetupDataverse", "SetupWebApi", "SetupAuth"
+        [string]$SkillName  # e.g., "CreateSite", "AddSeo", "AddTests", "SetupDataverse", "AddSampleData", "SetupWebApi", "IntegrateWebApi", "SetupAuth"
     )
 
     $siteSettingsPath = Join-Path $ProjectRoot ".powerpages-site\site-settings"
@@ -132,19 +138,35 @@ function New-SkillTrackingSetting {
         New-Item -ItemType Directory -Path $siteSettingsPath -Force | Out-Null
     }
 
-    $uuid = [guid]::NewGuid().ToString()
-
-    $content = @"
-description: Tracks that /$($SkillName.ToLower() -replace '([a-z])([A-Z])', '$1-$2') skill was used on this site
-id: $uuid
-name: Site/AI/$SkillName
-value: true
-"@
-
     $fileName = "Site-AI-$SkillName.sitesetting.yml"
     $filePath = Join-Path $siteSettingsPath $fileName
+
+    # Check if setting already exists and get current count
+    $currentCount = 0
+    $existingId = $null
+    if (Test-Path $filePath) {
+        $existingContent = Get-Content $filePath -Raw
+        if ($existingContent -match 'value:\s*(\d+)') {
+            $currentCount = [int]$Matches[1]
+        }
+        if ($existingContent -match 'id:\s*([a-f0-9-]+)') {
+            $existingId = $Matches[1]
+        }
+    }
+
+    $newCount = $currentCount + 1
+    $uuid = if ($existingId) { $existingId } else { [guid]::NewGuid().ToString() }
+    $skillSlug = $SkillName.ToLower() -replace '([a-z])([A-Z])', '$1-$2'
+
+    $content = @"
+description: Tracks usage count of /$skillSlug skill on this site
+id: $uuid
+name: Site/AI/$SkillName
+value: $newCount
+"@
+
     Set-Content -Path $filePath -Value $content -Encoding UTF8
-    Write-Host "Created: $filePath"
+    Write-Host "Updated: $filePath (count: $newCount)"
 }
 ```
 
@@ -155,14 +177,18 @@ value: true
 - If it already exists, do NOT overwrite (preserve original authoring tool)
 
 ### Skill Tracking Settings
-- **Every skill** should create its tracking setting before final upload
-- Create even if the setting already exists (update timestamp via new upload)
+- **Every skill** should update its tracking setting before final upload
+- If setting exists, increment the count; if not, create with count = 1
 
-| Skill | When to Create | Setting Name |
+| Skill | When to Update | Setting Name |
 |-------|----------------|--------------|
 | `/create-site` | After first upload, before second upload | `Site/AI/CreateSite` |
+| `/add-seo` | Before final upload | `Site/AI/AddSeo` |
+| `/add-tests` | Before final upload | `Site/AI/AddTests` |
 | `/setup-dataverse` | Before final upload | `Site/AI/SetupDataverse` |
+| `/add-sample-data` | Before final upload | `Site/AI/AddSampleData` |
 | `/setup-webapi` | Before final upload | `Site/AI/SetupWebApi` |
+| `/integrate-webapi` | Before final upload | `Site/AI/IntegrateWebApi` |
 | `/setup-auth` | Before final upload | `Site/AI/SetupAuth` |
 
 ## Usage Examples
@@ -176,6 +202,20 @@ New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "CreateSite"
 # Then upload again to push the settings
 ```
 
+### In /add-seo skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "AddSeo"
+# Then upload
+```
+
+### In /add-tests skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "AddTests"
+# Then upload (if deploying tests to site)
+```
+
 ### In /setup-dataverse skill
 
 ```powershell
@@ -183,10 +223,24 @@ New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "SetupDataverse"
 # Then upload
 ```
 
+### In /add-sample-data skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "AddSampleData"
+# Then upload
+```
+
 ### In /setup-webapi skill
 
 ```powershell
 New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "SetupWebApi"
+# Then upload
+```
+
+### In /integrate-webapi skill
+
+```powershell
+New-SkillTrackingSetting -ProjectRoot $projectRoot -SkillName "IntegrateWebApi"
 # Then upload
 ```
 

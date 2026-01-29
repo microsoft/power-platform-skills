@@ -1,5 +1,11 @@
 # Setup Dataverse Tables
 
-Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-dataverse/SKILL.md` to guide the user through setting up Dataverse tables and schema for their Power Pages site.
+Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-dataverse/SKILL.md`.
 
-DO NOT summarize the skill instructions. Follow them step by step, using the tools available to you as directed.
+**Important**:
+
+- Do not announce steps - just execute them
+- Check memory-bank.md for project context first
+- Create tables in dependency order (parent tables before children)
+- Execute all REST API commands as specified
+- Clean up any temporary helper scripts after completion

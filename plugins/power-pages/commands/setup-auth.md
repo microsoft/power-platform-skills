@@ -1,5 +1,12 @@
-# Setup Authentication & Authorization
+# Setup Authentication
 
-Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/SKILL.md` to guide the user through implementing authentication (login/logout) and role-based authorization for their Power Pages site.
+Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/SKILL.md`.
 
-DO NOT summarize the skill instructions. Follow them step by step, using the tools available to you as directed.
+**Important**:
+
+- Do not announce steps - just execute them
+- Check memory-bank.md for project context first
+- Verify /setup-webapi was completed (site must be uploaded)
+- Create auth service, authorization utils, and UI components
+- Build and upload after completion
+- Clean up any temporary helper scripts after completion
