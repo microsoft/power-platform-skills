@@ -84,7 +84,7 @@ To develop and test plugins locally, follow these steps:
 1. Launch Claude Code with plugin path:
 
     ```bash
-    claude --plugin-dir /path/to/power-platform-claude-plugin/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-claude-plugins/plugins/power-pages
     ```
 
 ## Documentation
