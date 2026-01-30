@@ -2,7 +2,7 @@
 name: setting-up-web-api
 description: Configures Web API access, table permissions, web roles, and site settings for Power Pages. Use when setting up table permissions, entity permissions, CRUD access, or site settings for Web API.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
 model: opus
 ---
 
@@ -14,7 +14,7 @@ model: opus
 
 ## Workflow
 
-1. **Check Context** → Read memory bank, get table name mapping from `/setup-dataverse`
+1. **Plan** → Check context, design permissions strategy, get approval
 2. **Create Site Settings** → `Webapi/{table}/enabled` and `fields` for each table
 3. **Create Web Roles** → Verify/create Anonymous, Authenticated, custom roles
 4. **Create Table Permissions** → Link to web roles with appropriate scope
@@ -22,11 +22,29 @@ model: opus
 
 ---
 
-## Step 1: Check Context
+## Step 1: Plan
+
+### 1.1 Check Context
 
 Read `memory-bank.md`. **Critical**: Get the **Table Name Mapping** - use actual logical names (may differ from `{prefix}_tablename` for reused tables).
 
 If continuing from `/setup-dataverse`, list tables to configure. Otherwise ask for project path and tables.
+
+### 1.2 Enter Plan Mode
+
+Use `/plan` command to enter plan mode and create an implementation plan covering:
+- Tables requiring Web API access
+- Permissions matrix (which roles get which CRUD operations on which tables)
+- Web roles to create or verify
+- Site settings to create
+- Security considerations (scope: Global vs Self)
+
+### 1.3 Get Approval
+
+Present the permissions plan to the user as a table showing:
+- Table name → Web role → Permissions (Read/Create/Write/Delete) → Scope
+
+Use `ExitPlanMode` only after user approves. If user requests changes, update the plan and present again.
 
 ---
 

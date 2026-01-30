@@ -13,9 +13,9 @@ All skills reference this single file. When new shared instructions are added, u
 Before implementing major changes, Claude MUST enter plan mode first. This ensures user approval before significant work begins.
 
 **Key Points:**
-- Use `EnterPlanMode` tool before writing code for new features or multi-file changes
+- Use `/plan` command to enter plan mode before writing code for new features or multi-file changes
 - Present plan for user approval
-- Exit plan mode with `ExitPlanMode` when approved
+- Exit plan mode with `ExitPlanMode` tool when approved
 
 ---
 

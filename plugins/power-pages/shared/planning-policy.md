@@ -14,12 +14,12 @@
 
 ## How to Plan
 
-1. **Enter Plan Mode**: Use the `EnterPlanMode` tool before writing any code
+1. **Enter Plan Mode**: Use the `/plan` command before writing any code
 2. **Explore**: Read relevant files and understand the current implementation
 3. **Design**: Create a clear implementation approach
 4. **Present**: Show the plan to the user for approval
 5. **Wait**: Do not proceed until the user approves
-6. **Exit**: Use `ExitPlanMode` when ready to implement
+6. **Exit**: Use `ExitPlanMode` tool when ready to implement
 
 ## When Planning is NOT Required
 

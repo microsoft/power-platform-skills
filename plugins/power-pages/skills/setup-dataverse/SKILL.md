@@ -2,7 +2,7 @@
 name: setting-up-dataverse-tables
 description: Creates Dataverse tables, columns, and relationships for Power Pages. Use when creating tables, defining schema, setting up entity relationships, or lookup fields.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
 model: opus
 ---
 
@@ -16,22 +16,21 @@ Tables are created in **topological order** (referenced tables first) to maintai
 
 ## Workflow
 
-1. **Check Context** → Read memory bank, get project path
-2. **Analyze Site** → Identify data patterns from components
-3. **Build Dependency Graph** → Determine creation order
-4. **Setup API Auth** → Get token and publisher prefix
-5. **Review Existing Tables** → Reuse, extend, or create new
-6. **Create Tables** → In dependency order with relationships
+1. **Plan** → Check context, analyze site, design schema, get approval
+2. **Setup API Auth** → Get token and publisher prefix
+3. **Review Existing Tables** → Reuse, extend, or create new
+4. **Create Tables** → In dependency order with relationships
+5. **Upload** → Create skill tracking setting and upload
 
 ---
 
-## Step 1: Check Context
+## Step 1: Plan
+
+### 1.1 Check Context
 
 Read `memory-bank.md`. If continuing from `/create-site`, proceed. Otherwise ask for project path or suggest `/create-site` first.
 
----
-
-## Step 2: Analyze Site
+### 1.2 Analyze Site
 
 Read `powerpages.config.json` and scan components for data patterns:
 
@@ -53,20 +52,29 @@ Read `powerpages.config.json` and scan components for data patterns:
 
 The `contact` table is already integrated with Power Pages authentication - portal users are linked to Contact records. Extend it with custom columns if needed rather than creating a separate user table.
 
-Design ER model, classify into tiers (TIER 0 = reference tables, TIER 1 = primary entities, etc.), present to user.
-
----
-
-## Step 3: Build Dependency Graph
+### 1.3 Build Dependency Graph
 
 Topologically sort tables. Rules:
 - No circular dependencies
 - All referenced tables exist
 - Self-references: create table first, add lookup after
 
+### 1.4 Enter Plan Mode
+
+Use `/plan` command to enter plan mode and create an implementation plan covering:
+- ER model with all tables, columns, and relationships
+- Tier classification (TIER 0 = reference tables, TIER 1 = primary entities, etc.)
+- Creation order based on dependency graph
+- Which existing tables will be reused vs. created
+- Columns and data types for each table
+
+### 1.5 Get Approval
+
+Present the plan (including ER diagram) to the user. Use `ExitPlanMode` only after user approves. If user requests changes, update the plan and present again.
+
 ---
 
-## Step 4: Setup API Auth
+## Step 2: Setup API Auth
 
 ```powershell
 az account show
@@ -80,7 +88,7 @@ $publisherPrefix = $api.PublisherPrefix  # Use for all schema names
 
 ---
 
-## Step 5: Review Existing Tables
+## Step 3: Review Existing Tables
 
 **ALWAYS query existing tables first before recommending creation:**
 
@@ -117,7 +125,7 @@ $tableMap["category"].Source        # "Reused", "Extended", or "Created"
 
 ---
 
-## Step 6: Create Tables
+## Step 4: Create Tables
 
 **Present the plan and get explicit confirmation before creating:**
 
@@ -141,7 +149,7 @@ Options:
 
 ---
 
-## Step 7: Create Skill Tracking Setting and Upload
+## Step 5: Create Skill Tracking Setting and Upload
 
 Create `Site/AI/SetupDataverse` site setting to track skill usage:
 

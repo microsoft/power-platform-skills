@@ -2,7 +2,7 @@
 name: creating-power-pages-site
 description: Creates Power Pages code sites (SPAs) using React, Angular, Vue, or Astro. Use when creating sites, portals, building websites, scaffolding projects, uploading to Power Pages, or activating sites.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
 model: opus
 ---
 
@@ -14,7 +14,7 @@ model: opus
 
 ## Workflow
 
-1. **Gather Requirements** → Ask framework, features, design preferences
+1. **Plan** → Gather requirements, enter plan mode, get approval
 2. **Create Site** → Use frontend-design skill, configure for Power Pages
 3. **Preview & Approve** → User reviews site locally before upload
 4. **Check Prerequisites** → Verify PAC CLI and Azure CLI
@@ -23,15 +23,32 @@ model: opus
 
 ---
 
-## Step 1: Gather Requirements
+## Step 1: Plan
+
+### 1.1 Gather Requirements
 
 Use `AskUserQuestion` to ask:
 1. Site purpose and target audience
-2. Framework: React (recommended), Angular, Vue, or Astro
-3. Features: landing page, forms, auth, data display
-4. Design preferences
+2. Audience type: internal or external
+3. Framework: React (recommended), Angular, Vue, or Astro
+4. Features: landing page, forms, auth, data display
+5. Design preferences
 
 **Constraint**: Only static SPA frameworks. NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
+
+### 1.2 Enter Plan Mode
+
+Use `/plan` command to enter plan mode and create an implementation plan covering:
+- Project structure and folder layout
+- Components to be created
+- Pages and routing approach
+- Styling approach (CSS modules, Tailwind, etc.)
+- Power Pages configuration (`powerpages.config.json`)
+- Build and deployment steps
+
+### 1.3 Get Approval
+
+Present the plan to the user. Use `ExitPlanMode` only after user approves. If user requests changes, update the plan and present again.
 
 ---
 

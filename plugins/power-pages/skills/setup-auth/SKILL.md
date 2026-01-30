@@ -2,7 +2,7 @@
 name: setting-up-authentication
 description: Configures authentication (login/logout) and role-based authorization for Power Pages. Use when setting up user login, Azure AD/Entra ID auth, logout, role-based access control, route protection, or conditional UI based on roles.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
 model: opus
 ---
 
@@ -14,7 +14,7 @@ model: opus
 
 ## Workflow
 
-1. **Check Prerequisites** → Verify `/setup-webapi` completed, site uploaded
+1. **Plan** → Check prerequisites, gather requirements, design auth approach, get approval
 2. **Create Auth Service** → Login/logout methods, user info retrieval
 3. **Create Authorization Utils** → Role checking, conditional rendering
 4. **Create Auth UI** → Login/logout button, user profile
@@ -23,7 +23,9 @@ model: opus
 
 ---
 
-## Step 1: Check Prerequisites
+## Step 1: Plan
+
+### 1.1 Check Prerequisites
 
 Read `memory-bank.md` for project context. Requires:
 - Site uploaded to Power Pages (`/_layout/tokenhtml` endpoint needed)
@@ -31,9 +33,24 @@ Read `memory-bank.md` for project context. Requires:
 
 If `/setup-webapi` not completed, tell user to run it first.
 
+### 1.2 Gather Requirements
+
 Use `AskUserQuestion`:
 - Which features? (Login/Logout only, User profile, Role-based content, All)
 - Which roles need conditional UI? (None, Admin sections, Member content, Multiple)
+
+### 1.3 Enter Plan Mode
+
+Use `/plan` command to enter plan mode and create an implementation plan covering:
+- Files to create (`authService.ts`, `authorization.ts`, type definitions)
+- Auth UI components (login button, user profile display)
+- Role-based UI requirements (which components need role checks)
+- Site settings to configure
+- Testing approach
+
+### 1.4 Get Approval
+
+Present the plan to the user. Use `ExitPlanMode` only after user approves. If user requests changes, update the plan and present again.
 
 ---
 
