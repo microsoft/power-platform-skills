@@ -1,7 +1,5 @@
 # Site Settings Reference
 
-This document describes how to create and configure site settings for Power Pages code sites.
-
 ## Folder Structure
 
 Site settings in Power Pages code sites are stored in the `.powerpages-site/site-settings` folder. Each setting is a separate YAML file with a unique ID.
@@ -51,23 +49,13 @@ value: <SETTING_VALUE>
 
 Each site setting must have a unique `id` field (UUID/GUID format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
 
-**When creating YAML files directly**: Generate a valid UUID where each `x` is a hexadecimal character (0-9, a-f).
+**Claude Code MUST generate UUIDs by running a CLI command** - never write UUID values directly. Use the Bash tool to execute the appropriate command based on the user's shell/platform:
 
-**PowerShell**:
-```powershell
-[guid]::NewGuid().ToString()
-```
-
-**Bash/Linux/Mac**:
-```bash
-uuidgen | tr '[:upper:]' '[:lower:]'
-```
-
-**Python**:
-```python
-import uuid
-print(str(uuid.uuid4()))
-```
+| Shell/Platform | Command |
+|----------------|---------|
+| **PowerShell** (Windows) | `[guid]::NewGuid().ToString()` |
+| **Bash** (Linux) | `cat /proc/sys/kernel/random/uuid` |
+| **Bash/Zsh** (macOS) | `uuidgen \| tr '[:upper:]' '[:lower:]'` |
 
 ## Required Site Settings for Each Table
 
@@ -264,15 +252,22 @@ New-WebApiErrorSetting -ProjectRoot $projectRoot -Enabled $true
 | `Webapi/<table>/enabled` | Enable Web API for table | `true` |
 | `Webapi/<table>/fields` | Allowed fields (comma-separated) | `{prefix}_name,{prefix}_price` |
 | `Webapi/error/innererror` | Show detailed errors (dev only) | `true` |
-| `Site/AuthoringTool` | Tracks which tool created the site | `ClaudeCodeCLI` or `ClaudeCodeVSCode` |
+| `Site/AI/AuthoringTool` | Tracks which tool created the site | `ClaudeCodeCLI` or `ClaudeCodeVSCode` |
+| `Site/AI/<SkillName>` | Tracks which skills were used | `true` |
 
-## Authoring Tool Site Setting
+## AI Site Settings
 
-When a site is created using Claude Code, a site setting must be added to track the authoring tool used.
+When a site is created or modified using Claude Code, site settings track the tooling:
 
 **📖 See: [authoring-tool-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/authoring-tool-reference.md)**
 
-This setting identifies whether the site was created using Claude Code CLI or VS Code extension.
+| Setting | Purpose |
+|---------|---------|
+| `Site/AI/AuthoringTool` | CLI or VS Code |
+| `Site/AI/CreateSite` | /create-site skill used |
+| `Site/AI/SetupDataverse` | /setup-dataverse skill used |
+| `Site/AI/SetupWebApi` | /setup-webapi skill used |
+| `Site/AI/SetupAuth` | /setup-auth skill used |
 
 ## Validation Checklist
 

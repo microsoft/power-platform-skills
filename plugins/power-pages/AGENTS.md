@@ -11,18 +11,6 @@ The Power Pages plugin helps users create and deploy Power Pages sites using mod
 - Configuring Web API access and permissions
 - Implementing authentication and authorization
 
-## Tool Restrictions
-
-Skills in this plugin use restricted tools for security:
-
-| Tool Pattern | Purpose |
-|--------------|---------|
-| `Bash(pac:*)` | PAC CLI commands (Power Platform CLI) |
-| `Bash(az:*)` | Azure CLI commands |
-| `Bash(dotnet:*)` | .NET CLI commands |
-
-These restrictions ensure skills can only execute Power Platform-related commands.
-
 ## Memory Bank System
 
 This plugin uses a memory bank (`memory-bank.md`) to persist state across sessions.
@@ -56,12 +44,35 @@ This plugin's shared resources are in `shared/`:
 
 ## Skills
 
+### Core Skills
+
 | Skill | Description |
 |-------|-------------|
 | `/create-site` | Create a Power Pages code site with modern frameworks |
 | `/setup-dataverse` | Set up Dataverse tables and schema |
-| `/setup-webapi` | Configure Web API access and permissions |
+| `/setup-webapi` | Configure Web API permissions and site settings |
+| `/integrate-webapi` | Connect frontend code to Web API (replace mock data) |
 | `/setup-auth` | Implement authentication and authorization |
+
+### Optional Enhancement Skills
+
+| Skill | Description | After |
+|-------|-------------|-------|
+| `/add-seo` | Add SEO assets (meta tags, robots.txt, sitemap) | `/create-site` |
+| `/add-tests` | Add unit tests (Vitest) and E2E tests (Playwright) | `/create-site` |
+| `/add-sample-data` | Insert sample data with foreign key relationships | `/setup-dataverse` |
+
+### Workflow Sequence
+
+```
+/create-site → /add-seo (optional) → /add-tests (optional)
+     ↓
+/setup-dataverse → /add-sample-data (optional)
+     ↓
+/setup-webapi → /integrate-webapi
+     ↓
+/setup-auth
+```
 
 ### Skill Structure
 
@@ -70,8 +81,9 @@ Each skill follows this structure:
 ```
 skills/<skill-name>/
 ├── SKILL.md                    # Main skill workflow
-├── <topic>-reference.md        # Detailed reference files
-└── troubleshooting.md          # Common issues and solutions
+└── references/                 # Detailed reference files
+    ├── <topic>-reference.md
+    └── troubleshooting.md
 ```
 
 ### Skill Header Pattern
@@ -80,15 +92,52 @@ All skills reference the shared instructions at the top:
 
 ```markdown
 ---
-description: What this skill does
+name: doing-something          # Required, gerund form (verb-ing)
+description: Does X for Y     # Third person, specific, <160 chars
 user-invocable: true
-allowed-tools: Bash(pac:*), Bash(az:*)
-model: sonnet
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]
+model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Planning policy, memory bank, cleanup, and other cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)**
 
 # Skill Title
+```
+
+### Writing Clean Skills (Anti-Bloat Guidelines)
+
+Follow these rules to keep skills concise and effective:
+
+**DO:**
+- Keep SKILL.md under 500 lines total
+- Use `name` field with gerund form (e.g., `creating-power-pages-site`)
+- Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
+- Use numbered lists for workflows instead of ASCII diagrams
+- Trust Claude's intelligence - omit explanations of well-known concepts
+- Use progressive disclosure: SKILL.md for workflow, reference files for details
+- Link to reference files inline: `See [reference.md](./reference.md)`
+
+**DON'T:**
+- Start with "This skill/document guides/covers/describes..." (AI slop)
+- Include ASCII workflow diagrams (waste 50+ lines)
+- Duplicate content between "Quick Summary" and "Actions" sections
+- Explain obvious concepts Claude already knows
+- Add verbose tables for simple lists (use inline format instead)
+- Repeat the same information in multiple places
+
+**Example - BAD (bloated):**
+```markdown
+This document describes how to configure site settings for Power Pages.
+
+## Overview
+Site settings control the behavior of your Power Pages site...
+[50 lines of explanation]
+```
+
+**Example - GOOD (concise):**
+```markdown
+## Site Settings
+Create YAML files in `.powerpages-site/site-settings/`. See [site-settings-reference.md](./references/site-settings-reference.md) for format details.
 ```
 
 ## Agents

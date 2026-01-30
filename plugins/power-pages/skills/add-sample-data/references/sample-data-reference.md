@@ -1,33 +1,13 @@
 # Sample Data Reference
 
-This document covers inserting sample data into Dataverse tables while maintaining referential integrity.
+## Insertion Order
 
-## Data Insertion Protocol
+Insert data by dependency tier:
+1. **Tier 0** (reference tables) - Categories, Statuses, Departments (skip existing)
+2. **Tier 1** (primary entities) - Products, Team Members (with lookups to Tier 0)
+3. **Tier 2** (dependent tables) - Testimonials, Contact Submissions (with lookups to Tier 1)
 
-```text
-SAMPLE DATA INSERTION ORDER (WITH EXISTING DATA CHECKS)
-
-0. Check for existing data in reused tables
-   - Query record counts in each table
-   - If data exists, ask user: skip, add more, or replace
-   - Collect existing record IDs for use as foreign keys
-
-1. Insert TIER 0 data (reference/lookup tables)
-   - Categories, Statuses, Departments, etc.
-   - Skip if records with same name already exist
-   - Store the returned/existing record IDs for use in foreign keys
-
-2. Insert TIER 1 data with valid lookups
-   - Products (with Category lookup)
-   - Team Members (with Department lookup)
-   - Use the IDs from step 1 for lookup values
-
-3. Insert TIER 2 data with valid lookups
-   - Testimonials (with Product lookup)
-   - Contact Submissions (with Status lookup)
-   - Use IDs from steps 1 and 2 for lookup values
-
-IMPORTANT: Never insert records with invalid/non-existent lookup values!
+**Important**: Check for existing data first. Never insert records with invalid lookup values.
 ```
 
 ## Check Existing Data

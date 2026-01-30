@@ -1,5 +1,11 @@
-# Setup Web API
+# Setup Web API Access
 
-Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-webapi/SKILL.md` to guide the user through configuring Web API access for their Power Pages site.
+Read and follow the instructions in `${CLAUDE_PLUGIN_ROOT}/skills/setup-webapi/SKILL.md`.
 
-DO NOT summarize the skill instructions. Follow them step by step, using the tools available to you as directed.
+**Important**:
+
+- Do not announce steps - just execute them
+- Check memory-bank.md for table mapping first
+- Create site settings, web roles, and table permissions
+- Build and upload after completion
+- Clean up any temporary helper scripts after completion

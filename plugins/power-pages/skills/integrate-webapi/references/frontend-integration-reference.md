@@ -1,7 +1,5 @@
 # Frontend Integration Reference
 
-This document provides code patterns for integrating Power Pages Web API into frontend applications.
-
 ## Web API Endpoint Format
 
 The Power Pages Web API follows OData conventions.

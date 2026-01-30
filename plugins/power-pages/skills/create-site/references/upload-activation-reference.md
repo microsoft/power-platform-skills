@@ -1,7 +1,5 @@
 # Upload and Activation Reference
 
-This document describes how to verify prerequisites, upload your site to Power Pages, and activate it.
-
 ## Prerequisites
 
 ### Check PAC CLI

@@ -1,15 +1,6 @@
 # API Authentication Reference
 
-This document covers setting up authentication for the Dataverse OData Web API.
-
-## Overview
-
-This skill uses the Dataverse OData Web API for all table and data operations:
-
-1. **Dataverse Web API** for table creation, schema management, and data operations
-2. **Azure CLI** for authentication (`az account get-access-token`)
-3. **PowerShell** for scripting API calls
-4. **Client-side `/_api/` calls** from the Power Pages site for runtime data access
+Uses Dataverse OData Web API with Azure CLI authentication (`az account get-access-token`).
 
 ## Prerequisites
 

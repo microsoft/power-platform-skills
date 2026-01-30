@@ -1,30 +1,12 @@
 # Authentication Reference
 
-This document provides code patterns for implementing server-side authentication in Power Pages sites.
+## Login Flow
 
-## How Power Pages Authentication Works
-
-Power Pages uses **server-side session-based authentication** with Azure Active Directory (AAD):
-
-1. **Login Flow**: Form submission to `/Account/Login/ExternalLogin` with anti-forgery token
-2. **Session Management**: Server maintains session via cookies
-3. **User Info**: Available in `window.Microsoft.Dynamic365.Portal.User` after login
-4. **Logout**: Redirect to `/Account/Login/LogOff`
-
-```text
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   User clicks   │────>│  Fetch token    │────>│  POST to login  │
-│   "Sign In"     │     │  /_layout/      │     │  /Account/Login │
-│                 │     │  tokenhtml      │     │  /ExternalLogin │
-└─────────────────┘     └─────────────────┘     └────────┬────────┘
-                                                         │
-                                                         v
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   User info     │<────│   Redirect to   │<────│   AAD Login     │
-│   available in  │     │   site with     │     │   Page          │
-│   Portal object │     │   session       │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
+1. Fetch anti-forgery token from `/_layout/tokenhtml`
+2. POST to `/Account/Login/ExternalLogin` with token, provider, returnUrl
+3. User authenticates via AAD → session established
+4. User info available in `window.Microsoft.Dynamic365.Portal.User`
+5. Logout: redirect to `/Account/Login/LogOff`
 
 ## TypeScript Declarations
 

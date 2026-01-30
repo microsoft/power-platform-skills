@@ -1,7 +1,5 @@
 # Table Management Reference
 
-This document covers querying, creating, and managing Dataverse tables via the OData Web API.
-
 ## Query Existing Custom Tables
 
 Before creating tables, review existing custom tables in the environment:

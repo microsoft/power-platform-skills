@@ -46,7 +46,7 @@ name: skill-name                    # Optional: defaults to directory name
 description: What this skill does   # Recommended: Claude uses for auto-loading
 user-invocable: true                # Optional: default true
 disable-model-invocation: false     # Optional: default false
-allowed-tools: Read, Bash(cmd:*)    # Optional: tool restrictions
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task"]    # Optional: tool restrictions
 argument-hint: [project-path]       # Optional: autocomplete hint
 context: fork                       # Optional: run in subagent
 agent: Explore                      # Optional: subagent type

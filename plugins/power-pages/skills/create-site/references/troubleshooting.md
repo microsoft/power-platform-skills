@@ -1,7 +1,5 @@
 # Troubleshooting
 
-This document covers common issues and solutions when creating Power Pages code sites.
-
 ## Upload Issues
 
 ### Upload Fails with JavaScript Error

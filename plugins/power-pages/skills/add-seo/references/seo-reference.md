@@ -1,7 +1,5 @@
 # SEO Reference
 
-This document describes how to add SEO assets to your Power Pages code site.
-
 ## Meta Tags Template
 
 Ensure the `index.html` file includes comprehensive meta tags for SEO and social sharing:
@@ -59,16 +57,6 @@ Ensure the `index.html` file includes comprehensive meta tags for SEO and social
 </head>
 ```
 
-## Framework-Specific Locations
-
-| Framework | index.html Location |
-|-----------|---------------------|
-| React (Vite) | Project root `index.html` |
-| React (CRA) | `public/index.html` |
-| Vue | Project root `index.html` |
-| Angular | `src/index.html` |
-| Astro | `src/layouts/Layout.astro` or use `<head>` slot |
-
 ## Required SEO Assets
 
 Place these assets in the `public/` folder:
@@ -103,25 +91,6 @@ Sitemap: https://[subdomain].powerappsportals.com/sitemap.xml
 # Disallow: /admin/
 # Disallow: /private/
 ```
-
-### robots.txt Directives
-
-| Directive | Purpose |
-|-----------|---------|
-| `User-agent: *` | Applies rules to all search engine bots |
-| `Allow: /` | Permits crawling of all pages |
-| `Disallow: /path/` | Blocks crawling of specific paths |
-| `Sitemap:` | Points crawlers to your sitemap |
-
-### Framework-Specific Location (robots.txt)
-
-| Framework | robots.txt Location |
-|-----------|---------------------|
-| React (Vite) | `public/robots.txt` |
-| React (CRA) | `public/robots.txt` |
-| Vue | `public/robots.txt` |
-| Angular | `src/robots.txt` (add to `angular.json` assets) |
-| Astro | `public/robots.txt` |
 
 ---
 
@@ -168,49 +137,16 @@ Create `sitemap.xml` in the `public/` folder:
 </urlset>
 ```
 
-### Sitemap Elements
+**Priority guidelines**: Homepage=1.0, Main sections=0.8, Secondary pages=0.7, Blog=0.6, Legal=0.3
 
-| Element | Required | Description |
-|---------|----------|-------------|
-| `<loc>` | Yes | Full URL of the page (must be absolute URL) |
-| `<lastmod>` | Recommended | Last modification date in YYYY-MM-DD format |
-| `<changefreq>` | Optional | How often the page changes: `always`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `never` |
-| `<priority>` | Optional | Priority relative to other pages: `0.0` to `1.0` (default: `0.5`) |
+**SPA note**: Use history mode routing (`/about`) not hash routing (`/#/about`) for proper indexing.
 
-### Priority Guidelines
+## Framework-Specific Paths
 
-| Page Type | Recommended Priority |
-|-----------|---------------------|
-| Homepage | `1.0` |
-| Main sections (About, Services, Products) | `0.8` |
-| Secondary pages (Contact, FAQ) | `0.7` |
-| Blog posts, articles | `0.6` |
-| Legal pages (Privacy, Terms) | `0.3` |
-
-### SPA Routing Considerations
-
-For Single Page Applications with client-side routing:
-
-1. **List all accessible routes** - Include every URL path that users can navigate to
-2. **Use hash routing carefully** - If using hash routing (`/#/about`), search engines may not index these properly. Prefer history mode routing (`/about`)
-3. **Ensure server redirects** - Configure your hosting to redirect all routes to `index.html` for proper SPA routing
-
-### Framework-Specific Location (sitemap.xml)
-
-| Framework | sitemap.xml Location |
-|-----------|----------------------|
-| React (Vite) | `public/sitemap.xml` |
-| React (CRA) | `public/sitemap.xml` |
-| Vue | `public/sitemap.xml` |
-| Angular | `src/sitemap.xml` (add to `angular.json` assets) |
-| Astro | `public/sitemap.xml` |
-
-### Verify After Deployment
-
-After the site is active, verify the sitemap is accessible:
-
-```
-https://[subdomain].powerappsportals.com/sitemap.xml
-```
-
-Update the sitemap whenever you add new pages to your site.
+| Framework | index.html | public/ folder |
+|-----------|------------|----------------|
+| React (Vite) | Project root | `public/` |
+| React (CRA) | `public/` | `public/` |
+| Vue | Project root | `public/` |
+| Angular | `src/` | `src/` (add to `angular.json` assets) |
+| Astro | Layout component | `public/` |

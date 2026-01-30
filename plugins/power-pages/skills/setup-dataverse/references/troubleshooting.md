@@ -1,7 +1,5 @@
 # Troubleshooting
 
-This document covers common issues and solutions when setting up Dataverse tables.
-
 ## Existing Table Detection Issues
 
 ### Tables not found
