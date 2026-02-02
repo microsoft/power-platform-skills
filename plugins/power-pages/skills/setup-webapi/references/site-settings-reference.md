@@ -45,6 +45,20 @@ value: <SETTING_VALUE>
 - Replace `/` with `-` in the setting name
 - Example: Setting `Webapi/{prefix}_product/enabled` → File `Webapi-{prefix}_product-enabled.sitesetting.yml`
 
+### Boolean Values
+
+**IMPORTANT**: Boolean values in YAML must be unquoted.
+
+```yaml
+# CORRECT - unquoted boolean
+value: true
+
+# WRONG - quoted string (will not work!)
+value: "true"
+```
+
+Power Pages expects actual boolean values, not string representations. Quoted booleans will cause site settings to not function correctly.
+
 ### Generating Unique IDs
 
 Each site setting must have a unique `id` field (UUID/GUID format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).

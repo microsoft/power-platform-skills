@@ -56,6 +56,20 @@ Configure the authoring tool site setting for Power Pages sites.
 
 ---
 
+## Azure CLI
+
+**📋 [azure-cli-reference.md](./azure-cli-reference.md)**
+
+Azure CLI is required for authentication and API calls.
+
+**Key Points:**
+- Check installation with `az --version`
+- If not installed, use MSI installer (recommended), winget, or PowerShell script
+- Official docs: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+- After installation, authenticate with `az login`
+
+---
+
 ## Adding New Shared Instructions
 
 When adding a new cross-cutting concern:

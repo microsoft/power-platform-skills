@@ -93,6 +93,23 @@ write: false
 | `accountrelationship` | string | No | Relationship name for account filtering |
 | `contactrelationship` | string | No | Relationship name for contact filtering |
 
+## Boolean Values
+
+**IMPORTANT**: Boolean values in YAML must be unquoted.
+
+```yaml
+# CORRECT - unquoted booleans
+read: true
+write: false
+create: false
+
+# WRONG - quoted strings (will not work!)
+read: "true"
+write: "false"
+```
+
+Power Pages expects actual boolean values, not string representations. Quoted booleans will cause table permissions to not function correctly.
+
 ## Generating Unique IDs
 
 **IMPORTANT**: Every table permission YAML file must have a unique `id` field (UUID/GUID format).

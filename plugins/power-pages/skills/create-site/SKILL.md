@@ -28,11 +28,15 @@ model: opus
 ### 1.1 Gather Requirements
 
 Use `AskUserQuestion` to ask:
-1. Site purpose and target audience
-2. Audience type: internal or external
-3. Framework: React (recommended), Angular, Vue, or Astro
-4. Features: landing page, forms, auth, data display
-5. Design preferences
+1. **Project location**: Where should the site be created?
+   - Current directory (files created here)
+   - New folder in current directory (specify name)
+   - Different location (specify path)
+2. Site purpose and target audience
+3. Audience type: internal or external
+4. Framework: React (recommended), Angular, Vue, or Astro
+5. Features: landing page, forms, auth, data display
+6. Design preferences
 
 **Constraint**: Only static SPA frameworks. NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 

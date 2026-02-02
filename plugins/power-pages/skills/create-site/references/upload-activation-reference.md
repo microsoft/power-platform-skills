@@ -26,17 +26,7 @@ pac help
 az --version
 ```
 
-**If not found**, install using winget:
-
-```powershell
-winget install -e --id Microsoft.AzureCLI
-```
-
-Restart terminal after installation, then verify:
-
-```powershell
-az --version
-```
+**If not found**, see **[azure-cli-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/azure-cli-reference.md)** for installation options (MSI installer, winget, or PowerShell script).
 
 ### Verify Authentication
 

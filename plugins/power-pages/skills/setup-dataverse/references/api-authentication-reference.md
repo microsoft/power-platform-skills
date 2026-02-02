@@ -4,6 +4,18 @@ Uses Dataverse OData Web API with Azure CLI authentication (`az account get-acce
 
 ## Prerequisites
 
+### Azure CLI Required
+
+Verify Azure CLI is installed:
+
+```powershell
+az --version
+```
+
+**If not found**, see **[azure-cli-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/azure-cli-reference.md)** for installation options.
+
+### Authentication
+
 Ensure Azure CLI is authenticated before proceeding:
 
 ```powershell

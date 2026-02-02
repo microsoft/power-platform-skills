@@ -35,6 +35,7 @@ This plugin's shared resources are in `shared/`:
 | `memory-bank.md` | Memory bank usage instructions |
 | `cleanup-reference.md` | Cleanup instructions for helper files |
 | `authoring-tool-reference.md` | Authoring tool site setting configuration |
+| `azure-cli-reference.md` | Azure CLI installation and authentication |
 
 ### Adding New Shared Instructions
 
@@ -182,3 +183,12 @@ After modifying this plugin:
 2. Test skill invocation with `/create-site`, `/setup-dataverse`, etc.
 3. Verify tool restrictions work (should only allow pac, az, dotnet commands)
 4. Test memory bank read/write in a sample project
+
+## Documenting Changes
+
+**When making significant changes to this plugin, update this CLAUDE.md file** to ensure future modifications respect established patterns and guidelines. This includes:
+
+- New prerequisites or dependencies
+- Changes to YAML file formats
+- New shared resources or cross-cutting concerns
+- Breaking changes or deprecations
