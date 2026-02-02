@@ -12,6 +12,10 @@ model: opus
 
 **References:** [authentication](./references/authentication-reference.md) | [authorization](./references/authorization-reference.md)
 
+**Agents:**
+- `webapi-architect` - Spawn for auth context patterns, permission hooks, or API auth errors
+- `permissions-architect` - Spawn to analyze role-based access requirements and recommend web roles
+
 ## Workflow
 
 1. **Plan** → Check prerequisites, gather requirements, design auth approach, get approval

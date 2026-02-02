@@ -2,6 +2,15 @@
 
 Table permissions control Web API data access. Create YAML files in `.powerpages-site/table-permissions/` and link to web roles.
 
+## Determining Required Permissions
+
+Use `permissions-architect` agent to automatically analyze the codebase to determine what permissions are needed. It will:
+- Scan frontend code for Web API calls (`/_api/` endpoints)
+- Identify which tables are accessed and what operations are used
+- Check existing site settings and permissions
+- Recommend appropriate scopes based on data sensitivity
+- Provide actionable permission configurations
+
 ## Permission Scopes
 
 | Scope | Value | Description | Use Case |

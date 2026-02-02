@@ -146,6 +146,8 @@ Create YAML files in `.powerpages-site/site-settings/`. See [site-settings-refer
 | Agent | Purpose |
 |-------|---------|
 | `code-site-architect` | Specialized for Power Pages code site architecture decisions |
+| `permissions-architect` | Analyzes codebase to suggest web roles and table permissions |
+| `webapi-architect` | Provides best practices for Web API implementation, code review, and troubleshooting |
 
 ## Power Pages Concepts
 

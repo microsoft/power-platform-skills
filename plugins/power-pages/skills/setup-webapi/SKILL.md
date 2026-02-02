@@ -12,6 +12,10 @@ model: opus
 
 **References:** [site-settings](./references/site-settings-reference.md) | [web-roles](./references/web-roles-reference.md) | [table-permissions](./references/table-permissions-reference.md) | [troubleshooting](./references/troubleshooting.md)
 
+**Agents:**
+- `permissions-architect` - Spawn to analyze codebase and recommend web roles, table permissions, and scopes
+- `webapi-architect` - Spawn for API implementation guidance or troubleshooting
+
 ## Workflow
 
 1. **Plan** → Check context, design permissions strategy, get approval
@@ -30,7 +34,15 @@ Read `memory-bank.md`. **Critical**: Get the **Table Name Mapping** - use actual
 
 If continuing from `/setup-dataverse`, list tables to configure. Otherwise ask for project path and tables.
 
-### 1.2 Enter Plan Mode
+### 1.2 Analyze Permissions Requirements
+
+**Spawn the `permissions-architect` agent** to analyze the codebase and get recommendations for:
+- Which tables need Web API access (based on frontend code analysis)
+- Appropriate web roles and table permissions
+- Correct scopes (Global, Self, Contact, etc.)
+- Security considerations
+
+### 1.3 Enter Plan Mode
 
 Use `/plan` command to enter plan mode and create an implementation plan covering:
 - Tables requiring Web API access
@@ -39,7 +51,7 @@ Use `/plan` command to enter plan mode and create an implementation plan coverin
 - Site settings to create
 - Security considerations (scope: Global vs Self)
 
-### 1.3 Get Approval
+### 1.4 Get Approval
 
 Present the permissions plan to the user as a table showing:
 - Table name → Web role → Permissions (Read/Create/Write/Delete) → Scope

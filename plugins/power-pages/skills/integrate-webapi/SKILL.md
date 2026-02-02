@@ -2,7 +2,7 @@
 name: integrating-webapi
 description: Integrates Web API into frontend code, replacing mock data with Dataverse API calls. Use when connecting frontend to Web API, replacing static data, or creating API services.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "AskUserQuestion"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "AskUserQuestion", "Task"]
 model: opus
 ---
 
@@ -11,6 +11,10 @@ model: opus
 # Integrate Web API
 
 **References:** [frontend-integration](./references/frontend-integration-reference.md)
+
+**Agents:**
+- `webapi-architect` - Spawn for implementation guidance, code review, or troubleshooting API errors
+- `permissions-architect` - Spawn if you need to add permissions for new tables or get 403 errors
 
 Connects frontend code to Power Pages Web API, replacing all mock/static data.
 
@@ -50,6 +54,8 @@ Create `src/services/webApi.ts` with:
 - Generic CRUD operations (getAll, getById, create, update, delete)
 
 See [frontend-integration-reference.md](./references/frontend-integration-reference.md#power-pages-web-api-service-typescript).
+
+**Tip:** Spawn the `webapi-architect` agent for guidance on advanced patterns (retry logic, pagination, file uploads).
 
 ---
 
@@ -141,3 +147,10 @@ fetch('/_api/${prefix}_products').then(r => r.json()).then(console.log)
 ```
 
 Update memory-bank.md with integration status.
+
+---
+
+## Troubleshooting
+
+- **401/429 errors**: Spawn `webapi-architect` for token handling and retry logic fixes
+- **403 errors**: Spawn `permissions-architect` to analyze and fix missing table permissions

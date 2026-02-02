@@ -1,8 +1,8 @@
 ---
 name: creating-power-pages-site
-description: Creates Power Pages code sites (SPAs) using React, Angular, Vue, or Astro. Use when creating sites, portals, building websites, scaffolding projects, uploading to Power Pages, or activating sites.
+description: Creates Power Pages code sites (SPAs) using React, Angular, Vue, or Astro. Use when creating sites, building power pages sites, portals, building websites using power pages, scaffolding projects, uploading to Power Pages, or activating sites.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "EnterPlanMode", "ExitPlanMode"]
 model: opus
 ---
 

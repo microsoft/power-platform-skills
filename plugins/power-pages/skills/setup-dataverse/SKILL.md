@@ -2,7 +2,7 @@
 name: setting-up-dataverse-tables
 description: Creates Dataverse tables, columns, and relationships for Power Pages. Use when creating tables, defining schema, setting up entity relationships, or lookup fields.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "ExitPlanMode"]
+allowed-tools: ["Read", "Write", "Grep", "Glob", "Bash", "TodoWrite", "AskUserQuestion", "Skill", "Task", "EnterPlanMode", "ExitPlanMode"]
 model: opus
 ---
 
