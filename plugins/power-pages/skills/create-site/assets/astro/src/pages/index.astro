@@ -1,0 +1,32 @@
+---
+import Layout from '../layouts/Layout.astro'
+---
+
+<Layout title="Home">
+  <section class="hero">
+    <h1>__SITE_TITLE__</h1>
+    <p class="hero-subtitle">__SITE_DESCRIPTION__</p>
+    <div class="hero-actions">
+      <a href="#features" class="btn btn-primary">Get Started</a>
+      <a href="/about" class="btn btn-secondary">Learn More</a>
+    </div>
+  </section>
+
+  <section id="features" class="features">
+    <h2>Features</h2>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <h3>Fast &amp; Modern</h3>
+        <p>Built with the latest web technologies for optimal performance.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Responsive Design</h3>
+        <p>Looks great on every device, from desktop to mobile.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Easy to Customize</h3>
+        <p>Theme system with CSS custom properties for quick styling.</p>
+      </div>
+    </div>
+  </section>
+</Layout>
