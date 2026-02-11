@@ -1,16 +1,6 @@
 # Power Platform Claude Plugins
 
-Official Copilot CLI extensions for Power Platform development by Microsoft.
-
-[![Launch with Copilot CLI](https://img.shields.io/badge/Launch%20with-Copilot%20CLI-000000?style=for-the-badge&logo=github&logoColor=white)](https://github.com/microsoft/power-platform-claude-plugins#quick-start)
-
-## Quick Start
-
-Run this command in your terminal to clone and launch Copilot CLI with the Power Pages plugin:
-
-```bash
-git clone https://github.com/microsoft/power-platform-claude-plugins.git && copilot --plugin-dir power-platform-claude-plugins/plugins/power-pages
-```
+Official Claude Code plugin for Power Platform development by Microsoft.
 
 ## Overview
 
