@@ -55,10 +55,30 @@ pac auth who
 
 **If authenticated**: Extract the current environment name and URL from the output. Proceed to Step 3.
 
-**If not authenticated**: Inform the user they need to authenticate first:
+**If not authenticated**:
 
-- Tell the user: "You are not authenticated with PAC CLI. Please run `pac auth create` to sign in, then invoke this skill again."
-- Stop the skill execution.
+1. Inform the user they are not authenticated with PAC CLI.
+2. Use `AskUserQuestion` to ask for the environment URL:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | You are not authenticated with PAC CLI. Please provide your Power Pages environment URL (e.g., `https://org12345.crm.dynamics.com`) so I can authenticate you. | Auth | *(free text input via "Other")* |
+
+   Provide two placeholder options to guide the user:
+   - "I'll paste the URL" (description: "Select 'Other' below and paste your environment URL")
+   - "I don't know my URL" (description: "You can find it in the Power Platform admin center under Environments > your environment > Environment URL")
+
+3. Once the user provides the URL, run the authentication command:
+
+   ```powershell
+   pac auth create --environment "<USER_PROVIDED_URL>"
+   ```
+
+   This will open a browser window for the user to sign in.
+
+4. After the command completes, verify by running `pac auth who` again.
+5. If authentication succeeds, proceed to Step 3.
+6. If authentication fails, present the error to the user and help them troubleshoot.
 
 ---
 
