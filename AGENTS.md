@@ -62,6 +62,10 @@ Checks generated sites for: required files (`package.json`, `.gitignore`, `power
 
 Only static SPA frameworks are supported (React, Vue, Angular, Astro). Server-rendered frameworks (Next.js, Nuxt, Remix, SvelteKit) are **not** supported.
 
+## Maintaining This File
+
+When you make significant changes to the repository (new plugins, skills, hooks, templates, or architectural shifts), update this file to keep it accurate for future agents.
+
 ## External Documentation
 
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
