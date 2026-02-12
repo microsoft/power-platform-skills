@@ -9,7 +9,7 @@ This repository is a **plugin marketplace** containing Claude Code plugins for P
 ## Repository Structure
 
 ```
-power-platform-claude-plugin/
+power-platform-skills/
 ├── .claude-plugin/
 │   └── marketplace.json      # Marketplace manifest (lists all plugins)
 ├── plugins/
@@ -42,13 +42,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your Claude Code instance
 
     ```bash
-    /plugin marketplace add microsoft/power-platform-claude-plugins
+    /plugin marketplace add microsoft/power-platform-skillss
     ```
 
 2. Install the desired plugin
 
     ```bash
-    /plugin install power-pages@power-platform-claude-plugins
+    /plugin install power-pages@power-platform-skillss
     ```
 
 ### Add from local path
@@ -57,13 +57,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your Claude Code instance
 
     ```bash
-    /plugin marketplace add /path/to/power-platform-claude-plugins
+    /plugin marketplace add /path/to/power-platform-skillss
     ```
 
 1. Install the desired plugin (installs to user scope by default)
 
     ```bash
-    /plugin install power-pages@power-platform-claude-plugins
+    /plugin install power-pages@power-platform-skillss
     ```
 
 ## Local Development
@@ -74,7 +74,7 @@ To develop and test plugins locally, follow these steps:
 1. Launch Claude Code with plugin path:
 
     ```bash
-    claude --plugin-dir /path/to/power-platform-claude-plugins/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     ```
 
 ## Documentation
@@ -82,21 +82,14 @@ To develop and test plugins locally, follow these steps:
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/pages)
-- [Claude Code Plugins](https://code.claude.com/docs/en/plugins-reference)
 
 ## Contributing
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit [Contributor License Agreements](https://cla.opensource.microsoft.com).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guide.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+## License
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+The code in this repo is licensed under the [MIT](LICENSE) license.
 
 ## Trademarks
 
