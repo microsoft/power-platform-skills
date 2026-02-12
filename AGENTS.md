@@ -24,29 +24,40 @@ plugins/
   power-pages/
     .claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
     .mcp.json                      ← MCP server config (Playwright for browser automation)
+    agents/
+      data-model-architect.md      ← Agent: proposes Dataverse data models (read-only)
     hooks/
       hooks.json                   ← Stop hooks: validation script + prompt-based completeness check
       scripts/validate-site.js     ← Node script validating generated sites
+      scripts/validate-datamodel.js ← Node script validating Dataverse data model creation
     skills/
       create-site/
         SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools, hooks)
         assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
       deploy-site/
         SKILL.md                   ← Deployment skill definition
+      setup-datamodel/
+        SKILL.md                   ← Dataverse data model creation skill definition
+        references/odata-api-patterns.md  ← OData API body templates for table/column/relationship creation
 ```
 
 ### Plugin Components
 
-**Skills** (user-invocable via `/power-pages:create-site` and `/power-pages:deploy-site`):
+**Agents** (auto-triggered by the main conversation when relevant):
+
+- `data-model-architect`: Read-only agent that analyzes site requirements, discovers existing Dataverse tables via OData API, and proposes a data model (new/modified/reused tables + Mermaid ER diagram). Uses `pac env who` + Azure CLI auth to query Dataverse. Renders the ER diagram visually in the browser via Playwright (writes a temp HTML file with Mermaid.js CDN, navigates to it, takes a screenshot) before entering plan mode. Does NOT create, modify, or delete any tables — purely advisory. The main conversation uses its output to create tables.
+
+**Skills** (user-invocable via `/power-pages:create-site`, `/power-pages:deploy-site`, and `/power-pages:setup-datamodel`):
 
 - Defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks)
 - `create-site`: 7-step workflow — gather requirements, plan, scaffold from template, customize with live Playwright preview, review, deploy
 - `deploy-site`: 5-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, handle blocked JS attachments
+- `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 
 **Hooks** (`hooks/hooks.json`):
 
-- Stop hooks run when a session ends: a command hook runs `validate-site.js` and a prompt hook checks task completeness
-- These are duplicated in `create-site/SKILL.md` frontmatter as a workaround for [claude-code#17688](https://github.com/anthropics/claude-code/issues/17688)
+- Stop hooks run when a session ends: command hooks run `validate-site.js` and `validate-datamodel.js`, prompt hooks check task completeness for both site creation and data model setup
+- These are duplicated in `create-site/SKILL.md` and `setup-datamodel/SKILL.md` frontmatter as a workaround for [claude-code#17688](https://github.com/anthropics/claude-code/issues/17688)
 
 **MCP Integration**: Playwright MCP server for browser automation and live site previews during development.
 
@@ -57,6 +68,10 @@ Framework templates use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`, `__PRIM
 ### Validation Script (`validate-site.js`)
 
 Checks generated sites for: required files (`package.json`, `.gitignore`, `powerpages.config.json`), config schema fields (`$schema`, `compiledPath`, `siteName`, `defaultLandingPage`), build/dev scripts in package.json, unreplaced `__PLACEHOLDER__` tokens, git initialization, and `src/` directory existence.
+
+### Validation Script (`validate-datamodel.js`)
+
+Checks created Dataverse data models by reading `.datamodel-manifest.json` (written by the `setup-datamodel` skill during table creation). Queries the Dataverse OData API to verify each table and column in the manifest actually exists in the environment. Gracefully exits 0 on auth errors (doesn't block if token expired) or when no manifest is found (not a data model session).
 
 ### Key Constraint
 

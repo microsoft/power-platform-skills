@@ -1,5 +1,4 @@
 {
-  "description": "Validation hooks for Power Pages site generation. These are duplicated in skills/create-site/SKILL.md frontmatter for skill-scoped execution (currently broken for plugins: github.com/anthropics/claude-code/issues/17688). Once fixed, remove these plugin-level hooks and rely on the skill-scoped ones.",
   "hooks": {
     "Stop": [
       {
@@ -12,7 +11,17 @@
           },
           {
             "type": "prompt",
-            "prompt": "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) The user reviewed the site via Playwright screenshots and approved it, 3) No build errors remain unresolved, 4) Git commits were made at key milestones (initial scaffold, after each major feature), 5) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return 'block' with specific issues. If no site creation happened or everything is complete, return 'approve'.",
+            "prompt": "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) The user reviewed the site via Playwright screenshots and approved it, 3) No build errors remain unresolved, 4) Git commits were made at key milestones (initial scaffold, after each major feature), 5) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }.",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/validate-datamodel.js\"",
+            "timeout": 30
+          },
+          {
+            "type": "prompt",
+            "prompt": "If a Dataverse data model was being set up in this session (via /power-pages:setup-datamodel), verify before allowing stop: 1) The data-model-architect agent was invoked, 2) The user approved the proposal, 3) All approved tables were created, 4) A summary was presented. If incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. Otherwise return { \"ok\": true }.",
             "timeout": 30
           }
         ]

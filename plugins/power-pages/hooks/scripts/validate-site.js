@@ -6,6 +6,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// Command hook output: exit 0 with no output to allow, JSON with decision:"block" to block.
+const approve = () => { process.exit(0); };
+const block = (reason) => {
+  console.log(JSON.stringify({ decision: "block", reason }));
+  process.exit(0);
+};
+
 let inputData = '';
 process.stdin.on('data', chunk => (inputData += chunk));
 process.stdin.on('end', () => {
@@ -13,10 +20,10 @@ process.stdin.on('end', () => {
     const input = JSON.parse(inputData);
     const cwd = input.cwd;
 
-    if (!cwd) process.exit(0);
+    if (!cwd) approve();
 
     const configPath = findConfig(cwd);
-    if (!configPath) process.exit(0); // Not a Power Pages project, skip
+    if (!configPath) approve(); // Not a Power Pages project, skip
 
     const projectRoot = path.dirname(configPath);
     const errors = [];
@@ -80,17 +87,13 @@ process.stdin.on('end', () => {
     }
 
     if (errors.length > 0) {
-      process.stderr.write(
-        'Power Pages site validation failed:\n- ' + errors.join('\n- ') + '\n'
-      );
-      process.exit(2);
+      block('Power Pages site validation failed:\n- ' + errors.join('\n- '));
     }
 
-    process.stdout.write('Power Pages site validation passed.\n');
-    process.exit(0);
+    approve();
   } catch {
     // Don't block on script errors
-    process.exit(0);
+    approve();
   }
 });
 
