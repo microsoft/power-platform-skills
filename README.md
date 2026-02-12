@@ -1,10 +1,10 @@
-# Power Platform Claude Plugins
+# Power Platform Skills
 
-Official Claude Code plugin for Power Platform development by Microsoft.
+Official agent skills/plugins for Power Platform development by Microsoft.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
 ## Repository Structure
 
@@ -39,7 +39,7 @@ Create and deploy Power Pages sites using modern development approaches.
 
 To use a plugin from this marketplace:
 
-1. Add the marketplace to your Claude Code instance
+1. Add the marketplace to your agent
 
     ```bash
     /plugin marketplace add microsoft/power-platform-skillss
@@ -54,7 +54,7 @@ To use a plugin from this marketplace:
 ### Add from local path
 
 1. Clone this repository
-1. Add the marketplace to your Claude Code instance
+1. Add the marketplace to your agent
 
     ```bash
     /plugin marketplace add /path/to/power-platform-skillss
@@ -75,6 +75,12 @@ To develop and test plugins locally, follow these steps:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    ```
+
+1. Launch Copilot with plugin path:
+
+    ```bash
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     ```
 
 ## Documentation
