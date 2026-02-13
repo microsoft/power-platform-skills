@@ -1,0 +1,23 @@
+{
+  "name": "power-apps",
+  "version": "1.0.0",
+  "description": "Build and deploy Power Apps generative pages for model-driven apps.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-claude-plugins/",
+  "repository": "https://github.com/microsoft/power-platform-claude-plugins/",
+  "license": "MIT",
+  "keywords": [
+    "power-apps",
+    "generative-pages",
+    "genux",
+    "genpage",
+    "react",
+    "fluent-ui",
+    "dataverse",
+    "pac-cli",
+    "model-driven"
+  ]
+}

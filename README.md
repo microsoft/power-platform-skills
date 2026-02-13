@@ -33,6 +33,12 @@ Create and deploy Power Pages sites using modern development approaches.
 
 **Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
 
+### Power Apps (`plugins/power-apps`)
+
+Build and deploy Power Apps generative pages for model-driven apps.
+
+**Stack**: React + TypeScript + Fluent, deployed via PAC CLI
+
 ## Installation
 
 ### Add from GitHub Marketplace
