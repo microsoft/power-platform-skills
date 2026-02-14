@@ -219,16 +219,19 @@ Create typed wrappers for each entity.
 export const productsApi = {
   getAll: (options?: QueryOptions) =>
     webApi.getAll<Product>('{prefix}_products', {
-      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '_{prefix}_categoryid_value', '{prefix}_imageurl', '{prefix}_isactive'],
+      expand: '{prefix}_Category($select={prefix}_name)',
       ...options,
     }),
   getById: (id: string) =>
     webApi.getById<Product>('{prefix}_products', id, {
-      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '_{prefix}_categoryid_value', '{prefix}_imageurl', '{prefix}_isactive'],
+      expand: '{prefix}_Category($select={prefix}_name)',
     }),
   getActive: () =>
     webApi.getAll<Product>('{prefix}_products', {
-      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '{prefix}_category', '{prefix}_imageurl', '{prefix}_isactive'],
+      select: ['{prefix}_productid', '{prefix}_name', '{prefix}_description', '{prefix}_price', '_{prefix}_categoryid_value', '{prefix}_imageurl', '{prefix}_isactive'],
+      expand: '{prefix}_Category($select={prefix}_name)',
       filter: '{prefix}_isactive eq true',
       orderBy: '{prefix}_name',
     }),
@@ -253,7 +256,7 @@ export const testimonialsApi = {
 export const faqsApi = {
   getActive: () =>
     webApi.getAll<FAQ>('{prefix}_faqs', {
-      select: ['{prefix}_faqid', '{prefix}_question', '{prefix}_answer', '{prefix}_category', '{prefix}_displayorder', '{prefix}_isactive'],
+      select: ['{prefix}_faqid', '{prefix}_question', '{prefix}_answer', '{prefix}_Category', '{prefix}_displayorder', '{prefix}_isactive'],
       filter: '{prefix}_isactive eq true',
       orderBy: '{prefix}_displayorder',
     }),
@@ -281,9 +284,15 @@ export interface Product {
   {prefix}_name: string;
   {prefix}_description: string;
   {prefix}_price: number;
-  {prefix}_category: string;
   {prefix}_imageurl: string;
   {prefix}_isactive: boolean;
+  // Raw Lookup ID (for filtering/logic)
+  _{prefix}_categoryid_value?: string; 
+  // Expanded Lookup Object (matches the Navigation Property name)
+  {prefix}_Category?: {
+    {prefix}_categoryid: string;
+    {prefix}_name: string;
+  };
 }
 
 export interface TeamMember {
@@ -312,7 +321,13 @@ export interface FAQ {
   {prefix}_faqid: string;
   {prefix}_question: string;
   {prefix}_answer: string;
-  {prefix}_category: string;
+  // Raw Lookup ID (for filtering/logic)
+  _{prefix}_categoryid_value?: string; 
+  // Expanded Lookup Object (matches the Navigation Property name)
+  {prefix}_Category?: {
+    {prefix}_categoryid: string;
+    {prefix}_name: string;
+  };
   {prefix}_displayorder: number;
   {prefix}_isactive: boolean;
 }
@@ -325,6 +340,24 @@ export interface ContactSubmission {
   {prefix}_status?: number;
 }
 ```
+
+## Handling Lookup Properties
+
+Lookups in Dataverse are unique because they expose two distinct properties. Understanding the difference is critical for frontend integration.
+
+### 1. Retrieval (GET)
+
+* The GUID Property: Automatically named `_{logicalname}_value`. Use this for IDs or logic.
+* The Navigation Property: Named `{logicalname}`. Use this with `$expand` to get related record details.
+
+### 2. Updating & Creating (POST/PATCH)
+
+You **cannot** update a lookup by sending a GUID to the `_value` property. You must use the `@odata.bind` annotation on the **Navigation Property**.
+
+**Syntax**: `"navigation_property_name@odata.bind": "/entity_set_plural_name(GUID)"`
+
+> **Note**: If you get an "Undeclared Property" error, you are likely using the logical name (lowercase) instead of the **Navigation Property Name** (case-sensitive, usually matches the schema name).
+
 
 ## React Hook for Data Fetching
 
@@ -702,7 +735,19 @@ Track replacements in the memory bank:
 | Order by | `$orderby=field [asc\|desc]` | `$orderby={prefix}_name desc` |
 | Top N | `$top=N` | `$top=10` |
 | Skip | `$skip=N` | `$skip=20` |
-| Expand | `$expand=relationship` | `$expand={prefix}_category` |
+| Expand | `$expand=relationship` | `$expand={prefix}_Category` |
+
+### OData Query Reference for Lookups
+
+| Goal | Syntax | Example |
+| --- | --- | --- |
+| Get Lookup GUID | `_{logicalname}_value` | `$select=_{prefix}_customer_value` |
+| Get Display Name | Use FormattedValue Header | `OData.Community.Display.V1.FormattedValue` |
+| Expand Related | `$expand={nav_property}` | `$expand={prefix}_Author($select={prefix}_name)` |
+| Filter by ID | `_{logicalname}_value eq GUID` | `$filter=_{prefix}_owner_value eq <guid>` |
+| Update Lookup | `{nav_property}@odata.bind` | `"{prefix}_Customer@odata.bind": "/accounts(<guid>)"` |
+| Clear Lookup | `DELETE` on the prop URL | `DELETE /_api/table(id)/nav_prop/$ref` |
+
 
 ### Filter Operators
 
@@ -715,7 +760,7 @@ Track replacements in the memory bank:
 | `lt` | Less than | `{prefix}_price lt 50` |
 | `le` | Less or equal | `{prefix}_price le 50` |
 | `and` | Logical AND | `{prefix}_isactive eq true and {prefix}_price gt 0` |
-| `or` | Logical OR | `{prefix}_category eq 'A' or {prefix}_category eq 'B'` |
+| `or` | Logical OR | `{prefix}_Category eq 'A' or {prefix}_Category eq 'B'` |
 | `contains` | Contains string | `contains({prefix}_name,'search')` |
 | `startswith` | Starts with | `startswith({prefix}_name,'Pro')` |
 | `endswith` | Ends with | `endswith({prefix}_email,'@example.com')` |
