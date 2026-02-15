@@ -106,13 +106,26 @@ function clearTokenCache(): void {
   cachedToken = null;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const method = options.method?.toUpperCase() || 'GET';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    ...options.headers as Record<string, string>,
-  };
+type ResponseType = 'json' | 'blob' | 'none';
+
+interface FetchAuthOptions extends RequestInit {
+  /** Response parsing strategy. Defaults to 'json'. Use 'blob' for file downloads, 'none' for DELETE/upload. */
+  responseType?: ResponseType;
+  /** If true, return null on 404 instead of throwing. Useful for file column existence checks. */
+  allowNotFound?: boolean;
+}
+
+async function fetchWithAuth<T = any>(url: string, options: FetchAuthOptions = {}): Promise<T> {
+  const { responseType = 'json', allowNotFound = false, ...fetchOptions } = options;
+  const method = fetchOptions.method?.toUpperCase() || 'GET';
+
+  // Set default headers based on responseType
+  const headers: Record<string, string> = responseType === 'blob'
+    ? { 'Accept': '*/*' }
+    : { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+
+  // Merge caller-provided headers (allows overriding defaults)
+  Object.assign(headers, fetchOptions.headers as Record<string, string>);
 
   // Add anti-forgery token for non-GET requests (POST, PATCH, DELETE)
   if (method !== 'GET') {
@@ -123,20 +136,31 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
   }
 
   const response = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
     credentials: 'include', // Important for authenticated requests
   });
+
+  // Handle 404 gracefully when allowNotFound is set (e.g., file column checks)
+  if (allowNotFound && response.status === 404) {
+    return null as T;
+  }
 
   if (!response.ok) {
     // If we get a 403, the token may have expired - clear the cache
     if (response.status === 403) {
       clearTokenCache();
     }
-    const error = await response.json().catch(() => ({ message: response.statusText }));
-    throw new Error(error.message || `API Error: ${response.status}`);
+    if (responseType === 'json') {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(error.message || `API Error: ${response.status}`);
+    }
+    throw new Error(`API Error: ${response.status}`);
   }
 
+  // Parse response based on responseType
+  if (responseType === 'blob') return response.blob() as Promise<T>;
+  if (responseType === 'none' || response.status === 204) return null as T;
   return response.json();
 }
 
@@ -198,6 +222,37 @@ export const webApi = {
   async delete(entitySet: string, id: string): Promise<void> {
     await fetchWithAuth(`${API_BASE}/${entitySet}(${id})`, {
       method: 'DELETE',
+      responseType: 'none',
+    });
+  },
+
+  // DOWNLOAD file/image from a file column
+  // Returns an object URL for the blob, or null if no file exists (404)
+  async downloadFile(entitySet: string, id: string, column: string): Promise<string | null> {
+    const blob = await fetchWithAuth<Blob | null>(
+      `${API_BASE}/${entitySet}(${id})/${column}/$value`,
+      { responseType: 'blob', allowNotFound: true }
+    );
+    return blob ? URL.createObjectURL(blob) : null;
+  },
+
+  // UPLOAD file/image to a file column
+  // IMPORTANT: Targets the column URL directly (no /$value suffix). Body is raw binary.
+  async uploadFile(
+    entitySet: string, id: string, column: string, file: Blob, fileName?: string
+  ): Promise<void> {
+    const headers: Record<string, string> = {
+      'Content-Type': file.type || 'application/octet-stream',
+      'If-Match': '*',
+    };
+    if (fileName) {
+      headers['x-ms-file-name'] = fileName;
+    }
+    await fetchWithAuth(`${API_BASE}/${entitySet}(${id})/${column}`, {
+      method: 'PATCH',
+      headers,
+      body: await file.arrayBuffer(),
+      responseType: 'none',
     });
   },
 };
@@ -358,6 +413,131 @@ You **cannot** update a lookup by sending a GUID to the `_value` property. You m
 
 > **Note**: If you get an "Undeclared Property" error, you are likely using the logical name (lowercase) instead of the **Navigation Property Name** (case-sensitive, usually matches the schema name).
 
+
+## File & Image Column Operations
+
+Dataverse supports **File** and **Image** column types that store binary data directly on records. The `fetchWithAuth` wrapper handles these via the `responseType` and `allowNotFound` options, and the `webApi` object exposes `downloadFile` / `uploadFile` methods for convenience.
+
+### Download File / Image
+
+To retrieve a file or image, request the `/$value` endpoint. The `fetchWithAuth` wrapper uses `responseType: 'blob'` to return binary data, and `allowNotFound: true` to return `null` on 404 (no file) instead of throwing.
+
+```typescript
+// Using the webApi helper (recommended):
+const imageUrl = await webApi.downloadFile('{prefix}_products', recordId, '{prefix}_photo');
+// Returns an object URL string for the blob, or null if no file exists
+
+// Equivalent direct call via fetchWithAuth:
+const blob = await fetchWithAuth<Blob | null>(
+  `/_api/{prefix}_products(${recordId})/{prefix}_photo/$value`,
+  { responseType: 'blob', allowNotFound: true }
+);
+const url = blob ? URL.createObjectURL(blob) : null;
+```
+
+### Upload File / Image
+
+To upload, send a `PATCH` to the column endpoint directly (**not** `/$value`). The body must be raw binary (ArrayBuffer), with `Content-Type` set to the file's MIME type and `responseType: 'none'` since the response has no body.
+
+**IMPORTANT**: Upload URL is `/_api/table(id)/column` — **no** `/$value` suffix.
+
+```typescript
+// Using the webApi helper (recommended):
+await webApi.uploadFile('{prefix}_products', recordId, '{prefix}_photo', file, 'hero.jpg');
+
+// Equivalent direct call via fetchWithAuth:
+await fetchWithAuth(`/_api/{prefix}_products(${recordId})/{prefix}_photo`, {
+  method: 'PATCH',
+  headers: {
+    'Content-Type': file.type || 'application/octet-stream',
+    'If-Match': '*',
+    'x-ms-file-name': 'hero.jpg',
+  },
+  body: await file.arrayBuffer(),
+  responseType: 'none',
+});
+```
+
+### DataverseImage Component
+
+A reusable React component for rendering images stored in Dataverse file/image columns. Handles loading states, fallbacks, and cleanup of object URLs.
+
+```tsx
+import { useState, useEffect } from 'react';
+import { webApi } from '../services/webApi';
+
+interface DataverseImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+  table: string;        // Entity set name (e.g., '{prefix}_products')
+  recordId: string;     // GUID of the record
+  column: string;       // File/image column logical name
+  fallbackSrc?: string; // Fallback image URL if no file exists
+  hasFile?: boolean;    // Whether the record has a file (skip fetch if false)
+}
+
+function DataverseImage({
+  table,
+  recordId,
+  column,
+  fallbackSrc = '',
+  hasFile = true,
+  ...imgProps
+}: DataverseImageProps) {
+  const [src, setSrc] = useState(fallbackSrc);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!hasFile) {
+      if (fallbackSrc) setSrc(fallbackSrc);
+      return;
+    }
+
+    let active = true;
+    const loadImage = async () => {
+      setIsLoading(true);
+      try {
+        const url = await webApi.downloadFile(table, recordId, column);
+        if (active && url) setSrc(url);
+      } catch (error) {
+        console.warn('[DataverseImage] Failed to load image:', error);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    loadImage();
+    return () => { active = false; };
+  }, [table, recordId, column, hasFile, fallbackSrc]);
+
+  return <img src={src} {...imgProps} />;
+}
+```
+
+**Usage:**
+```tsx
+// NOTE: Replace {prefix} with your actual publisher prefix
+<DataverseImage
+  table="{prefix}_products"
+  recordId={product.{prefix}_productid}
+  column="{prefix}_photo"
+  fallbackSrc="/images/placeholder.png"
+  hasFile={!!product.{prefix}_photo}
+  alt={product.{prefix}_name}
+  className="product-image"
+/>
+```
+
+### Key Differences: File Columns vs Standard Columns
+
+| Aspect | Standard Columns | File/Image Columns |
+|--------|------------------|--------------------|
+| **responseType** | `'json'` (default) | `'blob'` (download) / `'none'` (upload) |
+| **Content-Type** | `application/json` (default) | `application/octet-stream` (or file MIME type) |
+| **Accept Header** | `application/json` (default) | `*/*` (auto-set for `'blob'`) |
+| **Request Body** | JSON string | ArrayBuffer (binary) |
+| **Download URL** | `/_api/table(id)?$select=col` | `/_api/table(id)/column/$value` |
+| **Upload URL** | `/_api/table(id)` with JSON body | `/_api/table(id)/column` with binary body |
+| **Upload Method** | `POST` (create) / `PATCH` (update) | `PATCH` only |
+| **Extra Headers** | — | `x-ms-file-name`, `If-Match: *` |
 
 ## React Hook for Data Fetching
 
@@ -748,6 +928,34 @@ Track replacements in the memory bank:
 | Update Lookup | `{nav_property}@odata.bind` | `"{prefix}_Customer@odata.bind": "/accounts(<guid>)"` |
 | Clear Lookup | `DELETE` on the prop URL | `DELETE /_api/table(id)/nav_prop/$ref` |
 
+### OData Query Reference for File & Image Columns
+
+File and image columns use different URL patterns than standard OData queries. They do **not** support `$select`, `$filter`, or other OData query options — each operation targets the column endpoint directly.
+
+| Goal | Method | URL Pattern | Notes |
+| --- | --- | --- | --- |
+| Download file/image | `GET` | `/_api/{prefix}_products(<guid>)/{prefix}_photo/$value` | Returns binary blob. `Accept: */*` |
+| Upload file/image | `PATCH` | `/_api/{prefix}_products(<guid>)/{prefix}_photo` | Body is `ArrayBuffer`. No `/$value` suffix |
+| Delete file/image | `DELETE` | `/_api/{prefix}_products(<guid>)/{prefix}_photo` | Removes the file, keeps the record |
+| Check if file exists | `GET` | `/_api/{prefix}_products(<guid>)?$select={prefix}_photo` | Returns metadata (file name, size), not binary |
+
+**Required headers by operation:**
+
+| Operation | Content-Type | Accept | Extra Headers |
+| --- | --- | --- | --- |
+| Download | — | `*/*` | — |
+| Upload | File MIME type (e.g., `image/png`) | `application/json` | `If-Match: *`, `x-ms-file-name: <name>` |
+| Delete | — | `application/json` | `If-Match: *` |
+
+**Common pitfalls:**
+
+| Mistake | Symptom | Fix |
+| --- | --- | --- |
+| Using `/$value` on upload | `405 Method Not Allowed` | Upload to `/_api/table(id)/column` (no `/$value`) |
+| Sending JSON body for upload | `400 Bad Request` | Send `ArrayBuffer` via `file.arrayBuffer()` |
+| Missing `If-Match: *` on upload | `412 Precondition Failed` | Add `If-Match: *` header |
+| Using `$select` on `/$value` URL | `400 Bad Request` | Query options are not supported on `/$value` |
+| Missing `x-ms-file-name` | File saved without name/extension | Include `x-ms-file-name` header with filename |
 
 ### Filter Operators
 
