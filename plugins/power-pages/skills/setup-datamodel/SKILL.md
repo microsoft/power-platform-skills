@@ -18,7 +18,8 @@ hooks:
         - type: prompt
           prompt: >
             If a Dataverse data model was being set up in this session (via /power-pages:setup-datamodel),
-            verify before allowing stop: 1) The data-model-architect agent was invoked, 2) The user approved
+            verify before allowing stop: 1) A data model was obtained (either the data-model-architect agent
+            was invoked OR the user uploaded an existing ER diagram that was parsed), 2) The user approved
             the proposal, 3) All approved tables were created, 4) A summary was presented.
             If incomplete, return { "ok": false, "reason": "<specific issues>" }. Otherwise return { "ok": true }.
           timeout: 30
@@ -29,12 +30,13 @@ hooks:
 ## Workflow
 
 1. **Verify Prerequisites** → PAC CLI auth + Azure CLI token
-2. **Invoke Data Model Architect** → Spawn agent to analyze and propose data model
-3. **Review Proposal** → Present proposal to user, get approval
-4. **Pre-Creation Checks** → Query existing tables, skip duplicates
-5. **Create Tables & Columns** → OData API POST calls
-6. **Create Relationships** → OData API relationship definitions
-7. **Publish & Verify** → Publish customizations, verify tables, write manifest, present summary
+2. **Choose Data Model Source** → Upload existing ER diagram or let AI figure it out
+3. **Invoke Data Model Architect** → Spawn agent to analyze and propose data model (or parse uploaded diagram)
+4. **Review Proposal** → Present proposal to user, get approval
+5. **Pre-Creation Checks** → Query existing tables, skip duplicates
+6. **Create Tables & Columns** → OData API POST calls
+7. **Create Relationships** → OData API relationship definitions
+8. **Publish & Verify** → Publish customizations, verify tables, write manifest, present summary
 
 ---
 
@@ -81,7 +83,45 @@ If this returns a valid response, proceed. If it returns 401/403, the token is i
 
 ---
 
-## Step 2: Invoke Data Model Architect
+## Step 2: Choose Data Model Source
+
+Ask the user how they want to define the data model using the `AskUserQuestion` tool:
+
+**Question**: "How would you like to define the data model for your site?"
+
+| Option | Description |
+|--------|-------------|
+| **Upload an existing ER diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing data model |
+| **Let AI figure it out** | The AI agent will analyze your site's source code and propose a data model automatically |
+
+### Path A: Upload Existing ER Diagram
+
+If the user chooses to upload an existing diagram:
+
+1. Ask the user to provide their ER diagram. Supported formats:
+   - **Image file** (PNG, JPG) — Use the `Read` tool to view the image and extract tables, columns, relationships, and cardinalities from it
+   - **Mermaid syntax** — The user can paste Mermaid ER diagram text directly in chat
+   - **Text description** — A structured list of tables, columns, and relationships
+
+2. Parse the diagram into the same structured format used by the data-model-architect agent:
+   - Publisher prefix (ask the user, or retrieve from the environment via `pac env who`)
+   - Table definitions: `logicalName`, `displayName`, `status` (new/modified/reused), `columns`, `relationships`
+   - Column definitions: `logicalName`, `displayName`, `type`, `required`
+   - Relationship definitions: type (1:N or M:N), referenced/referencing tables
+
+3. Query existing Dataverse tables (same as Step 3 would) to mark each table as `new`, `modified`, or `reused`.
+
+4. Generate a Mermaid ER diagram from the parsed data (if the user provided an image or text) for visual confirmation.
+
+5. Proceed directly to **Step 4: Review Proposal** with the parsed data model.
+
+### Path B: Let AI Figure It Out
+
+If the user chooses to let AI figure it out, proceed to **Step 3: Invoke Data Model Architect** (the existing automated flow).
+
+---
+
+## Step 3: Invoke Data Model Architect
 
 Use the `Task` tool to spawn the `data-model-architect` agent. This agent autonomously:
 
@@ -111,11 +151,11 @@ Wait for the agent to return its structured proposal before proceeding.
 
 ---
 
-## Step 3: Review Proposal
+## Step 4: Review Proposal
 
 Present the agent's data model proposal to the user for approval.
 
-### 3.1 Enter Plan Mode
+### 4.1 Enter Plan Mode
 
 Use `EnterPlanMode` and write the proposal into the plan, including:
 
@@ -125,11 +165,11 @@ Use `EnterPlanMode` and write the proposal into the plan, including:
 - Mermaid ER diagram
 - Which tables are new vs. modified vs. reused
 
-### 3.2 Get User Approval
+### 4.2 Get User Approval
 
 Use `ExitPlanMode` to present the plan. The user can:
 
-- **Approve** — Proceed to Step 4
+- **Approve** — Proceed to Step 5
 - **Request changes** — Modify the proposal and re-present
 - **Cancel** — Stop the skill
 
@@ -137,11 +177,11 @@ Only proceed to creation after explicit user approval.
 
 ---
 
-## Step 4: Pre-Creation Checks
+## Step 5: Pre-Creation Checks
 
 Before creating anything, refresh the token and verify what already exists to avoid duplicates.
 
-### 4.1 Refresh Token
+### 5.1 Refresh Token
 
 Re-acquire the Azure CLI token (tokens expire after ~60 minutes):
 
@@ -149,7 +189,7 @@ Re-acquire the Azure CLI token (tokens expire after ~60 minutes):
 $token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
 ```
 
-### 4.2 Query Existing Tables
+### 5.2 Query Existing Tables
 
 For each table in the approved proposal marked as `new`, check whether it already exists:
 
@@ -163,7 +203,7 @@ Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<ta
 
 For tables marked as `modified`, verify the table exists (it should) and check which columns are missing.
 
-### 4.3 Build Creation Plan
+### 5.3 Build Creation Plan
 
 From the pre-creation checks, build a list of:
 
@@ -176,11 +216,11 @@ Inform the user of any skipped items.
 
 ---
 
-## Step 5: Create Tables & Columns
+## Step 6: Create Tables & Columns
 
 Create each approved table and its columns using Dataverse OData Web API. Refer to `references/odata-api-patterns.md` for full JSON body templates.
 
-### 5.1 Create Tables
+### 6.1 Create Tables
 
 For each new table, POST to the EntityDefinitions endpoint:
 
@@ -196,7 +236,7 @@ Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/EntityDefinitions" -H
 
 Use the deep-insert pattern to create the table and its columns in a single POST request. See `references/odata-api-patterns.md` for the complete JSON structure.
 
-### 5.2 Add Columns to Existing Tables
+### 6.2 Add Columns to Existing Tables
 
 For tables marked as `modified`, add new columns one at a time:
 
@@ -205,11 +245,11 @@ $body = <column JSON from references/odata-api-patterns.md>
 Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes" -Headers $headers -Body $body
 ```
 
-### 5.3 Track Progress
+### 6.3 Track Progress
 
 Track each creation attempt and its result (success/failure/skipped). Do NOT attempt automated rollback on failure — report failures and continue with remaining items.
 
-### 5.4 Refresh Token if Needed
+### 6.4 Refresh Token if Needed
 
 If creating many tables, refresh the token between batches (every 3–4 tables) to avoid expiration:
 
@@ -219,11 +259,11 @@ $token = az account get-access-token --resource "$envUrl" --query accessToken -o
 
 ---
 
-## Step 6: Create Relationships
+## Step 7: Create Relationships
 
 After all tables and columns exist, create relationships between them.
 
-### 6.1 One-to-Many Relationships
+### 7.1 One-to-Many Relationships
 
 Create lookup columns that establish 1:N relationships:
 
@@ -232,7 +272,7 @@ $body = <relationship JSON from references/odata-api-patterns.md>
 Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/RelationshipDefinitions" -Headers $headers -Body $body
 ```
 
-### 6.2 Many-to-Many Relationships
+### 7.2 Many-to-Many Relationships
 
 Create M:N relationships (intersect tables are created automatically):
 
@@ -241,15 +281,15 @@ $body = <M:N relationship JSON from references/odata-api-patterns.md>
 Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/RelationshipDefinitions" -Headers $headers -Body $body
 ```
 
-### 6.3 Track Relationship Creation
+### 7.3 Track Relationship Creation
 
 Track each relationship creation attempt. Report failures without rolling back.
 
 ---
 
-## Step 7: Publish & Verify
+## Step 8: Publish & Verify
 
-### 7.1 Publish Customizations
+### 8.1 Publish Customizations
 
 Publish all customizations so the new tables and columns become available:
 
@@ -263,7 +303,7 @@ Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/PublishXml" -Headers 
 
 See `references/odata-api-patterns.md` for the full PublishXml pattern.
 
-### 7.2 Verify Tables Exist
+### 8.2 Verify Tables Exist
 
 For each created table, run a verification query:
 
@@ -271,7 +311,7 @@ For each created table, run a verification query:
 Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')?`$select=LogicalName,DisplayName" -Headers $headers
 ```
 
-### 7.3 Write Manifest
+### 8.3 Write Manifest
 
 After successful verification, write `.datamodel-manifest.json` to the project root. This file records which tables and columns were verified to exist, and is used by the validation hook.
 
@@ -292,9 +332,9 @@ After successful verification, write `.datamodel-manifest.json` to the project r
 }
 ```
 
-Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 7.2.
+Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2.
 
-### 7.4 Present Summary
+### 8.4 Present Summary
 
 Present a summary to the user:
 
@@ -311,7 +351,7 @@ Include:
 - Any errors encountered with details
 - Location of the manifest file (`.datamodel-manifest.json`)
 
-### 7.5 Suggest Next Steps
+### 8.5 Suggest Next Steps
 
 After the summary, suggest:
 - Review created tables in the Power Pages maker portal

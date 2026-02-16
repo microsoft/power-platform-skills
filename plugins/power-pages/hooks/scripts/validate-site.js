@@ -10,7 +10,7 @@ const path = require('path');
 const approve = () => { process.exit(0); };
 const block = (reason) => {
   console.log(JSON.stringify({ decision: "block", reason }));
-  process.exit(0);
+  process.exit(1);
 };
 
 let inputData = '';
