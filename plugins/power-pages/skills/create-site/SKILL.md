@@ -11,7 +11,7 @@ hooks:
           command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js\""
           timeout: 15
         - type: prompt
-          prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) The user was given the dev server URL and asked to review the site, 3) No build errors remain unresolved, 4) Git commits were made at key milestones (initial scaffold, after each major feature), 5) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."
+          prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) The /power-pages:design-website skill was invoked to apply visual design (typography, colors, motion), 3) The user was given the dev server URL and asked to review the site, 4) No build errors remain unresolved, 5) Git commits were made at key milestones (initial scaffold, after each major feature, after design), 6) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."
           timeout: 30
 ---
 
@@ -23,12 +23,13 @@ hooks:
 >
 > **Do NOT take screenshots.** Use `browser_snapshot` (accessibility snapshot) to verify pages yourself, and give the user the dev server URL so they can preview in their own browser.
 
-1. **Gather Requirements** → Site purpose, framework, features, design
+1. **Gather Requirements** → Site purpose, framework, features
 2. **Choose Project Location** → Ask where to create the site
 3. **Plan** → Enter plan mode, create implementation plan, get approval
 4. **Scaffold & Launch** → Copy template, replace placeholders, **git init, npm install, start dev server, verify via Playwright snapshot** — ALL before Step 5
-5. **Customize** → Add pages, components, styling — **verify each change via Playwright snapshot** (dev server must already be running)
-6. **Review & Deploy** → Share dev server URL with user for review, **then ask about deployment** (mandatory before ending session)
+5. **Customize** → Add pages, components, routing — **verify each change via Playwright snapshot** (dev server must already be running)
+6. **Design** → Invoke `/power-pages:design-website` to apply distinctive visual design (typography, colors, motion, backgrounds)
+7. **Review & Deploy** → Share dev server URL with user for review, **then ask about deployment** (mandatory before ending session)
 
 ---
 
@@ -51,7 +52,6 @@ Use `AskUserQuestion` to collect (batch into 1-2 calls):
 
 | Question | Header | Options |
 |----------|--------|---------|
-| What color theme? | Theme | Blue Professional (#0078d4), Green Nature (#10b981), Purple Creative (#7c3aed), Dark Modern (#1e293b) |
 | Which features? (multi-select) | Features | Contact Form, Authentication, Data Tables, Search |
 
 **Audience influences site generation:**
@@ -60,17 +60,19 @@ Use `AskUserQuestion` to collect (batch into 1-2 calls):
 
 **After gathering answers, record these values for placeholder replacement:**
 
-| Placeholder | Description | Example |
-|-------------|-------------|---------|
+| Placeholder | Description | Value |
+|-------------|-------------|-------|
 | `__SITE_NAME__` | kebab-case project name | `contoso-portal` |
 | `__SITE_TITLE__` | Display title | `Contoso Portal` |
 | `__SITE_DESCRIPTION__` | One-line description | `Modern portal for Contoso employees` |
-| `__PRIMARY_COLOR__` | Primary hex color | `#0078d4` |
-| `__SECONDARY_COLOR__` | Complementary hex color | `#106ebe` |
-| `__BG_COLOR__` | Background color (default `#ffffff`) | `#ffffff` |
-| `__SURFACE_COLOR__` | Surface/card color (default `#f8fafc`) | `#f8fafc` |
-| `__TEXT_COLOR__` | Main text color (default `#1e293b`) | `#1e293b` |
-| `__TEXT_MUTED__` | Muted text color (default `#64748b`) | `#64748b` |
+| `__PRIMARY_COLOR__` | Primary hex color | `#334155` |
+| `__SECONDARY_COLOR__` | Complementary hex color | `#475569` |
+| `__BG_COLOR__` | Background color | `#ffffff` |
+| `__SURFACE_COLOR__` | Surface/card color | `#f8fafc` |
+| `__TEXT_COLOR__` | Main text color | `#1e293b` |
+| `__TEXT_MUTED__` | Muted text color | `#64748b` |
+
+> **Note:** Color placeholders use neutral defaults. The `/power-pages:design-website` skill (invoked in Step 6) handles all visual design decisions — typography, color palette, motion, and backgrounds.
 
 ### Framework Reference
 
@@ -106,7 +108,6 @@ Store this as `PROJECT_ROOT` for all subsequent steps.
    - Pages to create (based on purpose + features)
    - Components needed
    - Routing structure
-   - Styling approach
 3. Present plan to user
 4. Use `ExitPlanMode` only after user approves
 
@@ -185,17 +186,16 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 > **Prerequisite:** The dev server MUST already be running and verified via Playwright before starting this step. If it is not, go back and complete Step 4 first. After each significant change, use `browser_snapshot` to verify the page — do NOT take screenshots.
 
+This step focuses on **functional** customization — pages, components, routing, and navigation. Visual design (typography, colors, motion, backgrounds) is handled by the `design-website` skill in Step 6.
+
 Based on the user's requirements from Step 1, extend the scaffolded project:
 
 1. **Add pages** — Create route components for each requested page (e.g., Contact, Dashboard, Blog)
 2. **Add components** — Build reusable components for requested features (e.g., ContactForm, DataTable, SearchBar)
 3. **Update router** — Register all new routes
 4. **Update navigation** — Add links to the Layout/Header component
-5. **Apply styling** — Add page-specific styles consistent with the theme variables
 
-Invoke the `frontend-design` skill if the user wants high-fidelity, polished UI design. Otherwise, build clean functional pages using the theme system from the template.
-
-**Important**: Build real, functional UI — not placeholder "coming soon" pages.
+**Important**: Build real, functional UI — not placeholder "coming soon" pages. Use clean, minimal styling with the neutral scaffold theme. The `design-website` skill will apply distinctive visual design in the next step.
 
 ### Git Commit Checkpoints
 
@@ -209,7 +209,6 @@ git commit -m "<short description of what was added/changed>"
 **When to commit:**
 - After adding each new page or major component
 - After updating routing and navigation
-- After completing styling for a section
 - Before attempting anything risky or experimental
 
 **If something breaks**, revert to the last good commit:
@@ -220,7 +219,7 @@ git revert HEAD
 
 ### Live Verification During Customization
 
-After each significant change (new page, component, or styling update):
+After each significant change (new page or component):
 
 1. Use `mcp__plugin_power-pages_playwright__browser_navigate` to reload or navigate to the updated page
 2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure and content are correct
@@ -230,7 +229,26 @@ After each significant change (new page, component, or styling update):
 
 ---
 
-## Step 6: Review & Deploy
+## Step 6: Design
+
+> **CRITICAL: This step is mandatory.** After functional customization is complete, invoke the `/power-pages:design-website` skill to apply distinctive, polished visual design to the site.
+
+The `design-website` skill transforms the site's visual appearance — typography (Google Fonts), color palette, animations/motion, backgrounds/atmosphere, and layout refinement. It works with the dev server already running and uses Playwright for live verification.
+
+**Invoke the skill now:** `/power-pages:design-website`
+
+The skill will:
+1. Analyze the current scaffold styling
+2. Ask the user about aesthetic direction and mood
+3. Plan specific design changes
+4. Apply typography, colors, motion, and backgrounds with live preview after each change
+5. Commit design milestones
+
+> **GATE: Do NOT proceed to Step 7 until the design-website skill has completed.** The site should have distinctive typography (Google Fonts), a cohesive color palette (CSS variables), and motion/animations before moving to review.
+
+---
+
+## Step 7: Review & Deploy
 
 > **This step includes both review AND the deployment prompt. Do NOT end the session without asking about deployment.**
 

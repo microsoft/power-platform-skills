@@ -56,6 +56,9 @@ skills/
   create-webroles/
     SKILL.md                   ← Web roles creation skill definition
     scripts/validate-webroles.js ← Node script validating web role YAML files were created
+  design-website/
+    SKILL.md                   ← Website design skill definition
+    scripts/validate-design.js ← Node script validating design changes (fonts, colors, animations)
   integrate-webapi/
     SKILL.md                   ← Web API integration skill definition
     scripts/validate-webapi-integration.js ← Node script validating Web API integration code
@@ -80,13 +83,14 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
-- `create-site`: 7-step workflow — gather requirements, plan, scaffold from template, customize with live Playwright preview, review, deploy
+- `create-site`: 7-step workflow — gather requirements, plan, scaffold from template, functional customization with live Playwright preview, invoke `design-website` skill for visual design (typography, colors, motion, backgrounds), review, deploy
 - `deploy-site`: 5-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 6-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution), gather parameters (site name, subdomain, website record ID), confirm with user, POST to Power Platform websites API, poll provisioning status, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
 - `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, review & prompt deployment via deploy-site skill.
+- `design-website`: 7-step workflow — verify site exists, analyze current design (fonts, colors, layout), gather aesthetic direction (mood, inspiration, scope), plan design changes, launch dev server, apply design changes (typography via Google Fonts, color palette via CSS variables, backgrounds/atmosphere, CSS animations/motion, layout refinement) with live Playwright verification after each change, review & commit. Enforces distinctive typography (no generic Inter/Roboto/Arial), cohesive color themes, and motion for polish.
 - `integrate-webapi`: 6-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, invoke `webapi-permissions` agent to configure table permissions and site settings, ask user to deploy via `deploy-site` skill.
 - `setup-auth`: 7-step workflow — verify prerequisites (site deployed + web roles), gather auth requirements and plan, create auth service with Entra ID login/logout (anti-forgery token + form POST), create authorization utilities (role checking), create auth UI (AuthButton component), apply role-based access control to components, create `ProfileRedirectEnabled` site setting and deploy.
 
@@ -103,6 +107,7 @@ Defined in each skill's SKILL.md frontmatter:
   - `activate-site`: command hook runs `validate-activation.js` + prompt hook checks activation completeness
   - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
   - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
+  - `design-website`: command hook runs `validate-design.js` + prompt hook checks design completeness
   - `integrate-webapi`: command hook runs `validate-webapi-integration.js` + prompt hook checks integration completeness
   - `setup-auth`: command hook runs `validate-auth.js` + prompt hook checks auth setup completeness
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
@@ -119,7 +124,7 @@ Shared reference documents live at `references/` and are referenced by multiple 
 
 - `odata-common.md`: Auth headers, PowerShell token helper, token refresh cadence, HTTP status codes, Dataverse error codes, retry pattern. Used by `setup-datamodel` and `add-sample-data`.
 - `dataverse-prerequisites.md`: PAC CLI auth check (`pac env who`), Azure CLI token acquisition, API access verification (`WhoAmI`). Used by `setup-datamodel` and `add-sample-data`.
-- `framework-conventions.md`: Supported frameworks, framework → build tool / router / build output / public dir / index HTML mapping, framework detection via `package.json`, route discovery patterns. Used by `create-site` and `add-seo`.
+- `framework-conventions.md`: Supported frameworks, framework → build tool / router / build output / public dir / index HTML mapping, framework detection via `package.json`, route discovery patterns. Used by `create-site`, `add-seo`, and `design-website`.
 - `datamodel-manifest-schema.md`: Schema spec for `.datamodel-manifest.json` (fields, types, usage). Written by `setup-datamodel`, read by `add-sample-data`, validated by `validate-datamodel.js`.
 
 Skill-specific reference docs (e.g., `skills/setup-datamodel/references/odata-api-patterns.md`) contain only patterns unique to that skill and point to the shared docs via `${CLAUDE_PLUGIN_ROOT}/references/` paths for common content.
@@ -149,6 +154,10 @@ Checks SEO assets added to Power Pages sites: verifies `robots.txt` exists in `p
 ### `create-webroles/scripts/validate-webroles.js`
 
 Checks that web role YAML files were created in `.powerpages-site/web-roles/`. Validates each file has required `id` and `name` fields and that the `id` field contains a valid UUID v4 format. Gracefully exits 0 when no `.powerpages-site/web-roles/` directory is found (not a web roles session).
+
+### `design-website/scripts/validate-design.js`
+
+Checks that design changes were applied to a Power Pages code site: verifies CSS custom properties exist (`--color-*` or `--font-*` variables), Google Fonts are imported (via `<link>` in HTML or `@import` in CSS), CSS animations or transitions are present, and no generic fonts (Inter, Roboto, Arial, etc.) are used as primary font families. Only runs validation when design indicators are detected (Google Fonts import or CSS variables) — gracefully exits 0 otherwise to avoid blocking non-design sessions.
 
 ### `integrate-webapi/scripts/validate-webapi-integration.js`
 
