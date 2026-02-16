@@ -59,6 +59,11 @@ skills/
   integrate-webapi/
     SKILL.md                   ← Web API integration skill definition
     scripts/validate-webapi-integration.js ← Node script validating Web API integration code
+  setup-auth/
+    SKILL.md                   ← Authentication & authorization skill definition
+    references/authentication-reference.md ← Login/logout flow, auth service, framework patterns
+    references/authorization-reference.md  ← Role-based access control, guards, directives
+    scripts/validate-auth.js   ← Node script validating auth service and authorization code
 ```
 
 ## Plugin Components
@@ -83,6 +88,7 @@ User-invocable via `/power-pages:<skill-name>`:
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
 - `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, review & prompt deployment via deploy-site skill.
 - `integrate-webapi`: 6-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, invoke `webapi-permissions` agent to configure table permissions and site settings, ask user to deploy via `deploy-site` skill.
+- `setup-auth`: 7-step workflow — verify prerequisites (site deployed + web roles), gather auth requirements and plan, create auth service with Entra ID login/logout (anti-forgery token + form POST), create authorization utilities (role checking), create auth UI (AuthButton component), apply role-based access control to components, create `ProfileRedirectEnabled` site setting and deploy.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
 
@@ -98,6 +104,7 @@ Defined in each skill's SKILL.md frontmatter:
   - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
   - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
   - `integrate-webapi`: command hook runs `validate-webapi-integration.js` + prompt hook checks integration completeness
+  - `setup-auth`: command hook runs `validate-auth.js` + prompt hook checks auth setup completeness
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
 
 ### Shared Scripts
@@ -146,6 +153,10 @@ Checks that web role YAML files were created in `.powerpages-site/web-roles/`. V
 ### `integrate-webapi/scripts/validate-webapi-integration.js`
 
 Checks that Web API integration code was created for a Power Pages code site: verifies the shared API client (`src/shared/powerPagesApi.ts` or equivalent) exists, at least one service file exists in `src/shared/services/` or `src/services/` with `/_api/` endpoint references, and corresponding type definition files exist in `src/types/`. Gracefully exits 0 when no integration files are detected (not an integration session).
+
+### `setup-auth/scripts/validate-auth.js`
+
+Checks that authentication and authorization code was created: verifies auth service (`src/services/authService.ts` or equivalent) exists with login/logout/getCurrentUser functions and anti-forgery token handling, Power Pages type declarations (`src/types/powerPages.d.ts`) exist, authorization utilities (`src/utils/authorization.ts`) exist, and an auth UI component (AuthButton or equivalent) exists. Gracefully exits 0 when no auth files are detected (not an auth session).
 
 ## Key Constraint
 
