@@ -355,5 +355,6 @@ Include:
 
 After the summary, suggest:
 - Review created tables in the Power Pages maker portal
+- Populate tables with sample data for testing: `/power-pages:add-sample-data`
 - If the site is not yet built: `/power-pages:create-site`
 - If the site is ready to deploy: `/power-pages:deploy-site`

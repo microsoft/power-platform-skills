@@ -6,11 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 
-// Command hook output: exit 0 with no output to allow, JSON with decision:"block" to block.
+// Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
 const approve = () => { process.exit(0); };
 const block = (reason) => {
-  console.log(JSON.stringify({ decision: "block", reason }));
-  process.exit(1);
+  process.stderr.write(reason);
+  process.exit(2);
 };
 
 let inputData = '';
