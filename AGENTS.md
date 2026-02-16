@@ -52,6 +52,10 @@ plugins/
         SKILL.md                   ← Site activation/provisioning skill definition
         scripts/generate-subdomain.js  ← Random subdomain suggestion generator
         scripts/validate-activation.js ← Validates site was provisioned via PP API
+      create-webroles/
+        SKILL.md                   ← Web roles creation skill definition
+        scripts/generate-uuid.js   ← Node script generating UUID v4 for web role IDs
+        scripts/validate-webroles.js ← Node script validating web role YAML files were created
 ```
 
 ### Plugin Components
@@ -60,7 +64,7 @@ plugins/
 
 - `data-model-architect`: Read-only agent that analyzes site requirements, discovers existing Dataverse tables via OData API, and proposes a data model (new/modified/reused tables + Mermaid ER diagram). Uses `pac env who` + Azure CLI auth to query Dataverse. Renders the ER diagram visually in the browser via Playwright (writes a temp HTML file with Mermaid.js CDN, navigates to it, takes a screenshot) before entering plan mode. Does NOT create, modify, or delete any tables — purely advisory. The main conversation uses its output to create tables.
 
-**Skills** (user-invocable via `/power-pages:create-site`, `/power-pages:deploy-site`, `/power-pages:activate-site`, `/power-pages:setup-datamodel`, `/power-pages:add-sample-data`, and `/power-pages:add-seo`):
+**Skills** (user-invocable via `/power-pages:create-site`, `/power-pages:deploy-site`, `/power-pages:activate-site`, `/power-pages:setup-datamodel`, `/power-pages:add-sample-data`, `/power-pages:add-seo`, and `/power-pages:create-webroles`):
 
 - Defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks)
 - `create-site`: 7-step workflow — gather requirements, plan, scaffold from template, customize with live Playwright preview, review, deploy
@@ -69,6 +73,7 @@ plugins/
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 6-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution), gather parameters (site name, subdomain, website record ID), confirm with user, POST to Power Platform websites API, poll provisioning status, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
+- `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from `generate-uuid.js`, review & prompt deployment via deploy-site skill.
 
 **Hooks** (defined in each skill's SKILL.md frontmatter):
 
@@ -78,6 +83,7 @@ plugins/
   - `add-sample-data`: prompt hook checks sample data insertion completeness
   - `activate-site`: command hook runs `validate-activation.js` + prompt hook checks activation completeness
   - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
+  - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
 
 **Shared References** (`references/` at plugin root):
@@ -108,6 +114,10 @@ Checks created Dataverse data models by reading `.datamodel-manifest.json` (writ
 ### Validation Script (`add-seo/scripts/validate-seo.js`)
 
 Checks SEO assets added to Power Pages sites: verifies `robots.txt` exists in `public/` with proper `User-agent` and `Sitemap` directives, `sitemap.xml` exists with `<urlset>` and `<loc>` entries (no unreplaced placeholders), and `index.html` has `meta description` and `viewport` tags. Only runs validation when at least one SEO file (robots.txt or sitemap.xml) is detected — gracefully exits 0 otherwise to avoid blocking non-SEO sessions.
+
+### Validation Script (`create-webroles/scripts/validate-webroles.js`)
+
+Checks that web role YAML files were created in `.powerpages-site/web-roles/`. Validates each file has required `id` and `name` fields and that the `id` field contains a valid UUID v4 format. Gracefully exits 0 when no `.powerpages-site/web-roles/` directory is found (not a web roles session).
 
 ### Key Constraint
 
