@@ -52,6 +52,8 @@ Use `AskUserQuestion` to collect (batch into 1-2 calls):
 | Question | Header | Options |
 |----------|--------|---------|
 | Which features? (multi-select) | Features | *(generate 3-4 context-aware options based on the site name, purpose, and audience from Call 1)* |
+| What aesthetic direction do you want? | Aesthetic | Minimal & Clean (Recommended), Bold & Vibrant, Dark & Moody, Warm & Organic |
+| What's the overall mood? | Mood | Professional & Trustworthy (Recommended), Creative & Playful, Technical & Precise, Elegant & Premium |
 
 > **Feature options are NOT hardcoded.** Infer relevant features from the answers in Call 1. For example:
 > - "HR Dashboard" + Internal → Employee Directory, Leave Requests, Announcements, Org Chart
@@ -59,13 +61,6 @@ Use `AskUserQuestion` to collect (batch into 1-2 calls):
 > - "Partner Hub" + Internal → Document Library, Partner Directory, Deal Tracker, Notifications
 >
 > Always generate options that make sense for the specific site — never reuse a fixed list.
-
-**Call 3:**
-
-| Question | Header | Options |
-|----------|--------|---------|
-| What aesthetic direction do you want? | Aesthetic | Minimal & Clean (Recommended), Bold & Vibrant, Dark & Moody, Warm & Organic |
-| What's the overall mood? | Mood | Professional & Trustworthy (Recommended), Creative & Playful, Technical & Precise, Elegant & Premium |
 
 > **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table in `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Record the chosen font direction, color direction, and motion direction — these are applied during Step 5 (Customize).
 
