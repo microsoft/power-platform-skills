@@ -83,6 +83,75 @@ To develop and test plugins locally, follow these steps:
     copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     ```
 
+## Running Without Interruption
+
+Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
+
+> **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
+
+### Claude Code
+
+**Option 1 — Permission mode (recommended)**
+
+Set the `acceptEdits` mode to auto-approve file edits while still prompting for shell commands:
+
+```jsonc
+// .claude/settings.json (project-level) or ~/.claude/settings.json (user-level)
+{
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git *)",
+      "Bash(pac *)"
+      // add other commands your workflow needs
+    ]
+  }
+}
+```
+
+**Option 2 — Allow all tools**
+
+Press <kbd>Shift</kbd>+<kbd>Tab</kbd> during a session to cycle to **auto-accept** mode, or launch with:
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
+
+### GitHub Copilot CLI
+
+**Option 1 — Allow specific tools (recommended)**
+
+Pre-approve only the tools your workflow needs:
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
+```
+
+**Option 2 — Allow all tools**
+
+```bash
+copilot --allow-all-tools
+```
+
+To allow everything except dangerous commands:
+
+```bash
+copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
+```
+
+**Option 3 — Non-interactive single prompt**
+
+Pass a prompt directly with auto-approval for fully unattended runs:
+
+```bash
+copilot -p "Create a Power Pages code site with React" --allow-all-tools
+```
+
+See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
+
 ## Documentation
 
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
