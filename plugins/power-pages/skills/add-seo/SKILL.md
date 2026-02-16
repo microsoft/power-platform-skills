@@ -59,25 +59,9 @@ Read `powerpages.config.json` to get the site name and config:
 Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
 ```
 
-### 1.3 Detect Framework
+### 1.3 Detect Framework & Discover Routes
 
-Read `package.json` to determine the framework (React, Vue, Angular, Astro). This determines where the public directory is and how meta tags should be added.
-
-| Framework | Public Directory | Index HTML |
-|-----------|-----------------|------------|
-| React (Vite) | `public/` | `index.html` (project root) |
-| Vue (Vite) | `public/` | `index.html` (project root) |
-| Angular | `public/` | `src/index.html` |
-| Astro | `public/` | `src/layouts/*.astro` or `src/pages/*.astro` |
-
-### 1.4 Discover Routes
-
-Scan the project router configuration to discover all existing page routes:
-
-- **React**: Check `src/` for route definitions (react-router-dom)
-- **Vue**: Check `src/router/` for vue-router config
-- **Angular**: Check `src/app/` for Angular router config
-- **Astro**: Scan `src/pages/` for file-based routes
+Read `package.json` to determine the framework and locate key files. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
 
 Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 

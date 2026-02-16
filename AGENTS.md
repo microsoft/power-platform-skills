@@ -30,6 +30,11 @@ plugins/
       scripts/validate-site.js     ← Node script validating generated sites
       scripts/validate-datamodel.js ← Node script validating Dataverse data model creation
       scripts/validate-seo.js    ← Node script validating SEO assets (robots.txt, sitemap.xml, meta tags)
+    references/                    ← Shared reference docs used by multiple skills
+      odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
+      dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
+      framework-conventions.md     ← Framework detection, paths, route discovery
+      datamodel-manifest-schema.md ← .datamodel-manifest.json format spec
     skills/
       create-site/
         SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools, hooks)
@@ -69,6 +74,17 @@ plugins/
   - `add-sample-data`: prompt hook checks sample data insertion completeness
   - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
+
+**Shared References** (`references/` at plugin root):
+
+Shared reference documents live at `plugins/power-pages/references/` and are referenced by multiple skills via relative paths (e.g., `../../references/odata-common.md`). This avoids duplicating common patterns across skill-specific reference docs and SKILL.md files.
+
+- `odata-common.md`: Auth headers, PowerShell token helper, token refresh cadence, HTTP status codes, Dataverse error codes, retry pattern. Used by `setup-datamodel` and `add-sample-data`.
+- `dataverse-prerequisites.md`: PAC CLI auth check (`pac env who`), Azure CLI token acquisition, API access verification (`WhoAmI`). Used by `setup-datamodel` and `add-sample-data`.
+- `framework-conventions.md`: Supported frameworks, framework → build tool / router / build output / public dir / index HTML mapping, framework detection via `package.json`, route discovery patterns. Used by `create-site` and `add-seo`.
+- `datamodel-manifest-schema.md`: Schema spec for `.datamodel-manifest.json` (fields, types, usage). Written by `setup-datamodel`, read by `add-sample-data`, validated by `validate-datamodel.js`.
+
+Skill-specific reference docs (e.g., `skills/setup-datamodel/references/odata-api-patterns.md`) contain only patterns unique to that skill and point to the shared docs via `${CLAUDE_PLUGIN_ROOT}/references/` paths for common content.
 
 **MCP Integration**: Playwright MCP server for browser automation and live site previews during development.
 

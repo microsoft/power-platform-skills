@@ -42,44 +42,7 @@ hooks:
 
 ## Step 1: Verify Prerequisites
 
-Verify that PAC CLI and Azure CLI are authenticated and the environment is reachable.
-
-### 1.1 Check PAC CLI
-
-Run `pac env who` to get the current environment URL:
-
-```powershell
-pac env who
-```
-
-Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `$envUrl`.
-
-**If `pac env who` fails**: Tell the user to authenticate first:
-
-```powershell
-pac auth create
-```
-
-### 1.2 Get Azure CLI Token
-
-Get an access token for the Dataverse environment:
-
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-```
-
-**If `az` fails**: Tell the user to run `az login` first.
-
-### 1.3 Verify API Access
-
-Make a lightweight test request to confirm the token works:
-
-```powershell
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/WhoAmI" -Headers $headers
-```
-
-If this returns a valid response, proceed. If it returns 401/403, the token is invalid — ask the user to re-authenticate.
+Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
 ---
 
@@ -332,7 +295,7 @@ After successful verification, write `.datamodel-manifest.json` to the project r
 }
 ```
 
-Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2.
+Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2. See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full schema specification.
 
 ### 8.4 Present Summary
 

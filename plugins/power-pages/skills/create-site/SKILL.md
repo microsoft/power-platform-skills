@@ -74,12 +74,7 @@ Use `AskUserQuestion` to collect (batch into 1-2 calls):
 
 ### Framework Reference
 
-| Framework | Build Tool | Router | Build Output |
-|-----------|-----------|--------|--------------|
-| React | Vite | react-router-dom | `dist` |
-| Vue | Vite | vue-router | `dist` |
-| Angular | Angular CLI | @angular/router | `dist/__SITE_NAME__/browser` |
-| Astro | Astro | File-based + View Transitions | `dist` |
+See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
 
 **Constraint**: Only static SPA frameworks. NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 

@@ -2,41 +2,7 @@
 
 Reference document for the `add-sample-data` skill. Contains patterns for inserting records, setting lookup bindings, handling different column types, and querying record counts via the Dataverse OData Web API (v9.2).
 
----
-
-## Authentication Header
-
-All requests require the following headers:
-
-```json
-{
-  "Authorization": "Bearer <token>",
-  "Content-Type": "application/json",
-  "Accept": "application/json",
-  "OData-MaxVersion": "4.0",
-  "OData-Version": "4.0"
-}
-```
-
-PowerShell helper:
-
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{
-  Authorization  = "Bearer $token"
-  "Content-Type" = "application/json"
-  Accept         = "application/json"
-}
-```
-
-### Token Refresh
-
-Azure CLI tokens expire after ~60 minutes. Refresh every 20 records or before each major step:
-
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers["Authorization"] = "Bearer $token"
-```
+> **Authentication, error handling, and retry patterns** are in the shared reference: `${CLAUDE_PLUGIN_ROOT}/references/odata-common.md`. Read that file first for headers, token refresh, HTTP status codes, and retry logic.
 
 ---
 
@@ -293,54 +259,4 @@ Content-Type: application/json
 
 ## Error Handling
 
-### Common HTTP Status Codes
-
-| Code | Meaning | Action |
-|------|---------|--------|
-| 200/204 | Success | Proceed |
-| 400 | Bad request (malformed JSON, invalid field) | Fix the JSON body and retry |
-| 401 | Unauthorized (token expired) | Refresh token and retry |
-| 403 | Forbidden (insufficient privileges) | Inform user about permissions |
-| 404 | Entity set not found | Verify entity set name and retry |
-| 409 | Conflict (duplicate key) | Skip this record, log the duplicate |
-| 429 | Too many requests (throttled) | Wait 5 seconds, then retry |
-| 500/502/503 | Server error | Wait 5 seconds, retry once, then report failure |
-
-### Error Response Format
-
-Dataverse OData errors follow this structure:
-
-```json
-{
-  "error": {
-    "code": "0x80040237",
-    "message": "A record with matching key values already exists."
-  }
-}
-```
-
-Parse `error.message` for user-friendly reporting.
-
-### Retry Pattern
-
-For transient errors (401, 429, 5xx):
-
-```powershell
-$maxRetries = 2
-for ($i = 0; $i -le $maxRetries; $i++) {
-    try {
-        $result = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body -ContentType "application/json"
-        break
-    } catch {
-        $statusCode = $_.Exception.Response.StatusCode.value__
-        if ($statusCode -eq 401) {
-            $token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-            $headers["Authorization"] = "Bearer $token"
-        } elseif ($statusCode -in @(429, 500, 502, 503)) {
-            Start-Sleep -Seconds 5
-        } else {
-            throw
-        }
-    }
-}
-```
+See `${CLAUDE_PLUGIN_ROOT}/references/odata-common.md` for HTTP status codes, error response format, Dataverse error codes, and retry patterns.
