@@ -151,6 +151,13 @@ Checks that Web API integration code was created for a Power Pages code site: ve
 
 Only static SPA frameworks are supported (React, Vue, Angular, Astro). Server-rendered frameworks (Next.js, Nuxt, Remix, SvelteKit) are **not** supported.
 
+**DRY (Don't Repeat Yourself):** Never duplicate logic across files. Before writing new code, check for existing shared utilities and patterns:
+
+- **Validation scripts** must import from `scripts/lib/validation-helpers.js` for boilerplate (`approve`, `block`, `runValidation`), path finders (`findPath`, `findProjectRoot`, `findPowerPagesSiteDir`), auth helpers (`getAuthToken`, `getEnvironmentUrl`, `getPacAuthInfo`), and constants (`UUID_REGEX`, `CLOUD_TO_API`). Do not re-implement these in individual scripts.
+- **UUID generation** must use the shared `scripts/generate-uuid.js`. Do not copy it into skill-specific `scripts/` directories.
+- **Reference docs** shared across skills live in `references/` at the plugin root. Do not duplicate OData patterns, prerequisite steps, or framework conventions in skill-specific files — reference the shared docs via `${CLAUDE_PLUGIN_ROOT}/references/`.
+- When adding a new validation script, extend `validation-helpers.js` if the new helper would be useful to other scripts. Keep skill-specific logic in the individual script, shared logic in the library.
+
 ## Maintaining This File
 
 When you make significant changes to this plugin (new skills, agents, hooks, templates, or architectural shifts), update this file to keep it accurate for future agents.

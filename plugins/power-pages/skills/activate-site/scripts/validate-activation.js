@@ -7,109 +7,39 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { approve, block, runValidation, findPath, getAuthToken, getPacAuthInfo, CLOUD_TO_API } = require('../../../scripts/lib/validation-helpers');
 
-// Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
-const approve = () => { process.exit(0); };
-const block = (reason) => {
-  process.stderr.write(reason);
-  process.exit(2);
-};
+runValidation((cwd) => {
+  const configPath = findPath(cwd, 'powerpages.config.json');
+  if (!configPath) approve(); // Not a Power Pages project, skip
 
-// Cloud → Power Platform API base URL mapping
-const CLOUD_TO_API = {
-  'Public': 'https://api.powerplatform.com',
-  'UsGov': 'https://api.gov.powerplatform.microsoft.us',
-  'UsGovHigh': 'https://api.high.powerplatform.microsoft.us',
-  'UsGovDod': 'https://api.appsplatform.us',
-  'China': 'https://api.powerplatform.partner.microsoftonline.cn',
-};
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const siteName = config.siteName;
+  if (!siteName) approve();
 
-let inputData = '';
-process.stdin.on('data', chunk => (inputData += chunk));
-process.stdin.on('end', () => {
-  try {
-    const input = JSON.parse(inputData);
-    const cwd = input.cwd;
+  const pacInfo = getPacAuthInfo();
+  if (!pacInfo) approve(); // PAC CLI not authenticated, don't block
 
-    if (!cwd) approve();
+  const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
 
-    const configPath = findConfig(cwd);
-    if (!configPath) approve(); // Not a Power Pages project, skip
+  const token = getAuthToken(ppApiBaseUrl);
+  if (!token) approve(); // Auth not available, don't block
 
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const siteName = config.siteName;
-    if (!siteName) approve();
+  const websites = getWebsites(ppApiBaseUrl, token, pacInfo.environmentId);
+  if (websites === null) approve(); // API call failed, don't block
 
-    const pacInfo = getPacAuthInfo();
-    if (!pacInfo) approve(); // PAC CLI not authenticated, don't block
+  const found = websites.some(
+    (w) => w.name && w.name.toLowerCase() === siteName.toLowerCase()
+  );
 
-    const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
-
-    const token = getAuthToken(ppApiBaseUrl);
-    if (!token) approve(); // Auth not available, don't block
-
-    const websites = getWebsites(ppApiBaseUrl, token, pacInfo.environmentId);
-    if (websites === null) approve(); // API call failed, don't block
-
-    const found = websites.some(
-      (w) => w.name && w.name.toLowerCase() === siteName.toLowerCase()
+  if (!found) {
+    block(
+      `Power Pages activation validation failed:\n- Website "${siteName}" not found in environment ${pacInfo.environmentId}. The site may not have been provisioned successfully.`
     );
-
-    if (!found) {
-      block(
-        `Power Pages activation validation failed:\n- Website "${siteName}" not found in environment ${pacInfo.environmentId}. The site may not have been provisioned successfully.`
-      );
-    }
-
-    approve();
-  } catch {
-    // Don't block on script errors
-    approve();
   }
+
+  approve();
 });
-
-function findConfig(dir) {
-  const direct = path.join(dir, 'powerpages.config.json');
-  if (fs.existsSync(direct)) return direct;
-
-  // Check one level of subdirectories
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-        const sub = path.join(dir, entry.name, 'powerpages.config.json');
-        if (fs.existsSync(sub)) return sub;
-      }
-    }
-  } catch {}
-
-  return null;
-}
-
-function getPacAuthInfo() {
-  try {
-    const output = execSync('pac auth who', { encoding: 'utf8', timeout: 15000 });
-    const envMatch = output.match(/Environment ID:\s*([0-9a-fA-F-]+)/i);
-    const cloudMatch = output.match(/Cloud:\s*(\S+)/i);
-    if (!envMatch) return null;
-    return {
-      environmentId: envMatch[1],
-      cloud: cloudMatch ? cloudMatch[1] : 'Public',
-    };
-  } catch {
-    return null;
-  }
-}
-
-function getAuthToken(ppApiBaseUrl) {
-  try {
-    return execSync(
-      `az account get-access-token --resource "${ppApiBaseUrl}" --query accessToken -o tsv`,
-      { encoding: 'utf8', timeout: 15000 }
-    ).trim();
-  } catch {
-    return null;
-  }
-}
 
 function getWebsites(ppApiBaseUrl, token, environmentId) {
   try {

@@ -5,84 +5,46 @@
 
 const fs = require('fs');
 const path = require('path');
+const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
-// Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
-const approve = () => { process.exit(0); };
-const block = (reason) => {
-  process.stderr.write(reason);
-  process.exit(2);
-};
+runValidation((cwd) => {
+  const projectRoot = findProjectRoot(cwd);
+  if (!projectRoot) approve(); // Not a Power Pages project, skip
 
-let inputData = '';
-process.stdin.on('data', chunk => (inputData += chunk));
-process.stdin.on('end', () => {
-  try {
-    const input = JSON.parse(inputData);
-    const cwd = input.cwd;
+  // Check if any Web API integration files exist — if none, this wasn't an integration session
+  const apiClientExists = findApiClient(projectRoot);
+  const serviceFiles = findServiceFiles(projectRoot);
 
-    if (!cwd) approve();
+  if (!apiClientExists && serviceFiles.length === 0) approve();
 
-    const projectRoot = findProjectRoot(cwd);
-    if (!projectRoot) approve(); // Not a Power Pages project, skip
+  const errors = [];
 
-    // Check if any Web API integration files exist — if none, this wasn't an integration session
-    const apiClientExists = findApiClient(projectRoot);
-    const serviceFiles = findServiceFiles(projectRoot);
-
-    if (!apiClientExists && serviceFiles.length === 0) approve();
-
-    const errors = [];
-
-    // 1. Core API client must exist
-    if (!apiClientExists) {
-      errors.push('Missing shared API client (src/shared/powerPagesApi.ts or equivalent)');
-    }
-
-    // 2. At least one service file must exist
-    if (serviceFiles.length === 0) {
-      errors.push('No service files found in src/shared/services/ or src/services/');
-    }
-
-    // 3. Validate each service file has expected exports
-    for (const serviceFile of serviceFiles) {
-      const content = fs.readFileSync(serviceFile, 'utf8');
-      if (!content.includes('/_api/')) {
-        errors.push(`${path.basename(serviceFile)}: missing /_api/ endpoint references`);
-      }
-    }
-
-    // 4. Check for type files
-    const typeFiles = findTypeFiles(projectRoot);
-    if (typeFiles.length === 0 && serviceFiles.length > 0) {
-      errors.push('No type definition files found in src/types/ — services should have corresponding type definitions');
-    }
-
-    if (errors.length > 0) {
-      block('Web API integration validation failed:\n- ' + errors.join('\n- '));
-    }
-
-    approve();
-  } catch {
-    // Don't block on script errors
-    approve();
+  if (!apiClientExists) {
+    errors.push('Missing shared API client (src/shared/powerPagesApi.ts or equivalent)');
   }
-});
 
-function findProjectRoot(dir) {
-  const direct = path.join(dir, 'powerpages.config.json');
-  if (fs.existsSync(direct)) return dir;
+  if (serviceFiles.length === 0) {
+    errors.push('No service files found in src/shared/services/ or src/services/');
+  }
 
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-        const sub = path.join(dir, entry.name, 'powerpages.config.json');
-        if (fs.existsSync(sub)) return path.join(dir, entry.name);
-      }
+  for (const serviceFile of serviceFiles) {
+    const content = fs.readFileSync(serviceFile, 'utf8');
+    if (!content.includes('/_api/')) {
+      errors.push(`${path.basename(serviceFile)}: missing /_api/ endpoint references`);
     }
-  } catch {}
+  }
 
-  return null;
-}
+  const typeFiles = findTypeFiles(projectRoot);
+  if (typeFiles.length === 0 && serviceFiles.length > 0) {
+    errors.push('No type definition files found in src/types/ — services should have corresponding type definitions');
+  }
+
+  if (errors.length > 0) {
+    block('Web API integration validation failed:\n- ' + errors.join('\n- '));
+  }
+
+  approve();
+});
 
 function findApiClient(projectRoot) {
   const candidates = [

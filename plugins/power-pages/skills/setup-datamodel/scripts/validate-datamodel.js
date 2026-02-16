@@ -8,110 +8,46 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { approve, block, runValidation, findPath, getAuthToken, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
 
-// Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
-const approve = () => { process.exit(0); };
-const block = (reason) => {
-  process.stderr.write(reason);
-  process.exit(2);
-};
+runValidation((cwd) => {
+  const manifestPath = findPath(cwd, '.datamodel-manifest.json');
+  if (!manifestPath) approve(); // Not a data model session, skip
 
-let inputData = '';
-process.stdin.on('data', chunk => (inputData += chunk));
-process.stdin.on('end', () => {
-  try {
-    const input = JSON.parse(inputData);
-    const cwd = input.cwd;
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!manifest.tables || manifest.tables.length === 0) approve();
 
-    if (!cwd) approve();
+  const envUrl = manifest.environmentUrl || getEnvironmentUrl();
+  if (!envUrl) approve(); // Can't determine environment — don't block
 
-    const manifestPath = findManifest(cwd);
-    if (!manifestPath) approve(); // Not a data model session, skip
+  const token = getAuthToken(envUrl);
+  if (!token) approve(); // Auth not available — don't block
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (!manifest.tables || manifest.tables.length === 0) approve();
+  const errors = [];
 
-    const envUrl = manifest.environmentUrl || getEnvironmentUrl();
-    if (!envUrl) {
-      // Can't determine environment — don't block
-      approve();
+  for (const table of manifest.tables) {
+    const tableExists = checkTableExists(envUrl, token, table.logicalName);
+    if (!tableExists) {
+      errors.push(`Missing table: ${table.logicalName} (${table.displayName || 'unknown'})`);
+      continue;
     }
 
-    const token = getAuthToken(envUrl);
-    if (!token) {
-      // Auth not available — don't block
-      approve();
-    }
-
-    const errors = [];
-
-    for (const table of manifest.tables) {
-      // Verify table exists
-      const tableExists = checkTableExists(envUrl, token, table.logicalName);
-      if (!tableExists) {
-        errors.push(`Missing table: ${table.logicalName} (${table.displayName || 'unknown'})`);
-        continue; // Skip column checks if table doesn't exist
-      }
-
-      // Verify columns exist
-      if (table.columns && table.columns.length > 0) {
-        const existingColumns = getTableColumns(envUrl, token, table.logicalName);
-        for (const col of table.columns) {
-          if (!existingColumns.includes(col.logicalName)) {
-            errors.push(`Missing column: ${table.logicalName}.${col.logicalName}`);
-          }
+    if (table.columns && table.columns.length > 0) {
+      const existingColumns = getTableColumns(envUrl, token, table.logicalName);
+      for (const col of table.columns) {
+        if (!existingColumns.includes(col.logicalName)) {
+          errors.push(`Missing column: ${table.logicalName}.${col.logicalName}`);
         }
       }
     }
-
-    if (errors.length > 0) {
-      block('Dataverse data model validation failed:\n- ' + errors.join('\n- '));
-    }
-
-    approve();
-  } catch {
-    // Don't block on script errors
-    approve();
   }
+
+  if (errors.length > 0) {
+    block('Dataverse data model validation failed:\n- ' + errors.join('\n- '));
+  }
+
+  approve();
 });
-
-function findManifest(dir) {
-  const direct = path.join(dir, '.datamodel-manifest.json');
-  if (fs.existsSync(direct)) return direct;
-
-  // Check one level of subdirectories
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-        const sub = path.join(dir, entry.name, '.datamodel-manifest.json');
-        if (fs.existsSync(sub)) return sub;
-      }
-    }
-  } catch {}
-
-  return null;
-}
-
-function getEnvironmentUrl() {
-  try {
-    const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
-    return match ? match[1].replace(/\/+$/, '') : null;
-  } catch {
-    return null;
-  }
-}
-
-function getAuthToken(envUrl) {
-  try {
-    return execSync(
-      `az account get-access-token --resource "${envUrl}" --query accessToken -o tsv`,
-      { encoding: 'utf8', timeout: 15000 }
-    ).trim();
-  } catch {
-    return null;
-  }
-}
 
 function checkTableExists(envUrl, token, logicalName) {
   try {
