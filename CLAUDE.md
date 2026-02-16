@@ -1,1 +1,1 @@
-AGENTS.md
+C:/repos/power-platform-claude-plugins/AGENTS.md

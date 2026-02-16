@@ -1,0 +1,1 @@
+C:/repos/power-platform-claude-plugins/plugins/power-pages/AGENTS.md
