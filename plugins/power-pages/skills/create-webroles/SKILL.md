@@ -145,7 +145,7 @@ For each new web role the user approved, create a YAML file in `.powerpages-site
 For each role, generate a UUID using the Node script. **NEVER generate UUIDs yourself — always use the script.**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/generate-uuid.js"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
 ### 4.2 Create the YAML File

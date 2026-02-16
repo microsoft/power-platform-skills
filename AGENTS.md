@@ -26,6 +26,9 @@ plugins/
     .mcp.json                      ← MCP server config (Playwright for browser automation)
     agents/
       data-model-architect.md      ← Agent: proposes Dataverse data models (read-only)
+      webapi-permissions.md        ← Agent: proposes Web API permissions plan (read-only)
+    scripts/
+      generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
     references/                    ← Shared reference docs used by multiple skills
       odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
       dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
@@ -54,7 +57,6 @@ plugins/
         scripts/validate-activation.js ← Validates site was provisioned via PP API
       create-webroles/
         SKILL.md                   ← Web roles creation skill definition
-        scripts/generate-uuid.js   ← Node script generating UUID v4 for web role IDs
         scripts/validate-webroles.js ← Node script validating web role YAML files were created
 ```
 
@@ -63,6 +65,7 @@ plugins/
 **Agents** (auto-triggered by the main conversation when relevant):
 
 - `data-model-architect`: Read-only agent that analyzes site requirements, discovers existing Dataverse tables via OData API, and proposes a data model (new/modified/reused tables + Mermaid ER diagram). Uses `pac env who` + Azure CLI auth to query Dataverse. Renders the ER diagram visually in the browser via Playwright (writes a temp HTML file with Mermaid.js CDN, navigates to it, takes a screenshot) before entering plan mode. Does NOT create, modify, or delete any tables — purely advisory. The main conversation uses its output to create tables.
+- `webapi-permissions`: Read-only agent that analyzes site code, discovers existing web roles and table permissions, queries Dataverse for table columns, and proposes a complete Web API permissions plan (table permissions + site settings). Checks for `.powerpages-site` folder to verify site deployment. Renders a Mermaid flowchart showing web roles → table permissions → tables visually in the browser via Playwright. Never uses `*` for Web API field settings — always lists specific columns. Does NOT create any YAML files — purely advisory. The main conversation uses its output to create table permission and site setting files.
 
 **Skills** (user-invocable via `/power-pages:create-site`, `/power-pages:deploy-site`, `/power-pages:activate-site`, `/power-pages:setup-datamodel`, `/power-pages:add-sample-data`, `/power-pages:add-seo`, and `/power-pages:create-webroles`):
 
@@ -73,7 +76,7 @@ plugins/
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 6-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution), gather parameters (site name, subdomain, website record ID), confirm with user, POST to Power Platform websites API, poll provisioning status, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
-- `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from `generate-uuid.js`, review & prompt deployment via deploy-site skill.
+- `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, review & prompt deployment via deploy-site skill.
 
 **Hooks** (defined in each skill's SKILL.md frontmatter):
 
@@ -85,6 +88,12 @@ plugins/
   - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
   - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
+
+**Shared Scripts** (`scripts/` at plugin root):
+
+Shared utility scripts live at `plugins/power-pages/scripts/` and are referenced by multiple skills and agents via `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+
+- `generate-uuid.js`: Generates a random UUID v4. Self-contained, no dependencies. Used by `create-webroles` and the main agent when creating table permission / site setting files from the `webapi-permissions` agent plan.
 
 **Shared References** (`references/` at plugin root):
 
