@@ -13,7 +13,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/validate-datamodel.js"'
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-datamodel/scripts/validate-datamodel.js"'
           timeout: 30
         - type: prompt
           prompt: >

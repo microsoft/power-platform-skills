@@ -8,7 +8,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/validate-site.js\""
+          command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js\""
           timeout: 15
         - type: prompt
           prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) The user was given the dev server URL and asked to review the site, 3) No build errors remain unresolved, 4) Git commits were made at key milestones (initial scaffold, after each major feature), 5) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."

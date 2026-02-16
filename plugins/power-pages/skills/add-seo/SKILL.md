@@ -13,7 +13,7 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/validate-seo.js\""
+          command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/add-seo/scripts/validate-seo.js\""
           timeout: 15
         - type: prompt
           prompt: "If SEO assets were being added in this session (via /power-pages:add-seo), verify before allowing stop: 1) robots.txt was created in the public directory, 2) sitemap.xml was created in the public directory with correct site URLs, 3) Meta tags (title, description, viewport, Open Graph) were added to index.html, 4) The user reviewed and approved the SEO additions, 5) A git commit was made with the SEO changes. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no SEO work happened or everything is complete, return { \"ok\": true }."
