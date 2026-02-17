@@ -2,11 +2,11 @@
 
 // Validates Power Pages site activation output.
 // Runs as a Stop hook to verify the website was provisioned in the environment.
-// Reads the activation result written by activate-site.js (via Operation-Location polling)
-// instead of making a separate GET /websites call to list all websites.
+// Calls the shared check-activation-status.js script to query the Power Platform API
+// instead of relying on an intermediate file.
 
-const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
@@ -14,31 +14,29 @@ runValidation(async (cwd) => {
   if (!configPath) approve(); // Not a Power Pages project, skip
 
   const projectRoot = path.dirname(configPath);
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  const siteName = config.siteName;
-  if (!siteName) approve();
+  const checkScript = path.resolve(__dirname, '../../../scripts/check-activation-status.js');
 
-  // Read activation result written by activate-site.js to the project root.
-  // This avoids a separate GET /websites call — the result was already
-  // determined by polling the Operation-Location header from the POST.
-  const resultPath = path.join(projectRoot, '.activation-result.json');
   let result;
   try {
-    result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const output = execSync(`node "${checkScript}" --projectRoot "${projectRoot}"`, {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    result = JSON.parse(output);
   } catch {
-    approve(); // No result file — activation script didn't run in this session, don't block
+    approve(); // Auth/transient failure — don't block
   }
 
-  if (result.status === 'Succeeded') {
+  if (result.activated === true) {
     approve();
   }
 
-  if (result.status === 'Failed') {
+  if (result.activated === false) {
     block(
-      `Power Pages activation validation failed:\n- ${result.error || 'Provisioning failed'}. The site may not have been provisioned successfully.`
+      `Power Pages activation validation failed:\n- Site '${result.siteName || 'unknown'}' is not activated. The site may not have been provisioned successfully.`
     );
   }
 
-  // Running / other — don't block, provisioning may still be in progress
+  // Error or unexpected shape — don't block
   approve();
 });
