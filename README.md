@@ -93,12 +93,6 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
     ```
 
-1. Launch Copilot with plugin path:
-
-    ```bash
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    ```
-
 ## Running Without Interruption
 
 Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
