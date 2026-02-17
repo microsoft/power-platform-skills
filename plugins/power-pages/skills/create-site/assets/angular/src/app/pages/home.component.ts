@@ -8,7 +8,7 @@ import { RouterLink } from '@angular/router'
   template: `
     <div class="page">
       <section class="hero">
-        <h1>__SITE_TITLE__</h1>
+        <h1>__SITE_NAME__</h1>
         <p class="hero-subtitle">__SITE_DESCRIPTION__</p>
         <div class="hero-actions">
           <a href="#features" class="btn btn-primary">Get Started</a>

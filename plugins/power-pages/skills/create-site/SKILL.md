@@ -63,8 +63,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
    Store this as `PROJECT_ROOT`.
 
 5. From the user's answers, derive:
-   - `__SITE_NAME__` (kebab-case, e.g., `contoso-portal`)
-   - `__SITE_TITLE__` (display title, e.g., `Contoso Portal`)
+   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
+   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
    - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
 6. Summarize understanding and confirm with user before proceeding
 
@@ -113,8 +113,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
    | Placeholder | Description | Value |
    |-------------|-------------|-------|
-   | `__SITE_NAME__` | kebab-case project name | `contoso-portal` |
-   | `__SITE_TITLE__` | Display title | `Contoso Portal` |
+   | `__SITE_NAME__` | Title Case site name | `Contoso Portal` |
+   | `__SITE_SLUG__` | kebab-case slug (derived from name) | `contoso-portal` |
    | `__SITE_DESCRIPTION__` | One-line description | `Modern portal for Contoso employees` |
    | `__PRIMARY_COLOR__` | Primary hex color | *(choose based on aesthetic + mood)* |
    | `__SECONDARY_COLOR__` | Complementary hex color | *(choose based on aesthetic + mood)* |
@@ -380,17 +380,23 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 > **This phase is MANDATORY. Do NOT end the session without asking about deployment.**
 
 **Actions**:
-1. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
+1. Record skill usage:
+
+   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+   Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
+
+2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
    > "Would you like to deploy your site to Power Pages now?"
-2. If the user chooses to deploy, invoke the `/power-pages:deploy-site` skill.
-3. Mark all todos complete
-4. Present a final summary:
+3. If the user chooses to deploy, invoke the `/power-pages:deploy-site` skill.
+4. Mark all todos complete
+5. Present a final summary:
    - Site name and purpose
    - Framework and project location
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
    - Total file count and git commit count
-5. Suggest optional enhancement skills:
+6. Suggest optional enhancement skills:
    - `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
    - `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/power-pages:add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
@@ -455,7 +461,7 @@ Every site must meet these standards before completion:
 "Create a partner portal for our consultants"
 
 ### Phase 1: Discovery
-- Name: partner-portal, "Partner Portal"
+- Name: Partner Portal
 - Framework: React
 - Purpose: Company Portal
 - Audience: Internal (partners, consultants)

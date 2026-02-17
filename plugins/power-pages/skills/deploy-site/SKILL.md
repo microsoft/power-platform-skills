@@ -201,11 +201,17 @@ Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -ErrorAction SilentlyConti
 
 List its contents to confirm site configuration files are present (e.g., `web-roles/`, `site-settings/`, `table-permissions/`).
 
-### 5.2 Confirm Upload Output
+### 5.2 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeploySite"`.
+
+### 5.3 Confirm Upload Output
 
 Review the output from the `pac pages upload-code-site` command in Phase 4 (or Phase 6 retry). Verify it reported a successful upload with no errors.
 
-### 5.3 Commit Changes
+### 5.4 Commit Changes
 
 Stage and commit deployment artifacts:
 
@@ -214,11 +220,11 @@ git add -A
 git commit -m "Deploy site to Power Pages"
 ```
 
-### 5.4 Check Activation Status
+### 5.5 Check Activation Status
 
 Before asking about activation, check whether the site is already activated by querying the Power Platform websites API. This avoids prompting the user unnecessarily when the site is already live.
 
-#### 5.4.1 Resolve API Base URL
+#### 5.5.1 Resolve API Base URL
 
 Map the **Cloud** value extracted from `pac auth who` (Phase 2) to the Power Platform API base URL:
 
@@ -230,7 +236,7 @@ Map the **Cloud** value extracted from `pac auth who` (Phase 2) to the Power Pla
 | `UsGovDod` | `https://api.appsplatform.us` |
 | `China` | `https://api.powerplatform.partner.microsoftonline.cn` |
 
-#### 5.4.2 Query Websites API
+#### 5.5.2 Query Websites API
 
 Attempt to acquire an Azure CLI token and call the GET websites API:
 
@@ -241,10 +247,10 @@ $websites = Invoke-RestMethod -Uri "$ppApiBaseUrl/powerpages/environments/$envir
 ```
 
 - **If the API call succeeds and the response contains one or more websites**: The site is already activated. Inform the user: "Your site is already activated — no further provisioning needed." Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
-- **If the API call succeeds but the response is empty (no websites returned)**: The site is not yet activated. Proceed to step 5.4.3.
-- **If the API call fails** (Azure CLI not installed, not logged in, token error, or any other failure): Fall back to step 5.4.3. Do not block the deployment flow due to a failed activation check.
+- **If the API call succeeds but the response is empty (no websites returned)**: The site is not yet activated. Proceed to step 5.5.3.
+- **If the API call fails** (Azure CLI not installed, not logged in, token error, or any other failure): Fall back to step 5.5.3. Do not block the deployment flow due to a failed activation check.
 
-#### 5.4.3 Ask About Activation (only if site is NOT already activated)
+#### 5.5.3 Ask About Activation (only if site is NOT already activated)
 
 Ask the user if they want to activate the site using `AskUserQuestion`:
 

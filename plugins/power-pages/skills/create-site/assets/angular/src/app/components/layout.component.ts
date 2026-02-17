@@ -9,7 +9,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router'
     <div class="app">
       <header class="header">
         <nav class="nav">
-          <a routerLink="/" class="logo">__SITE_TITLE__</a>
+          <a routerLink="/" class="logo">__SITE_NAME__</a>
           <div class="nav-links">
             <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Home</a>
             <a routerLink="/about" routerLinkActive="active">About</a>
@@ -20,7 +20,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router'
         <ng-content />
       </main>
       <footer class="footer">
-        <p>&copy; {{ year }} __SITE_TITLE__</p>
+        <p>&copy; {{ year }} __SITE_NAME__</p>
       </footer>
     </div>
   `,

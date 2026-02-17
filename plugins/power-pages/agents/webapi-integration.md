@@ -279,6 +279,11 @@ export async function powerPagesFetch<T>(
 
     const response = await fetch(url, { ...options, headers });
 
+    // On 401, the user's session has expired — do not retry, prompt re-authentication
+    if (response.status === 401) {
+      throw new Error('Session expired. Please sign in again.');
+    }
+
     // On 403, the anti-forgery token may have expired — refresh and retry
     if (response.status === 403 && attempt < MAX_RETRIES) {
       cachedAntiForgeryToken = null;
@@ -318,6 +323,11 @@ export async function powerPagesFetchResponse(
     const headers = await buildPowerPagesHeaders(options?.headers);
 
     const response = await fetch(url, { ...options, headers });
+
+    // On 401, the user's session has expired — do not retry, prompt re-authentication
+    if (response.status === 401) {
+      throw new Error('Session expired. Please sign in again.');
+    }
 
     // On 403, the anti-forgery token may have expired — refresh and retry
     if (response.status === 403 && attempt < MAX_RETRIES) {
@@ -379,8 +389,7 @@ export interface ODataCollectionResponse<T> {
 export interface PaginatedResult<T> {
   items: T[];
   totalCount: number;
-  page: number;
-  pageSize: number;
+  nextLink?: string;
 }
 
 // ── Formatted Value Helper ────────────────────────────────────────────────────
@@ -675,7 +684,7 @@ All examples below use the `Product` table as reference. Replace table names, co
 
 **Every list/query operation MUST be paginated.** Never fetch unbounded data. Two pagination approaches exist — choose based on the use case:
 
-**Server-side pagination (`$top` / `$skip`)** — Use for UI list views with paging controls. The `list` function below uses this approach. Always include `$count=true` to get the total record count efficiently without fetching all rows.
+**Cursor-based pagination (`$top` + `@odata.nextLink`)** — Use for UI list views with paging controls. The `list` function below uses this approach. Always include `$count=true` to get the total record count efficiently without fetching all rows. **Note:** Dataverse Web API does **not** support the `$skip` query option. Use `@odata.nextLink` from each response to fetch the next page.
 
 **Client-side pagination (`fetchAllPages`)** — Use only when you genuinely need every record (e.g., populating a local dropdown, building a lookup map, exporting data). Uses the `fetchAllPages` helper from the core API client which follows `@odata.nextLink` with a safety iteration limit.
 
@@ -714,35 +723,33 @@ import {
 } from '../shared/powerPagesApi';
 
 export interface ListParams {
-  page?: number;
   pageSize?: number;
+  nextLink?: string;  // @odata.nextLink cursor from a previous response
   filter?: string;
   orderBy?: string;
   search?: string;
 }
 
 export const listProducts = async (params?: ListParams): Promise<PaginatedResult<Product>> => {
-  const page = params?.page ?? 1;
   const pageSize = params?.pageSize ?? 10;
 
-  const query: Record<string, string | undefined> = {
+  // If we have a nextLink from a previous response, use it directly.
+  // Dataverse does NOT support $skip — pagination uses @odata.nextLink cursors.
+  const url = params?.nextLink ?? buildODataUrl('cr4fc_products', {
     '$select': PRODUCT_SELECT,
     '$expand': PRODUCT_EXPAND,
     '$orderby': params?.orderBy ?? 'createdon desc',
     '$count': 'true',
     '$top': String(pageSize),
-    '$skip': String((page - 1) * pageSize),
     '$filter': params?.filter,
-  };
+  });
 
-  const url = buildODataUrl('cr4fc_products', query);
   const response = await powerPagesFetch<ODataCollectionResponse<ProductEntity>>(url);
 
   return {
     items: (response?.value ?? []).map(mapProductEntity),
     totalCount: response?.['@odata.count'] ?? response?.value?.length ?? 0,
-    page,
-    pageSize,
+    nextLink: response?.['@odata.nextLink'],
   };
 };
 ```
@@ -988,30 +995,32 @@ export function useProducts(params?: ListParams) {
   const [data, setData] = useState<PaginatedResult<Product>>({
     items: [],
     totalCount: 0,
-    page: 1,
-    pageSize: 10,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (overrides?: Partial<ListParams>) => {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await listProducts(params);
+      const result = await listProducts({ ...params, ...overrides });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
       setIsLoading(false);
     }
-  }, [params?.page, params?.pageSize, params?.filter, params?.orderBy]);
+  }, [params?.pageSize, params?.filter, params?.orderBy]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  return { ...data, isLoading, error, refetch: fetchData };
+  const fetchNextPage = useCallback(() => {
+    if (data.nextLink) fetchData({ nextLink: data.nextLink });
+  }, [data.nextLink, fetchData]);
+
+  return { ...data, isLoading, error, refetch: fetchData, fetchNextPage };
 }
 ```
 
@@ -1094,16 +1103,18 @@ import { ref, watch, type Ref } from 'vue';
 export function useProducts(params?: Ref<ListParams | undefined>) {
   const items = ref<Product[]>([]);
   const totalCount = ref(0);
+  const nextLink = ref<string | undefined>();
   const isLoading = ref(true);
   const error = ref<string | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = async (overrides?: Partial<ListParams>) => {
     isLoading.value = true;
     error.value = null;
     try {
-      const result = await listProducts(params?.value);
+      const result = await listProducts({ ...params?.value, ...overrides });
       items.value = result.items;
       totalCount.value = result.totalCount;
+      nextLink.value = result.nextLink;
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Failed to fetch data';
     } finally {
@@ -1111,9 +1122,13 @@ export function useProducts(params?: Ref<ListParams | undefined>) {
     }
   };
 
-  watch(params ?? ref(undefined), fetchData, { immediate: true });
+  const fetchNextPage = () => {
+    if (nextLink.value) fetchData({ nextLink: nextLink.value });
+  };
 
-  return { items, totalCount, isLoading, error, refetch: fetchData };
+  watch(params ?? ref(undefined), () => fetchData(), { immediate: true });
+
+  return { items, totalCount, nextLink, isLoading, error, refetch: fetchData, fetchNextPage };
 }
 ```
 
@@ -1287,7 +1302,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 1. **`/_api/` prefix** — Always use `/_api/` for Power Pages Web API URLs. Never use the Dataverse environment URL directly.
 2. **Anti-forgery token required** — The `__RequestVerificationToken` header must be set on every request. Fetch it from `/_layout/tokenhtml` and parse the value from the returned HTML. No `Authorization` bearer header is needed — Power Pages uses cookie-based session auth for authenticated users.
 3. **No wildcard `$select`** — Always list specific columns. Wildcards expose unnecessary data and degrade performance.
-4. **Always paginate** — Every list/query MUST include `$top`. Use `$top`/`$skip`/`$count` for UI pagination. Use `fetchAllPages` only when all records are genuinely needed (dropdowns, lookups, exports). Never fetch unbounded data.
+4. **Always paginate** — Every list/query MUST include `$top`. Use `$top`/`$count` for the first page and `@odata.nextLink` cursors for subsequent pages. Dataverse does **not** support `$skip` — never use it. Use `fetchAllPages` only when all records are genuinely needed (dropdowns, lookups, exports). Never fetch unbounded data.
 5. **Use `$count=true`** — Include on every list query to get total record count efficiently in `@odata.count` without fetching all rows. For count-only queries, combine with `$top=0`.
 6. **`@odata.bind` for lookups** — Set lookup relationships using `NavigationProperty@odata.bind` annotation with the target entity set path, not raw GUID values. The Navigation Property name is **case-sensitive** and must match the schema name (typically PascalCase like `cr4fc_Category`). Using the logical name (all lowercase) causes "Undeclared Property" errors.
 7. **Handle 204 responses** — PATCH and DELETE return empty bodies. Do not attempt to parse them.
@@ -1297,7 +1312,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 11. **Escape OData strings** — Always use `escapeODataString()` for user-provided values in `$filter` to prevent injection.
 12. **Safe `fetchAllPages` iteration limit** — Always cap the pagination loop (default 100 iterations) when following `@odata.nextLink` to prevent infinite loops.
 13. **Cache the anti-forgery token** — Use an 8-minute TTL cache to avoid fetching from `/_layout/tokenhtml` on every request.
-14. **Retry transient errors** — 429 and 5xx with exponential backoff. On 403, invalidate the cached anti-forgery token and retry.
+14. **Retry transient errors** — 429 and 5xx with exponential backoff. On 403, invalidate the cached anti-forgery token and retry. On 401, do **not** retry — the session has expired and the user must re-authenticate. Throw a clear "Session expired" error.
 15. **Type everything** — Raw OData entity interface + clean domain type + mapper function.
 16. **Match existing patterns** — If the project has conventions for file locations, naming, or code style, follow them exactly.
 17. **One table per invocation** — This agent handles a single table. For multiple tables, the caller invokes it separately for each.

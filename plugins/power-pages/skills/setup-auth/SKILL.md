@@ -499,7 +499,13 @@ name: Authentication/Registration/ProfileRedirectEnabled
 value: false
 ```
 
-#### 8.2 Present Summary
+#### 8.2 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupAuth"`.
+
+#### 8.3 Present Summary
 
 Present a summary of everything created:
 
@@ -513,7 +519,7 @@ Present a summary of everything created:
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
-#### 8.3 Ask to Deploy
+#### 8.4 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -527,7 +533,7 @@ Use `AskUserQuestion`:
 
 > "Remember to deploy your site using `/power-pages:deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
 
-#### 8.4 Post-Deploy Notes
+#### 8.5 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 

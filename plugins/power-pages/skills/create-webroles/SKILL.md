@@ -236,7 +236,13 @@ name: <Role Name>
 
 **Actions**:
 
-1. Present a summary of what was created:
+1. Record skill usage:
+
+   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+   Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateWebroles"`.
+
+2. Present a summary of what was created:
 
    > "I've created the following new web roles:"
    > | Role Name | ID | Anonymous | Authenticated |
@@ -244,17 +250,17 @@ name: <Role Name>
    > | Content Editors | `a1b2c3d4-...` | false | false |
    > | *(etc.)* |
 
-2. Then ask the user if they want to deploy the site to apply the new roles:
+3. Then ask the user if they want to deploy the site to apply the new roles:
 
    | Question | Options |
    |----------|---------|
    | The new web roles have been created locally. To apply them in Power Pages, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-3. **If "Yes, deploy now"**: Tell the user to invoke the deploy skill:
+4. **If "Yes, deploy now"**: Tell the user to invoke the deploy skill:
 
    > "Please run `/power-pages:deploy-site` to deploy your site and apply the new web roles."
 
-4. **If "No, I'll deploy later"**: Acknowledge and remind them:
+5. **If "No, I'll deploy later"**: Acknowledge and remind them:
 
    > "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
 

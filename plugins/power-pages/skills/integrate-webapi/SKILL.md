@@ -354,7 +354,13 @@ git commit -m "Add Web API permissions and site settings for [table names]"
 
 **Actions**:
 
-### 7.1 Present Summary
+### 7.1 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "IntegrateWebApi"`.
+
+### 7.2 Present Summary
 
 Present a summary of everything that was done:
 
@@ -368,7 +374,7 @@ Present a summary of everything that was done:
 | Table Permissions | Created | X permission files |
 | Site Settings | Created | X setting files |
 
-### 7.2 Ask to Deploy
+### 7.3 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -382,7 +388,7 @@ Use `AskUserQuestion`:
 
 > "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready. The Web API calls will not work until the site is deployed with the new permissions."
 
-### 7.3 Post-Deploy Notes
+### 7.4 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 

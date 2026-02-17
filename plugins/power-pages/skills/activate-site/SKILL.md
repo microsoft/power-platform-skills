@@ -366,7 +366,13 @@ Power Pages site activated successfully!
 | `UsGovDod` | `appsplatform.us` |
 | `China` | `powerappsportals.cn` |
 
-#### 6.2 Suggest Next Steps
+#### 6.2 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ActivateSite"`.
+
+#### 6.3 Suggest Next Steps
 
 After the summary, suggest:
 - Set up the data model: `/power-pages:setup-datamodel`

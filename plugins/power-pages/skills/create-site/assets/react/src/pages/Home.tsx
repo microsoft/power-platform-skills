@@ -2,7 +2,7 @@ export default function Home() {
   return (
     <div className="page">
       <section className="hero">
-        <h1>__SITE_TITLE__</h1>
+        <h1>__SITE_NAME__</h1>
         <p className="hero-subtitle">__SITE_DESCRIPTION__</p>
         <div className="hero-actions">
           <a href="#features" className="btn btn-primary">Get Started</a>

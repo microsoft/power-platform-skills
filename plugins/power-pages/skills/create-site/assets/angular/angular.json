@@ -3,7 +3,7 @@
   "version": 1,
   "newProjectRoot": "projects",
   "projects": {
-    "__SITE_NAME__": {
+    "__SITE_SLUG__": {
       "projectType": "application",
       "root": "",
       "sourceRoot": "src",
@@ -12,7 +12,7 @@
         "build": {
           "builder": "@angular-devkit/build-angular:application",
           "options": {
-            "outputPath": "dist/__SITE_NAME__",
+            "outputPath": "dist/__SITE_SLUG__",
             "index": "src/index.html",
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
@@ -40,8 +40,8 @@
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
           "configurations": {
-            "production": { "buildTarget": "__SITE_NAME__:build:production" },
-            "development": { "buildTarget": "__SITE_NAME__:build:development" }
+            "production": { "buildTarget": "__SITE_SLUG__:build:production" },
+            "development": { "buildTarget": "__SITE_SLUG__:build:development" }
           },
           "defaultConfiguration": "development"
         }

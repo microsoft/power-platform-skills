@@ -310,7 +310,13 @@ If a dev server is running (or start one):
 2. Navigate to `/robots.txt` and verify it loads
 3. Navigate to `/sitemap.xml` and verify it loads
 
-#### 7.3 Git Commit
+#### 7.3 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddSeo"`.
+
+#### 7.4 Git Commit
 
 > **CRITICAL — This step is MANDATORY. You MUST commit the SEO changes before finishing. Do NOT skip this step.**
 
@@ -323,7 +329,7 @@ git commit -m "Add SEO: robots.txt, sitemap.xml, meta tags, favicon"
 
 Adjust the file paths based on what was actually created (e.g., include `src/layouts/Layout.astro` instead of `index.html` for Astro sites, omit `favicon.svg` if it was not created). Only stage files that were created or modified by this skill.
 
-#### 7.4 Present Summary
+#### 7.5 Present Summary
 
 Present a summary of what was added:
 
@@ -335,7 +341,7 @@ Present a summary of what was added:
 | Open Graph | Added/Skipped | og:title, og:description, og:url, Twitter Card |
 | Favicon | Created/Skipped | SVG favicon with site initial |
 
-#### 7.5 Suggest Next Steps
+#### 7.6 Suggest Next Steps
 
 After the summary, suggest:
 - **Deploy the site** to make SEO changes live: `/power-pages:deploy-site`

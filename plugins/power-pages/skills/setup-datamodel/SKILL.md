@@ -339,7 +339,13 @@ After successful verification, write `.datamodel-manifest.json` to the project r
 
 Use the `Write` tool to create this file at `<PROJECT_ROOT>/.datamodel-manifest.json`. Only include tables and columns that were confirmed to exist in Step 8.2. See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full schema specification.
 
-### 8.4 Present Summary
+### 8.4 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupDatamodel"`.
+
+### 8.5 Present Summary
 
 Present a summary to the user:
 
@@ -356,7 +362,7 @@ Include:
 - Any errors encountered with details
 - Location of the manifest file (`.datamodel-manifest.json`)
 
-### 8.5 Suggest Next Steps
+### 8.6 Suggest Next Steps
 
 After the summary, suggest:
 - Review created tables in the Power Pages maker portal

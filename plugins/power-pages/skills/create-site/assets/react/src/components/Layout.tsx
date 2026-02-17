@@ -8,7 +8,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="app">
       <header className="header">
         <nav className="nav">
-          <Link to="/" className="logo">__SITE_TITLE__</Link>
+          <Link to="/" className="logo">__SITE_NAME__</Link>
           <div className="nav-links">
             <Link to="/" className={location.pathname === '/' ? 'active' : ''}>Home</Link>
             <Link to="/about" className={location.pathname === '/about' ? 'active' : ''}>About</Link>
@@ -17,7 +17,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       </header>
       <main className="main">{children}</main>
       <footer className="footer">
-        <p>&copy; {new Date().getFullYear()} __SITE_TITLE__</p>
+        <p>&copy; {new Date().getFullYear()} __SITE_NAME__</p>
       </footer>
     </div>
   )

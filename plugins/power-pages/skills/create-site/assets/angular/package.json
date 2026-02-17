@@ -1,5 +1,5 @@
 {
-  "name": "__SITE_NAME__",
+  "name": "__SITE_SLUG__",
   "private": true,
   "version": "0.0.0",
   "scripts": {

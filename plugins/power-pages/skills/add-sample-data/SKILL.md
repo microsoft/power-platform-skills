@@ -258,7 +258,13 @@ $count = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/<EntitySetName>?`$count=t
 
 The `@odata.count` field in the response gives the total record count.
 
-### 6.2 Present Summary
+### 6.2 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddSampleData"`.
+
+### 6.3 Present Summary
 
 Present a summary table:
 
@@ -272,7 +278,7 @@ Include:
 - Any failures with error details
 - Lookup relationships that were established
 
-### 6.3 Suggest Next Steps
+### 6.4 Suggest Next Steps
 
 After the summary, suggest:
 - Review the data in the Power Pages maker portal or model-driven app
