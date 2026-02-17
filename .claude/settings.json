@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pac *)",
+      "Bash(node *)",
+      "Bash(dotnet *)",
+      "Bash(powershell *)",
+      "Read",
+      "Write",
+      "Edit"
+    ]
+  }
+}

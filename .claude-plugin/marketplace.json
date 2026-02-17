@@ -21,6 +21,17 @@
             "source": "./plugins/power-pages",
             "category": "development",
             "strict": false
+        },
+        {
+            "name": "power-apps",
+            "description": "Build and deploy Power Apps generative pages for model-driven apps.",
+            "version": "1.0.0",
+            "author": {
+                "name": "Microsoft"
+            },
+            "source": "./plugins/power-apps",
+            "category": "development",
+            "strict": false
         }
     ]
 }
