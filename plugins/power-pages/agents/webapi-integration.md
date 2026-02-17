@@ -223,7 +223,7 @@ export const buildPowerPagesHeaders = async (
 
 // ── Response Parsing ──────────────────────────────────────────────────────────
 
-const parseResponseBody = async <T>(response: Response): Promise<T | null> => {
+export const parseResponseBody = async <T>(response: Response): Promise<T | null> => {
   if (response.status === 204 || response.status === 202) return null;
 
   const text = await response.text();
@@ -235,6 +235,20 @@ const parseResponseBody = async <T>(response: Response): Promise<T | null> => {
     console.warn('Failed to parse response body as JSON');
     return null;
   }
+};
+
+// ── Create Response Helper ────────────────────────────────────────────────
+
+/**
+ * Extract the created record ID from a POST response.
+ * Power Pages Web API may return the entity in the body (when Prefer: return=representation
+ * is honored) or just a success status with the record URL in the Location header.
+ */
+export const extractRecordId = (response: Response): string | null => {
+  const location = response.headers.get('Location') ?? response.headers.get('OData-EntityId');
+  if (!location) return null;
+  const match = location.match(/\(([0-9a-fA-F-]{36})\)/);
+  return match ? match[1] : null;
 };
 
 // ── Retry Helpers ─────────────────────────────────────────────────────────────
@@ -753,9 +767,15 @@ export const getProductById = async (id: string): Promise<Product | null> => {
 
 ### 5.5 Create (POST)
 
-Use `Prefer: return=representation` to get the created record in the response:
+Send `Prefer: return=representation` to request the created entity in the response body. However, the API may return just a success status (e.g., 204) without a body — in that case, extract the created record ID from the `Location` response header and fetch the record:
 
 ```typescript
+import {
+  powerPagesFetchResponse,
+  parseResponseBody,
+  extractRecordId,
+} from '../shared/powerPagesApi';
+
 export const createProduct = async (payload: CreateProductInput): Promise<Product> => {
   const body: Record<string, unknown> = {
     cr4fc_name: payload.name,
@@ -770,14 +790,26 @@ export const createProduct = async (payload: CreateProductInput): Promise<Produc
     body['cr4fc_Category@odata.bind'] = `/cr4fc_categories(${payload.categoryId})`;
   }
 
-  const response = await powerPagesFetch<ProductEntity>('/_api/cr4fc_products', {
+  // Use powerPagesFetchResponse to access headers — the API may return the
+  // created entity in the body or just a success status with a Location header
+  const response = await powerPagesFetchResponse('/_api/cr4fc_products', {
     method: 'POST',
     headers: { Prefer: 'return=representation' },
     body: JSON.stringify(body),
   });
 
-  if (!response) throw new Error('Failed to create record — no response body');
-  return mapProductEntity(response);
+  // Try to parse the entity from the response body
+  const entity = await parseResponseBody<ProductEntity>(response);
+  if (entity) return mapProductEntity(entity);
+
+  // No body — extract the ID from the Location header and fetch the record
+  const createdId = extractRecordId(response);
+  if (createdId) {
+    const created = await getProductById(createdId);
+    if (created) return created;
+  }
+
+  throw new Error('Failed to retrieve created record — no response body or Location header');
 };
 ```
 
@@ -1259,7 +1291,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 5. **Use `$count=true`** — Include on every list query to get total record count efficiently in `@odata.count` without fetching all rows. For count-only queries, combine with `$top=0`.
 6. **`@odata.bind` for lookups** — Set lookup relationships using `NavigationProperty@odata.bind` annotation with the target entity set path, not raw GUID values. The Navigation Property name is **case-sensitive** and must match the schema name (typically PascalCase like `cr4fc_Category`). Using the logical name (all lowercase) causes "Undeclared Property" errors.
 7. **Handle 204 responses** — PATCH and DELETE return empty bodies. Do not attempt to parse them.
-8. **`Prefer: return=representation`** — Use on POST to receive the created record in the response body.
+8. **Handle POST responses** — Send `Prefer: return=representation` on POST, but the API may return just a success status (e.g., 204) without a body. Always handle both cases: parse the body if present, otherwise extract the created record ID from the `Location` or `OData-EntityId` response header using `extractRecordId()` and fetch the record with a separate GET.
 9. **`If-Match: *`** — Required header for PATCH (update) operations.
 10. **Formatted values** — Include `Prefer: odata.include-annotations="OData.Community.Display.V1.FormattedValue"` to get display names for lookups and option set labels.
 11. **Escape OData strings** — Always use `escapeODataString()` for user-provided values in `$filter` to prevent injection.

@@ -231,6 +231,35 @@ For each table that needs Web API access, determine the specific columns to expo
 
 **CRITICAL SECURITY RULE: NEVER use `*` (wildcard) for the fields setting.** Always list specific column logical names. Using `*` exposes all columns including system columns and potentially sensitive data. This is a security risk.
 
+#### Cross-Check with Integration Code
+
+After determining which columns to include, verify that **every column referenced in the Web API integration code** is present in the proposed `Webapi/<table>/fields` setting. Missing columns will cause silent data gaps or API errors at runtime.
+
+Search the source code for columns used in each table's service layer:
+
+1. **`$select` statements** — Find column select arrays in service files:
+   ```text
+   Grep: "\$select|_SELECT" in src/**/*.ts
+   ```
+
+2. **POST/PATCH request bodies** — Find columns written in create/update operations:
+   ```text
+   Grep: "cr[a-z0-9]+_\w+" in src/shared/services/*.ts or src/services/*.ts
+   ```
+
+3. **Type definitions** — Check TypeScript entity interfaces for column names:
+   ```text
+   Grep: "cr[a-z0-9]+_\w+" in src/types/*.ts
+   ```
+
+For each table, compile the complete set of columns used in code and ensure the proposed `Webapi/<table>/fields` value includes **all of them**. If a column appears in the integration code but is missing from the fields setting, add it.
+
+**Common omissions to check for:**
+- Primary key column (e.g., `cr4fc_productid`) — always needed for CRUD
+- Lookup GUID columns (e.g., `_cr4fc_category_value`) — needed for filtering and references
+- `createdon` / `modifiedon` — if displayed in the UI
+- Columns used in `$filter` or `$orderby` — must be in the fields list to be queryable
+
 ---
 
 ## Step 4: Discover Table Columns
