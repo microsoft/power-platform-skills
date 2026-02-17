@@ -10,7 +10,7 @@
     "plugins": [
         {
             "name": "power-pages",
-            "source": "power-pages",
+            "source": "./plugins/power-pages",
             "description": "Power Pages development and management plugin for Claude Code and GitHub Copilot",
             "category": "development",
             "tags": [
@@ -22,7 +22,7 @@
         },
         {
             "name": "power-apps",
-            "source": "power-apps",
+            "source": "./plugins/power-apps",
             "description": "Build and deploy Power Apps generative pages for model-driven apps",
             "category": "development",
             "tags": [
