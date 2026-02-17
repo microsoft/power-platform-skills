@@ -205,10 +205,15 @@ For each table that needs Web API access, determine:
 2. **What operations** are needed per role:
    - `adx_read` — Can read records
    - `adx_create` — Can create new records
-   - `adx_write` — Can update existing records
+   - `adx_write` — Can update existing records. **Also required for file/image column uploads** — uploading a file uses `PATCH` which requires write permission even if the role doesn't need to update other fields on the record.
    - `adx_delete` — Can delete records
    - `adx_append` — Can associate records to other records (needed when this table has child relationships)
    - `adx_appendto` — Can be associated as a child to other records (needed when this table is referenced by lookups)
+
+   **File/image upload detection:** If the integration code contains `uploadFileColumn`, `uploadFile`, or PATCH requests targeting a column endpoint (pattern: `/_api/<table>(<id>)/<column>`), the table requires `write: true`. Search for these patterns:
+   ```text
+   Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image|upload\w+File" in src/**/*.ts
+   ```
 3. **Scope** — What records the role can access:
    - `756150000` — **Global**: Access all records. **Avoid Global scope whenever possible** — it grants unrestricted access to every record in the table. Only use Global for truly public, read-only reference data (e.g., product catalog for anonymous browsing) where no other scope is appropriate.
    - `756150001` — **Contact**: Access records associated with the current user's contact. **Recommend Contact scope for individual self-access** — use when each user should only see/manage their own records (e.g., orders, profiles, addresses).
@@ -257,6 +262,7 @@ For each table, compile the complete set of columns used in code and ensure the 
 **Common omissions to check for:**
 - Primary key column (e.g., `cr4fc_productid`) — always needed for CRUD
 - Lookup GUID columns (e.g., `_cr4fc_category_value`) — needed for filtering and references
+- File/image columns (e.g., `cr4fc_photo`) — needed in the fields list if the code downloads or uploads files. Also ensure `write: true` is set on the table permission if uploads are used (PATCH method).
 - `createdon` / `modifiedon` — if displayed in the UI
 - Columns used in `$filter` or `$orderby` — must be in the fields list to be queryable
 
