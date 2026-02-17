@@ -222,7 +222,7 @@ Present all activation parameters to the user using `AskUserQuestion`:
 Run the shared activation script, passing all parameters gathered in Phases 1–2:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Omit `--websiteRecordId` if it is null/empty.

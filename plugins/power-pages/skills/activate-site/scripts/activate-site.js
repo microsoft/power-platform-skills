@@ -5,7 +5,7 @@
 // refreshes the Azure CLI token during long polling cycles.
 //
 // Usage:
-//   node activate-site.js --siteName "My Site" --subdomain "my-site" --organizationId "<guid>" --environmentId "<guid>" --cloud "Public" [--websiteRecordId "<guid>"]
+//   node activate-site.js --siteName "My Site" --subdomain "my-site" --organizationId "<guid>" --environmentId "<guid>" --cloud "Public" [--websiteRecordId "<guid>"] [--projectRoot "<path>"]
 //
 // Output (JSON to stdout):
 //   { "status": "Succeeded", "siteUrl": "https://...", "siteName": "...", "subdomain": "..." }
@@ -13,11 +13,21 @@
 //   { "status": "Running", "message": "Provisioning still in progress after 5 minutes" }
 //   { "error": "..." }   — when prerequisites are missing or unexpected errors occur
 
-const { getAuthToken, makeRequest, CLOUD_TO_API, CLOUD_TO_SITE_DOMAIN } = require('./lib/validation-helpers');
+const fs = require('fs');
+const nodePath = require('path');
+const { getAuthToken, makeRequest, CLOUD_TO_API, CLOUD_TO_SITE_DOMAIN } = require('../../../scripts/lib/validation-helpers');
 
 // --- Helpers ---
 
 function output(obj) {
+  // Write result to .activation-result.json in the project root so
+  // validate-activation.js can read it without a separate GET /websites call.
+  // The --projectRoot arg tells us where to write.
+  try {
+    if (projectRoot) {
+      fs.writeFileSync(nodePath.join(projectRoot, '.activation-result.json'), JSON.stringify(obj), 'utf8');
+    }
+  } catch { /* best-effort */ }
   process.stdout.write(JSON.stringify(obj));
   process.exit(0);
 }
@@ -28,7 +38,7 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const args = {};
-  const keys = ['--siteName', '--subdomain', '--organizationId', '--environmentId', '--cloud', '--websiteRecordId'];
+  const keys = ['--siteName', '--subdomain', '--organizationId', '--environmentId', '--cloud', '--websiteRecordId', '--projectRoot'];
   for (const key of keys) {
     const idx = argv.indexOf(key);
     if (idx !== -1 && idx + 1 < argv.length) {
@@ -41,6 +51,7 @@ function parseArgs(argv) {
 // --- Parse arguments ---
 
 const args = parseArgs(process.argv.slice(2));
+const projectRoot = args.projectRoot || null;
 
 if (!args.siteName) output({ error: 'Missing required argument: --siteName' });
 if (!args.subdomain) output({ error: 'Missing required argument: --subdomain' });
@@ -158,16 +169,16 @@ const apiUrl = `${ppApiBaseUrl}/powerpages/environments/${args.environmentId}/we
 
     const status = pollStatus.status || pollStatus.Status;
 
-    if (status === 'Succeeded') {
+    if (status === 'OperationComplete') {
       output({
         status: 'Succeeded',
-        siteUrl,
+        siteUrl: pollStatus.websiteUrl || siteUrl,
         siteName: args.siteName,
         subdomain: args.subdomain,
       });
     }
 
-    if (status === 'Failed') {
+    if (status === 'OperationFailed') {
       const errMsg = pollStatus.error?.message || pollStatus.Error?.message || JSON.stringify(pollStatus);
       output({
         status: 'Failed',
@@ -176,7 +187,7 @@ const apiUrl = `${ppApiBaseUrl}/powerpages/environments/${args.environmentId}/we
       });
     }
 
-    // "Running" — continue polling
+    // "OperationInProgress" / "OperationNotStarted" — continue polling
   }
 
   // Timed out

@@ -8,9 +8,5 @@
     "microsoft-learn": {
         "type": "http",
         "url": "https://learn.microsoft.com/api/mcp"
-    },
-    "drawio": {
-        "type": "http",
-        "url": "https://mcp.draw.io/mcp"
     }
 }
