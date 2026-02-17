@@ -1,8 +1,8 @@
 {
     "playwright": {
-        "command": "npx",
+        "command": "node",
         "args": [
-            "@playwright/mcp@latest"
+            "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
         ]
     },
     "microsoft-learn": {
