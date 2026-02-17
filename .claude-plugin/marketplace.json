@@ -1,37 +1,36 @@
 {
     "name": "power-platform-skills",
-    "description": "Directory of agent plugins for Power Platform development",
     "owner": {
         "name": "Microsoft"
+    },
+    "metadata": {
+        "description": "Plugins for Power Platform development with Claude Code",
+        "pluginRoot": "./plugins"
     },
     "plugins": [
         {
             "name": "power-pages",
+            "source": "power-pages",
             "description": "Power Pages development and management plugin for Claude Code",
-            "version": "1.0.0",
-            "author": {
-                "name": "Microsoft"
-            },
+            "category": "development",
             "tags": [
                 "power platform",
                 "power pages",
                 "microsoft power platform",
                 "microsoft"
-            ],
-            "source": "./plugins/power-pages",
-            "category": "development",
-            "strict": false
+            ]
         },
         {
             "name": "power-apps",
-            "description": "Build and deploy Power Apps generative pages for model-driven apps.",
-            "version": "1.0.0",
-            "author": {
-                "name": "Microsoft"
-            },
-            "source": "./plugins/power-apps",
+            "source": "power-apps",
+            "description": "Build and deploy Power Apps generative pages for model-driven apps",
             "category": "development",
-            "strict": false
+            "tags": [
+                "power platform",
+                "power apps",
+                "model-driven",
+                "microsoft"
+            ]
         }
     ]
 }
