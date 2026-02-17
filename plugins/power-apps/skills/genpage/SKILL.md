@@ -16,10 +16,10 @@ allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "As
 
 ## References
 
-- **Code generation rules**: [genux-rules-reference.md](../../shared/references/genux-rules-reference.md)
-- **PAC CLI commands**: [pac-cli-reference.md](../../shared/references/pac-cli-reference.md)
-- **Troubleshooting**: [troubleshooting.md](../../shared/references/troubleshooting.md)
-- **Sample pages**: [samples/](../../shared/samples/)
+- **Code generation rules**: [genux-rules-reference.md](../../references/genux-rules-reference.md)
+- **PAC CLI commands**: [pac-cli-reference.md](../../references/pac-cli-reference.md)
+- **Troubleshooting**: [troubleshooting.md](../../references/troubleshooting.md)
+- **Sample pages**: [samples/](../../samples/)
 
 ## What This Skill Does
 
@@ -87,7 +87,7 @@ node --version
 pac --version
 ```
 
-If either fails, inform the user and provide installation instructions. Do NOT proceed until prerequisites are met. See [troubleshooting.md](../../shared/references/troubleshooting.md) if issues arise.
+If either fails, inform the user and provide installation instructions. Do NOT proceed until prerequisites are met. See [troubleshooting.md](../../references/troubleshooting.md) if issues arise.
 
 ### Step 2: Authenticate and Select Environment
 
@@ -161,7 +161,7 @@ After generating, **read the RuntimeTypes.ts file** and:
 
 > **NEVER guess or assume column names.** Custom entities (e.g., `cr69c_candidate`) have unpredictable column names (e.g., `cr69c_fullname` not `cr69c_name`). The only way to know the real names is to read them from the generated schema.
 
-If schema generation fails, see [troubleshooting.md](../../shared/references/troubleshooting.md). Do NOT generate code with guessed column names.
+If schema generation fails, see [troubleshooting.md](../../references/troubleshooting.md). Do NOT generate code with guessed column names.
 
 **For mock data pages:** Skip this step.
 
@@ -169,24 +169,24 @@ If schema generation fails, see [troubleshooting.md](../../shared/references/tro
 
 Before generating code, read the comprehensive rules reference:
 
-**[genux-rules-reference.md](../../shared/references/genux-rules-reference.md)** — Full code generation rules, DataAPI types, layout patterns, common errors.
+**[genux-rules-reference.md](../../references/genux-rules-reference.md)** — Full code generation rules, DataAPI types, layout patterns, common errors.
 
 Also read a relevant sample for reference:
 
 | Sample | Use When |
 |--------|----------|
-| [1-account-grid.tsx](../../shared/samples/1-account-grid.tsx) | DataGrid with Dataverse entities |
-| [2-wizard-multi-step.tsx](../../shared/samples/2-wizard-multi-step.tsx) | Multi-step wizard flow |
-| [3-poa-revocation-wizard.tsx](../../shared/samples/3-poa-revocation-wizard.tsx) | Complex wizard with forms |
-| [4-account-crud-dataverse.tsx](../../shared/samples/4-account-crud-dataverse.tsx) | Full CRUD operations |
-| [5-file-upload.tsx](../../shared/samples/5-file-upload.tsx) | File upload pattern |
-| [6-navigation-sidebar.tsx](../../shared/samples/6-navigation-sidebar.tsx) | Sidebar navigation layout |
-| [7-comprehensive-form.tsx](../../shared/samples/7-comprehensive-form.tsx) | Complex form with validation |
-| [8-responsive-cards.tsx](../../shared/samples/8-responsive-cards.tsx) | Card-based responsive layout |
+| [1-account-grid.tsx](../../samples/1-account-grid.tsx) | DataGrid with Dataverse entities |
+| [2-wizard-multi-step.tsx](../../samples/2-wizard-multi-step.tsx) | Multi-step wizard flow |
+| [3-poa-revocation-wizard.tsx](../../samples/3-poa-revocation-wizard.tsx) | Complex wizard with forms |
+| [4-account-crud-dataverse.tsx](../../samples/4-account-crud-dataverse.tsx) | Full CRUD operations |
+| [5-file-upload.tsx](../../samples/5-file-upload.tsx) | File upload pattern |
+| [6-navigation-sidebar.tsx](../../samples/6-navigation-sidebar.tsx) | Sidebar navigation layout |
+| [7-comprehensive-form.tsx](../../samples/7-comprehensive-form.tsx) | Complex form with validation |
+| [8-responsive-cards.tsx](../../samples/8-responsive-cards.tsx) | Card-based responsive layout |
 
 ### Step 7: Generate Code
 
-Generate complete TypeScript following ALL rules in [genux-rules-reference.md](../../shared/references/genux-rules-reference.md). **For Dataverse pages, use ONLY the column names verified from RuntimeTypes.ts in Step 5.** Output in this format:
+Generate complete TypeScript following ALL rules in [genux-rules-reference.md](../../references/genux-rules-reference.md). **For Dataverse pages, use ONLY the column names verified from RuntimeTypes.ts in Step 5.** Output in this format:
 
 **Agent Thoughts:** Step-by-step reasoning and approach
 **Summary:** Non-technical bulleted list of what was built
@@ -264,14 +264,14 @@ const choices = await dataApi.getChoices("account-statecode");
 - Always wrap async `dataApi` calls in try-catch
 - DataGrid: use `createTableColumn`, enable sorting by default
 
-See [genux-rules-reference.md](../../shared/references/genux-rules-reference.md) for full DataAPI type definitions and examples.
+See [genux-rules-reference.md](../../references/genux-rules-reference.md) for full DataAPI type definitions and examples.
 
 ### Step 8: Save and Deploy
 
 After showing code, ALWAYS ask:
 > "Would you like to publish this page to Power Apps?"
 
-If yes, follow this deployment workflow. See [pac-cli-reference.md](../../shared/references/pac-cli-reference.md) for full command details.
+If yes, follow this deployment workflow. See [pac-cli-reference.md](../../references/pac-cli-reference.md) for full command details.
 
 **For Dataverse entity pages** (schema already generated in Step 5):
 
