@@ -6,37 +6,17 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 
 ## How to Record Skill Usage
 
-### Step 1: Detect the Authoring Tool
+### Run the Tracking Script
 
-Determine which AI tool you are and the environment you're running in:
-
-1. Identify which AI tool you are (Claude Code, GitHub Copilot, etc.)
-2. Detect if running inside VS Code by checking environment variables:
-   ```powershell
-   $env:TERM_PROGRAM -eq 'vscode'
-   # or
-   $env:VSCODE_GIT_ASKPASS_NODE
-   ```
-3. Combine tool + environment to pick the correct `--authoringTool` value:
-
-| AI Tool | Terminal/CLI | VS Code |
-|---------|-------------|---------|
-| Claude Code | `ClaudeCodeCLI` | `ClaudeCodeVSCode` |
-| GitHub Copilot | `GitHubCopilotCLI` | `GitHubCopilotVSCode` |
-
-If you cannot determine the AI tool, use `Unknown` as the value.
-
-### Step 2: Run the Tracking Script
-
-Run the shared tracking script with all three required arguments:
+Run the shared tracking script:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<value>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 
 - `--projectRoot`: The project root directory (containing `powerpages.config.json`)
 - `--skillName`: The PascalCase skill name from the table below
-- `--authoringTool`: The value determined in Step 1
+- `--authoringTool`: Your agent name (e.g., `ClaudeCode`, `GitHubCopilot`). The script normalizes this value — any name containing "claude" becomes `ClaudeCode`, any name containing "github" or "copilot" becomes `GitHubCopilot`.
 
 The script exits silently if `.powerpages-site/site-settings/` does not exist, so it is safe to call unconditionally.
 

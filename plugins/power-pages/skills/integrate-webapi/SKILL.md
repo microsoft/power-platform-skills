@@ -23,8 +23,9 @@ hooks:
             verify before allowing stop: 1) The site was analyzed and tables requiring Web API integration
             were identified, 2) The webapi-integration agent was invoked to create API client, types, and
             service files for each table, 3) All integration files were verified (types, services, hooks exist)
-            and the project builds successfully, 4) The webapi-permissions agent was invoked to set up table
-            permissions and site settings, 5) The user was asked whether to deploy the site.
+            and the project builds successfully, 4) Table permissions and site settings were configured
+            (either via the webapi-permissions agent or by parsing a user-provided permissions diagram),
+            5) The user was asked whether to deploy the site.
             If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
             If no Web API integration work happened or everything is complete, return { "ok": true }.
           timeout: 30
@@ -56,7 +57,7 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 3. **Review Integration Plan** — Present findings to the user and confirm which tables to integrate
 4. **Implement Integrations** — Use the `webapi-integration` agent for each table
 5. **Verify Integrations** — Validate all expected files exist and the project builds successfully
-6. **Setup Permissions** — Use the `webapi-permissions` agent to configure table permissions and site settings
+6. **Setup Permissions** — Choose permissions source (upload diagram or let the Web API Permissions Architect analyze), then configure table permissions and site settings
 7. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
 
 ---
@@ -304,7 +305,50 @@ Use `AskUserQuestion`:
 
 **If "Skip"**: Skip to Phase 7 with a note that permissions still need to be configured.
 
-### 5.2 Invoke Permissions Agent
+### 5.2 Choose Permissions Source
+
+Ask the user how they want to define the permissions using the `AskUserQuestion` tool:
+
+**Question**: "How would you like to define the Web API permissions for your site?"
+
+| Option | Description |
+|--------|-------------|
+| **Upload an existing permissions diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing permissions structure |
+| **Let the Web API Permissions Architect figure it out** | The Web API Permissions Architect will analyze your site's code, data model, and Dataverse environment, then propose permissions automatically |
+
+Route to the appropriate path:
+
+#### Path A: Upload Existing Permissions Diagram
+
+If the user chooses to upload an existing diagram:
+
+1. Ask the user to provide their permissions diagram. Supported formats:
+   - **Image file** (PNG, JPG) — Use the `Read` tool to view the image and extract web roles, table permissions, CRUD flags, scopes, and site settings from it
+   - **Mermaid syntax** — The user can paste a Mermaid flowchart diagram text directly in chat
+   - **Text description** — A structured list of web roles, table permissions, scopes, and site settings
+
+2. Parse the diagram into the same structured format used by the webapi-permissions agent:
+   - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
+   - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto), parent permission and relationship name (if Parent scope)
+   - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields must list specific column logical names, NEVER use `*` wildcard**
+
+3. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
+
+4. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
+
+5. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
+
+   | Question | Options |
+   |----------|---------|
+   | Does this permissions plan look correct? | Approve and create files (Recommended), Request changes, Cancel |
+
+6. Proceed directly to **section 5.4: Create Permission Files** with the parsed permissions data.
+
+#### Path B: Let the Web API Permissions Architect Figure It Out
+
+If the user chooses to let the Web API Permissions Architect figure it out, proceed to **section 5.3: Invoke Permissions Agent**.
+
+### 5.3 Invoke Permissions Agent
 
 Use the `Task` tool to invoke the `webapi-permissions` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-permissions.md`:
 
@@ -312,9 +356,9 @@ Use the `Task` tool to invoke the `webapi-permissions` agent at `${CLAUDE_PLUGIN
 
 > "Analyze this Power Pages code site and set up Web API permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles, table permissions, and site settings. Propose a complete permissions plan covering all integrated tables."
 
-### 5.3 Create Permission Files
+### 5.4 Create Permission Files
 
-After the `webapi-permissions` agent returns its plan and the user approves it (via plan mode within the agent), create the actual YAML files based on the agent's output:
+After the permissions data is available — either from the user's uploaded diagram (Path A) or from the `webapi-permissions` agent's approved plan (Path B) — create the actual YAML files:
 
 - **Table permission files** in `.powerpages-site/table-permissions/`
 - **Site setting files** in `.powerpages-site/site-settings/`
@@ -333,9 +377,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 - String values (like field lists) are also unquoted: `value: cr87b_name,cr87b_email`
 - CRUD flags are unquoted booleans: `read: true` — NEVER `read: "true"`
 - Fields MUST be alphabetically sorted
-- Follow the exact YAML format specified by the `webapi-permissions` agent's plan output
+- Follow the exact YAML format specified by the permissions plan output
 
-### 5.4 Git Commit
+### 5.5 Git Commit
 
 Stage and commit the permission files:
 
@@ -416,8 +460,9 @@ After deployment (or if skipped), remind the user:
 1. After Phase 2: Confirm which tables to integrate
 2. After Phase 3: Approve integration plan
 3. At Phase 6.1: Deploy now or skip permissions (if `.powerpages-site` missing)
-4. At Phase 6.3: Approve permissions plan (handled within the `webapi-permissions` agent via plan mode)
-5. At Phase 7.2: Deploy now or deploy later
+4. At Phase 6.2: Choose permissions source (upload diagram or let the Web API Permissions Architect analyze)
+5. At Phase 6.3/6.4: Approve permissions plan (via user review for Path A, or plan mode within the agent for Path B)
+6. At Phase 7.2: Deploy now or deploy later
 
 ### Progress Tracking
 
@@ -430,7 +475,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
 | Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent per table, verify output, git commit |
 | Verify integrations | Verifying integrations | Validate all expected files exist, check imports and API references, run project build |
-| Setup permissions | Configuring permissions and site settings | Invoke webapi-permissions agent, create YAML files, git commit |
+| Setup permissions | Configuring permissions and site settings | Choose permissions source (upload diagram or Web API Permissions Architect), create YAML files, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.

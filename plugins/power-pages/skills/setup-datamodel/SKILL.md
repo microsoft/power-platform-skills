@@ -63,7 +63,7 @@ Guide the user through creating Dataverse tables, columns, and relationships for
    | Option | Description |
    |--------|-------------|
    | **Upload an existing ER diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing data model |
-   | **Let AI figure it out** | The AI agent will analyze your site's source code and propose a data model automatically |
+   | **Let the Data Model Architect figure it out** | The Data Model Architect will analyze your site's source code and propose a data model automatically |
 
 2. Route to the appropriate path:
 
@@ -88,9 +88,9 @@ If the user chooses to upload an existing diagram:
 
 5. Proceed directly to **Phase 4: Review Proposal** with the parsed data model.
 
-### Path B: Let AI Figure It Out
+### Path B: Let the Data Model Architect Figure It Out
 
-If the user chooses to let AI figure it out, proceed to **Phase 3: Invoke Data Model Architect** (the existing automated flow).
+If the user chooses to let the Data Model Architect figure it out, proceed to **Phase 3: Invoke Data Model Architect** (the existing automated flow).
 
 **Output**: Data model source chosen and, for Path A, parsed data model ready for review
 

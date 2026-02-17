@@ -30,6 +30,17 @@ if (!projectRoot || !skillName || !authoringTool) {
   process.exit(1);
 }
 
+// --- Normalize authoring tool name to PascalCase ---
+
+function normalizeAuthoringTool(raw) {
+  const lower = raw.toLowerCase();
+  if (lower.includes('claude')) return 'ClaudeCode';
+  if (lower.includes('github') || lower.includes('copilot')) return 'GitHubCopilot';
+  return raw;
+}
+
+const normalizedAuthoringTool = normalizeAuthoringTool(authoringTool);
+
 // --- Check for site-settings directory ---
 
 const siteSettingsDir = path.join(projectRoot, '.powerpages-site', 'site-settings');
@@ -97,10 +108,10 @@ if (!fs.existsSync(authoringFilePath)) {
     description: 'Records which AI authoring tool was used',
     id: generateUuid(),
     name: 'Site/AI/AuthoringTool',
-    value: authoringTool
+    value: normalizedAuthoringTool
   };
   fs.writeFileSync(authoringFilePath, writeYaml(fields), 'utf8');
-  console.log(`Created Site/AI/AuthoringTool setting (value: ${authoringTool})`);
+  console.log(`Created Site/AI/AuthoringTool setting (value: ${normalizedAuthoringTool})`);
 } else {
   console.log('Site/AI/AuthoringTool setting already exists — preserved');
 }
