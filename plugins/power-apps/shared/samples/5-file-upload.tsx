@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Button, Text } from "@fluentui/react-components";
+import { Button, Text, tokens } from "@fluentui/react-components";
 
 const GeneratedComponent = () => {
     const fileInputRef = useRef<HTMLInputElement>(null); // Ref for hidden file input

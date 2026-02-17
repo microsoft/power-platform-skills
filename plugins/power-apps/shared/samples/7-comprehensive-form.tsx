@@ -84,7 +84,7 @@ const GeneratedComponent: React.FC = () => {
     }, []);
 
     return (
-        <div className={styles.container}>
+        <div className={styles.container} ref={containerRef}>
             <header>
                 <Subtitle1 as="h1" block>User Information Form</Subtitle1>
                 <Body1 style={{ color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXS }} block>Please fill out all required fields. Fields marked with * are mandatory.</Body1>
@@ -133,7 +133,6 @@ const GeneratedComponent: React.FC = () => {
                                 placeholder="Select preferred contact time"
                                 freeform={false}
                                 showSeconds={false}
-                                // All Time Pickers must have this prop
                                 mountNode={mountNode}
                             />
                         </Field>

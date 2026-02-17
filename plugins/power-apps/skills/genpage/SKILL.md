@@ -49,7 +49,7 @@ Before starting, verify:
 ## Development Standards
 
 - **React 17 + TypeScript** — all generated code
-- **Fluent UI V9** — `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat`)
+- **Fluent UI V9** — `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat`)
 - **Single file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
 - **Type-safe DataAPI** — use RuntimeTypes when Dataverse entities are involved
