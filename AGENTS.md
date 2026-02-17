@@ -14,7 +14,7 @@ This file provides generic instructions for Claude Code when working on this plu
 This repository is a **plugin marketplace** containing multiple plugins:
 
 ```
-power-platform-claude-plugins/
+power-platform-skills/
 ├── .claude-plugin/
 │   └── marketplace.json      # Marketplace manifest (lists all available plugins)
 ├── plugins/                  # Directory containing individual plugins

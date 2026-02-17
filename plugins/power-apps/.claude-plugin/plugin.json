@@ -6,8 +6,8 @@
     "name": "Microsoft",
     "url": "https://www.microsoft.com"
   },
-  "homepage": "https://github.com/microsoft/power-platform-claude-plugins/",
-  "repository": "https://github.com/microsoft/power-platform-claude-plugins/",
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
   "license": "MIT",
   "keywords": [
     "power-apps",
