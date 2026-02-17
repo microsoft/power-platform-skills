@@ -82,14 +82,14 @@ Auto-triggered by the main conversation when relevant:
 User-invocable via `/power-pages:<skill-name>`:
 
 - `create-site`: 6-step workflow — gather requirements (including design direction), plan (with explicit scaffold prerequisites), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and live Playwright preview, review, deploy
-- `deploy-site`: 5-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, handle blocked JS attachments
+- `deploy-site`: 6-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, verify deployment (confirm `.powerpages-site` folder, commit, offer activation), handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 6-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution), gather parameters (site name, subdomain, website record ID), confirm with user, POST to Power Platform websites API, poll provisioning status, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
-- `create-webroles`: 5-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, review & prompt deployment via deploy-site skill.
-- `integrate-webapi`: 6-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, invoke `webapi-permissions` agent to configure table permissions and site settings, ask user to deploy via `deploy-site` skill.
-- `setup-auth`: 7-step workflow — verify prerequisites (site deployed + web roles), gather auth requirements and plan, create auth service with Entra ID login/logout (anti-forgery token + form POST), create authorization utilities (role checking), create auth UI (AuthButton component), apply role-based access control to components, create `ProfileRedirectEnabled` site setting and deploy.
+- `create-webroles`: 6-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, verify web roles (validate files, UUIDs, uniqueness constraints), review & prompt deployment via deploy-site skill.
+- `integrate-webapi`: 7-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, verify integrations (validate all files exist, project builds), invoke `webapi-permissions` agent to configure table permissions and site settings, review & deploy via `deploy-site` skill.
+- `setup-auth`: 8-step workflow — verify prerequisites (site deployed + web roles), gather auth requirements and plan, create auth service with Entra ID login/logout (anti-forgery token + form POST), create authorization utilities (role checking), create auth UI (AuthButton component), apply role-based access control to components, verify auth setup (validate files, build, auth UI renders), create `ProfileRedirectEnabled` site setting and deploy.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
 
@@ -158,6 +158,154 @@ Checks that Web API integration code was created for a Power Pages code site: ve
 ### `setup-auth/scripts/validate-auth.js`
 
 Checks that authentication and authorization code was created: verifies auth service (`src/services/authService.ts` or equivalent) exists with login/logout/getCurrentUser functions and anti-forgery token handling, Power Pages type declarations (`src/types/powerPages.d.ts`) exist, authorization utilities (`src/utils/authorization.ts`) exist, and an auth UI component (AuthButton or equivalent) exists. Gracefully exits 0 when no auth files are detected (not an auth session).
+
+## Skill Development Guide
+
+All skills in this plugin follow a consistent set of patterns. When creating a new skill, follow every convention below to maintain consistency across the plugin.
+
+### Phase-Wise Workflow
+
+Every skill is structured as a sequence of **phases** (typically 5–8). Each phase has a single, clear goal and an explicit output statement describing what it delivers. Phases execute sequentially — never skip or reorder them.
+
+A typical phase sequence looks like:
+
+1. **Prerequisites / Verify** — Confirm tools, auth, project structure exist
+2. **Discover / Gather** — Collect user input, analyze existing code/state
+3. **Plan / Review** — Present a plan and get user approval before proceeding
+4. **Implement / Create** — Do the actual work (create files, call APIs, scaffold)
+5. **Verify** (**mandatory**) — Validate the output: confirm files exist, formats are correct, project builds, UI renders
+6. **Deploy / Summarize** — Offer deployment and present a summary with next steps
+
+**Every skill must have a dedicated verification phase.** This is not optional. The verification phase must be a standalone phase (not a substep buried inside another phase) and must appear after the implementation work is complete but before the final review/deploy phase. What verification checks depends on the skill:
+
+- **File-creating skills**: Verify files exist, formats are valid, no unreplaced placeholders, project builds
+- **API-calling skills**: Verify records/resources were created by querying them back, present success/failure counts
+- **Deployment skills**: Verify deployment artifacts exist (e.g., `.powerpages-site` folder), confirm command output reported success
+- **UI-creating skills**: Verify the project builds and the new UI renders correctly via Playwright
+
+### Task Tracking (To Do List)
+
+Every skill uses `TaskCreate`, `TaskUpdate`, and `TaskList` to track progress:
+
+1. **Create all tasks upfront** — At the very start of Phase 1, before any work begins, create one task per phase using `TaskCreate`. The user sees the full scope immediately. Never add tasks incrementally mid-workflow.
+2. **Task fields** — Each task must include:
+   - `subject`: Imperative form (e.g., "Verify prerequisites")
+   - `activeForm`: Present continuous form shown in spinner (e.g., "Verifying prerequisites")
+   - `description`: Detailed description of what the phase does and its acceptance criteria
+3. **Task lifecycle** — Mark each task `in_progress` via `TaskUpdate` when starting the phase, then `completed` when the phase finishes. Progress through tasks sequentially.
+4. **Progress tracking table** — Include a table at the end of the SKILL.md listing all tasks with their `subject`, `activeForm`, and `description` fields. This serves as the reference for task creation.
+
+Example:
+
+```
+| Task subject | activeForm | Description |
+|---|---|---|
+| Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
+| Gather configuration | Gathering configuration | Collect user input for site name, options, preferences |
+| ... | ... | ... |
+```
+
+### SKILL.md Frontmatter
+
+Every SKILL.md starts with YAML frontmatter following this structure:
+
+```yaml
+---
+name: <skill-name>              # kebab-case identifier
+description: >-                  # User-facing description listing trigger phrases
+  <when to use this skill and synonym phrases>
+user-invocable: true
+argument-hint: <optional hint>   # Describes optional argument the user can pass
+allowed-tools:                   # Declare exactly what tools this skill needs
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Glob
+  - Grep
+  - Task
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - AskUserQuestion
+  # ... plus any MCP tools needed (e.g., Playwright browser_*)
+model: opus
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/<skill-name>/scripts/validate-<skill>.js"'
+          timeout: 30
+        - type: prompt
+          prompt: "<completeness checklist — returns { ok: true } or { ok: false, reason }>"
+          timeout: 30
+---
+```
+
+### User Confirmation at Key Decision Points
+
+Every skill must pause and wait for user input at critical junctures using `AskUserQuestion`. Document these decision points explicitly in the SKILL.md under a **"Key Decision Points (Wait for User)"** section. Common points:
+
+- After gathering requirements — confirm understanding before planning
+- After presenting a plan — get approval before implementation
+- After implementation — accept results or request changes
+- Before deployment — deploy now or later
+
+### Deployment Prompt
+
+Skills that create or modify site artifacts should end with a deployment prompt:
+
+1. Announce completion: "The X has been created/configured locally."
+2. Ask via `AskUserQuestion`: "Ready to deploy?" with options: "Yes, deploy now (Recommended)" / "No, I'll deploy later"
+3. If "Yes" — invoke the `/power-pages:deploy-site` skill
+4. If "No" — remind user: "Run `/power-pages:deploy-site` when ready"
+5. Present a summary and suggest next steps
+
+### Validation Hooks (Stop Hooks)
+
+Every skill that creates files must define two Stop hooks in its frontmatter:
+
+1. **Command hook** — A Node.js validation script (`scripts/validate-<skill>.js`) that verifies artifacts were created correctly (files exist, valid format, no unreplaced placeholders). Must import shared boilerplate from `scripts/lib/validation-helpers.js`. Must gracefully exit 0 when the session didn't involve this skill (e.g., no relevant files detected).
+2. **Prompt hook** — A completeness checklist that returns `{ ok: true }` or `{ ok: false, reason: "..." }`. Lists 4–6 specific conditions that must all be true for the skill to be considered complete.
+
+### Shared Resources (DRY)
+
+Before writing any new logic, check for existing shared utilities and references:
+
+- **Shared references** in `references/` at the plugin root — reuse via `${CLAUDE_PLUGIN_ROOT}/references/` paths
+- **Shared scripts** in `scripts/` — e.g., `generate-uuid.js`, `scripts/lib/validation-helpers.js`
+- **Skill-specific references** go in `skills/<skill-name>/references/` and must point to shared docs for common content rather than duplicating
+
+### Graceful Failure (No Auto-Rollback)
+
+Skills that make API calls must:
+
+- Track each API call result (success/failure/skipped)
+- **Never** attempt automated rollback on failure
+- Report failures clearly and continue with remaining items
+- Present a summary at the end showing what succeeded and what failed
+
+### Token Refresh for Long Operations
+
+Skills that make repeated Dataverse/API calls must refresh the Azure CLI access token periodically — every ~20 records, 3–4 tables, or ~60 seconds — to avoid expiration mid-workflow.
+
+### Git Commits at Milestones
+
+Skills that create or modify source files must commit after every significant milestone:
+
+- After creating each page or component
+- After applying design foundations
+- After each phase that modifies files completes
+
+Each commit should be focused with a clear message describing what was added or changed.
+
+### Agent Spawning
+
+Skills that delegate work to agents (via the `Task` tool) must:
+
+- Process agent invocations **sequentially, not in parallel** — the first invocation may create shared files that subsequent ones depend on
+- Wait for each agent to complete before invoking the next
+- Present agent output to the user for approval before proceeding
 
 ## Key Constraint
 

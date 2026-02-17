@@ -22,8 +22,9 @@ hooks:
             If Web API integration was being performed in this session (via /power-pages:integrate-webapi),
             verify before allowing stop: 1) The site was analyzed and tables requiring Web API integration
             were identified, 2) The webapi-integration agent was invoked to create API client, types, and
-            service files for each table, 3) The webapi-permissions agent was invoked to set up table
-            permissions and site settings, 4) The user was asked whether to deploy the site.
+            service files for each table, 3) All integration files were verified (types, services, hooks exist)
+            and the project builds successfully, 4) The webapi-permissions agent was invoked to set up table
+            permissions and site settings, 5) The user was asked whether to deploy the site.
             If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
             If no Web API integration work happened or everything is complete, return { "ok": true }.
           timeout: 30
@@ -54,8 +55,9 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 2. **Explore Integration Points** — Analyze site code and data model to identify tables needing Web API integration
 3. **Review Integration Plan** — Present findings to the user and confirm which tables to integrate
 4. **Implement Integrations** — Use the `webapi-integration` agent for each table
-5. **Setup Permissions** — Use the `webapi-permissions` agent to configure table permissions and site settings
-6. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
+5. **Verify Integrations** — Validate all expected files exist and the project builds successfully
+6. **Setup Permissions** — Use the `webapi-permissions` agent to configure table permissions and site settings
+7. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
 
 ---
 
@@ -236,7 +238,53 @@ git commit -m "Add Web API integration for [table names]"
 
 ---
 
-## Phase 5: Setup Permissions
+## Phase 5: Verify Integrations
+
+**Goal**: Validate that all expected integration files exist, imports are correct, and the project builds successfully
+
+**Actions**:
+
+### 5.1 Verify File Inventory
+
+For each integrated table, confirm the following files exist:
+- **Type definition** in `src/types/` (e.g., `src/types/product.ts`)
+- **Service file** in `src/shared/services/` or `src/services/` (e.g., `productService.ts`)
+- **Framework-specific hook/composable** (e.g., `src/shared/hooks/useProducts.ts` for React, `src/composables/useProducts.ts` for Vue)
+
+Also verify:
+- **Shared API client** at `src/shared/powerPagesApi.ts` exists
+- Each service file references `/_api/` endpoints
+- Each service file imports from the shared API client
+
+### 5.2 Verify Build
+
+Run the project build to catch any import errors, type errors, or missing dependencies:
+
+```powershell
+npm run build
+```
+
+If the build fails, fix the issues before proceeding. Common issues:
+- Missing imports between generated files
+- Type mismatches between service and type definitions
+- Framework-specific compilation errors
+
+### 5.3 Present Verification Results
+
+Present a table summarizing the verification:
+
+| Table | Types | Service | Hook/Composable | API References |
+|-------|-------|---------|-----------------|----------------|
+| Products | `src/types/product.ts` | `src/shared/services/productService.ts` | `src/shared/hooks/useProducts.ts` | `/_api/cr4fc_products` |
+| ... | ... | ... | ... | ... |
+
+**Build status**: Pass / Fail (with details)
+
+**Output**: All integration files verified, project builds successfully
+
+---
+
+## Phase 6: Setup Permissions
 
 **Goal**: Configure table permissions and site settings for all integrated tables using the `webapi-permissions` agent
 
@@ -254,7 +302,7 @@ Use `AskUserQuestion`:
 
 **If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this phase.
 
-**If "Skip"**: Skip to Phase 6 with a note that permissions still need to be configured.
+**If "Skip"**: Skip to Phase 7 with a note that permissions still need to be configured.
 
 ### 5.2 Invoke Permissions Agent
 
@@ -278,11 +326,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
 **CRITICAL YAML FORMATTING RULES when writing these files:**
+- **Code site git format**: Table permission fields have `adx_` prefix stripped (e.g., `append`, `read`, `scope`) EXCEPT `adx_entitypermission_webrole` (M2M relationship keeps prefix). The display name field is `entityname` (NOT `entitypermissionname`). Entity reference lookups (like `parententitypermission`) store only the GUID, not a nested object.
 - Boolean values MUST be unquoted: `value: true` — NEVER `value: "true"` or `value: "false"`
-- Numeric values MUST be unquoted: `adx_scope: 756150000` — NEVER `adx_scope: "756150000"`
+- Numeric values MUST be unquoted: `scope: 756150000` — NEVER `scope: "756150000"`
 - UUIDs MUST be unquoted: `id: a1b2c3d4-...` — NEVER `id: "a1b2c3d4-..."`
 - String values (like field lists) are also unquoted: `value: cr87b_name,cr87b_email`
-- CRUD flags are unquoted booleans: `adx_read: true` — NEVER `adx_read: "true"`
+- CRUD flags are unquoted booleans: `read: true` — NEVER `read: "true"`
+- Fields MUST be alphabetically sorted
+- Follow the exact YAML format specified by the `webapi-permissions` agent's plan output
 
 ### 5.4 Git Commit
 
@@ -297,13 +348,13 @@ git commit -m "Add Web API permissions and site settings for [table names]"
 
 ---
 
-## Phase 6: Review & Deploy
+## Phase 7: Review & Deploy
 
 **Goal**: Present a summary of all work performed and offer deployment
 
 **Actions**:
 
-### 6.1 Present Summary
+### 7.1 Present Summary
 
 Present a summary of everything that was done:
 
@@ -317,7 +368,7 @@ Present a summary of everything that was done:
 | Table Permissions | Created | X permission files |
 | Site Settings | Created | X setting files |
 
-### 6.2 Ask to Deploy
+### 7.2 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -331,7 +382,7 @@ Use `AskUserQuestion`:
 
 > "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready. The Web API calls will not work until the site is deployed with the new permissions."
 
-### 6.3 Post-Deploy Notes
+### 7.3 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
@@ -358,9 +409,9 @@ After deployment (or if skipped), remind the user:
 
 1. After Phase 2: Confirm which tables to integrate
 2. After Phase 3: Approve integration plan
-3. At Phase 5.1: Deploy now or skip permissions (if `.powerpages-site` missing)
-4. At Phase 5.3: Approve permissions plan (handled within the `webapi-permissions` agent via plan mode)
-5. At Phase 6.2: Deploy now or deploy later
+3. At Phase 6.1: Deploy now or skip permissions (if `.powerpages-site` missing)
+4. At Phase 6.3: Approve permissions plan (handled within the `webapi-permissions` agent via plan mode)
+5. At Phase 7.2: Deploy now or deploy later
 
 ### Progress Tracking
 
@@ -372,6 +423,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Explore integration points | Analyzing code for integration points | Use Explore agent to discover tables, existing services, and compile integration manifest |
 | Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
 | Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent per table, verify output, git commit |
+| Verify integrations | Verifying integrations | Validate all expected files exist, check imports and API references, run project build |
 | Setup permissions | Configuring permissions and site settings | Invoke webapi-permissions agent, create YAML files, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 

@@ -24,7 +24,8 @@ hooks:
             file was created (authService.ts/js) with login/logout functions, 3) PowerPages type declarations
             were created (powerPages.d.ts), 4) Authorization utilities were created (authorization.ts/js)
             with role-checking functions, 5) Auth UI component was created (AuthButton or equivalent),
-            6) The user was asked whether to deploy the site.
+            6) All auth files were verified (exist, contain expected exports, project builds successfully),
+            7) The user was asked whether to deploy the site.
             If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
             If no auth setup work happened or everything is complete, return { "ok": true }.
           timeout: 30
@@ -55,7 +56,8 @@ Configure authentication (login/logout via Microsoft Entra ID) and role-based au
 4. **Phase 4: Create Authorization Utils** — Role-checking functions and wrapper components
 5. **Phase 5: Create Auth UI** — Login/logout button integrated into navigation
 6. **Phase 6: Implement Role-Based UI** — Apply role-based patterns to site components
-7. **Phase 7: Review & Deploy** — Summary and deployment prompt
+7. **Phase 7: Verify Auth Setup** — Validate all auth files exist, build succeeds, auth UI renders
+8. **Phase 8: Review & Deploy** — Summary and deployment prompt
 
 ---
 
@@ -420,13 +422,66 @@ git commit -m "Add role-based access control to site components"
 
 ---
 
-## Phase 7: Review & Deploy
+## Phase 7: Verify Auth Setup
+
+**Goal:** Validate that all auth files exist, the project builds, and the auth UI renders correctly.
+
+### Actions
+
+#### 7.1 Verify File Inventory
+
+Confirm the following files were created:
+- `src/types/powerPages.d.ts` — Power Pages type declarations
+- `src/services/authService.ts` — Auth service with login/logout functions
+- Framework-specific auth hook/composable (e.g., `src/hooks/useAuth.ts` for React)
+- `src/utils/authorization.ts` — Role-checking utilities
+- Framework-specific authorization components (e.g., `RequireAuth.tsx`, `RequireRole.tsx` for React)
+- Auth button component (e.g., `src/components/AuthButton.tsx` for React)
+
+Read each file and verify it contains the expected exports and functions:
+- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`
+- Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
+
+#### 7.2 Verify Build
+
+Run the project build to catch any import errors, type errors, or missing dependencies:
+
+```powershell
+npm run build
+```
+
+If the build fails, fix the issues before proceeding.
+
+#### 7.3 Verify Auth UI Renders
+
+Start the dev server and verify the auth button appears in the navigation:
+
+```powershell
+npm run dev
+```
+
+Use Playwright to navigate to the site and take a snapshot to confirm the auth button is visible:
+- Navigate to `http://localhost:<port>`
+- Take a browser snapshot
+- Verify the auth button (Sign In / mock user) appears in the navigation area
+
+If the auth button is not visible or the page has rendering errors, fix the issues.
+
+### Output
+
+- All auth files verified (present and contain expected exports)
+- Project builds successfully
+- Auth UI renders correctly in the browser
+
+---
+
+## Phase 8: Review & Deploy
 
 **Goal:** Create required site settings, present a summary of all work, and prompt for deployment.
 
 ### Actions
 
-#### 7.1 Create Site Setting
+#### 8.1 Create Site Setting
 
 The site needs the `Authentication/Registration/ProfileRedirectEnabled` setting set to `false` to prevent Power Pages from redirecting users to a profile page after login (which doesn't exist in code sites).
 
@@ -444,7 +499,7 @@ name: Authentication/Registration/ProfileRedirectEnabled
 value: false
 ```
 
-#### 7.2 Present Summary
+#### 8.2 Present Summary
 
 Present a summary of everything created:
 
@@ -458,7 +513,7 @@ Present a summary of everything created:
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
-#### 7.3 Ask to Deploy
+#### 8.3 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -472,7 +527,7 @@ Use `AskUserQuestion`:
 
 > "Remember to deploy your site using `/power-pages:deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
 
-#### 7.4 Post-Deploy Notes
+#### 8.4 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
@@ -505,7 +560,8 @@ Use `TaskCreate` at the start to track each phase:
 | Phase 4 | Create Authorization Utils — role-checking functions and components |
 | Phase 5 | Create Auth UI — AuthButton component and navigation integration |
 | Phase 6 | Implement Role-Based UI — apply authorization patterns to components |
-| Phase 7 | Review & Deploy — site setting, summary, deployment prompt |
+| Phase 7 | Verify Auth Setup — validate files exist, build succeeds, auth UI renders |
+| Phase 8 | Review & Deploy — site setting, summary, deployment prompt |
 
 Update each task with `TaskUpdate` as phases are completed.
 
@@ -517,7 +573,7 @@ Update each task with `TaskUpdate` as phases are completed.
 - **Phase 2.1**: Which auth features to include? (login/logout, role-based, or both)
 - **Phase 2.2**: Approve plan or request changes?
 - **Phase 6.1**: Which content areas to protect with role-based access?
-- **Phase 7.3**: Deploy now or later?
+- **Phase 8.3**: Deploy now or later?
 
 ---
 

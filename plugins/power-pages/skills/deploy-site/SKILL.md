@@ -25,7 +25,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure PAC CLI is installed and available on the system PATH
 
 **Actions**:
-1. Create todo list with all 5 phases (see [Progress Tracking](#progress-tracking) table)
+1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
    ```powershell
@@ -64,7 +64,12 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
    pac auth who
    ```
 
-2. **If authenticated**: Extract the current environment name and URL from the output. Proceed to Phase 3.
+2. **If authenticated**: Extract the following values from the output:
+   - **Environment name** and **URL**
+   - **Environment ID** — the GUID after `Environment ID:`
+   - **Cloud** — the value after `Cloud:` (e.g., `Public`, `UsGov`, `UsGovHigh`, `UsGovDod`, `China`)
+
+   Proceed to Phase 3.
 
 3. **If not authenticated**:
 
@@ -169,43 +174,103 @@ Run the upload command:
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 ```
 
-**If the upload succeeds**:
+**If the upload succeeds**: Proceed to Phase 5 to verify the deployment.
 
-1. Inform the user that the site has been deployed successfully. Share the environment URL where they can view their site.
-2. Commit the changes:
+**If the upload fails**: Check the error message:
+- If the failure is related to **blocked JavaScript** (`.js`) attachments → proceed to **Phase 6**
+- If the failure mentions **`.html` type attachments are currently blocked** → this is a **misleading error**. See [Troubleshooting: HTML Blocked Attachment Error](#troubleshooting-html-blocked-attachment-error) below
+- For other errors → present the error to the user and help them troubleshoot
 
-   ```powershell
-   git add -A
-   git commit -m "Deploy site to Power Pages"
-   ```
-
-3. Ask the user if they want to activate the site using `AskUserQuestion`:
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Site deployed successfully! Would you like to activate (provision) the site now so it gets a live URL? | Activate | Activate now (Recommended) — Provision the site with a subdomain and make it live, Skip for now — I'll activate later |
-
-4. **If "Activate now"**: Invoke the `/power-pages:activate-site` skill.
-5. **If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
-
-**If the upload fails**: Check the error message and proceed to Phase 5 if the failure is related to blocked JavaScript attachments. For other errors, present the error to the user and help them troubleshoot.
-
-**Output**: Site built, uploaded to Power Pages, changes committed, and activation offered
+**Output**: Site built and uploaded to Power Pages
 
 ---
 
-## Phase 5: Handle Blocked JavaScript
+## Phase 5: Verify Deployment
+
+**Goal**: Confirm the deployment was successful and handle post-deployment steps
+
+**Actions**:
+
+### 5.1 Verify `.powerpages-site` Folder
+
+Confirm the `.powerpages-site` folder was created (first deploy) or still exists:
+
+```powershell
+Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -ErrorAction SilentlyContinue
+```
+
+List its contents to confirm site configuration files are present (e.g., `web-roles/`, `site-settings/`, `table-permissions/`).
+
+### 5.2 Confirm Upload Output
+
+Review the output from the `pac pages upload-code-site` command in Phase 4 (or Phase 6 retry). Verify it reported a successful upload with no errors.
+
+### 5.3 Commit Changes
+
+Stage and commit deployment artifacts:
+
+```powershell
+git add -A
+git commit -m "Deploy site to Power Pages"
+```
+
+### 5.4 Check Activation Status
+
+Before asking about activation, check whether the site is already activated by querying the Power Platform websites API. This avoids prompting the user unnecessarily when the site is already live.
+
+#### 5.4.1 Resolve API Base URL
+
+Map the **Cloud** value extracted from `pac auth who` (Phase 2) to the Power Platform API base URL:
+
+| Cloud value | PP API Base URL |
+|---|---|
+| `Public` | `https://api.powerplatform.com` |
+| `UsGov` | `https://api.gov.powerplatform.microsoft.us` |
+| `UsGovHigh` | `https://api.high.powerplatform.microsoft.us` |
+| `UsGovDod` | `https://api.appsplatform.us` |
+| `China` | `https://api.powerplatform.partner.microsoftonline.cn` |
+
+#### 5.4.2 Query Websites API
+
+Attempt to acquire an Azure CLI token and call the GET websites API:
+
+```powershell
+$token = az account get-access-token --resource "$ppApiBaseUrl" --query accessToken -o tsv
+$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
+$websites = Invoke-RestMethod -Uri "$ppApiBaseUrl/powerpages/environments/$environmentId/websites?api-version=2022-03-01-preview" -Headers $headers
+```
+
+- **If the API call succeeds and the response contains one or more websites**: The site is already activated. Inform the user: "Your site is already activated — no further provisioning needed." Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
+- **If the API call succeeds but the response is empty (no websites returned)**: The site is not yet activated. Proceed to step 5.4.3.
+- **If the API call fails** (Azure CLI not installed, not logged in, token error, or any other failure): Fall back to step 5.4.3. Do not block the deployment flow due to a failed activation check.
+
+#### 5.4.3 Ask About Activation (only if site is NOT already activated)
+
+Ask the user if they want to activate the site using `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Site deployed successfully! Would you like to activate (provision) the site now so it gets a live URL? | Activate | Activate now (Recommended) — Provision the site with a subdomain and make it live, Skip for now — I'll activate later |
+
+**If "Activate now"**: Invoke the `/power-pages:activate-site` skill.
+**If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
+
+**Output**: Deployment verified, changes committed, activation offered
+
+---
+
+## Phase 6: Handle Blocked JavaScript
 
 **Goal**: Resolve blocked JavaScript attachment errors and retry deployment
 
 **Actions**:
 
-### 5.1 Explain the Issue
+### 6.1 Explain the Issue
 
 Tell the user:
 > "The upload failed because JavaScript (.js) file attachments are blocked in your Power Pages environment. This is a security setting that prevents uploading .js files. To deploy a code site, this restriction needs to be relaxed for .js files."
 
-### 5.2 Ask for Permission
+### 6.2 Ask for Permission
 
 Use `AskUserQuestion`:
 
@@ -215,9 +280,9 @@ Use `AskUserQuestion`:
 
 **If "No"**: Stop and inform the user that the deployment cannot proceed without unblocking `.js` attachments.
 
-**If "Yes"**: Proceed to 5.3.
+**If "Yes"**: Proceed to 6.3.
 
-### 5.3 Update Blocked Attachments
+### 6.3 Update Blocked Attachments
 
 1. Run `pac env list-settings` to retrieve the current environment settings:
 
@@ -237,7 +302,7 @@ Use `AskUserQuestion`:
 
 5. Confirm the update was successful.
 
-### 5.4 Retry Upload
+### 6.4 Retry Upload
 
 Run the upload command again:
 
@@ -245,23 +310,47 @@ Run the upload command again:
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 ```
 
-If it succeeds:
-
-1. Inform the user that the deployment is complete.
-2. Commit the changes:
-
-   ```powershell
-   git add -A
-   git commit -m "Deploy site to Power Pages"
-   ```
-
-3. Ask the user about activation (same `AskUserQuestion` as Phase 4 step 3).
-4. **If "Activate now"**: Invoke the `/power-pages:activate-site` skill.
-5. **If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
+If it succeeds: Proceed to Phase 5 to verify the deployment.
 
 If it fails again with a different error, present the error to the user and help troubleshoot.
 
-**Output**: JavaScript unblocked, site deployed successfully, changes committed, and activation offered
+**Output**: JavaScript unblocked and site deployed successfully
+
+---
+
+## Troubleshooting: HTML Blocked Attachment Error
+
+If the upload fails with an error like:
+
+```
+Error: Unable to upload webfile name 'index.html' with record Id <GUID> as '.html' type attachments are currently blocked on this environment.
+```
+
+**This error is misleading.** The `.html` extension is not actually blocked — the real cause is a stale environment manifest file in the `.powerpages-site` folder. This manifest maps local files to Dataverse record IDs from a previous upload. When the mapping becomes outdated (e.g., after environment changes or record deletions), the upload fails with this confusing error.
+
+### Fix
+
+1. Locate the environment-specific manifest file in the `.powerpages-site` folder. It follows the naming pattern `<environment-host>-manifest.yml` (e.g., `demo1.crm.dynamics.com-manifest.yml`). List the folder contents to find it:
+
+   ```powershell
+   Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -Filter "*-manifest.yml"
+   ```
+
+2. Delete the manifest file:
+
+   ```powershell
+   Remove-Item -Path "<PROJECT_ROOT>/.powerpages-site/<environment-host>-manifest.yml"
+   ```
+
+3. Retry the upload:
+
+   ```powershell
+   pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
+   ```
+
+If the retry succeeds, proceed to Phase 5. If it fails with a different error, present the error to the user and help them troubleshoot.
+
+> **Important**: Do NOT attempt to unblock `.html` in the environment's blocked attachments list — the error is not caused by the attachment block setting.
 
 ---
 
@@ -287,7 +376,8 @@ If the user skips activation (or after activation completes), suggest:
 1. After Phase 2: If not authenticated, get environment URL from user
 2. At Phase 3: Confirm or switch the target environment
 3. At Phase 4: If multiple `powerpages.config.json` found, ask which project to deploy
-4. At Phase 5: Get permission before modifying blocked attachments setting
+4. At Phase 5: Activate site now or later
+5. At Phase 6: Get permission before modifying blocked attachments setting
 
 ### Progress Tracking
 
@@ -299,9 +389,10 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify authentication | Verifying authentication | Check current auth status, authenticate if needed |
 | Confirm target environment | Confirming environment | Show current environment, let user confirm or switch |
 | Deploy the code site | Deploying site | Locate project root, build, and upload via pac pages upload-code-site |
+| Verify deployment | Verifying deployment | Confirm .powerpages-site folder exists, review upload output, commit changes, offer activation |
 | Handle blocked JavaScript | Resolving JS block | If upload fails due to blocked JS, offer to unblock and retry |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. Phase 5 may be marked `completed` immediately if no JavaScript blocking issue is encountered. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. Phase 6 may be marked `completed` immediately if no JavaScript blocking issue is encountered. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

@@ -1,6 +1,48 @@
+# Dependencies
 node_modules
+
+# Build output
 dist
-.angular
+tmp
+out-tsc
+
+# Angular
+.angular/cache
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment variables
 .env
 .env.local
+.env*.local
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Miscellaneous
+.sass-cache
+testem.log
+
+# OS
+.DS_Store
+Thumbs.db
