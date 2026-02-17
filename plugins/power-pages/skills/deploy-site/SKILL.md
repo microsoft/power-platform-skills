@@ -1,5 +1,5 @@
 ---
-name: deploy-power-pages-site
+name: deploy-site
 description: This skill should be used when the user asks to "deploy to power pages", "upload site", "publish site", "deploy site", "push to power pages", "upload code site", or wants to deploy/upload an existing Power Pages code site to a Power Pages environment using PAC CLI.
 user-invocable: true
 allowed-tools: ["Read", "Bash", "AskUserQuestion", "Glob", "Grep", "TaskCreate", "TaskUpdate", "TaskList"]
@@ -222,35 +222,23 @@ git commit -m "Deploy site to Power Pages"
 
 ### 5.5 Check Activation Status
 
-Before asking about activation, check whether the site is already activated by querying the Power Platform websites API. This avoids prompting the user unnecessarily when the site is already live.
+Before asking about activation, check whether the site is already activated by running the shared activation status script. This avoids prompting the user unnecessarily when the site is already live.
 
-#### 5.5.1 Resolve API Base URL
-
-Map the **Cloud** value extracted from `pac auth who` (Phase 2) to the Power Platform API base URL:
-
-| Cloud value | PP API Base URL |
-|---|---|
-| `Public` | `https://api.powerplatform.com` |
-| `UsGov` | `https://api.gov.powerplatform.microsoft.us` |
-| `UsGovHigh` | `https://api.high.powerplatform.microsoft.us` |
-| `UsGovDod` | `https://api.appsplatform.us` |
-| `China` | `https://api.powerplatform.partner.microsoftonline.cn` |
-
-#### 5.5.2 Query Websites API
-
-Attempt to acquire an Azure CLI token and call the GET websites API:
+Run the check-activation-status script, passing the project root (determined in Phase 4.1):
 
 ```powershell
-$token = az account get-access-token --resource "$ppApiBaseUrl" --query accessToken -o tsv
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-$websites = Invoke-RestMethod -Uri "$ppApiBaseUrl/powerpages/environments/$environmentId/websites?api-version=2022-03-01-preview" -Headers $headers
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-- **If the API call succeeds and the response contains one or more websites**: The site is already activated. Inform the user: "Your site is already activated — no further provisioning needed." Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
-- **If the API call succeeds but the response is empty (no websites returned)**: The site is not yet activated. Proceed to step 5.5.3.
-- **If the API call fails** (Azure CLI not installed, not logged in, token error, or any other failure): Fall back to step 5.5.3. Do not block the deployment flow due to a failed activation check.
+The script reads `siteName` from `powerpages.config.json`, looks up the `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches the response against **both** the `websiteRecordId` (exact GUID match) and `name` (case-insensitive). It outputs a JSON result to stdout.
 
-#### 5.5.3 Ask About Activation (only if site is NOT already activated)
+Evaluate the result:
+
+- **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
+- **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
+- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
+
+#### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
 Ask the user if they want to activate the site using `AskUserQuestion`:
 

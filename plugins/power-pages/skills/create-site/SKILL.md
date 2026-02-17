@@ -1,5 +1,5 @@
 ---
-name: create-power-pages-site
+name: create-site
 description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
 user-invocable: true
 argument-hint: Optional site description
@@ -52,11 +52,12 @@ Guide the user through creating a complete, production-quality Power Pages code 
    | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | What is the site's purpose? | Purpose | Company Portal, Blog/Content, Dashboard, Landing Page |
    | Who is the target audience? | Audience | Internal (employees, partners), External (public-facing customers) |
-   | Where should the project be created? | Location | Current Directory, New folder in current directory (Recommended), Choose a different directory |
+   | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
 4. Resolve the project location:
+   - **If "Current directory"**: Project root = `<cwd>`.
    - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
-   - **If "Choose a different directory"**: Ask for the full path. Verify/create it. Project root = provided path.
+   - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
 
    After resolving, confirm: "The site will be created at `<resolved path>`."
 

@@ -17,9 +17,7 @@ tools:
   - Write
   - EnterPlanMode
   - ExitPlanMode
-  - mcp__plugin_power-pages_playwright__browser_navigate
-  - mcp__plugin_power-pages_playwright__browser_take_screenshot
-  - mcp__plugin_power-pages_playwright__browser_wait_for
+  - mcp__plugin_power-pages_drawio__create_diagram
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
@@ -507,91 +505,71 @@ Conventions for the diagram:
 
 ### 5.5 Render Diagram Visually
 
-**Do this BEFORE entering plan mode.** Render the Mermaid diagram in the browser so the user can see it while reviewing the plan.
+**Do this BEFORE entering plan mode.** Render the permissions diagram using the draw.io MCP server so the user can see it while reviewing the plan.
 
-1. Write a temporary HTML file to the **system temp directory** (NOT the project directory — avoid polluting the repo):
+Generate draw.io XML (mxGraphModel format) from the permissions structure (web roles → table permissions → tables), then call the `create_diagram` tool.
 
-```powershell
-# Get the temp directory path
-$tempDir = [System.IO.Path]::GetTempPath()
-# File path: $tempDir/permissions-diagram.html
+**How to build the XML:**
+
+Create three horizontal layers: Web Roles at top, Table Permissions in the middle, Tables at the bottom. Use swimlane containers for each layer, rectangles for roles and permissions, and cylinder shapes for tables.
+
+**Template example** (adapt to your actual roles/permissions/tables):
+
+```xml
+<mxGraphModel>
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <!-- Web Roles Layer -->
+    <mxCell id="sg1" value="Web Roles" style="swimlane;startSize=24;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="40" y="20" width="700" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="wr1" value="Anonymous Users" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="sg1">
+      <mxGeometry x="40" y="30" width="160" height="36" as="geometry"/>
+    </mxCell>
+    <mxCell id="wr2" value="Authenticated Users" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="sg1">
+      <mxGeometry x="400" y="30" width="180" height="36" as="geometry"/>
+    </mxCell>
+    <!-- Table Permissions Layer -->
+    <mxCell id="sg2" value="Table Permissions" style="swimlane;startSize=24;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="40" y="140" width="700" height="100" as="geometry"/>
+    </mxCell>
+    <mxCell id="tp1" value="&lt;b&gt;Product - Anonymous Read&lt;/b&gt;&lt;br&gt;Scope: Global&lt;br&gt;R:✓ C:✗ W:✗ D:✗" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;fontSize=11;" vertex="1" parent="sg2">
+      <mxGeometry x="20" y="30" width="200" height="58" as="geometry"/>
+    </mxCell>
+    <mxCell id="tp2" value="&lt;b&gt;Order - Auth Access&lt;/b&gt;&lt;br&gt;Scope: Self&lt;br&gt;R:✓ C:✓ W:✗ D:✗" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;fontSize=11;" vertex="1" parent="sg2">
+      <mxGeometry x="360" y="30" width="200" height="58" as="geometry"/>
+    </mxCell>
+    <!-- Tables Layer -->
+    <mxCell id="sg3" value="Tables" style="swimlane;startSize=24;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+      <mxGeometry x="40" y="280" width="700" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="tb1" value="cra5b_product" style="shape=cylinder3;whiteSpace=wrap;html=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="sg3">
+      <mxGeometry x="60" y="26" width="140" height="44" as="geometry"/>
+    </mxCell>
+    <mxCell id="tb2" value="cra5b_order" style="shape=cylinder3;whiteSpace=wrap;html=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="sg3">
+      <mxGeometry x="400" y="26" width="140" height="44" as="geometry"/>
+    </mxCell>
+    <!-- Arrows: role → permission (solid) -->
+    <mxCell id="a1" style="endArrow=block;startArrow=none;strokeWidth=2;" edge="1" source="wr1" target="tp1" parent="1"/>
+    <mxCell id="a2" style="endArrow=block;startArrow=none;strokeWidth=2;" edge="1" source="wr2" target="tp2" parent="1"/>
+    <!-- Arrows: permission → table (solid) -->
+    <mxCell id="a3" style="endArrow=block;startArrow=none;strokeWidth=2;" edge="1" source="tp1" target="tb1" parent="1"/>
+    <mxCell id="a4" style="endArrow=block;startArrow=none;strokeWidth=2;" edge="1" source="tp2" target="tb2" parent="1"/>
+    <!-- Dashed arrow for parent relationships: parent permission -.-> child permission -->
+    <!-- <mxCell id="a5" value="parent" style="endArrow=block;dashed=1;strokeWidth=1;fontSize=10;" edge="1" source="tp_parent" target="tp_child" parent="1"/> -->
+  </root>
+</mxGraphModel>
 ```
 
-HTML template:
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Web API Permissions Diagram</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-  <style>
-    body {
-      background: #ffffff;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      margin: 0;
-      padding: 40px;
-      font-family: system-ui, sans-serif;
-    }
-    .mermaid {
-      width: 100%;
-      min-width: 1200px;
-    }
-    .mermaid svg {
-      width: 100% !important;
-      height: auto !important;
-    }
-  </style>
-</head>
-<body>
-  <pre class="mermaid">
-    <!-- paste the Mermaid flowchart code here -->
-  </pre>
-  <script>mermaid.initialize({ startOnLoad: true, theme: 'default', flowchart: { useMaxWidth: false }, themeVariables: { fontSize: '16px' } });</script>
-</body>
-</html>
-```
-
-2. **Resize the browser** to a large viewport for a legible diagram:
-
-Use `browser_resize` with **width: 1920** and **height: 1080** before navigating.
-
-3. Navigate Playwright to the file using a `file:///` URL:
-   - On Windows: `file:///C:/Users/<user>/AppData/Local/Temp/permissions-diagram.html`
-   - Convert backslashes to forward slashes in the path
-
-4. Wait for the diagram to render (wait ~3 seconds for Mermaid to process).
-
-5. Take a **full-page screenshot** using `browser_take_screenshot` with `fullPage: true` — this captures the entire diagram regardless of viewport height.
-
-If Playwright fails, fall back to an ASCII representation:
-
-```
-┌─────────────────────┐     ┌──────────────────────────┐
-│   Anonymous Users   │     │   Authenticated Users    │
-└─────────┬───────────┘     └───────────┬──────────────┘
-          │                             │
-          ▼                             ▼
-┌─────────────────────┐     ┌──────────────────────────┐
-│ Product - Anon Read │     │ Order - Auth Access      │
-│ Scope: Global       │     │ Scope: Self              │
-│ R:✓ C:✗ W:✗ D:✗    │     │ R:✓ C:✓ W:✗ D:✗         │
-└─────────┬───────────┘     └───────────┬──────────────┘
-          │                             │  ┌─ parent
-          ▼                             ▼  ▼
-┌─────────────────────┐     ┌──────────────────────────┐
-│   cra5b_product     │     │ OrderItem - Auth Access   │
-└─────────────────────┘     │ Scope: Parent             │
-                            │ R:✓ C:✓ W:✗ D:✗          │
-                            └───────────┬──────────────┘
-                                        ▼
-                            ┌──────────────────────────┐
-                            │   cra5b_orderitem        │
-                            └──────────────────────────┘
-```
+**Conventions:**
+- Use swimlane containers to group Web Roles, Table Permissions, and Tables in distinct layers
+- Web role nodes: rounded rectangles with yellow fill (`#fff2cc`)
+- Table permission nodes: rectangles with blue fill (`#dae8fc`), showing permission name in bold, scope, and CRUD summary with ✓/✗
+- Table nodes: cylinder shapes with green fill (`#d5e8d4`) showing the table logical name
+- Solid arrows (`endArrow=block`): role-to-permission and permission-to-table associations
+- Dashed arrows (`dashed=1` with "parent" label): parent-child permission relationships
+- Space elements so they don't overlap
 
 ### 5.6 Summary and Next Steps
 
@@ -615,13 +593,7 @@ Use `EnterPlanMode` to present the complete proposal (sections 5.1–5.4 and 5.6
 
 ---
 
-## Step 6: Clean Up
-
-After the user approves the plan, delete the temporary `permissions-diagram.html` file from the system temp directory if it was created.
-
----
-
-## Step 7: Return Structured Output
+## Step 6: Return Structured Output
 
 After the user approves the plan, return the complete proposal back to the calling context. The output **must** include enough detail for the main agent to create all files. Structure the return as:
 
@@ -636,7 +608,7 @@ After the user approves the plan, return the complete proposal back to the calli
 ## Critical Constraints
 
 - **READ-ONLY**: Do NOT create, modify, or delete any YAML files, table permissions, or site settings. You are advisory only. The main agent creates files based on your plan.
-- **No file writes**: Do not use `Write` tool for any YAML files in `.powerpages-site/`. The only file you may write is the temporary `permissions-diagram.html` in the system temp directory for visualization.
+- **No file writes**: Do not use `Write` tool for any YAML files in `.powerpages-site/`.
 - **Code site git format**: All YAML files must use the code site git format where `adx_` prefix is stripped from regular attributes but M2M relationships (like `adx_entitypermission_webrole`) keep the prefix. Entity-specific ID fields become just `id`. Entity reference lookups store only the GUID value. The display name field for table permissions is `entityname` (from Dataverse `adx_entityname`), NOT `entitypermissionname`. Fields must be alphabetically sorted.
 - **NEVER use `*` for fields**: Always list specific column logical names in `Webapi/<table>/fields` settings. Using `*` is a security risk.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.

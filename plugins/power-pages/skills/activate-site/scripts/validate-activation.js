@@ -6,10 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-const { approve, block, runValidation, findPath, getAuthToken, getPacAuthInfo, CLOUD_TO_API } = require('../../../scripts/lib/validation-helpers');
+const { approve, block, runValidation, findPath, getAuthToken, makeRequest, getPacAuthInfo, CLOUD_TO_API } = require('../../../scripts/lib/validation-helpers');
 
-runValidation((cwd) => {
+runValidation(async (cwd) => {
   const configPath = findPath(cwd, 'powerpages.config.json');
   if (!configPath) approve(); // Not a Power Pages project, skip
 
@@ -25,7 +24,7 @@ runValidation((cwd) => {
   const token = getAuthToken(ppApiBaseUrl);
   if (!token) approve(); // Auth not available, don't block
 
-  const websites = getWebsites(ppApiBaseUrl, token, pacInfo.environmentId);
+  const websites = await getWebsites(ppApiBaseUrl, token, pacInfo.environmentId);
   if (websites === null) approve(); // API call failed, don't block
 
   const found = websites.some(
@@ -41,14 +40,21 @@ runValidation((cwd) => {
   approve();
 });
 
-function getWebsites(ppApiBaseUrl, token, environmentId) {
+async function getWebsites(ppApiBaseUrl, token, environmentId) {
   try {
-    const output = execSync(
-      `powershell -NoProfile -Command "(Invoke-RestMethod -Uri '${ppApiBaseUrl}/powerpages/environments/${environmentId}/websites?api-version=2022-03-01-preview' -Headers @{ Authorization = 'Bearer ${token}'; Accept = 'application/json' }).value | ConvertTo-Json -Compress"`,
-      { encoding: 'utf8', timeout: 15000 }
-    );
-    const parsed = JSON.parse(output.trim());
-    return Array.isArray(parsed) ? parsed : [parsed];
+    const result = await makeRequest({
+      url: `${ppApiBaseUrl}/powerpages/environments/${environmentId}/websites?api-version=2022-03-01-preview`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      timeout: 15000,
+    });
+    if (result.error || result.statusCode !== 200) return null;
+    const parsed = JSON.parse(result.body);
+    const value = parsed.value;
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
   } catch {
     return null;
   }

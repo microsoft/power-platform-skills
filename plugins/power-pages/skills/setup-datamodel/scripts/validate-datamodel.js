@@ -7,10 +7,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-const { approve, block, runValidation, findPath, getAuthToken, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { approve, block, runValidation, findPath, getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
 
-runValidation((cwd) => {
+runValidation(async (cwd) => {
   const manifestPath = findPath(cwd, '.datamodel-manifest.json');
   if (!manifestPath) approve(); // Not a data model session, skip
 
@@ -26,14 +25,14 @@ runValidation((cwd) => {
   const errors = [];
 
   for (const table of manifest.tables) {
-    const tableExists = checkTableExists(envUrl, token, table.logicalName);
+    const tableExists = await checkTableExists(envUrl, token, table.logicalName);
     if (!tableExists) {
       errors.push(`Missing table: ${table.logicalName} (${table.displayName || 'unknown'})`);
       continue;
     }
 
     if (table.columns && table.columns.length > 0) {
-      const existingColumns = getTableColumns(envUrl, token, table.logicalName);
+      const existingColumns = await getTableColumns(envUrl, token, table.logicalName);
       for (const col of table.columns) {
         if (!existingColumns.includes(col.logicalName)) {
           errors.push(`Missing column: ${table.logicalName}.${col.logicalName}`);
@@ -49,25 +48,35 @@ runValidation((cwd) => {
   approve();
 });
 
-function checkTableExists(envUrl, token, logicalName) {
+async function checkTableExists(envUrl, token, logicalName) {
   try {
-    execSync(
-      `powershell -NoProfile -Command "Invoke-RestMethod -Uri '${envUrl}/api/data/v9.2/EntityDefinitions(LogicalName=''${logicalName}'')' -Headers @{ Authorization = 'Bearer ${token}'; Accept = 'application/json' } | Out-Null"`,
-      { encoding: 'utf8', timeout: 15000 }
-    );
-    return true;
+    const result = await makeRequest({
+      url: `${envUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${logicalName}')`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      timeout: 15000,
+    });
+    return result.statusCode === 200;
   } catch {
     return false;
   }
 }
 
-function getTableColumns(envUrl, token, logicalName) {
+async function getTableColumns(envUrl, token, logicalName) {
   try {
-    const output = execSync(
-      `powershell -NoProfile -Command "(Invoke-RestMethod -Uri '${envUrl}/api/data/v9.2/EntityDefinitions(LogicalName=''${logicalName}'')/Attributes?$select=LogicalName' -Headers @{ Authorization = 'Bearer ${token}'; Accept = 'application/json' }).value.LogicalName -join ','  "`,
-      { encoding: 'utf8', timeout: 15000 }
-    );
-    return output.trim().split(',').filter(Boolean);
+    const result = await makeRequest({
+      url: `${envUrl}/api/data/v9.2/EntityDefinitions(LogicalName='${logicalName}')/Attributes?$select=LogicalName`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      timeout: 15000,
+    });
+    if (result.error || result.statusCode !== 200) return [];
+    const parsed = JSON.parse(result.body);
+    return (parsed.value || []).map((a) => a.LogicalName).filter(Boolean);
   } catch {
     return [];
   }

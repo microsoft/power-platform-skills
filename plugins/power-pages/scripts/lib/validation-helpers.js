@@ -22,12 +22,12 @@ const block = (reason) => {
 function runValidation(callback) {
   let inputData = '';
   process.stdin.on('data', chunk => (inputData += chunk));
-  process.stdin.on('end', () => {
+  process.stdin.on('end', async () => {
     try {
       const input = JSON.parse(inputData);
       const cwd = input.cwd;
       if (!cwd) approve();
-      callback(cwd);
+      await callback(cwd);
     } catch {
       approve();
     }
@@ -126,6 +126,53 @@ function getPacAuthInfo() {
   }
 }
 
+/**
+ * Makes an HTTP/HTTPS request using Node.js built-in modules (cross-platform, no PowerShell).
+ * Returns a Promise — callers must use `await`.
+ * @param {object} options
+ * @param {string} options.url - Full URL to request
+ * @param {string} [options.method='GET'] - HTTP method
+ * @param {object} [options.headers={}] - Request headers
+ * @param {string} [options.body=null] - Request body (string)
+ * @param {boolean} [options.includeHeaders=false] - Include response headers in result
+ * @param {number} [options.timeout=15000] - Timeout in ms
+ * @returns {Promise<{ statusCode: number, body: string, headers?: object } | { error: string }>}
+ */
+function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 15000 }) {
+  return new Promise((resolve) => {
+    const https = require('https');
+    const http = require('http');
+    const u = new URL(url);
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(
+      {
+        method,
+        headers,
+        hostname: u.hostname,
+        port: u.port || undefined,
+        path: u.pathname + u.search,
+        timeout,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          const result = { statusCode: res.statusCode, body: data };
+          if (includeHeaders) result.headers = res.headers;
+          resolve(result);
+        });
+      }
+    );
+    req.on('error', (e) => resolve({ error: e.message }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ error: 'Request timed out' });
+    });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
@@ -133,6 +180,15 @@ const CLOUD_TO_API = {
   'UsGovHigh': 'https://api.high.powerplatform.microsoft.us',
   'UsGovDod': 'https://api.appsplatform.us',
   'China': 'https://api.powerplatform.partner.microsoftonline.cn',
+};
+
+/** Cloud → Power Pages site URL domain mapping */
+const CLOUD_TO_SITE_DOMAIN = {
+  'Public': 'powerappsportals.com',
+  'UsGov': 'powerappsportals.us',
+  'UsGovHigh': 'high.powerappsportals.us',
+  'UsGovDod': 'appsplatform.us',
+  'China': 'powerappsportals.cn',
 };
 
 module.exports = {
@@ -144,7 +200,9 @@ module.exports = {
   findPowerPagesSiteDir,
   UUID_REGEX,
   getAuthToken,
+  makeRequest,
   getEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
+  CLOUD_TO_SITE_DOMAIN,
 };

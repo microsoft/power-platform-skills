@@ -1,5 +1,5 @@
 ---
-name: activate-power-pages-site
+name: activate-site
 description: >
   This skill should be used when the user asks to "activate site",
   "provision website", "activate a Power Pages website", "activate portal",
@@ -18,7 +18,7 @@ hooks:
         - type: prompt
           prompt: >
             If a Power Pages website was being activated in this session (via /power-pages:activate-site),
-            verify before allowing stop: 1) Prerequisites were verified (PAC CLI auth + Azure CLI token),
+            verify before allowing stop: 1) Prerequisites were verified (PAC CLI auth + Azure CLI login),
             2) Site name was read from config or user input, 3) The subdomain generator script was run AND the user was asked (via AskUserQuestion) whether to use the generated subdomain or enter a custom one,
             4) The user confirmed activation parameters, 5) The POST to the websites API was made,
             6) Provisioning status was polled to completion, 7) A summary with the site URL was presented.
@@ -35,25 +35,24 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 ## Core Principles
 
 - **Cloud-aware URL resolution** — Never hardcode API base URLs or site URL domains. Always derive them from the Cloud value returned by `pac auth who`.
-- **Token freshness** — Azure CLI tokens expire quickly. Re-acquire before any API call that follows a user interaction or polling delay.
+- **Token handling** — Scripts acquire and refresh Azure CLI tokens internally. The agent only needs to verify the user is logged in to Azure CLI.
 - **Confirm before mutating** — Always present the full activation parameters to the user and get explicit approval before POSTing to the websites API.
 
 **Initial request:** $ARGUMENTS
 
 ## Workflow
 
-1. **Phase 1: Verify Prerequisites** — PAC CLI auth + Azure CLI token for the Power Platform API
+1. **Phase 1: Verify Prerequisites** — PAC CLI auth + Azure CLI login + activation status check
 2. **Phase 2: Gather Parameters** — Site name, subdomain, website record ID
 3. **Phase 3: Confirm** — Present all parameters to user for approval
-4. **Phase 4: Activate** — POST to the Power Platform websites API
-5. **Phase 5: Poll Status** — Poll provisioning status until completion
-6. **Phase 6: Present Summary** — Show site URL, suggest next steps
+4. **Phase 4: Activate & Poll** — Run activation script (POST + poll provisioning status)
+5. **Phase 5: Present Summary** — Show site URL, suggest next steps
 
 ---
 
 ## Phase 1: Verify Prerequisites
 
-**Goal:** Ensure PAC CLI is installed and authenticated, resolve the correct Power Platform API base URL for the user's cloud, and acquire a valid Azure CLI token.
+**Goal:** Ensure PAC CLI is installed and authenticated, and verify the user is logged in to Azure CLI (scripts handle token acquisition internally).
 
 ### Actions
 
@@ -91,49 +90,40 @@ pac auth who
 
 **If not authenticated**: Follow the same authentication flow as `deploy-site` — ask the user for their environment URL and run `pac auth create --environment "<URL>"`.
 
-#### 1.3 Resolve Power Platform API Base URL
+#### 1.3 Verify Azure CLI Login
 
-Map the **Cloud** value from `pac auth who` to the correct Power Platform API base URL. **CRITICAL: Never hardcode the base URL — always derive it from the Cloud value.**
-
-| Cloud value | PP API Base URL |
-|---|---|
-| `Public` | `https://api.powerplatform.com` |
-| `UsGov` | `https://api.gov.powerplatform.microsoft.us` |
-| `UsGovHigh` | `https://api.high.powerplatform.microsoft.us` |
-| `UsGovDod` | `https://api.appsplatform.us` |
-| `China` | `https://api.powerplatform.partner.microsoftonline.cn` |
-
-Store the resolved URL as `$ppApiBaseUrl`.
-
-#### 1.4 Acquire Azure CLI Token
-
-Get an access token scoped to the Power Platform API base URL:
+Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
 
 ```powershell
-$token = az account get-access-token --resource "$ppApiBaseUrl" --query accessToken -o tsv
+az account show
 ```
 
 **If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login`.
 
-#### 1.5 Verify Token
+#### 1.4 Check If Already Activated
 
-Make a lightweight GET to verify the token works:
+Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
 ```powershell
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-Invoke-RestMethod -Uri "$ppApiBaseUrl/powerpages/environments/$environmentId/websites?api-version=2022-03-01-preview" -Headers $headers
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-**If 401/403**: The token may not have the right scope. Ask the user to verify they have the Power Platform admin or website creator role.
+Where `<PROJECT_ROOT>` is the directory containing `powerpages.config.json` (use `Glob` with `**/powerpages.config.json` to locate it if not already known).
 
-**If successful**: Proceed to Phase 2.
+The script reads `siteName` from `powerpages.config.json`, looks up the `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches the response against **both** the `websiteRecordId` (exact GUID match) and `name` (case-insensitive). It outputs a JSON result to stdout.
+
+Evaluate the result:
+
+- **If `activated` is `true`**: The site is already provisioned. Inform the user: "Your site **<siteName>** is already activated at **<websiteUrl>**. No further provisioning is needed." Suggest next steps (Phase 5.3) and stop — do NOT proceed to Phase 2.
+- **If `activated` is `false`**: Proceed to Phase 2.
+- **If `error` is present**: The check could not complete. Proceed to Phase 2 (do not block the activation flow due to a failed check).
 
 ### Output
 
 - PAC CLI installed and authenticated
 - Environment ID, Organization ID, and Cloud value extracted
-- `$ppApiBaseUrl` resolved from Cloud value
-- Azure CLI token acquired and verified
+- Azure CLI login confirmed
+- Activation status checked (already activated → stop early, not activated → continue)
 
 ---
 
@@ -221,158 +211,76 @@ Present all activation parameters to the user using `AskUserQuestion`:
 
 ---
 
-## Phase 4: Activate
+## Phase 4: Activate & Poll
 
-**Goal:** POST to the Power Platform websites API to start provisioning and capture the Operation-Location header for polling.
+**Goal:** POST to the Power Platform websites API to start provisioning, poll until completion, and report the result.
 
 ### Actions
 
-#### 4.1 Refresh Token
+#### 4.1 Run Activation Script
 
-Re-acquire the Azure CLI token in case it has expired since Phase 1:
-
-```powershell
-$token = az account get-access-token --resource "$ppApiBaseUrl" --query accessToken -o tsv
-```
-
-#### 4.2 Build Request Body
-
-Construct the JSON body for the activation API call:
-
-```json
-{
-  "name": "<siteName>",
-  "subdomain": "<subdomain>",
-  "templateName": "DefaultPortalTemplate",
-  "dataverseOrganizationId": "<organizationId>",
-  "selectedBaseLanguage": 1033,
-  "websiteRecordId": "<websiteRecordId or null>"
-}
-```
-
-If `websiteRecordId` is null/empty, **omit** the field from the body entirely (do not send `null`).
-
-#### 4.3 POST to Websites API
-
-Use `Invoke-WebRequest` (NOT `Invoke-RestMethod`) to capture response headers — specifically the `Operation-Location` header needed for polling:
+Run the shared activation script, passing all parameters gathered in Phases 1–2:
 
 ```powershell
-$body = @{
-  name = "$siteName"
-  subdomain = "$subdomain"
-  templateName = "DefaultPortalTemplate"
-  dataverseOrganizationId = "$organizationId"
-  selectedBaseLanguage = 1033
-} | ConvertTo-Json
-
-$response = Invoke-WebRequest -Method Post `
-  -Uri "$ppApiBaseUrl/powerpages/environments/$environmentId/websites?api-version=2022-03-01-preview" `
-  -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json"; Accept = "application/json" } `
-  -Body $body
-
-$response.StatusCode
-$response.Headers["Operation-Location"]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
 ```
 
-Add the `websiteRecordId` field to the `$body` hashtable only if it is not null.
+Omit `--websiteRecordId` if it is null/empty.
 
-#### 4.4 Handle Responses
+The script acquires an Azure CLI token, POSTs to the websites API, extracts the `Operation-Location` header, and polls every 10 seconds for up to 5 minutes (refreshing the token periodically). It outputs a JSON result to stdout.
 
-| Status Code | Meaning | Action |
+> **Note:** This script may run for up to 5 minutes while polling. Use a Bash timeout of at least 360 seconds (6 minutes).
+
+#### 4.2 Handle Results
+
+Evaluate the JSON output:
+
+| `status` value | `statusCode` / `errorCode` | Action |
 |---|---|---|
-| **202 Accepted** | Provisioning started | Extract `Operation-Location` header, proceed to Phase 5 |
-| **400 Bad Request** | Likely subdomain already taken | Parse error message. If subdomain conflict, loop back to Phase 2 action 2.2 for a new subdomain |
-| **401 Unauthorized** | Token expired or invalid | Refresh token and retry once |
-| **403 Forbidden** | Insufficient permissions | Inform user they need the "Power Pages site creator" or "System Administrator" role |
-| **409 Conflict** | Website already exists | Inform user a site already exists in this environment and suggest using `/power-pages:deploy-site` instead |
-| **429 / 5xx** | Throttling or server error | Wait 5 seconds and retry once |
+| **`Succeeded`** | — | Provisioning complete. The result includes `siteUrl`. Proceed to Phase 5. |
+| **`Failed`** | `400` + `SubdomainConflict` (or error message mentions subdomain) | Subdomain already taken. Loop back to Phase 2 action 2.2 for a new subdomain, then re-run the script. |
+| **`Failed`** | `401` | Token expired. Ask the user to run `az login` and retry. |
+| **`Failed`** | `403` | Insufficient permissions. Inform user they need the "Power Pages site creator" or "System Administrator" role. |
+| **`Failed`** | `409` | Website already exists. Inform user and suggest using `/power-pages:deploy-site` instead. |
+| **`Failed`** | `429` or `5xx` | Throttling or server error. Wait 5 seconds and re-run the script once. |
+| **`Failed`** | other | Present the error to the user and help troubleshoot. |
+| **`Running`** | — | Provisioning still in progress after 5 minutes. Inform the user it may take up to 15 minutes and suggest checking the Power Platform admin center. |
+| `error` field | — | Prerequisite failure (missing args, no token). Present the error and help troubleshoot. |
 
 ### Output
 
-- API returned 202 Accepted
-- `Operation-Location` URL captured for polling
+- Provisioning status resolved (Succeeded with `siteUrl`, Failed with error details, or Running with timeout advisory)
 
 ---
 
-## Phase 5: Poll Status
-
-**Goal:** Poll the provisioning operation until it succeeds, fails, or times out.
-
-### Actions
-
-#### 5.1 Poll Operation-Location
-
-The `Operation-Location` header from Phase 4 contains a URL to poll for provisioning status. Poll every 10 seconds for up to 5 minutes (30 polls max):
-
-```powershell
-$operationUrl = $response.Headers["Operation-Location"]
-$maxAttempts = 30
-$attempt = 0
-
-do {
-  Start-Sleep -Seconds 10
-  $attempt++
-
-  # Refresh token every ~60 seconds (every 6 polls)
-  if ($attempt % 6 -eq 0) {
-    $token = az account get-access-token --resource "$ppApiBaseUrl" --query accessToken -o tsv
-  }
-
-  $status = Invoke-RestMethod -Uri $operationUrl -Headers @{ Authorization = "Bearer $token"; Accept = "application/json" }
-  $status.status
-} while ($status.status -eq "Running" -and $attempt -lt $maxAttempts)
-```
-
-#### 5.2 Handle Poll Results
-
-| Status | Action |
-|---|---|
-| **Succeeded** | Provisioning complete — proceed to Phase 6 |
-| **Failed** | Report the error from `$status.error` to the user. Suggest checking the Power Platform admin center for details. |
-| **Running (timeout)** | After 5 minutes, inform the user that provisioning is still in progress. It may take up to 15 minutes. Suggest they check the Power Platform admin center for status. |
-
-### Output
-
-- Provisioning status resolved (Succeeded, Failed, or Running with timeout advisory)
-
----
-
-## Phase 6: Present Summary
+## Phase 5: Present Summary
 
 **Goal:** Show the user the final site URL and suggest next steps.
 
 ### Actions
 
-#### 6.1 Show Results
+#### 5.1 Show Results
 
-Present the activation summary to the user:
+Present the activation summary using the `siteUrl` from the script output:
 
 ```
 Power Pages site activated successfully!
 
   Site Name:  <siteName>
-  Site URL:   https://<subdomain>.powerappsportals.com
+  Site URL:   <siteUrl>
   Environment: <environmentName> (<environmentId>)
   Status:     Provisioned
 ```
 
-**Note:** The site URL domain varies by cloud:
+The script already resolves the correct cloud-specific site URL domain, so use the `siteUrl` value directly.
 
-| Cloud | Site URL Domain |
-|---|---|
-| `Public` | `powerappsportals.com` |
-| `UsGov` | `powerappsportals.us` |
-| `UsGovHigh` | `high.powerappsportals.us` |
-| `UsGovDod` | `appsplatform.us` |
-| `China` | `powerappsportals.cn` |
-
-#### 6.2 Record Skill Usage
+#### 5.2 Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ActivateSite"`.
 
-#### 6.3 Suggest Next Steps
+#### 5.3 Suggest Next Steps
 
 After the summary, suggest:
 - Set up the data model: `/power-pages:setup-datamodel`
@@ -381,7 +289,7 @@ After the summary, suggest:
 
 ### Output
 
-- Activation summary presented with correct cloud-specific site URL
+- Activation summary presented with site URL
 - Next steps suggested to the user
 
 ---
@@ -394,22 +302,22 @@ Use `TaskCreate` at the start to track progress through each phase:
 
 | Task | Description |
 |------|-------------|
-| Phase 1 | Verify Prerequisites — PAC CLI auth, Cloud detection, API base URL, Azure CLI token |
+| Phase 1 | Verify Prerequisites — PAC CLI auth, Cloud detection, Azure CLI login, activation status check |
 | Phase 2 | Gather Parameters — site name, subdomain, website record ID |
 | Phase 3 | Confirm — user approval of activation parameters |
-| Phase 4 | Activate — POST to websites API, capture Operation-Location |
-| Phase 5 | Poll Status — poll provisioning until completion |
-| Phase 6 | Present Summary — show site URL and next steps |
+| Phase 4 | Activate & Poll — run activation script, handle result |
+| Phase 5 | Present Summary — show site URL and next steps |
 
 Mark each task complete with `TaskUpdate` as you finish each phase.
 
 ### Key Decision Points
 
 - **Phase 1.2**: If not authenticated, must authenticate before proceeding — cannot skip.
+- **Phase 1.4**: If site is already activated, stop early — do NOT proceed to Phase 2.
 - **Phase 2.2**: User may accept the generated subdomain or provide a custom one — validate custom input.
 - **Phase 3**: User must explicitly approve activation. If declined, stop the skill entirely.
-- **Phase 4.4**: On 400 (subdomain taken), loop back to Phase 2 action 2.2 — do not abort.
-- **Phase 4.4**: On 409 (site already exists), redirect user to `/power-pages:deploy-site` instead.
-- **Phase 5.2**: On timeout (still Running after 5 minutes), do not treat as failure — advise user to check admin center.
+- **Phase 4.2**: On 400 (subdomain taken), loop back to Phase 2 action 2.2 and re-run the script — do not abort.
+- **Phase 4.2**: On 409 (site already exists), redirect user to `/power-pages:deploy-site` instead.
+- **Phase 4.2**: On timeout (still Running after 5 minutes), do not treat as failure — advise user to check admin center.
 
 **Begin with Phase 1: Verify Prerequisites**
