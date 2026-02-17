@@ -48,13 +48,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your agent
 
     ```bash
-    /plugin marketplace add microsoft/power-platform-skillss
+    /plugin marketplace add microsoft/power-platform-skills
     ```
 
 2. Install the desired plugin
 
     ```bash
-    /plugin install power-pages@power-platform-skillss
+    /plugin install power-pages@power-platform-skills
     ```
 
 ### Add from local path
@@ -63,13 +63,13 @@ To use a plugin from this marketplace:
 1. Add the marketplace to your agent
 
     ```bash
-    /plugin marketplace add /path/to/power-platform-skillss
+    /plugin marketplace add /path/to/power-platform-skills
     ```
 
 1. Install the desired plugin (installs to user scope by default)
 
     ```bash
-    /plugin install power-pages@power-platform-skillss
+    /plugin install power-pages@power-platform-skills
     ```
 
 ## Local Development
