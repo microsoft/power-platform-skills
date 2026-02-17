@@ -4,8 +4,7 @@
         "name": "Microsoft"
     },
     "metadata": {
-        "description": "Plugins for Power Platform development with Claude Code and GitHub Copilot",
-        "pluginRoot": "./plugins"
+        "description": "Plugins for Power Platform development with Claude Code and GitHub Copilot"
     },
     "plugins": [
         {
