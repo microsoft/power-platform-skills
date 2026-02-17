@@ -256,7 +256,15 @@ Follow these conventions:
 
 **Do this BEFORE entering plan mode.** Render the Mermaid ER diagram in the browser so the user can see it while reviewing the plan.
 
-1. Write a temporary HTML file (e.g., `er-diagram.html` in the project directory) that loads Mermaid.js from CDN and renders the diagram:
+1. Write a temporary HTML file to the **system temp directory** (NOT the project directory — avoid polluting the repo):
+
+```powershell
+# Get the temp directory path
+$tempDir = [System.IO.Path]::GetTempPath()
+# File path: $tempDir/er-diagram.html
+```
+
+HTML template:
 
 ```html
 <!DOCTYPE html>
@@ -270,31 +278,41 @@ Follow these conventions:
       background: #ffffff;
       display: flex;
       justify-content: center;
-      align-items: center;
-      min-height: 100vh;
+      align-items: flex-start;
       margin: 0;
       padding: 40px;
       font-family: system-ui, sans-serif;
     }
-    .mermaid { max-width: 100%; }
+    .mermaid {
+      width: 100%;
+      min-width: 1200px;
+    }
+    .mermaid svg {
+      width: 100% !important;
+      height: auto !important;
+    }
   </style>
 </head>
 <body>
   <pre class="mermaid">
     <!-- paste the Mermaid erDiagram code here -->
   </pre>
-  <script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'default', er: { fontSize: 16, useMaxWidth: false } });</script>
 </body>
 </html>
 ```
 
-2. Navigate Playwright to the file using a `file:///` URL:
-   - On Windows: `file:///C:/path/to/er-diagram.html`
+2. **Resize the browser** to a large viewport for a legible diagram:
+
+Use `browser_resize` with **width: 1920** and **height: 1080** before navigating.
+
+3. Navigate Playwright to the file using a `file:///` URL:
+   - On Windows: `file:///C:/Users/<user>/AppData/Local/Temp/er-diagram.html`
    - Convert backslashes to forward slashes in the path
 
-3. Wait for the diagram to render (wait for the `svg` element to appear, or wait ~3 seconds).
+4. Wait for the diagram to render (wait for the `svg` element to appear, or wait ~3 seconds).
 
-4. Take a screenshot using `browser_take_screenshot` — this captures the rendered diagram. The browser window also remains open so the user can view and interact with it directly.
+5. Take a **full-page screenshot** using `browser_take_screenshot` with `fullPage: true` — this captures the entire diagram regardless of viewport height. The browser window also remains open so the user can view and interact with it directly.
 
 If Playwright fails to launch or navigate, fall back to printing an ASCII ER diagram directly in the conversation. Use box-drawing characters to represent tables and arrows for relationships:
 
@@ -334,7 +352,7 @@ Use `EnterPlanMode` to present the complete proposal (sections 4.1–4.4 and 4.6
 
 ## Step 5: Clean Up
 
-After the user approves the plan, delete the temporary `er-diagram.html` file if it was created.
+After the user approves the plan, delete the temporary `er-diagram.html` file from the system temp directory if it was created.
 
 ---
 

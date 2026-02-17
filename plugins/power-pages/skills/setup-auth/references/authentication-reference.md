@@ -504,7 +504,7 @@ Create as a YAML file in `.powerpages-site/site-settings/`:
 ```yaml
 id: <generated-uuid>
 name: Authentication/Registration/ProfileRedirectEnabled
-value: "false"
+value: false
 ```
 
 ### Other Useful Settings

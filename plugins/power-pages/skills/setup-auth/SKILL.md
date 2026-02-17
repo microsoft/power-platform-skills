@@ -441,7 +441,7 @@ Create `.powerpages-site/site-settings/authentication-registration-profileredire
 ```yaml
 id: <UUID from generate-uuid.js>
 name: Authentication/Registration/ProfileRedirectEnabled
-value: "false"
+value: false
 ```
 
 #### 7.2 Present Summary

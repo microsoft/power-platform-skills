@@ -277,6 +277,13 @@ For each file that needs a UUID, generate one using the shared script:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
+**CRITICAL YAML FORMATTING RULES when writing these files:**
+- Boolean values MUST be unquoted: `value: true` — NEVER `value: "true"` or `value: "false"`
+- Numeric values MUST be unquoted: `adx_scope: 756150000` — NEVER `adx_scope: "756150000"`
+- UUIDs MUST be unquoted: `id: a1b2c3d4-...` — NEVER `id: "a1b2c3d4-..."`
+- String values (like field lists) are also unquoted: `value: cr87b_name,cr87b_email`
+- CRUD flags are unquoted booleans: `adx_read: true` — NEVER `adx_read: "true"`
+
 ### 5.4 Git Commit
 
 Stage and commit the permission files:
