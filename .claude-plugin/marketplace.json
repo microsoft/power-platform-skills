@@ -1,6 +1,6 @@
 {
     "name": "power-platform-skills",
-    "description": "Directory of agent plugins for Power Platform development",
+    "description": "Directory of Claude Code extensions for Power Platform development",
     "owner": {
         "name": "Microsoft"
     },

@@ -12,15 +12,22 @@ This repository is a **plugin marketplace** containing Claude Code/GitHub Copilo
 power-platform-skills/
 ├── .claude-plugin/
 │   └── marketplace.json      # Marketplace manifest (lists all plugins)
+├── .claude/
+│   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
 ├── plugins/
-│   └── power-pages/          # Individual plugin directory
+│   ├── power-pages/          # Power Pages plugin
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── commands/
+│   │   ├── shared/
+│   │   └── skills/
+│   └── power-apps/           # Power Apps plugin
 │       ├── .claude-plugin/
-│       │   └── plugin.json   # Plugin manifest
-│       ├── .mcp.json         # MCP server configuration
-│       ├── agents/           # Agent persona files
-│       ├── commands/         # Command entry points
-│       ├── shared/           # Shared resources
-│       └── skills/           # Skill workflows
+│       │   └── plugin.json
+│       ├── commands/
+│       ├── skills/
+│       ├── shared/           # Shared references + samples
+│       └── github/           # GitHub Copilot instructions
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
@@ -55,6 +62,7 @@ To use a plugin from this marketplace:
 
     ```bash
     /plugin install power-pages@power-platform-skills
+    /plugin install power-apps@power-platform-skills
     ```
 
 ### Add from local path
@@ -70,6 +78,7 @@ To use a plugin from this marketplace:
 
     ```bash
     /plugin install power-pages@power-platform-skills
+    /plugin install power-apps@power-platform-skills
     ```
 
 ## Local Development
@@ -81,6 +90,7 @@ To develop and test plugins locally, follow these steps:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
     ```
 
 1. Launch Copilot with plugin path:

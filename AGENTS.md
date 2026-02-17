@@ -9,9 +9,20 @@ A **plugin marketplace** for Power Platform development by Microsoft. The market
 ## Repository Structure
 
 ```
-.claude-plugin/marketplace.json    ← Marketplace manifest listing all plugins
-plugins/
-  power-pages/                     ← Power Pages plugin (see plugins/power-pages/AGENTS.md)
+power-platform-skills/
+├── .claude-plugin/
+│   └── marketplace.json      # Marketplace manifest (lists all available plugins)
+├── plugins/                  # Directory containing individual plugins
+│   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
+│       ├── .claude-plugin/
+│       │   └── plugin.json   # Plugin manifest
+│       ├── AGENTS.md         # Plugin-specific development guidelines
+│       ├── agents/           # Agent persona files
+│       ├── commands/         # Command entry points
+│       ├── shared/           # Shared resources and documentation
+│       └── skills/           # Skill workflows (SKILL.md in subdirectories)
+├── AGENTS.md                 # Generic development guidelines (this file)
+└── README.md                 # Repository overview
 ```
 
 ## Local Development
