@@ -1,4 +1,4 @@
-# Power Platform Claude Plugins - Development Guidelines
+# Power Platform Skills - Development Guidelines
 
 This file provides generic instructions for Claude Code when working on this plugin marketplace. For plugin-specific guidelines, see the `AGENTS.md` file in each plugin's folder.
 

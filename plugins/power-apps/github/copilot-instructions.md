@@ -198,7 +198,7 @@ For the full rules, see [genux-rules-reference.md](../shared/references/genux-ru
 ### Critical Rules
 
 1. **React 17 + TypeScript** — all code must use React 17 (no React 18 features like `useTransition`, `createRoot`, concurrent mode)
-2. **Fluent UI V9** — use `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat` with `mountNode` prop)
+2. **Fluent UI V9** — use `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat` — both require `mountNode` prop)
 3. **Single File** — all code in one `.tsx` file; each component/utility as separate top-level function (no nesting)
 4. **Limited Imports** — only React, Fluent UI V9, approved Fluent icons, and D3.js for charts
 5. **DataAPI** — ONLY use when explicit TableRegistrations provided; otherwise use mocked data
@@ -219,6 +219,7 @@ For the full rules, see [genux-rules-reference.md](../shared/references/genux-ru
 "@fluentui/react-calendar-compat": "^0.2.2"
 "@fluentui/react-components": "^9.46.4"
 "@fluentui/react-datepicker-compat": "^0.5.0"
+"@fluentui/react-timepicker-compat": "^0.3.0"
 "@fluentui/react-theme": "^9.1.24"
 "d3": "^7.9.0"
 ```

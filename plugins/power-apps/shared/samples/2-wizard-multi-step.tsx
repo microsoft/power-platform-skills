@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Text, RadioGroup, Radio, Divider, ProgressBar } from '@fluentui/react-components';
+import { Button, Text, RadioGroup, Radio, Divider, ProgressBar, tokens } from '@fluentui/react-components';
 
 const GeneratedComponent = () => {
     const [currentStep, setCurrentStep] = useState(0);

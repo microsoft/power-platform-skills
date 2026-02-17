@@ -7,7 +7,7 @@ Comprehensive rules for generating genux page code. Read this file during code g
 ## Critical Rules
 
 1. **React 17 + TypeScript**: All code must use React 17 with TypeScript
-2. **Fluent UI V9**: Use `@fluentui/react-components` (DatePicker from `@fluentui/react-datepicker-compat` with `mountNode` prop)
+2. **Fluent UI V9**: Use `@fluentui/react-components` (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat` — both require `mountNode` prop)
 3. **Single File**: All code (components, utilities) in one file; each as separate top-level function (no nesting)
 4. **Limited Imports**: Only React, Fluent UI V9, FluentUI icons, and D3.js for charts
 5. **DataAPI**: ONLY use when explicit TableRegistrations provided; otherwise use mocked data
@@ -32,11 +32,12 @@ Only these libraries are available. Do NOT use any other library.
 "@fluentui/react-calendar-compat": "^0.2.2"
 "@fluentui/react-components": "^9.46.4"
 "@fluentui/react-datepicker-compat": "^0.5.0"
+"@fluentui/react-timepicker-compat": "^0.3.0"
 "@fluentui/react-theme": "^9.1.24"
 "d3": "^7.9.0"
 ```
 
-**CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` (NOT `@fluentui/react-components`)
+**CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` and TimePicker from `@fluentui/react-timepicker-compat` (NOT from `@fluentui/react-components`)
 
 ---
 
