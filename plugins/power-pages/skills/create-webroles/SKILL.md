@@ -6,7 +6,7 @@ description: >
   "add authenticated role", "add anonymous role", or wants to create web roles for
   their Power Pages code site. Web roles control access and permissions for site users.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task"]
+allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList"]
 model: opus
 hooks:
   Stop:
@@ -29,114 +29,146 @@ hooks:
 
 Create web roles for a Power Pages code site. Web roles define the permissions and access levels for different types of site users.
 
+## Core Principles
+
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Always use the UUID script**: Never generate UUIDs manually — always use `${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
+- **Preserve uniqueness constraints**: Only one role can have `anonymoususersrole: true` and only one can have `authenticatedusersrole: true`. Always check existing roles before setting these flags.
+
 > **Prerequisite:** The site must be deployed at least once before web roles can be created, since deployment creates the `.powerpages-site` folder structure that stores web role definitions.
+
+**Initial request:** $ARGUMENTS
+
+---
 
 ## Workflow
 
-1. **Verify Site Structure** → Check for `.powerpages-site/web-roles/` directory
-2. **Discover Existing Roles** → Read current web role YAML files
-3. **Determine New Roles** → Analyze the site and ask the user what roles are needed
-4. **Create Web Role Files** → Generate YAML files with UUIDs from the Node script
-5. **Review & Deploy** → Present summary and proceed to deployment
+1. **Phase 1: Verify Site Structure** → Check for `.powerpages-site/web-roles/` directory
+2. **Phase 2: Discover Existing Roles** → Read current web role YAML files
+3. **Phase 3: Determine New Roles** → Analyze the site and ask the user what roles are needed
+4. **Phase 4: Create Web Role Files** → Generate YAML files with UUIDs from the Node script
+5. **Phase 5: Review & Deploy** → Present summary and proceed to deployment
 
 ---
 
-## Step 1: Verify Site Structure
+## Phase 1: Verify Site Structure
 
-Look for the `.powerpages-site/web-roles/` directory in the project root. Use `Glob` to search:
+**Goal**: Confirm the `.powerpages-site/web-roles/` directory exists and is ready for web role files
 
-```text
-**/.powerpages-site/web-roles
-```
+**Actions**:
 
-Also locate the project root by finding `powerpages.config.json`:
+1. Look for the `.powerpages-site/web-roles/` directory in the project root. Use `Glob` to search:
 
-```text
-**/powerpages.config.json
-```
+   ```text
+   **/.powerpages-site/web-roles
+   ```
 
-**If `.powerpages-site` folder does NOT exist:**
+2. Also locate the project root by finding `powerpages.config.json`:
 
-The site has not been deployed yet. The `.powerpages-site` folder is created automatically when the site is deployed for the first time using `pac pages upload-code-site`.
+   ```text
+   **/powerpages.config.json
+   ```
 
-Tell the user:
+3. **If `.powerpages-site` folder does NOT exist:**
 
-> "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. I'll deploy your site first, and then we can create web roles."
+   The site has not been deployed yet. The `.powerpages-site` folder is created automatically when the site is deployed for the first time using `pac pages upload-code-site`.
 
-Use `AskUserQuestion` to confirm:
+   Tell the user:
 
-| Question | Options |
-|----------|---------|
-| Your site needs to be deployed first so the `.powerpages-site` folder is created. Shall I deploy it now? | Yes, deploy now (Recommended), No, I'll do it later |
+   > "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. I'll deploy your site first, and then we can create web roles."
 
-**If "Yes, deploy now"**: Invoke the `/power-pages:deploy-site` skill to deploy the site. Once deployment completes and `.powerpages-site` is created, resume this workflow from Step 2.
+   Use `AskUserQuestion` to confirm:
 
-**If "No, I'll do it later"**: Stop here — the user must deploy first before web roles can be created.
+   | Question | Options |
+   |----------|---------|
+   | Your site needs to be deployed first so the `.powerpages-site` folder is created. Shall I deploy it now? | Yes, deploy now (Recommended), No, I'll do it later |
 
-**If `.powerpages-site` exists but `web-roles/` subdirectory does NOT exist:**
+   **If "Yes, deploy now"**: Invoke the `/power-pages:deploy-site` skill to deploy the site. Once deployment completes and `.powerpages-site` is created, resume this workflow from Phase 2.
 
-Create the `web-roles` directory:
+   **If "No, I'll do it later"**: Stop here — the user must deploy first before web roles can be created.
 
-```powershell
-New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/web-roles" -Force
-```
+4. **If `.powerpages-site` exists but `web-roles/` subdirectory does NOT exist:**
 
-Proceed to Step 2.
+   Create the `web-roles` directory:
 
-**If both exist:** Proceed to Step 2.
+   ```powershell
+   New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/web-roles" -Force
+   ```
 
----
+   Proceed to Phase 2.
 
-## Step 2: Discover Existing Roles
+5. **If both exist:** Proceed to Phase 2.
 
-Read all YAML files in the `.powerpages-site/web-roles/` directory. Each file represents one web role with this format:
-
-```yaml
-anonymoususersrole: false
-authenticatedusersrole: false
-id: 778fa3d0-a2ef-4d2b-98b8-e6c7d8ce1444
-name: Administrators
-```
-
-Parse each file and compile a list of existing web roles (name, id, and flags).
-
-Present the existing roles to the user:
-
-> "I found the following existing web roles in your site:"
-> - **Administrators** (id: `778fa3d0-...`, authenticated: false, anonymous: false)
-> - *(etc.)*
-
-If no roles exist yet, inform the user:
-
-> "No web roles are currently defined for your site."
+**Output**: Confirmed `.powerpages-site/web-roles/` directory exists and is ready
 
 ---
 
-## Step 3: Determine New Roles
+## Phase 2: Discover Existing Roles
 
-Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
+**Goal**: Identify all web roles already defined for the site
 
-Common web roles for Power Pages sites include:
-- **Administrators** — Full access to site management
-- **Authenticated Users** — Default role for logged-in users (set `authenticatedusersrole: true`)
-- **Anonymous Users** — Default role for non-logged-in visitors (set `anonymoususersrole: true`)
-- **Content Editors** — Users who can edit site content
-- **Moderators** — Users who can moderate community content
-- Custom roles based on business needs
+**Actions**:
 
-Ask the user which roles they want to create:
+1. Read all YAML files in the `.powerpages-site/web-roles/` directory. Each file represents one web role with this format:
 
-| Question | Options |
-|----------|---------|
-| Which web roles would you like to create for your site? You can select from suggestions or describe custom roles. | *(Provide relevant suggestions based on site context, existing roles, and business domain)* |
+   ```yaml
+   anonymoususersrole: false
+   authenticatedusersrole: false
+   id: 778fa3d0-a2ef-4d2b-98b8-e6c7d8ce1444
+   name: Administrators
+   ```
 
-CRITICAL: Do NOT suggest roles that already exist. Filter out any existing role names before presenting options.
+2. Parse each file and compile a list of existing web roles (name, id, and flags).
 
-Allow the user to specify custom role names as well.
+3. Present the existing roles to the user:
+
+   > "I found the following existing web roles in your site:"
+   > - **Administrators** (id: `778fa3d0-...`, authenticated: false, anonymous: false)
+   > - *(etc.)*
+
+4. If no roles exist yet, inform the user:
+
+   > "No web roles are currently defined for your site."
+
+**Output**: Complete list of existing web roles with their names, IDs, and flags
 
 ---
 
-## Step 4: Create Web Role Files
+## Phase 3: Determine New Roles
+
+**Goal**: Decide which new web roles to create based on site needs and user input
+
+**Actions**:
+
+1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
+
+   Common web roles for Power Pages sites include:
+   - **Administrators** — Full access to site management
+   - **Authenticated Users** — Default role for logged-in users (set `authenticatedusersrole: true`)
+   - **Anonymous Users** — Default role for non-logged-in visitors (set `anonymoususersrole: true`)
+   - **Content Editors** — Users who can edit site content
+   - **Moderators** — Users who can moderate community content
+   - Custom roles based on business needs
+
+2. Ask the user which roles they want to create:
+
+   | Question | Options |
+   |----------|---------|
+   | Which web roles would you like to create for your site? You can select from suggestions or describe custom roles. | *(Provide relevant suggestions based on site context, existing roles, and business domain)* |
+
+   CRITICAL: Do NOT suggest roles that already exist. Filter out any existing role names before presenting options.
+
+3. Allow the user to specify custom role names as well.
+
+**Output**: Confirmed list of new web roles to create
+
+---
+
+## Phase 4: Create Web Role Files
+
+**Goal**: Generate properly formatted YAML files with valid UUIDs for each new web role
+
+**Actions**:
 
 For each new web role the user approved, create a YAML file in `.powerpages-site/web-roles/`.
 
@@ -171,28 +203,64 @@ name: <Role Name>
 
 After creating all files, list the contents of `.powerpages-site/web-roles/` and read each new file to confirm they were written correctly.
 
+**Output**: All new web role YAML files created and verified
+
 ---
 
-## Step 5: Review & Deploy
+## Phase 5: Review & Deploy
 
-Present a summary of what was created:
+**Goal**: Present a summary of created roles and offer deployment
 
-> "I've created the following new web roles:"
-> | Role Name | ID | Anonymous | Authenticated |
-> |-----------|-----|-----------|---------------|
-> | Content Editors | `a1b2c3d4-...` | false | false |
-> | *(etc.)* |
+**Actions**:
 
-Then ask the user if they want to deploy the site to apply the new roles:
+1. Present a summary of what was created:
 
-| Question | Options |
-|----------|---------|
-| The new web roles have been created locally. To apply them in Power Pages, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
+   > "I've created the following new web roles:"
+   > | Role Name | ID | Anonymous | Authenticated |
+   > |-----------|-----|-----------|---------------|
+   > | Content Editors | `a1b2c3d4-...` | false | false |
+   > | *(etc.)* |
 
-**If "Yes, deploy now"**: Tell the user to invoke the deploy skill:
+2. Then ask the user if they want to deploy the site to apply the new roles:
 
-> "Please run `/power-pages:deploy-site` to deploy your site and apply the new web roles."
+   | Question | Options |
+   |----------|---------|
+   | The new web roles have been created locally. To apply them in Power Pages, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "No, I'll deploy later"**: Acknowledge and remind them:
+3. **If "Yes, deploy now"**: Tell the user to invoke the deploy skill:
 
-> "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
+   > "Please run `/power-pages:deploy-site` to deploy your site and apply the new web roles."
+
+4. **If "No, I'll deploy later"**: Acknowledge and remind them:
+
+   > "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
+
+**Output**: Summary presented and deployment offered
+
+---
+
+## Important Notes
+
+### Key Decision Points (Wait for User)
+
+1. After Phase 1: Confirm deployment if `.powerpages-site` is missing
+2. After Phase 3: Confirm which roles to create
+3. After Phase 5: Deploy or skip
+
+### Progress Tracking
+
+Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify site structure | Verifying site structure | Check for `.powerpages-site/web-roles/` directory, create if needed |
+| Discover existing roles | Discovering existing roles | Read current web role YAML files and compile list of existing roles |
+| Determine new roles | Determining new roles | Analyze site needs and ask user which roles to create |
+| Create web role files | Creating web role files | Generate YAML files with UUIDs from the Node script for each new role |
+| Review and deploy | Reviewing and deploying | Present summary of created roles and offer deployment |
+
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+
+---
+
+**Begin with Phase 1: Verify Site Structure**

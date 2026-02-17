@@ -9,7 +9,7 @@ description: >
   and deployment. This skill orchestrates the full integration lifecycle:
   code integration, permissions setup, and deployment.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Task"]
+allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList"]
 model: opus
 hooks:
   Stop:
@@ -33,23 +33,37 @@ hooks:
 
 Integrate Power Pages Web API into a code site's frontend. This skill orchestrates the full lifecycle: analyzing where integrations are needed, implementing API client code for each table, configuring permissions and site settings, and deploying the site.
 
+## Core Principles
+
+- **One table at a time**: Process tables sequentially because the first table creates the shared `powerPagesApi.ts` client that subsequent tables reuse, and each agent invocation may modify shared files.
+- **Permissions require deployment**: The `.powerpages-site` folder must exist before table permissions and site settings can be configured. Integration code can be written without it, but permissions cannot.
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+
 > **Prerequisites:**
 > - An existing Power Pages code site created via `/power-pages:create-site`
 > - A Dataverse data model (tables/columns) already set up via `/power-pages:setup-datamodel` or created manually
 > - The site must be deployed at least once (`.powerpages-site` folder must exist) for permissions setup
 
-## Workflow
-
-1. **Verify Site Exists** → Locate the Power Pages project and verify prerequisites
-2. **Explore Integration Points** → Analyze site code and data model to identify tables needing Web API integration
-3. **Review Integration Plan** → Present findings to the user and confirm which tables to integrate
-4. **Implement Integrations** → Use the `webapi-integration` agent for each table
-5. **Setup Permissions** → Use the `webapi-permissions` agent to configure table permissions and site settings
-6. **Review & Deploy** → Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
+**Initial request:** $ARGUMENTS
 
 ---
 
-## Step 1: Verify Site Exists
+## Workflow
+
+1. **Verify Site Exists** — Locate the Power Pages project and verify prerequisites
+2. **Explore Integration Points** — Analyze site code and data model to identify tables needing Web API integration
+3. **Review Integration Plan** — Present findings to the user and confirm which tables to integrate
+4. **Implement Integrations** — Use the `webapi-integration` agent for each table
+5. **Setup Permissions** — Use the `webapi-permissions` agent to configure table permissions and site settings
+6. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
+
+---
+
+## Phase 1: Verify Site Exists
+
+**Goal**: Locate the Power Pages project root and confirm that prerequisites are met
+
+**Actions**:
 
 ### 1.1 Locate Project
 
@@ -91,11 +105,17 @@ Look for the `.powerpages-site` folder:
 **/.powerpages-site
 ```
 
-**If not found**: Warn the user that the permissions step (Step 5) will require deployment first. The integration code (Steps 2–4) can still proceed.
+**If not found**: Warn the user that the permissions phase (Phase 5) will require deployment first. The integration code (Phases 2–4) can still proceed.
+
+**Output**: Confirmed project root, framework, data model availability, and deployment status
 
 ---
 
-## Step 2: Explore Integration Points
+## Phase 2: Explore Integration Points
+
+**Goal**: Analyze the site code and data model to identify all tables needing Web API integration
+
+**Actions**:
 
 Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to analyze the site code and data model. The Explore agent should answer these questions:
 
@@ -135,11 +155,15 @@ From the Explore agent's findings, compile a list of tables needing integration:
 | Products | `cr4fc_product` | `cr4fc_products` | CRUD | `ProductList.tsx`, `ProductCard.tsx` | None |
 | Categories | `cr4fc_category` | `cr4fc_categories` | Read | `CategoryFilter.tsx` | None |
 
+**Output**: Complete integration manifest listing all tables, their operations, referencing files, and existing service status
+
 ---
 
-## Step 3: Review Integration Plan
+## Phase 3: Review Integration Plan
 
-Present the integration manifest to the user and ask for confirmation.
+**Goal**: Present the integration manifest to the user and confirm which tables to integrate
+
+**Actions**:
 
 ### 3.1 Present Findings
 
@@ -159,11 +183,15 @@ Use `AskUserQuestion` to confirm:
 
 If the user selects specific tables or adds more, update the integration manifest accordingly.
 
+**Output**: User-confirmed list of tables to integrate
+
 ---
 
-## Step 4: Implement Integrations
+## Phase 4: Implement Integrations
 
-For each table in the confirmed integration manifest, invoke the `webapi-integration` agent (via `Task` tool) to create the integration code.
+**Goal**: Create Web API integration code for each confirmed table using the `webapi-integration` agent
+
+**Actions**:
 
 ### 4.1 Invoke Agent Per Table
 
@@ -204,11 +232,15 @@ git add -A
 git commit -m "Add Web API integration for [table names]"
 ```
 
+**Output**: Integration code created for all confirmed tables, verified and committed
+
 ---
 
-## Step 5: Setup Permissions
+## Phase 5: Setup Permissions
 
-Invoke the `webapi-permissions` agent to configure table permissions and site settings for all integrated tables.
+**Goal**: Configure table permissions and site settings for all integrated tables using the `webapi-permissions` agent
+
+**Actions**:
 
 ### 5.1 Check Deployment Prerequisite
 
@@ -220,9 +252,9 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The `.powerpages-site` folder was not found. The site needs to be deployed once before permissions can be configured. Would you like to deploy now? | Yes, deploy now (Recommended), Skip permissions for now — I'll set them up later |
 
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this step.
+**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this phase.
 
-**If "Skip"**: Skip to Step 6 with a note that permissions still need to be configured.
+**If "Skip"**: Skip to Phase 6 with a note that permissions still need to be configured.
 
 ### 5.2 Invoke Permissions Agent
 
@@ -230,7 +262,7 @@ Use the `Task` tool to invoke the `webapi-permissions` agent at `${CLAUDE_PLUGIN
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and set up Web API permissions. The following tables have been integrated with Web API: [list of tables integrated in Step 4]. Check for existing web roles, table permissions, and site settings. Propose a complete permissions plan covering all integrated tables."
+> "Analyze this Power Pages code site and set up Web API permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles, table permissions, and site settings. Propose a complete permissions plan covering all integrated tables."
 
 ### 5.3 Create Permission Files
 
@@ -254,9 +286,15 @@ git add -A
 git commit -m "Add Web API permissions and site settings for [table names]"
 ```
 
+**Output**: Table permissions and site settings created, verified, and committed
+
 ---
 
-## Step 6: Review & Deploy
+## Phase 6: Review & Deploy
+
+**Goal**: Present a summary of all work performed and offer deployment
+
+**Actions**:
 
 ### 6.1 Present Summary
 
@@ -294,3 +332,44 @@ After deployment (or if skipped), remind the user:
 - **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct
 - **Disable innererror in production**: If `Webapi/error/innererror` was enabled for debugging, disable it before going live
 - **Web roles**: Users must be assigned the appropriate web roles to access protected APIs
+
+**Output**: Summary presented, deployment completed or deferred, post-deploy guidance provided
+
+---
+
+## Important Notes
+
+### Throughout All Phases
+
+- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Ask for user confirmation** at key decision points (see list below)
+- **Process tables sequentially** — never in parallel, because the shared API client and shared files create ordering dependencies
+- **Commit at milestones** — after integration code and after permission files
+- **Verify each integration** — confirm expected files exist after each agent invocation
+
+### Key Decision Points (Wait for User)
+
+1. After Phase 2: Confirm which tables to integrate
+2. After Phase 3: Approve integration plan
+3. At Phase 5.1: Deploy now or skip permissions (if `.powerpages-site` missing)
+4. At Phase 5.3: Approve permissions plan (handled within the `webapi-permissions` agent via plan mode)
+5. At Phase 6.2: Deploy now or deploy later
+
+### Progress Tracking
+
+Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify site exists | Verifying site prerequisites | Locate project root, detect framework, check data model and deployment status |
+| Explore integration points | Analyzing code for integration points | Use Explore agent to discover tables, existing services, and compile integration manifest |
+| Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
+| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent per table, verify output, git commit |
+| Setup permissions | Configuring permissions and site settings | Invoke webapi-permissions agent, create YAML files, git commit |
+| Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
+
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+
+---
+
+**Begin with Phase 1: Verify Site Exists**

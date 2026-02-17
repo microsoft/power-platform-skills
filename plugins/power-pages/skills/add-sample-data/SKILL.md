@@ -7,7 +7,7 @@ description: >
   or wants to populate their Dataverse tables with sample records
   so they can test and demo their Power Pages site.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "EnterPlanMode", "ExitPlanMode", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch"]
+allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch"]
 model: opus
 hooks:
   Stop:
@@ -16,8 +16,8 @@ hooks:
           prompt: >
             If sample data was being added in this session (via /power-pages:add-sample-data),
             verify before allowing stop: 1) Tables were discovered (from .datamodel-manifest.json or OData API),
-            2) The user selected which tables to populate and approved the sample data plan,
-            3) All approved records were inserted via OData API, 4) A verification summary was presented
+            2) The user selected which tables to populate,
+            3) All records were inserted via OData API, 4) A verification summary was presented
             showing record counts per table. If incomplete, return { "ok": false, "reason": "<specific issues>" }.
             Otherwise return { "ok": true }.
           timeout: 30
@@ -27,30 +27,37 @@ hooks:
 
 Populate Dataverse tables with sample records via OData API so users can test and demo their Power Pages sites.
 
-## Workflow
+## Core Principles
 
-1. **Verify Prerequisites** → PAC CLI auth + Azure CLI token
-2. **Discover Tables** → Read `.datamodel-manifest.json` or query OData API
-3. **Select Tables & Configure** → User picks tables and record count
-4. **Generate & Review Sample Data Plan** → Preview sample records, get approval
-5. **Insert Sample Data** → OData POST calls with relationship handling
-6. **Verify & Summarize** → Confirm record counts, present summary
+- **Respect insertion order**: Always insert parent/referenced tables before child/referencing tables so lookup IDs are available when needed.
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases -- create the todo list upfront with all phases before starting any work.
+- **Fail gracefully**: On insertion failure, log the error and continue with remaining records -- never attempt automated rollback.
 
----
-
-## Step 1: Verify Prerequisites
-
-Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+**Initial request:** $ARGUMENTS
 
 ---
 
-## Step 2: Discover Tables
+## Phase 1: Verify Prerequisites
 
-Find the custom tables available in the user's Dataverse environment.
+**Goal**: Confirm PAC CLI auth, acquire an Azure CLI token, and verify API access
+
+**Actions**:
+1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
+2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+
+**Output**: Authenticated session with valid token and confirmed API access
+
+---
+
+## Phase 2: Discover Tables
+
+**Goal**: Find the custom tables available in the user's Dataverse environment
+
+**Actions**:
 
 ### Path A: Read `.datamodel-manifest.json` (Preferred)
 
-Check if `.datamodel-manifest.json` exists in the project root (written by the `setup-datamodel` skill). If it exists, read it — it already contains table logical names, display names, and column info.
+Check if `.datamodel-manifest.json` exists in the project root (written by the `setup-datamodel` skill). If it exists, read it -- it already contains table logical names, display names, and column info.
 
 ```powershell
 # Check if manifest exists
@@ -77,23 +84,27 @@ $columns = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(Logic
 
 Show the user the list of discovered tables with their columns so they can choose which to populate.
 
+**Output**: List of discovered tables with their columns presented to the user
+
 ---
 
-## Step 3: Select Tables & Configure
+## Phase 3: Select Tables & Configure
 
-Use `AskUserQuestion` to gather user preferences:
+**Goal**: Gather user preferences on which tables to populate and how many records to create
+
+**Actions**:
 
 ### 3.1 Select Tables
 
-Ask which tables they want to populate (use `multiSelect: true`). List all discovered tables as options.
+Use `AskUserQuestion` to ask which tables they want to populate (use `multiSelect: true`). List all discovered tables as options.
 
 ### 3.2 Select Record Count
 
-Ask how many sample records per table:
+Use `AskUserQuestion` to ask how many sample records per table:
 
 | Option | Description |
 |--------|-------------|
-| **5 records** | Quick test — just enough to verify the setup |
+| **5 records** | Quick test -- just enough to verify the setup |
 | **10 records** | Light demo data for basic testing |
 | **25 records** | Fuller dataset for realistic demos |
 | **Custom** | Let the user specify a number |
@@ -103,23 +114,25 @@ Ask how many sample records per table:
 Analyze relationships between selected tables. Parent/referenced tables must be inserted first so their IDs are available for child/referencing table lookups.
 
 Build the insertion order:
-1. Tables with no lookup dependencies (parent tables) → insert first
-2. Tables that reference already-inserted tables → insert next
+1. Tables with no lookup dependencies (parent tables) -- insert first
+2. Tables that reference already-inserted tables -- insert next
 3. Continue until all tables are ordered
+
+**Output**: Confirmed table selection, record count, and insertion order
 
 ---
 
-## Step 4: Generate & Review Sample Data Plan
+## Phase 4: Generate & Review Sample Data
 
-### 4.1 Enter Plan Mode
+**Goal**: Generate contextually appropriate sample records and get user approval before inserting
 
-Use `EnterPlanMode` to present a preview of the sample data to be created.
+**Actions**:
 
-### 4.2 Generate Contextual Sample Data
+### 4.1 Generate Contextual Sample Data
 
 For each selected table, generate sample records with contextually appropriate values based on column names and types:
 
-- **String columns**: Generate realistic values matching the column name (e.g., "Email" → `jane.doe@example.com`, "Phone" → `(555) 123-4567`, "Name" → realistic names)
+- **String columns**: Generate realistic values matching the column name (e.g., "Email" -> `jane.doe@example.com`, "Phone" -> `(555) 123-4567`, "Name" -> realistic names)
 - **Memo columns**: Generate short descriptive text relevant to the column name
 - **Integer/Decimal/Currency columns**: Generate reasonable numeric values
 - **DateTime columns**: Generate dates within a sensible range (past year to next month)
@@ -127,12 +140,12 @@ For each selected table, generate sample records with contextually appropriate v
 - **Picklist/Choice columns**: Query valid options first (see references/odata-record-patterns.md), then use actual option values
 - **Lookup columns**: Reference records from parent tables that will be/were already inserted
 
-### 4.3 Present Preview
+### 4.2 Present Sample Data Preview
 
-For each table, show a markdown table previewing the sample records:
+For each table, show a markdown table previewing the sample records directly in the conversation:
 
 ```markdown
-### Project (cr123_project) — 5 records
+### Project (cr123_project) -- 5 records
 
 | Name | Description | Status | Start Date |
 |------|-------------|--------|------------|
@@ -143,19 +156,17 @@ For each table, show a markdown table previewing the sample records:
 
 Show relationship handling: which lookup fields reference which parent table records.
 
-### 4.4 Get User Approval
-
-Use `ExitPlanMode` to present the plan. The user can:
-
-- **Approve** — Proceed to Step 5
-- **Request changes** — Modify the sample data and re-present
-- **Cancel** — Stop the skill
+**Output**: Sample data plan ready for insertion. Proceed directly to Phase 5.
 
 ---
 
-## Step 5: Insert Sample Data
+## Phase 5: Insert Sample Data
 
-Execute OData POST calls to create the sample records. Refer to `references/odata-record-patterns.md` for full patterns.
+**Goal**: Execute OData POST calls to create all approved sample records with correct relationship handling
+
+**Actions**:
+
+Refer to `references/odata-record-patterns.md` for full patterns.
 
 ### 5.1 Get Entity Set Names
 
@@ -227,9 +238,15 @@ $token = az account get-access-token --resource "$envUrl" --query accessToken -o
 $headers["Authorization"] = "Bearer $token"
 ```
 
+**Output**: All approved records inserted with parent-child relationships established
+
 ---
 
-## Step 6: Verify & Summarize
+## Phase 6: Verify & Summarize
+
+**Goal**: Confirm record counts and present a final summary to the user
+
+**Actions**:
 
 ### 6.1 Verify Record Counts
 
@@ -261,3 +278,42 @@ After the summary, suggest:
 - Review the data in the Power Pages maker portal or model-driven app
 - If the site is not yet built: `/power-pages:create-site`
 - If the site is ready to deploy: `/power-pages:deploy-site`
+
+**Output**: Verified record counts and summary presented to the user
+
+---
+
+## Important Notes
+
+### Throughout All Phases
+
+- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Ask for user confirmation** at key decision points (see list below)
+- **Respect insertion order** -- always insert parent tables before child tables
+- **Fail gracefully** -- log errors and continue, never rollback automatically
+- **Refresh tokens** every 20 records to avoid expiration
+
+### Key Decision Points (Wait for User)
+
+1. After Phase 2: Confirm which tables to populate
+2. After Phase 3: Confirm record count and insertion order
+3. After Phase 6: Review summary and decide next steps
+
+### Progress Tracking
+
+Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
+| Discover tables | Discovering tables | Read .datamodel-manifest.json or query OData API for custom tables |
+| Select tables and configure | Configuring tables | User picks tables, record count, and determine insertion order |
+| Generate and review sample data | Generating sample data | Generate contextual sample records, present preview, get user approval |
+| Insert sample data | Inserting records | Execute OData POST calls with relationship handling and token refresh |
+| Verify and summarize | Verifying results | Confirm record counts, present summary, suggest next steps |
+
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+
+---
+
+**Begin with Phase 1: Verify Prerequisites**

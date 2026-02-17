@@ -612,6 +612,43 @@ export const mapProductEntity = (entity: ProductEntity): Product => ({
 
 Use `getFormattedValue()` for lookup display names and option set labels — these come from the `Prefer: odata.include-annotations` header.
 
+### 4.6 Lookup Property Rules
+
+Lookups in Dataverse expose **two distinct properties**. Understanding the difference is critical:
+
+**On retrieval (GET):**
+- **GUID property** — Automatically named `_{logicalname}_value`. Contains the raw lookup ID. Use for filtering, logic, and foreign-key references. Include in `$select`.
+- **Navigation property** — Named after the relationship (e.g., `cr4fc_Category`). Use with `$expand` to fetch related record details. **Case-sensitive** — must match the schema name exactly (typically PascalCase).
+
+```typescript
+// $select includes the GUID property for the raw ID
+'$select': '_{prefix}_categoryid_value,{prefix}_name'
+// $expand uses the Navigation Property to get related data
+'$expand': '{prefix}_Category($select={prefix}_categoryid,{prefix}_name)'
+// $filter uses the GUID property
+'$filter': `_{prefix}_categoryid_value eq ${categoryId}`
+```
+
+**On create/update (POST/PATCH):**
+- You **cannot** set a lookup by sending a GUID to the `_value` property. You **must** use `@odata.bind` on the **Navigation Property**.
+- Syntax: `"NavigationProperty@odata.bind": "/entity_set_name(GUID)"`
+
+```typescript
+// CORRECT — uses Navigation Property name (case-sensitive)
+body['cr4fc_Category@odata.bind'] = `/cr4fc_categories(${categoryId})`;
+
+// WRONG — using the GUID property name causes "Undeclared Property" error
+body['_cr4fc_categoryid_value'] = categoryId; // ❌ Does NOT work
+```
+
+**Common error:** If you get an "Undeclared Property" error on POST/PATCH, you are likely using the logical name (all lowercase) instead of the **Navigation Property name** (case-sensitive, matches the schema name).
+
+**To clear a lookup**, set the `@odata.bind` annotation to `null`:
+
+```typescript
+body['cr4fc_Category@odata.bind'] = null; // unbinds the relationship
+```
+
 ---
 
 ## Step 5: Create Service Layer
@@ -642,10 +679,12 @@ const PRODUCT_SELECT = [
   'cr4fc_price',
   'cr4fc_status',
   'cr4fc_imageurl',
+  '_cr4fc_category_value', // Lookup GUID — use for filtering/logic
   'createdon',
   'modifiedon',
 ].join(',');
 
+// Expand uses the Navigation Property (case-sensitive) to fetch related record
 const PRODUCT_EXPAND = 'cr4fc_Category($select=cr4fc_categoryid,cr4fc_name)';
 ```
 
@@ -850,6 +889,56 @@ export const getProductCount = async (filter?: string): Promise<number> => {
 };
 ```
 
+### 5.10 File & Image Column Operations
+
+If the target table has **File** or **Image** columns, add download, upload, and delete methods to the service. These use the `fetchFileColumnUrl` and `uploadFileColumn` helpers from the core API client.
+
+**Download** — returns an object URL for the blob, or `null` if no file exists (404):
+
+```typescript
+import { fetchFileColumnUrl, uploadFileColumn } from '../shared/powerPagesApi';
+
+export const downloadProductPhoto = async (id: string): Promise<string | null> => {
+  return fetchFileColumnUrl('cr4fc_products', id, 'cr4fc_photo');
+};
+```
+
+**Upload** — sends raw binary via PATCH. Body is `ArrayBuffer`, not JSON:
+
+```typescript
+export const uploadProductPhoto = async (
+  id: string,
+  file: Blob,
+  fileName?: string
+): Promise<void> => {
+  await uploadFileColumn('cr4fc_products', id, 'cr4fc_photo', file, fileName);
+};
+```
+
+**Delete** — removes the file from the column without deleting the record:
+
+```typescript
+export const deleteProductPhoto = async (id: string): Promise<void> => {
+  await powerPagesFetch(`/_api/cr4fc_products(${id})/cr4fc_photo`, {
+    method: 'DELETE',
+    headers: { 'If-Match': '*' },
+  });
+};
+```
+
+Only create these methods if the target table actually has File or Image columns (check the data model manifest for column types `File` or `Image`).
+
+**Common pitfalls with file columns:**
+
+| Mistake | Symptom | Fix |
+|---------|---------|-----|
+| Using `/$value` on upload URL | `405 Method Not Allowed` | Upload to `/_api/table(id)/column` (no `/$value`) |
+| Sending JSON body for upload | `400 Bad Request` | Send `ArrayBuffer` via `file.arrayBuffer()` |
+| Missing `If-Match: *` on upload | `412 Precondition Failed` | Add `If-Match: *` header |
+| Using `$select` on `/$value` URL | `400 Bad Request` | OData query options are not supported on `/$value` |
+| Missing `x-ms-file-name` header | File saved without name/extension | Include `x-ms-file-name` header with filename |
+| Using `Accept: application/json` for download | Empty or error response | Use `Accept: */*` for blob downloads |
+
 ---
 
 ## Step 6: Wire Up
@@ -893,6 +982,75 @@ export function useProducts(params?: ListParams) {
   return { ...data, isLoading, error, refetch: fetchData };
 }
 ```
+
+### 6.1.1 React — DataverseImage Component
+
+If the table has File or Image columns, create a reusable component for rendering Dataverse images. Handles loading states, fallbacks, and cleanup of object URLs:
+
+```tsx
+import { useState, useEffect } from 'react';
+import { fetchFileColumnUrl } from '../shared/powerPagesApi';
+
+interface DataverseImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+  table: string;        // Entity set name (e.g., 'cr4fc_products')
+  recordId: string;     // GUID of the record
+  column: string;       // File/image column logical name
+  fallbackSrc?: string; // Fallback image URL if no file exists
+  hasFile?: boolean;    // Whether the record has a file (skip fetch if false)
+}
+
+function DataverseImage({
+  table,
+  recordId,
+  column,
+  fallbackSrc = '',
+  hasFile = true,
+  ...imgProps
+}: DataverseImageProps) {
+  const [src, setSrc] = useState(fallbackSrc);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!hasFile) {
+      if (fallbackSrc) setSrc(fallbackSrc);
+      return;
+    }
+
+    let active = true;
+    const loadImage = async () => {
+      setIsLoading(true);
+      try {
+        const url = await fetchFileColumnUrl(table, recordId, column);
+        if (active && url) setSrc(url);
+      } catch (error) {
+        console.warn('[DataverseImage] Failed to load image:', error);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    loadImage();
+    return () => { active = false; };
+  }, [table, recordId, column, hasFile, fallbackSrc]);
+
+  return <img src={src} {...imgProps} />;
+}
+```
+
+Usage:
+```tsx
+<DataverseImage
+  table="cr4fc_products"
+  recordId={product.id}
+  column="cr4fc_photo"
+  fallbackSrc="/images/placeholder.png"
+  hasFile={!!product.hasPhoto}
+  alt={product.name}
+  className="product-image"
+/>
+```
+
+Only create this component if the table has image columns that need rendering in the UI.
 
 ### 6.2 Vue — Composable
 
@@ -978,6 +1136,7 @@ Match existing project conventions. If none exist, use this default layout:
 | Entity types + domain types + mapper | `src/types/<tableName>.ts` |
 | Service (CRUD operations) | `src/shared/services/<tableName>Service.ts` |
 | React hook | `src/shared/hooks/use<DomainName>.ts` |
+| React DataverseImage component | `src/shared/components/DataverseImage.tsx` |
 | Vue composable | `src/composables/use<DomainName>.ts` |
 | Angular service | `src/app/services/<tableName>-api.service.ts` |
 
@@ -1098,7 +1257,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 3. **No wildcard `$select`** — Always list specific columns. Wildcards expose unnecessary data and degrade performance.
 4. **Always paginate** — Every list/query MUST include `$top`. Use `$top`/`$skip`/`$count` for UI pagination. Use `fetchAllPages` only when all records are genuinely needed (dropdowns, lookups, exports). Never fetch unbounded data.
 5. **Use `$count=true`** — Include on every list query to get total record count efficiently in `@odata.count` without fetching all rows. For count-only queries, combine with `$top=0`.
-6. **`@odata.bind` for lookups** — Set lookup relationships using `navigationProperty@odata.bind` annotation with the target entity set path, not raw GUID values.
+6. **`@odata.bind` for lookups** — Set lookup relationships using `NavigationProperty@odata.bind` annotation with the target entity set path, not raw GUID values. The Navigation Property name is **case-sensitive** and must match the schema name (typically PascalCase like `cr4fc_Category`). Using the logical name (all lowercase) causes "Undeclared Property" errors.
 7. **Handle 204 responses** — PATCH and DELETE return empty bodies. Do not attempt to parse them.
 8. **`Prefer: return=representation`** — Use on POST to receive the created record in the response body.
 9. **`If-Match: *`** — Required header for PATCH (update) operations.
@@ -1110,6 +1269,9 @@ Only create this if the site's UI shows/hides controls based on user roles.
 15. **Type everything** — Raw OData entity interface + clean domain type + mapper function.
 16. **Match existing patterns** — If the project has conventions for file locations, naming, or code style, follow them exactly.
 17. **One table per invocation** — This agent handles a single table. For multiple tables, the caller invokes it separately for each.
-18. **Upload vs download** — File upload uses `/_api/table(id)/column` (PATCH). File download uses `/_api/table(id)/column/$value` (GET). Do not confuse the two.
-19. **Remind about permissions** — After creating integration code, note that the `webapi-permissions` agent must be run to configure site settings and table permissions if not already done.
-20. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.
+18. **Upload vs download URLs** — File upload uses `/_api/table(id)/column` (PATCH, no `/$value`). File download uses `/_api/table(id)/column/$value` (GET). File delete uses `/_api/table(id)/column` (DELETE). Do not confuse the URL patterns.
+19. **File upload body is binary** — Send `ArrayBuffer` via `file.arrayBuffer()`, not JSON. Set `Content-Type` to the file's MIME type. Include `If-Match: *` and `x-ms-file-name` headers.
+20. **File download uses blob response** — Set `Accept: */*` (not `application/json`). Parse response as blob, not JSON. Return `null` on 404 instead of throwing.
+21. **Lookup GUID vs Navigation Property** — On GET, use `_{logicalname}_value` in `$select` for the raw GUID, and the Navigation Property in `$expand` for related data. On POST/PATCH, use `NavigationProperty@odata.bind` — never write directly to the `_value` property.
+22. **Remind about permissions** — After creating integration code, note that the `webapi-permissions` agent must be run to configure site settings and table permissions if not already done.
+23. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.

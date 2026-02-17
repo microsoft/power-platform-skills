@@ -9,7 +9,7 @@ description: >
   authentication (login/logout via Microsoft Entra ID) and role-based
   authorization for their Power Pages code site.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "EnterPlanMode", "ExitPlanMode", "Skill"]
+allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "Skill"]
 model: opus
 hooks:
   Stop:
@@ -34,6 +34,14 @@ hooks:
 
 Configure authentication (login/logout via Microsoft Entra ID) and role-based authorization for a Power Pages code site. This skill creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework.
 
+## Core Principles
+
+- **Client-side auth is UX only** — Power Pages authentication is server-side (session cookies). Client-side role checks control what users see, not what they can access. Server-side table permissions enforce actual security.
+- **Framework-appropriate patterns** — Every auth artifact (hooks, composables, services, directives, guards) must match the detected framework's idioms and conventions.
+- **Development parity** — Include mock data for local development so developers can test auth flows and role-based UI without deploying to Power Pages.
+
+**Initial request:** $ARGUMENTS
+
 > **Prerequisites:**
 > - An existing Power Pages code site created via `/power-pages:create-site`
 > - The site must be deployed at least once (`.powerpages-site` folder must exist)
@@ -41,19 +49,23 @@ Configure authentication (login/logout via Microsoft Entra ID) and role-based au
 
 ## Workflow
 
-1. **Check Prerequisites** → Verify site exists, detect framework, check web roles
-2. **Plan** → Gather auth requirements and enter plan mode for approval
-3. **Create Auth Service** → Auth service with login/logout and type declarations
-4. **Create Authorization Utils** → Role-checking functions and wrapper components
-5. **Create Auth UI** → Login/logout button integrated into navigation
-6. **Implement Role-Based UI** → Apply role-based patterns to site components
-7. **Review & Deploy** → Summary and deployment prompt
+1. **Phase 1: Check Prerequisites** — Verify site exists, detect framework, check web roles
+2. **Phase 2: Plan** — Gather auth requirements and present plan for approval
+3. **Phase 3: Create Auth Service** — Auth service with login/logout and type declarations
+4. **Phase 4: Create Authorization Utils** — Role-checking functions and wrapper components
+5. **Phase 5: Create Auth UI** — Login/logout button integrated into navigation
+6. **Phase 6: Implement Role-Based UI** — Apply role-based patterns to site components
+7. **Phase 7: Review & Deploy** — Summary and deployment prompt
 
 ---
 
-## Step 1: Check Prerequisites
+## Phase 1: Check Prerequisites
 
-### 1.1 Locate Project
+**Goal:** Confirm the project exists, identify the framework, verify deployment status and web roles, and check for existing auth code.
+
+### Actions
+
+#### 1.1 Locate Project
 
 Look for `powerpages.config.json` in the current directory or immediate subdirectories:
 
@@ -63,11 +75,11 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 
 **If not found**: Tell the user to create a site first with `/power-pages:create-site`.
 
-### 1.2 Detect Framework
+#### 1.2 Detect Framework
 
 Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
-### 1.3 Check Deployment Status
+#### 1.3 Check Deployment Status
 
 Look for the `.powerpages-site` folder:
 
@@ -89,7 +101,7 @@ Use `AskUserQuestion`:
 
 **If "No"**: Stop — the site must be deployed first.
 
-### 1.4 Check Web Roles
+#### 1.4 Check Web Roles
 
 Look for web role YAML files in `.powerpages-site/web-roles/`:
 
@@ -109,7 +121,7 @@ Read each file and compile a list of existing web roles (name, id, flags).
 
 **If "Skip"**: Continue — auth service and login/logout will still work, but role-based authorization will need roles created later.
 
-### 1.5 Check for Existing Auth Code
+#### 1.5 Check for Existing Auth Code
 
 Search for existing auth files to avoid duplicating work:
 
@@ -120,11 +132,23 @@ Search for existing auth files to avoid duplicating work:
 
 If auth files already exist, present them to the user and ask whether to overwrite or skip.
 
+### Output
+
+- Project root path confirmed
+- Framework identified (React, Vue, Angular, or Astro)
+- Deployment status verified
+- Web roles inventory compiled
+- Existing auth code conflicts identified (if any)
+
 ---
 
-## Step 2: Plan
+## Phase 2: Plan
 
-### 2.1 Gather Requirements
+**Goal:** Gather authentication requirements from the user and present the implementation plan for approval.
+
+### Actions
+
+#### 2.1 Gather Requirements
 
 Use `AskUserQuestion` to determine the scope:
 
@@ -132,30 +156,48 @@ Use `AskUserQuestion` to determine the scope:
 |----------|---------|
 | Which authentication features do you need? | Login & Logout + Role-based access control (Recommended), Login & Logout only, Role-based access control only (auth service already exists) |
 
-If web roles were found in Step 1.4, also ask:
+If web roles were found in Phase 1.4, also ask:
 
 | Question | Options |
 |----------|---------|
 | Which web roles should have access to protected areas of the site? | *(List discovered web role names as options)* |
 
-### 2.2 Enter Plan Mode
+#### 2.2 Present Plan for Approval
 
-Enter plan mode and present the implementation plan:
+Present the implementation plan inline:
 
 - Which files will be created (auth service, types, authorization utils, components)
 - How the auth UI will be integrated into the site's navigation
 - Which routes/components will be protected and with which roles
 - The site setting that needs to be configured (`Authentication/Registration/ProfileRedirectEnabled = false`)
 
-Wait for user approval before proceeding.
+Use `AskUserQuestion` to get approval:
+
+| Question | Options |
+|----------|---------|
+| Here is the implementation plan for authentication and authorization. Would you like to proceed? | Approve and proceed (Recommended), I'd like to make changes |
+
+**If "Approve and proceed"**: Continue to Phase 3.
+
+**If "I'd like to make changes"**: Ask the user what they want to change, revise the plan, and present it again for approval.
+
+### Output
+
+- Authentication scope confirmed (login/logout, role-based access, or both)
+- Target web roles selected
+- Implementation plan approved by user
 
 ---
 
-## Step 3: Create Auth Service
+## Phase 3: Create Auth Service
+
+**Goal:** Create the authentication service, type declarations, and framework-specific auth hook/composable with local development mock support.
 
 Reference: `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md`
 
-### 3.1 Create Type Declarations
+### Actions
+
+#### 3.1 Create Type Declarations
 
 Create `src/types/powerPages.d.ts` with type definitions for the Power Pages portal object and user:
 
@@ -163,7 +205,7 @@ Create `src/types/powerPages.d.ts` with type definitions for the Power Pages por
 - `PowerPagesPortal` interface — `User`, `version`, `type`, `id`, `geo`, `tenant`, etc.
 - Global `Window` interface extension for `Microsoft.Dynamic365.Portal`
 
-### 3.2 Create Auth Service
+#### 3.2 Create Auth Service
 
 Create the auth service file based on the detected framework:
 
@@ -183,7 +225,7 @@ Create the auth service file based on the detected framework:
 
 **CRITICAL**: Power Pages authentication is **server-side** (session cookies). The login flow posts a form to the server which redirects to Entra ID. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
 
-### 3.3 Create Framework-Specific Auth Hook/Composable
+#### 3.3 Create Framework-Specific Auth Hook/Composable
 
 Based on the detected framework:
 
@@ -192,7 +234,7 @@ Based on the detected framework:
 - **Angular**: Create `src/app/services/auth.service.ts` — injectable service with `BehaviorSubject` for user state
 - **Astro**: Create `src/services/authService.ts` only (no framework-specific wrapper needed — use the service directly in components)
 
-### 3.4 Add Mock Data for Local Development
+#### 3.4 Add Mock Data for Local Development
 
 Auth only works when served from Power Pages (not during local `npm run dev`). Add a development mock pattern in the auth service:
 
@@ -203,13 +245,24 @@ const isDevelopment = window.location.hostname === 'localhost' || window.locatio
 
 The mock should return a fake user with configurable roles so developers can test role-based UI locally.
 
+### Output
+
+- `src/types/powerPages.d.ts` created with Power Pages type definitions
+- `src/services/authService.ts` created with login/logout functions
+- Framework-specific auth hook/composable created
+- Local development mock data included
+
 ---
 
-## Step 4: Create Authorization Utils
+## Phase 4: Create Authorization Utils
+
+**Goal:** Create role-checking utilities and framework-specific authorization components (guards, directives, wrapper components).
 
 Reference: `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authorization-reference.md`
 
-### 4.1 Create Core Authorization Utilities
+### Actions
+
+#### 4.1 Create Core Authorization Utilities
 
 Create `src/utils/authorization.ts` with:
 
@@ -221,7 +274,7 @@ Create `src/utils/authorization.ts` with:
 - `isAdmin()` — checks for "Administrators" role
 - `hasElevatedAccess(additionalRoles)` — checks admin or specified roles
 
-### 4.2 Create Framework-Specific Authorization Components
+#### 4.2 Create Framework-Specific Authorization Components
 
 Based on the detected framework:
 
@@ -241,7 +294,7 @@ Based on the detected framework:
 **Astro:**
 - `src/utils/authorization.ts` only (use directly in component scripts)
 
-### 4.3 Security Reminder
+#### 4.3 Security Reminder
 
 Add a comment at the top of the authorization utilities:
 
@@ -251,11 +304,21 @@ Add a comment at the top of the authorization utilities:
 // Always configure table permissions via /power-pages:integrate-webapi.
 ```
 
+### Output
+
+- `src/utils/authorization.ts` created with role-checking functions
+- Framework-specific authorization components created (guards, directives, or wrapper components)
+- Security reminder comments included
+
 ---
 
-## Step 5: Create Auth UI
+## Phase 5: Create Auth UI
 
-### 5.1 Create Auth Button Component
+**Goal:** Create the login/logout button component and integrate it into the site's navigation.
+
+### Actions
+
+#### 5.1 Create Auth Button Component
 
 Based on the detected framework, create a login/logout button component:
 
@@ -270,7 +333,7 @@ The component should:
 - Include a loading state while checking auth status
 - Be styled to match the site's existing design (read existing CSS variables/theme)
 
-### 5.2 Integrate into Navigation
+#### 5.2 Integrate into Navigation
 
 Find the site's navigation component and integrate the auth button:
 
@@ -280,7 +343,7 @@ Find the site's navigation component and integrate the auth button:
 
 **Do NOT replace the existing navigation** — add the auth button alongside existing nav items.
 
-### 5.3 Git Commit
+#### 5.3 Git Commit
 
 Stage and commit the auth files:
 
@@ -289,11 +352,21 @@ git add -A
 git commit -m "Add authentication service and auth UI component"
 ```
 
+### Output
+
+- Auth button component created for the detected framework
+- Auth button integrated into the site's navigation
+- Changes committed to git
+
 ---
 
-## Step 6: Implement Role-Based UI
+## Phase 6: Implement Role-Based UI
 
-### 6.1 Identify Protected Content
+**Goal:** Identify protected content areas and apply role-based authorization patterns to the site's components.
+
+### Actions
+
+#### 6.1 Identify Protected Content
 
 Analyze the site's components to find content that should be role-gated:
 
@@ -303,7 +376,7 @@ Analyze the site's components to find content that should be role-gated:
 
 Present findings to the user and confirm which areas to protect.
 
-### 6.2 Apply Authorization Patterns
+#### 6.2 Apply Authorization Patterns
 
 Based on the user's choices, wrap the appropriate components:
 
@@ -330,7 +403,7 @@ Based on the user's choices, wrap the appropriate components:
 { path: 'admin', component: AdminComponent, canActivate: [authGuard, roleGuard], data: { roles: ['Administrators'] } }
 ```
 
-### 6.3 Git Commit
+#### 6.3 Git Commit
 
 Stage and commit:
 
@@ -339,11 +412,21 @@ git add -A
 git commit -m "Add role-based access control to site components"
 ```
 
+### Output
+
+- Protected content areas identified and confirmed with user
+- Role-based authorization patterns applied to components
+- Changes committed to git
+
 ---
 
-## Step 7: Review & Deploy
+## Phase 7: Review & Deploy
 
-### 7.1 Create Site Setting
+**Goal:** Create required site settings, present a summary of all work, and prompt for deployment.
+
+### Actions
+
+#### 7.1 Create Site Setting
 
 The site needs the `Authentication/Registration/ProfileRedirectEnabled` setting set to `false` to prevent Power Pages from redirecting users to a profile page after login (which doesn't exist in code sites).
 
@@ -361,7 +444,7 @@ name: Authentication/Registration/ProfileRedirectEnabled
 value: "false"
 ```
 
-### 7.2 Present Summary
+#### 7.2 Present Summary
 
 Present a summary of everything created:
 
@@ -375,7 +458,7 @@ Present a summary of everything created:
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
-### 7.3 Ask to Deploy
+#### 7.3 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -389,7 +472,7 @@ Use `AskUserQuestion`:
 
 > "Remember to deploy your site using `/power-pages:deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
 
-### 7.4 Post-Deploy Notes
+#### 7.4 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
@@ -398,3 +481,44 @@ After deployment (or if skipped), remind the user:
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
 - **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/power-pages:integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production
+
+### Output
+
+- `ProfileRedirectEnabled` site setting created
+- Full summary presented to user
+- Deployment prompted (or skipped with reminder)
+- Post-deploy guidance provided
+
+---
+
+## Important Notes
+
+### Progress Tracking
+
+Use `TaskCreate` at the start to track each phase:
+
+| Task | Description |
+|------|-------------|
+| Phase 1 | Check Prerequisites — verify site, framework, deployment, web roles |
+| Phase 2 | Plan — gather requirements and get user approval |
+| Phase 3 | Create Auth Service — auth service, types, framework hook/composable |
+| Phase 4 | Create Authorization Utils — role-checking functions and components |
+| Phase 5 | Create Auth UI — AuthButton component and navigation integration |
+| Phase 6 | Implement Role-Based UI — apply authorization patterns to components |
+| Phase 7 | Review & Deploy — site setting, summary, deployment prompt |
+
+Update each task with `TaskUpdate` as phases are completed.
+
+### Key Decision Points
+
+- **Phase 1.3**: Deploy now or stop? (site must be deployed before auth setup)
+- **Phase 1.4**: Create web roles now or skip? (roles needed for authorization)
+- **Phase 1.5**: Overwrite or skip existing auth files?
+- **Phase 2.1**: Which auth features to include? (login/logout, role-based, or both)
+- **Phase 2.2**: Approve plan or request changes?
+- **Phase 6.1**: Which content areas to protect with role-based access?
+- **Phase 7.3**: Deploy now or later?
+
+---
+
+**Begin with Phase 1: Check Prerequisites**

@@ -7,7 +7,7 @@ description: >
   or wants to create Dataverse tables, columns, and relationships for their
   Power Pages site based on a data model proposal.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "EnterPlanMode", "ExitPlanMode", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch"]
+allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search", "mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch"]
 model: opus
 hooks:
   Stop:
@@ -27,35 +27,45 @@ hooks:
 
 # Set Up Dataverse Data Model
 
-## Workflow
+Guide the user through creating Dataverse tables, columns, and relationships for their Power Pages site. Follow a systematic approach: verify prerequisites, obtain a data model (via AI analysis or user-provided diagram), review and approve, then create all schema objects via OData API.
 
-1. **Verify Prerequisites** → PAC CLI auth + Azure CLI token
-2. **Choose Data Model Source** → Upload existing ER diagram or let AI figure it out
-3. **Invoke Data Model Architect** → Spawn agent to analyze and propose data model (or parse uploaded diagram)
-4. **Review Proposal** → Present proposal to user, get approval
-5. **Pre-Creation Checks** → Query existing tables, skip duplicates
-6. **Create Tables & Columns** → OData API POST calls
-7. **Create Relationships** → OData API relationship definitions
-8. **Publish & Verify** → Publish customizations, verify tables, write manifest, present summary
+## Core Principles
 
----
+- **Never create without approval**: Always present the full data model proposal and get explicit user confirmation before making any Dataverse changes.
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Resilient execution**: Refresh tokens proactively, check for existing tables before creating, and report failures without automated rollback.
 
-## Step 1: Verify Prerequisites
-
-Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+**Initial request:** $ARGUMENTS
 
 ---
 
-## Step 2: Choose Data Model Source
+## Phase 1: Verify Prerequisites
 
-Ask the user how they want to define the data model using the `AskUserQuestion` tool:
+**Goal**: Confirm PAC CLI authentication, acquire an Azure CLI token, and verify API access
 
-**Question**: "How would you like to define the data model for your site?"
+**Actions**:
+1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
+2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
-| Option | Description |
-|--------|-------------|
-| **Upload an existing ER diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing data model |
-| **Let AI figure it out** | The AI agent will analyze your site's source code and propose a data model automatically |
+**Output**: Verified PAC CLI auth, valid Azure CLI token, confirmed API access, `$envUrl` stored
+
+---
+
+## Phase 2: Choose Data Model Source
+
+**Goal**: Determine whether the user will upload an existing ER diagram or let AI analyze the site
+
+**Actions**:
+1. Ask the user how they want to define the data model using the `AskUserQuestion` tool:
+
+   **Question**: "How would you like to define the data model for your site?"
+
+   | Option | Description |
+   |--------|-------------|
+   | **Upload an existing ER diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing data model |
+   | **Let AI figure it out** | The AI agent will analyze your site's source code and propose a data model automatically |
+
+2. Route to the appropriate path:
 
 ### Path A: Upload Existing ER Diagram
 
@@ -72,55 +82,63 @@ If the user chooses to upload an existing diagram:
    - Column definitions: `logicalName`, `displayName`, `type`, `required`
    - Relationship definitions: type (1:N or M:N), referenced/referencing tables
 
-3. Query existing Dataverse tables (same as Step 3 would) to mark each table as `new`, `modified`, or `reused`.
+3. Query existing Dataverse tables (same as Phase 3 would) to mark each table as `new`, `modified`, or `reused`.
 
 4. Generate a Mermaid ER diagram from the parsed data (if the user provided an image or text) for visual confirmation.
 
-5. Proceed directly to **Step 4: Review Proposal** with the parsed data model.
+5. Proceed directly to **Phase 4: Review Proposal** with the parsed data model.
 
 ### Path B: Let AI Figure It Out
 
-If the user chooses to let AI figure it out, proceed to **Step 3: Invoke Data Model Architect** (the existing automated flow).
+If the user chooses to let AI figure it out, proceed to **Phase 3: Invoke Data Model Architect** (the existing automated flow).
+
+**Output**: Data model source chosen and, for Path A, parsed data model ready for review
 
 ---
 
-## Step 3: Invoke Data Model Architect
+## Phase 3: Invoke Data Model Architect
 
-Use the `Task` tool to spawn the `data-model-architect` agent. This agent autonomously:
+**Goal**: Spawn the data-model-architect agent to autonomously analyze the site and propose a data model
 
-1. Analyzes the site's source code to infer data requirements
-2. Queries existing Dataverse tables via OData GET requests
-3. Identifies reuse opportunities (reuse, extend, or create new)
-4. Proposes a complete data model with an ER diagram
+**Actions**:
+1. Use the `Task` tool to spawn the `data-model-architect` agent. This agent autonomously:
+   - Analyzes the site's source code to infer data requirements
+   - Queries existing Dataverse tables via OData GET requests
+   - Identifies reuse opportunities (reuse, extend, or create new)
+   - Proposes a complete data model with an ER diagram
 
-Spawn the agent:
+2. Spawn the agent:
 
-```
-Task tool:
-  subagent_type: general-purpose
-  prompt: |
-    You are the data-model-architect agent. Follow the instructions in
-    the agent definition file at:
-    ${CLAUDE_PLUGIN_ROOT}/agents/data-model-architect.md
+   ```
+   Task tool:
+     subagent_type: general-purpose
+     prompt: |
+       You are the data-model-architect agent. Follow the instructions in
+       the agent definition file at:
+       ${CLAUDE_PLUGIN_ROOT}/agents/data-model-architect.md
 
-    Analyze the current project and Dataverse environment, then propose
-    a complete data model. Return:
-    1. Publisher prefix
-    2. Table definitions (logicalName, displayName, status, columns, relationships)
-    3. Mermaid ER diagram
-```
+       Analyze the current project and Dataverse environment, then propose
+       a complete data model. Return:
+       1. Publisher prefix
+       2. Table definitions (logicalName, displayName, status, columns, relationships)
+       3. Mermaid ER diagram
+   ```
 
-Wait for the agent to return its structured proposal before proceeding.
+3. Wait for the agent to return its structured proposal before proceeding.
+
+**Output**: Structured data model proposal from the agent (publisher prefix, table definitions, ER diagram)
 
 ---
 
-## Step 4: Review Proposal
+## Phase 4: Review Proposal
 
-Present the agent's data model proposal to the user for approval.
+**Goal**: Present the data model proposal to the user and get explicit approval before creating anything
 
-### 4.1 Enter Plan Mode
+**Actions**:
 
-Use `EnterPlanMode` and write the proposal into the plan, including:
+### 4.1 Present Proposal
+
+Present the data model proposal directly to the user as a formatted message, including:
 
 - Publisher prefix
 - All proposed tables with columns (logical names + display names)
@@ -130,19 +148,27 @@ Use `EnterPlanMode` and write the proposal into the plan, including:
 
 ### 4.2 Get User Approval
 
-Use `ExitPlanMode` to present the plan. The user can:
+Use `AskUserQuestion` to get approval:
 
-- **Approve** — Proceed to Step 5
-- **Request changes** — Modify the proposal and re-present
-- **Cancel** — Stop the skill
+| Question | Header | Options |
+|----------|--------|---------|
+| Does this data model look correct? | Data Model Proposal | Approve and create tables (Recommended), Request changes, Cancel |
+
+- **If "Approve and create tables (Recommended)"**: Proceed to Phase 5
+- **If "Request changes"**: Ask what they want changed, modify the proposal, and re-present for approval
+- **If "Cancel"**: Stop the skill
 
 Only proceed to creation after explicit user approval.
 
+**Output**: User-approved data model proposal
+
 ---
 
-## Step 5: Pre-Creation Checks
+## Phase 5: Pre-Creation Checks
 
-Before creating anything, refresh the token and verify what already exists to avoid duplicates.
+**Goal**: Refresh the token, verify what already exists in Dataverse, and build the creation plan to avoid duplicates
+
+**Actions**:
 
 ### 5.1 Refresh Token
 
@@ -177,11 +203,17 @@ From the pre-creation checks, build a list of:
 
 Inform the user of any skipped items.
 
+**Output**: Finalized creation plan with tables, columns, and relationships to create or skip
+
 ---
 
-## Step 6: Create Tables & Columns
+## Phase 6: Create Tables & Columns
 
-Create each approved table and its columns using Dataverse OData Web API. Refer to `references/odata-api-patterns.md` for full JSON body templates.
+**Goal**: Create each approved table and its columns using the Dataverse OData Web API
+
+**Actions**:
+
+Refer to `references/odata-api-patterns.md` for full JSON body templates.
 
 ### 6.1 Create Tables
 
@@ -220,11 +252,15 @@ If creating many tables, refresh the token between batches (every 3–4 tables) 
 $token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
 ```
 
+**Output**: All approved tables and columns created (or failures reported)
+
 ---
 
-## Step 7: Create Relationships
+## Phase 7: Create Relationships
 
-After all tables and columns exist, create relationships between them.
+**Goal**: Create all relationships between the newly created and existing tables
+
+**Actions**:
 
 ### 7.1 One-to-Many Relationships
 
@@ -248,9 +284,15 @@ Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/RelationshipDefinitio
 
 Track each relationship creation attempt. Report failures without rolling back.
 
+**Output**: All approved relationships created (or failures reported)
+
 ---
 
-## Step 8: Publish & Verify
+## Phase 8: Publish & Verify
+
+**Goal**: Publish all customizations, verify tables exist, write the manifest, and present a summary
+
+**Actions**:
 
 ### 8.1 Publish Customizations
 
@@ -319,5 +361,47 @@ Include:
 After the summary, suggest:
 - Review created tables in the Power Pages maker portal
 - Populate tables with sample data for testing: `/power-pages:add-sample-data`
+- Integrate tables with your site's frontend via Web API: `/power-pages:integrate-webapi`
 - If the site is not yet built: `/power-pages:create-site`
 - If the site is ready to deploy: `/power-pages:deploy-site`
+
+**Output**: Published customizations, verified tables, manifest written, summary presented
+
+---
+
+## Important Notes
+
+### Throughout All Phases
+
+- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Ask for user confirmation** at key decision points (see list below)
+- **Refresh tokens proactively** — re-acquire the Azure CLI token before any batch of API calls, especially if more than a few minutes have passed
+- **Report failures without rollback** — track each creation attempt and continue with remaining items on failure
+
+### Key Decision Points (Wait for User)
+
+1. After Phase 2: Data model source chosen (upload vs. AI)
+2. After Phase 4: Approve data model proposal before any creation
+3. After Phase 5: Acknowledge any skipped items before proceeding
+4. After Phase 8: Review summary and choose next steps
+
+### Progress Tracking
+
+Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
+| Choose data model source | Choosing data model source | Ask user to upload ER diagram or let AI analyze the site |
+| Invoke data model architect | Invoking data model architect | Spawn agent to analyze site and propose data model |
+| Review and approve proposal | Reviewing proposal | Present data model proposal to user, get explicit approval |
+| Pre-creation checks | Running pre-creation checks | Refresh token, query existing tables, build creation plan |
+| Create tables and columns | Creating tables and columns | POST to OData API to create tables and columns |
+| Create relationships | Creating relationships | POST to OData API to create 1:N and M:N relationships |
+| Publish and verify | Publishing and verifying | Publish customizations, verify tables, write manifest, present summary |
+
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+
+---
+
+**Begin with Phase 1: Verify Prerequisites**

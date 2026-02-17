@@ -7,7 +7,7 @@ description: >
   or wants to add SEO essentials (robots.txt, sitemap.xml, meta tags) to their
   Power Pages code site after creating it with /power-pages:create-site.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "AskUserQuestion", "Task", "EnterPlanMode", "ExitPlanMode", "mcp__plugin_power-pages_playwright__browser_navigate", "mcp__plugin_power-pages_playwright__browser_snapshot", "mcp__plugin_power-pages_playwright__browser_click", "mcp__plugin_power-pages_playwright__browser_close"]
+allowed-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_playwright__browser_navigate", "mcp__plugin_power-pages_playwright__browser_snapshot", "mcp__plugin_power-pages_playwright__browser_click", "mcp__plugin_power-pages_playwright__browser_close"]
 model: opus
 hooks:
   Stop:
@@ -26,21 +26,33 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 
 > **Prerequisite:** This skill expects an existing Power Pages code site created via `/power-pages:create-site`. Run that skill first if the site does not exist yet.
 
+## Core Principles
+
+- **Crawlability first:** Every public page must be discoverable by search engines via a valid `robots.txt` and `sitemap.xml` before any other SEO work matters.
+- **Accurate metadata:** Meta tags (title, description, Open Graph) must truthfully represent page content — misleading metadata harms rankings.
+- **Framework-aware placement:** SEO assets must be placed in the correct location for the detected framework (public directory, layout component, etc.).
+
+**Initial request:** $ARGUMENTS
+
 ## Workflow
 
-1. **Verify Site Exists** → Locate the Power Pages project
-2. **Gather SEO Configuration** → Site URL, pages, preferences
-3. **Plan** → Enter plan mode, present SEO additions, get approval
-4. **Add robots.txt** → Create robots.txt in public directory
-5. **Add sitemap.xml** → Generate sitemap.xml from site routes
-6. **Add Meta Tags** → Add title, description, viewport, Open Graph, and favicon to index.html
-7. **Verify & Commit** → Verify via Playwright, commit changes
+1. **Phase 1: Verify Site Exists** → Locate the Power Pages project
+2. **Phase 2: Gather SEO Configuration** → Site URL, pages, preferences
+3. **Phase 3: Plan & Approve** → Present SEO additions inline, get user approval
+4. **Phase 4: Add robots.txt** → Create robots.txt in public directory
+5. **Phase 5: Add sitemap.xml** → Generate sitemap.xml from site routes
+6. **Phase 6: Add Meta Tags** → Add title, description, viewport, Open Graph, and favicon to index.html
+7. **Phase 7: Verify & Commit** → Verify via Playwright, commit changes
 
 ---
 
-## Step 1: Verify Site Exists
+## Phase 1: Verify Site Exists
 
-### 1.1 Locate Project
+**Goal:** Confirm a Power Pages code site exists and understand its structure.
+
+### Actions
+
+#### 1.1 Locate Project
 
 Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root.
 
@@ -51,7 +63,7 @@ Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
 
 **If not found**: Tell the user to create a site first with `/power-pages:create-site`.
 
-### 1.2 Read Existing Config
+#### 1.2 Read Existing Config
 
 Read `powerpages.config.json` to get the site name and config:
 
@@ -59,47 +71,83 @@ Read `powerpages.config.json` to get the site name and config:
 Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
 ```
 
-### 1.3 Detect Framework & Discover Routes
+#### 1.3 Detect Framework & Discover Routes
 
 Read `package.json` to determine the framework and locate key files. See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → public directory → index HTML mapping and route discovery patterns.
 
 Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
+### Output
+
+- Project root path identified
+- Framework detected (React, Vue, Angular, or Astro)
+- Full list of discoverable routes
+
 ---
 
-## Step 2: Gather SEO Configuration
+## Phase 2: Gather SEO Configuration
+
+**Goal:** Collect all SEO preferences from the user before making any changes.
+
+### Actions
 
 Use `AskUserQuestion` to collect SEO preferences:
 
-### Call 1:
+#### Call 1:
 
 | Question | Header | Options |
 |----------|--------|---------|
 | What is the production URL for your site? (e.g., https://contoso.powerappsportals.com) | Site URL | *(free text — use single generic option so user types via "Other")* |
 | Which pages should be excluded from search engine indexing? | Exclusions | None — index all pages (Recommended), Admin/auth pages only, Let me specify |
 
-### Call 2:
+#### Call 2:
 
 | Question | Header | Options |
 |----------|--------|---------|
 | What meta description should appear in search results? | Description | *(free text — use single generic option so user types via "Other")* |
 | Add Open Graph tags for social media sharing? | OG Tags | Yes — add Open Graph and Twitter Card tags (Recommended), No — skip social tags |
 
----
+### Output
 
-## Step 3: Plan
-
-1. Enter plan mode with `EnterPlanMode`
-2. Present the SEO additions that will be made:
-   - `robots.txt` content (which paths allowed/disallowed)
-   - `sitemap.xml` content (all discovered routes with the production URL)
-   - Meta tags to add to `index.html` (title, description, viewport, charset, Open Graph, Twitter Card)
-   - Favicon link tag
-3. Use `ExitPlanMode` to get user approval
+- Production URL confirmed
+- Exclusion list finalized
+- Meta description text
+- Open Graph tag preference (yes/no)
 
 ---
 
-## Step 4: Add robots.txt
+## Phase 3: Plan & Approve
+
+**Goal:** Present the full SEO plan to the user and get explicit approval before making changes.
+
+### Actions
+
+Present the SEO additions that will be made as a clear, inline summary:
+
+1. **robots.txt content** — which paths will be allowed/disallowed
+2. **sitemap.xml content** — all discovered routes with the production URL and priority assignments
+3. **Meta tags to add to index.html** — title, description, viewport, charset, Open Graph, Twitter Card
+4. **Favicon** — link tag and placeholder SVG
+
+After presenting the plan, use `AskUserQuestion` to get approval:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Here is the SEO plan. How would you like to proceed? | SEO Plan Approval | Approve and proceed (Recommended), I'd like to make changes |
+
+If the user chooses "I'd like to make changes", ask what they want to change, update the plan accordingly, and present the revised plan for approval again.
+
+### Output
+
+- User-approved SEO plan ready for implementation
+
+---
+
+## Phase 4: Add robots.txt
+
+**Goal:** Create a valid `robots.txt` that tells search engines which pages to crawl.
+
+### Actions
 
 Create `robots.txt` in the public directory (`<PROJECT_ROOT>/public/robots.txt`):
 
@@ -121,9 +169,17 @@ Disallow: /auth/
 Sitemap: <PRODUCTION_URL>/sitemap.xml
 ```
 
+### Output
+
+- `public/robots.txt` created with correct directives
+
 ---
 
-## Step 5: Add sitemap.xml
+## Phase 5: Add sitemap.xml
+
+**Goal:** Generate a complete `sitemap.xml` listing all discoverable routes with proper priorities.
+
+### Actions
 
 Create `sitemap.xml` in the public directory (`<PROJECT_ROOT>/public/sitemap.xml`).
 
@@ -155,13 +211,21 @@ Generate entries for each discovered route using the production URL:
 
 **Exclusions:** Do not include routes the user chose to exclude (e.g., `/admin/*`, `/auth/*`).
 
+### Output
+
+- `public/sitemap.xml` created with all routes, correct URLs, and no placeholders
+
 ---
 
-## Step 6: Add Meta Tags
+## Phase 6: Add Meta Tags
 
-### 6.1 Essential Meta Tags
+**Goal:** Add comprehensive meta tags, Open Graph tags, and a favicon to the site's HTML.
 
-Add or update meta tags in the site's `index.html` (location depends on framework — see Step 1.3):
+### Actions
+
+#### 6.1 Essential Meta Tags
+
+Add or update meta tags in the site's `index.html` (location depends on framework — see Phase 1.3):
 
 ```html
 <head>
@@ -175,7 +239,7 @@ Add or update meta tags in the site's `index.html` (location depends on framewor
 </head>
 ```
 
-### 6.2 Open Graph Tags (if user opted in)
+#### 6.2 Open Graph Tags (if user opted in)
 
 Add Open Graph and Twitter Card meta tags inside `<head>`:
 
@@ -193,7 +257,7 @@ Add Open Graph and Twitter Card meta tags inside `<head>`:
 <meta name="twitter:description" content="<META_DESCRIPTION>" />
 ```
 
-### 6.3 Favicon
+#### 6.3 Favicon
 
 Check if a favicon already exists in the public directory. If not, add a simple SVG favicon link:
 
@@ -212,15 +276,25 @@ Create a minimal placeholder `public/favicon.svg` using the site's primary color
 
 Where `<FIRST_LETTER>` is the first letter of the site name and `<PRIMARY_COLOR>` is the primary theme color from the site's configuration.
 
-### 6.4 Astro-Specific Handling
+#### 6.4 Astro-Specific Handling
 
 For Astro sites, meta tags should be added to the base layout component (e.g., `src/layouts/Layout.astro`) rather than a root `index.html`. Astro uses component-based `<head>` management.
 
+### Output
+
+- Meta tags added to `index.html` (or Astro layout equivalent)
+- Open Graph and Twitter Card tags added (if opted in)
+- Favicon SVG created and linked (if not already present)
+
 ---
 
-## Step 7: Verify & Commit
+## Phase 7: Verify & Commit
 
-### 7.1 Verify Files Exist
+**Goal:** Confirm all SEO assets are in place, verify via Playwright, and commit changes.
+
+### Actions
+
+#### 7.1 Verify Files Exist
 
 Confirm the following files were created/updated:
 - `public/robots.txt`
@@ -228,7 +302,7 @@ Confirm the following files were created/updated:
 - `public/favicon.svg` (if created)
 - `index.html` or equivalent (meta tags added)
 
-### 7.2 Verify via Playwright
+#### 7.2 Verify via Playwright
 
 If a dev server is running (or start one):
 
@@ -236,16 +310,20 @@ If a dev server is running (or start one):
 2. Navigate to `/robots.txt` and verify it loads
 3. Navigate to `/sitemap.xml` and verify it loads
 
-### 7.3 Git Commit
+#### 7.3 Git Commit
 
-Stage and commit all SEO changes:
+> **CRITICAL — This step is MANDATORY. You MUST commit the SEO changes before finishing. Do NOT skip this step.**
+
+Stage the specific SEO files and commit:
 
 ```powershell
-git add -A
+git add public/robots.txt public/sitemap.xml public/favicon.svg index.html
 git commit -m "Add SEO: robots.txt, sitemap.xml, meta tags, favicon"
 ```
 
-### 7.4 Present Summary
+Adjust the file paths based on what was actually created (e.g., include `src/layouts/Layout.astro` instead of `index.html` for Astro sites, omit `favicon.svg` if it was not created). Only stage files that were created or modified by this skill.
+
+#### 7.4 Present Summary
 
 Present a summary of what was added:
 
@@ -257,9 +335,45 @@ Present a summary of what was added:
 | Open Graph | Added/Skipped | og:title, og:description, og:url, Twitter Card |
 | Favicon | Created/Skipped | SVG favicon with site initial |
 
-### 7.5 Suggest Next Steps
+#### 7.5 Suggest Next Steps
 
 After the summary, suggest:
 - **Deploy the site** to make SEO changes live: `/power-pages:deploy-site`
 - If data model is needed: `/power-pages:setup-datamodel`
 - For more advanced SEO: consider structured data (JSON-LD), performance optimization, and accessibility audit
+
+### Output
+
+- All files verified on disk
+- Playwright verification passed
+- Git commit created with all SEO changes
+
+---
+
+## Important Notes
+
+### Progress Tracking
+
+Use `TaskCreate` at the start to track each phase:
+
+| Task | Description |
+|------|-------------|
+| Phase 1 | Verify site exists and detect framework |
+| Phase 2 | Gather SEO configuration from user |
+| Phase 3 | Present plan and get user approval |
+| Phase 4 | Create robots.txt |
+| Phase 5 | Generate sitemap.xml |
+| Phase 6 | Add meta tags, Open Graph, and favicon |
+| Phase 7 | Verify via Playwright and commit |
+
+Update each task with `TaskUpdate` as it is completed.
+
+### Key Decision Points
+
+- **Phase 1:** If `powerpages.config.json` is not found, stop and redirect the user to `/power-pages:create-site`.
+- **Phase 2:** If the user specifies custom exclusions, confirm the exact paths before proceeding.
+- **Phase 3:** Do not proceed to implementation until the user explicitly approves the plan.
+- **Phase 6.4:** If the framework is Astro, meta tags go into the layout component, not `index.html`.
+- **Phase 7.2:** If Playwright verification fails (e.g., robots.txt does not load), diagnose and fix before committing.
+
+**Begin with Phase 1: Verify Site Exists**
