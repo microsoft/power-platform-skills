@@ -1,12 +1,36 @@
-# Power Apps Plugin - Development Guidelines
+# AGENTS.md — Power Apps Plugin
 
-This file provides instructions for Claude Code when working on the Power Apps plugin specifically.
+This file provides guidance to AI Agents when working with the **power-apps** plugin.
 
-## Overview
+## What This Plugin Is
 
-The Power Apps plugin helps users build and deploy Power Apps generative pages (genux pages) for model-driven apps. It provides an interactive workflow from requirements gathering through PAC CLI deployment, generating React 17 + TypeScript + Fluent UI V9 single-file components.
+A plugin for building and deploying Power Apps generative pages (genux) for model-driven apps. Uses React 17 + TypeScript + Fluent UI V9 single-file components, deployed via PAC CLI.
 
-This is a single-session workflow plugin — no memory bank is needed. Each `/genpage` invocation completes the full cycle: validate prerequisites, gather requirements, generate schema, produce code, and deploy.
+Single-session workflow — each `/genpage` invocation completes the full cycle: validate prerequisites, gather requirements, generate schema, produce code, and deploy.
+
+## Local Development
+
+Test this plugin locally:
+
+```bash
+claude --plugin-dir /path/to/plugins/power-apps
+```
+
+## Architecture
+
+```
+.claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+AGENTS.md                      ← Plugin guidance for AI agents (this file)
+CLAUDE.md                      ← Symlink → AGENTS.md
+references/                    ← Shared reference docs
+  genux-rules-reference.md     ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  pac-cli-reference.md         ← PAC CLI commands and parameters
+  troubleshooting.md           ← Common issues and fixes
+samples/                       ← Example .tsx files (8 samples)
+skills/
+  genpage/
+    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
+```
 
 ## Skills
 
@@ -14,63 +38,11 @@ This is a single-session workflow plugin — no memory bank is needed. Each `/ge
 |-------|-------------|
 | `/genpage` | Build and deploy a generative page for a model-driven Power App |
 
-### Skill Structure
-
-```
-skills/<skill-name>/
-└── SKILL.md                    # Main skill workflow (links to shared/)
-
-../../shared/                   # Shared resources (references + samples)
-├── references/
-│   ├── genux-rules-reference.md
-│   ├── pac-cli-reference.md
-│   └── troubleshooting.md
-└── samples/                    # Example .tsx files
-```
-
-### Skill Header Pattern
-
-```markdown
----
-name: genpage
-description: Does X for Y     # Third person, specific, <160 chars
-user-invocable: true
-allowed-tools: [...]
----
-
-# Skill Title
-```
-
-### Writing Clean Skills (Anti-Bloat Guidelines)
-
-Follow these rules to keep skills concise and effective:
-
-**DO:**
-- Keep SKILL.md under 500 lines total
-- Use short, descriptive `name` field (e.g., `genpage`)
-- Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
-- Use numbered lists for workflows instead of ASCII diagrams
-- Trust Claude's intelligence - omit explanations of well-known concepts
-- Use progressive disclosure: SKILL.md for workflow, reference files for details
-- Link to shared references inline: `See [troubleshooting.md](../../shared/references/troubleshooting.md)`
-
-**DON'T:**
-- Start with "This skill/document guides/covers/describes..." (AI slop)
-- Include ASCII workflow diagrams (waste 50+ lines)
-- Duplicate content between summary and action sections
-- Explain obvious concepts Claude already knows
-- Add verbose tables for simple lists (use inline format instead)
-- Repeat the same information in multiple places
-
 ## Key Concepts
 
 ### Genux Pages
 
 Generative pages (genux) are React 17 + TypeScript single-file components that run inside model-driven Power Apps. They use Fluent UI V9 for styling and the DataAPI for Dataverse data access. Each page is a single `.tsx` file with `export default GeneratedComponent`.
-
-### Model-Driven Apps
-
-Power Apps model-driven apps are data-first applications built on Dataverse. Genux pages extend these apps with custom React-based UI pages deployed via PAC CLI.
 
 ### DataAPI
 
@@ -79,6 +51,25 @@ The DataAPI (`props.dataApi`) provides typed CRUD operations against Dataverse t
 ### RuntimeTypes
 
 TypeScript type definitions generated from Dataverse metadata. Contains entity types, enum registrations, and the `GeneratedComponentProps` interface. Generated via PAC CLI before code generation to ensure correct column names.
+
+## Development Standards
+
+- **React 17 + TypeScript** — all generated code
+- **Fluent UI V9** — `@fluentui/react-components` exclusively (DatePicker from `@fluentui/react-datepicker-compat`, TimePicker from `@fluentui/react-timepicker-compat`)
+- **Single file architecture** — all components, utilities, styles in one `.tsx` file
+- **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
+- **Type-safe DataAPI** — use RuntimeTypes when Dataverse entities are involved
+- **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
+- **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
+- **Complete code** — no placeholders, TODOs, or ellipses in final output
+
+## Skill Authoring Guidelines
+
+- Keep SKILL.md under 500 lines
+- Use short, descriptive `name` field (e.g., `genpage`)
+- Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
+- Use progressive disclosure: SKILL.md for workflow, reference files for details
+- Link to references inline: `See [troubleshooting.md](../../references/troubleshooting.md)`
 
 ## Testing Changes
 
