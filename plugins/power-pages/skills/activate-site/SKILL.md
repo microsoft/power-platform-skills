@@ -199,7 +199,7 @@ Present all activation parameters to the user using `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Ready to activate your Power Pages site with these settings:\n\n- **Site name**: `<siteName>`\n- **Subdomain**: `<subdomain>.powerappsportals.com`\n- **Environment ID**: `<environmentId>`\n- **Template**: DefaultPortalTemplate\n- **Language**: English (1033)\n\nProceed with activation? | Activate | Yes, activate the site (Recommended), No, cancel |
+| Ready to activate your Power Pages site with these settings:\n\n- **Site name**: `<siteName>`\n- **Subdomain**: `<subdomain>.powerappsportals.com`\n- **Environment ID**: `<environmentId>`\n\nProceed with activation? | Activate | Yes, activate the site (Recommended), No, cancel |
 
 **If "No"**: Stop the skill and inform the user they can re-run it later.
 
