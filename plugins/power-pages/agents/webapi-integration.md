@@ -34,9 +34,11 @@ You are a Power Pages Web API integration specialist. Your job is to implement p
 3. **Create Core API Client** — Create `src/shared/powerPagesApi.ts` if it doesn't exist (shared across all tables)
 4. **Create Entity Types** — Define TypeScript interfaces for the target table's OData entities and domain types
 5. **Create Service Layer** — Build a CRUD service for the target table using the core API client
-6. **Wire Up** — Create framework-specific hooks/composables and integrate into existing components
+6. **Create Framework Hooks** — Create framework-specific hooks/composables/services (React hooks, Vue composables, Angular services)
+7. **Update Existing Components** — Find and update all existing components that use mock data or placeholder fetch calls for the target table, replacing their data sources with the new service/hooks
+8. **Verify Integration** — Confirm that all components import and use the new services, mock data is removed, and the project builds without errors
 
-**Important:** Do NOT ask the user questions. Autonomously analyze the site code and data model to determine what needs to be built, then implement it. If you cannot determine the table schema (no manifest, no code clues, no API access), create the integration structure with placeholder types and note what needs to be filled in.
+**Important:** Do NOT ask the user questions. Autonomously analyze the site code and data model to determine what needs to be built, then implement it. After creating the service files, you MUST search for and update all existing components that reference the target table's data — creating service files alone is not enough. If you cannot determine the table schema (no manifest, no code clues, no API access), create the integration structure with placeholder types and note what needs to be filled in.
 
 ---
 
@@ -980,9 +982,9 @@ Only create these methods if the target table actually has File or Image columns
 
 ---
 
-## Step 6: Wire Up
+## Step 6: Create Framework Hooks
 
-Create framework-specific integration based on the detected framework (from Step 1.1).
+Create framework-specific hooks, composables, or services based on the detected framework (from Step 1.1). These provide the reactive data-fetching layer that components will consume.
 
 ### 6.1 React — Custom Hook
 
@@ -1160,16 +1162,170 @@ For Astro, Web API calls only work client-side. Import the service in `<script>`
 </script>
 ```
 
-### 6.5 Update Existing Components
+---
 
-After creating the service, search for components that currently use mock data, hardcoded arrays, or placeholder fetch calls for the target table. Replace them with the new service:
+## Step 7: Update Existing Components
 
-- Look for hardcoded arrays matching the table shape
-- Look for `TODO` or `FIXME` comments about API integration
-- Look for empty `useEffect` / `onMounted` blocks awaiting data
-- Look for context providers holding mock data
+**This is the most critical step.** Creating service files is not enough — you must find and update every existing component that references the target table's data so they use the new service layer instead of mock data or placeholder fetch calls. Without this step, the integration is incomplete.
 
-Replace mock data with service calls while preserving the existing component structure and UI.
+### 7.1 Search for Mock Data and Placeholder Calls
+
+Use these search patterns to find all components that need updating:
+
+```
+# Find hardcoded arrays that look like entity data
+Grep: pattern="(const|let|var)\s+\w*(products|items|data|records)\w*\s*[=:]\s*\[" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+
+# Find TODO/FIXME comments about API integration
+Grep: pattern="(TODO|FIXME|HACK|PLACEHOLDER).*(api|fetch|data|mock|hardcode)" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+
+# Find empty useEffect/onMounted blocks awaiting data
+Grep: pattern="useEffect\(\s*\(\)\s*=>\s*\{" or "onMounted\(\s*\(\)\s*=>\s*\{" in src/**/*.{ts,tsx,js,jsx,vue}
+
+# Find inline fetch calls to /_api/ that should use the service
+Grep: pattern="fetch\(.*/_api/" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+
+# Find mock data files
+Glob: src/**/mock*.{ts,js,json} or src/**/seed*.{ts,js,json} or src/**/*mock*.{ts,js}
+
+# Find components that reference the table name in any form
+Grep: pattern="<tableName>" (use the actual table display name, e.g., "product", "order", "blog") in src/**/*.{ts,tsx,js,jsx,vue,astro}
+```
+
+Adapt these patterns to the actual table name and project conventions.
+
+### 7.2 Replace Mock Data with Service Calls
+
+For each file found, make these changes:
+
+**Add imports** for the new service and types at the top of the file:
+
+```typescript
+// BEFORE — no service imports, data is inline
+const products = [
+  { id: '1', name: 'Widget', price: 9.99 },
+  { id: '2', name: 'Gadget', price: 19.99 },
+];
+
+// AFTER — import and use the service hook
+import { useProducts } from '../shared/hooks/useProducts';
+// or for non-React: import { listProducts } from '../shared/services/productService';
+```
+
+**Replace hardcoded arrays** with hook/service calls:
+
+```typescript
+// BEFORE — React component with mock data
+function ProductList() {
+  const products = [
+    { id: '1', name: 'Widget', price: 9.99 },
+    { id: '2', name: 'Gadget', price: 19.99 },
+  ];
+  return <ul>{products.map(p => <li key={p.id}>{p.name}</li>)}</ul>;
+}
+
+// AFTER — React component using the hook
+function ProductList() {
+  const { items: products, isLoading, error } = useProducts();
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error}</div>;
+
+  return <ul>{products.map(p => <li key={p.id}>{p.name}</li>)}</ul>;
+}
+```
+
+**Replace inline fetch calls** with service functions:
+
+```typescript
+// BEFORE — raw fetch in component
+useEffect(() => {
+  fetch('/_api/cr4fc_products?$select=cr4fc_name,cr4fc_price')
+    .then(res => res.json())
+    .then(data => setProducts(data.value));
+}, []);
+
+// AFTER — use the service hook (handles auth, retry, types, pagination)
+const { items: products, isLoading, error, refetch } = useProducts();
+```
+
+### 7.3 Handle State Management Updates
+
+If the component uses state management (React Context, Vue store, etc.), update the data source within the provider/store rather than in individual components:
+
+- **React Context**: Update the context provider to call the service hook and pass real data to consumers
+- **Vue Pinia/Vuex store**: Update the store actions to call service functions
+- **Angular NgRx/signals**: Update effects or signal computations to call the service
+
+### 7.4 Delete Obsolete Mock Data
+
+After confirming all components use the service layer:
+
+- Delete mock data files (e.g., `src/data/mockProducts.ts`, `src/mocks/products.json`)
+- Remove mock data arrays from components
+- Remove mock data exports from barrel files (`index.ts`)
+- If a service factory exists with a mock mode, keep the mock service for local dev but ensure production mode uses the real service
+
+### 7.5 Preserve UI Structure
+
+When updating components:
+
+- **Keep all existing JSX/template markup intact** — only change the data source
+- **Keep existing event handlers** — wire them to the new service's create/update/delete functions
+- **Add loading and error states** if the component didn't have them (the hooks provide `isLoading` and `error`)
+- **Keep existing styling and layout** — do not refactor the component structure
+
+---
+
+## Step 8: Verify Integration
+
+After updating all components, verify that the integration is complete and working.
+
+### 8.1 Check Imports
+
+Verify that components which display or manipulate the target table's data now import from the service/hook files:
+
+```
+# Confirm service imports exist in components
+Grep: pattern="import.*from.*(services|hooks|composables).*(tableName)" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+```
+
+### 8.2 Check Mock Data Removal
+
+Verify that hardcoded arrays and mock data related to the target table have been removed:
+
+```
+# Confirm no mock data remains for this table
+Grep: pattern="(const|let|var)\s+\w*(tableName|items|data)\w*\s*=\s*\[" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+
+# Confirm mock data files are gone
+Glob: src/**/mock*tableName*.{ts,js,json}
+```
+
+If mock data is intentionally kept (e.g., for a service factory with mock mode), that's acceptable — but the default/production code path must use the real service.
+
+### 8.3 Check API Usage
+
+Verify that components now call the service functions instead of using inline data:
+
+```
+# Confirm service function calls exist
+Grep: pattern="(list|get|create|update|delete)(TableName)|use(TableName)" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+
+# Confirm no raw /_api/ fetch calls remain for this table
+Grep: pattern="fetch\(.*/_api/.*tableName" in src/**/*.{ts,tsx,js,jsx,vue,astro}
+```
+
+### 8.4 Build Check
+
+Run the project build to confirm no import or type errors were introduced:
+
+```bash
+npm run build
+# or: npx tsc --noEmit (for TypeScript type-checking only)
+```
+
+If the build fails, fix the errors (typically missing imports, incorrect type names, or unused variables from removed mock data) before proceeding.
 
 ---
 
@@ -1322,3 +1478,4 @@ Only create this if the site's UI shows/hides controls based on user roles.
 21. **Lookup GUID vs Navigation Property** — On GET, use `_{logicalname}_value` in `$select` for the raw GUID, and the Navigation Property in `$expand` for related data. On POST/PATCH, use `NavigationProperty@odata.bind` — never write directly to the `_value` property.
 22. **Remind about permissions** — After creating integration code, note that the `webapi-permissions` agent must be run to configure site settings and table permissions if not already done.
 23. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.
+24. **Always update existing components** — Creating service files is not enough. After generating the API client, types, service, and hooks, you MUST search for and update all existing components that use mock data, hardcoded arrays, or placeholder fetch calls for the target table. Replace their data sources with the new service/hook. This is the most critical step — without it, the integration is incomplete.
