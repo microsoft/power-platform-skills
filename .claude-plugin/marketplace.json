@@ -4,14 +4,14 @@
         "name": "Microsoft"
     },
     "metadata": {
-        "description": "Plugins for Power Platform development with Claude Code",
+        "description": "Plugins for Power Platform development with Claude Code and GitHub Copilot",
         "pluginRoot": "./plugins"
     },
     "plugins": [
         {
             "name": "power-pages",
             "source": "power-pages",
-            "description": "Power Pages development and management plugin for Claude Code",
+            "description": "Power Pages development and management plugin for Claude Code and GitHub Copilot",
             "category": "development",
             "tags": [
                 "power platform",
