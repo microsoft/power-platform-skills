@@ -87,13 +87,22 @@ Populates your Dataverse tables with realistic, contextually appropriate records
 
 > "Connect my site to the Dataverse tables"
 
-Creates production-ready Web API integration code for your frontend, including a shared API client, typed services, and framework-specific hooks or composables.
+Orchestrates the full Web API integration lifecycle — from analyzing your site's code to identify where data is needed, through generating typed API code for each table, to configuring table permissions and site settings so the APIs work in production.
 
-- Shared `powerPagesApi.ts` client with anti-forgery token management and retry logic
-- TypeScript entity types and CRUD service layer per table
-- Framework-specific patterns: React hooks, Vue composables, Angular services
-- Updates existing components to use real data (replaces mock data)
-- Configures table permissions and site settings for Web API access
+The skill first scans your codebase to find components using mock data, placeholder fetch calls, or hardcoded arrays, then maps them to your Dataverse tables. It processes each table sequentially, spawning a dedicated **Web API Integration** agent that creates the integration code. After all tables are wired up, a **Web API Permissions Architect** agent analyzes your site and proposes table permissions and site settings — or you can upload your own permissions diagram instead.
+
+**What gets created:**
+
+- Shared `powerPagesApi.ts` client with anti-forgery token management, OData URL builder, and exponential backoff retry logic
+- TypeScript entity types and domain mappers per table
+- CRUD service layer per table using `/_api/` endpoints with dual token headers and `@odata.bind` for lookups
+- Framework-specific patterns: React hooks, Vue composables, Angular injectable services
+- Table permission YAML files and site setting YAML files (with explicit column lists — never `*` wildcards)
+
+**What gets updated:**
+
+- Existing components are refactored to use real API calls (mock data and placeholder fetches are replaced)
+- `.powerpages-site/table-permissions/` and `.powerpages-site/site-settings/` directories are populated for deployment
 
 ### `/setup-auth`
 
@@ -148,7 +157,7 @@ A common end-to-end workflow looks like this:
 3. /activate-site     →  Provision a public URL
 4. /setup-datamodel   →  Create Dataverse tables
 5. /add-sample-data   →  Populate tables with test records
-6. /integrate-webapi  →  Connect frontend to Dataverse
+6. /integrate-webapi  →  Configure table permissions, web API site settings and generate API client code
 7. /create-webroles   →  Define access roles
 8. /setup-auth        →  Add login/logout + role-based UI
 9. /add-seo           →  Search engine optimization
@@ -195,4 +204,3 @@ claude --dangerously-skip-permissions
 ## License
 
 [MIT](../../LICENSE)
-
