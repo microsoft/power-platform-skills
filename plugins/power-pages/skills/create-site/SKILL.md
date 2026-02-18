@@ -3,7 +3,7 @@ name: create-site
 description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_playwright__browser_navigate", "mcp__plugin_power-pages_playwright__browser_snapshot", "mcp__plugin_power-pages_playwright__browser_click", "mcp__plugin_power-pages_playwright__browser_close"]
+allowed-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_playwright__browser_navigate", "mcp__plugin_power-pages_playwright__browser_snapshot", "mcp__plugin_power-pages_playwright__browser_click"]
 model: opus
 hooks:
   Stop:
@@ -371,7 +371,6 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
 5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
-6. Close the Playwright browser with `mcp__plugin_power-pages_playwright__browser_close` when done
 
 **Output**: User-approved site ready for deployment
 
