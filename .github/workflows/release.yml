@@ -1,0 +1,70 @@
+name: Release to Stable Channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format '$VERSION'. Use semver (e.g., 1.1.0)"
+            exit 1
+          fi
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$VERSION already exists."
+            exit 1
+          fi
+
+      - name: Validate JSON manifests
+        run: |
+          echo "Validating marketplace manifest..."
+          node -e "JSON.parse(require('fs').readFileSync('.claude-plugin/marketplace.json', 'utf8'))"
+          echo "Validating plugin manifests..."
+          for manifest in plugins/*/.claude-plugin/plugin.json; do
+            echo "  Checking $manifest"
+            node -e "JSON.parse(require('fs').readFileSync('$manifest', 'utf8'))"
+          done
+          echo "All manifests valid."
+
+      - name: Check version in plugin manifests
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Expected version: $VERSION"
+          MATCH=false
+          for manifest in plugins/*/.claude-plugin/plugin.json; do
+            PLUGIN_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$manifest','utf8')).version)")
+            PLUGIN_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$manifest','utf8')).name)")
+            echo "  $PLUGIN_NAME: v$PLUGIN_VERSION"
+            if [ "$PLUGIN_VERSION" = "$VERSION" ]; then MATCH=true; fi
+          done
+          if [ "$MATCH" = "false" ]; then
+            echo "::warning::No plugin.json has version $VERSION. Bump the version before releasing."
+          fi
+
+      - name: Create tag
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+          echo "Created tag v${{ inputs.version }}"
+
+      - name: Promote to stable branch
+        run: |
+          git push origin HEAD:refs/heads/stable
+          echo "Updated stable branch to v${{ inputs.version }}"

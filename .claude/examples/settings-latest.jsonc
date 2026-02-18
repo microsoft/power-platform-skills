@@ -1,0 +1,11 @@
+// Use the LATEST channel — tracks main, updates on every merged PR
+{
+  "extraKnownMarketplaces": {
+    "power-platform-skills": {
+      "source": {
+        "source": "github",
+        "repo": "microsoft/power-platform-skills"
+      }
+    }
+  }
+}

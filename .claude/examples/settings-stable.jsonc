@@ -1,0 +1,12 @@
+// Use the STABLE channel — updates only on version tag (e.g., v1.1.0)
+{
+  "extraKnownMarketplaces": {
+    "power-platform-skills": {
+      "source": {
+        "source": "github",
+        "repo": "microsoft/power-platform-skills",
+        "ref": "stable"
+      }
+    }
+  }
+}

@@ -83,6 +83,42 @@ To use a plugin from this marketplace:
     /plugin install power-apps@power-platform-skills
     ```
 
+## Release Channels
+
+| Channel | Branch | Updates when | Best for |
+|---------|--------|-------------|----------|
+| **Latest** | `main` | Every merged PR | Early access, development |
+| **Stable** | `stable` | Version tag pushed (e.g., `v1.1.0`) | Production, reliability |
+
+Add the marketplace to your project's `.claude/settings.json` with the desired channel:
+
+**Stable channel (recommended for teams):**
+```json
+"extraKnownMarketplaces": {
+  "power-platform-skills": {
+    "source": {
+      "source": "github",
+      "repo": "microsoft/power-platform-skills",
+      "ref": "stable"
+    }
+  }
+}
+```
+
+**Latest channel:**
+```json
+"extraKnownMarketplaces": {
+  "power-platform-skills": {
+    "source": {
+      "source": "github",
+      "repo": "microsoft/power-platform-skills"
+    }
+  }
+}
+```
+
+See `.claude/examples/` for complete example settings files.
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
