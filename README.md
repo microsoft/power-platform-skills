@@ -40,7 +40,9 @@ Create and deploy Power Pages sites using modern development approaches.
 
 **Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
 
-### Power Apps (`plugins/power-apps`)
+### Power Apps (`plugins/power-apps`) — *Coming Soon*
+
+> **Note**: This plugin is under active development and not yet available in the marketplace.
 
 Build and deploy Power Apps generative pages for model-driven apps.
 
