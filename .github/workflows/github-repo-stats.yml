@@ -16,4 +16,7 @@ jobs:
               # Use latest release.
               uses: jgehrcke/github-repo-stats@RELEASE
               with:
+                  repository: microsoft/power-platform-skills
                   ghtoken: ${{ secrets.ghrs_github_api_token }}
+                  databranch: github-repo-stats
+                  ghpagesprefix: https://microsoft.github.io/power-platform-skills
