@@ -203,7 +203,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
       'Your site automatically includes responsive design \u2014 it looks great on phones, tablets, and desktops.',
       'With role-based security, you can control exactly who sees what on your site.',
       'Power Pages integrates seamlessly with Power Automate, Power BI, and the entire Microsoft ecosystem.',
-      'You can extend your site with custom code, Liquid templates, and JavaScript for unlimited flexibility.',
+      'You can extend your site with custom code, and JavaScript for unlimited flexibility.',
       'Built-in content delivery networks ensure your pages load fast for users worldwide.',
       'Multi-language support lets you reach audiences across the globe with localized content.',
     ]

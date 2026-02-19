@@ -139,7 +139,7 @@ export default function Home() {
       'Your site automatically includes responsive design \u2014 it looks great on phones, tablets, and desktops.',
       'With role-based security, you can control exactly who sees what on your site.',
       'Power Pages integrates seamlessly with Power Automate, Power BI, and the entire Microsoft ecosystem.',
-      'You can extend your site with custom code, Liquid templates, and JavaScript for unlimited flexibility.',
+      'You can extend your site with custom code, and JavaScript for unlimited flexibility.',
       'Built-in content delivery networks ensure your pages load fast for users worldwide.',
       'Multi-language support lets you reach audiences across the globe with localized content.',
     ]
@@ -205,15 +205,15 @@ export default function Home() {
 
         <div className="feature-cards">
           <div className="feature-card" data-delay="0">
-            <span className="feature-card-icon">{'\uD83D\uDD12'}</span>
+            <span className="feature-card-icon">{ '\uD83D\uDD12' }</span>
             <span className="feature-card-label">Enterprise-grade security</span>
           </div>
           <div className="feature-card" data-delay="400">
-            <span className="feature-card-icon">{'\u26A1'}</span>
+            <span className="feature-card-icon">{ '\u26A1' }</span>
             <span className="feature-card-label">Lightning-fast performance</span>
           </div>
           <div className="feature-card" data-delay="800">
-            <span className="feature-card-icon">{'\uD83C\uDF10'}</span>
+            <span className="feature-card-icon">{ '\uD83C\uDF10' }</span>
             <span className="feature-card-label">Ready to scale globally</span>
           </div>
         </div>

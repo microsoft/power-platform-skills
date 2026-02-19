@@ -420,6 +420,7 @@ html, body {
   border-radius: 16px;
   padding: 20px 22px;
   width: 150px;
+  -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   opacity: 0;
   transform: translateY(20px) scale(0.95);
