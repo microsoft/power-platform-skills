@@ -6,9 +6,138 @@ Official agent skills/plugins for Power Platform development by Microsoft.
 
 This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
+## Installation
+
+### Quick Install (Recommended)
+
+Run the installer to set up all plugins with auto-update enabled:
+
+**Windows (PowerShell)**:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js; del install.js
+```
+
+**Mac OS/Linux**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
+```
+
+The installer automatically:
+
+- Detects available tools (Claude Code, GitHub Copilot CLI)
+- Registers the plugin marketplace and installs all listed plugins
+- Enables auto-update so plugins stay current
+
+### Manual Installation
+
+If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
+
+1. Add the marketplace
+
+    ```bash
+    /plugin marketplace add microsoft/power-platform-skills
+    ```
+
+2. Install the desired plugin
+
+    ```bash
+    /plugin install power-pages@power-platform-skills
+    ```
+
+## Available Plugins
+
+### Power Pages (`plugins/power-pages`)
+
+Create and deploy Power Pages sites using modern development approaches.
+
+**Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
+
+### Power Apps (`plugins/power-apps`) — *Coming Soon*
+
+> **Note**: This plugin is under active development and not yet available in the marketplace.
+
+Build and deploy Power Apps generative pages for model-driven apps.
+
+**Stack**: React + TypeScript + Fluent, deployed via PAC CLI
+
+## Local Development
+
+To develop and test plugins locally, follow these steps:
+
+1. Clone this repository
+1. Launch Claude Code with plugin path:
+
+    ```bash
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
+    ```
+
+## Running Without Interruption
+
+Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
+
+> **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
+
+### Claude Code
+
+#### Option 1 — Permission mode (recommended)
+
+Set the `acceptEdits` mode to auto-approve file edits while still prompting for shell commands:
+
+```jsonc
+// .claude/settings.json (project-level) or ~/.claude/settings.json (user-level)
+{
+  "defaultMode": "acceptEdits",
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(git *)",
+      "Bash(pac *)"
+      // add other commands your workflow needs
+    ]
+  }
+}
+```
+
+#### Option 2 — Allow all tools
+
+Press <kbd>Shift</kbd>+<kbd>Tab</kbd> during a session to cycle to **auto-accept** mode, or launch with:
+
+```bash
+claude --dangerously-skip-permissions
+```
+
+See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
+
+### GitHub Copilot CLI
+
+#### Option 1 — Allow specific tools (recommended)
+
+Pre-approve only the tools your workflow needs:
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
+```
+
+#### Option 2 — Allow all tools in Copilot
+
+```bash
+copilot --allow-all-tools
+```
+
+To allow everything except dangerous commands:
+
+```bash
+copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
+```
+
+See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
+
 ## Repository Structure
 
-```
+```text
 power-platform-skills/
 ├── .claude-plugin/
 │   └── marketplace.json      # Marketplace manifest (lists all plugins)
@@ -31,141 +160,6 @@ power-platform-skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
-
-## Available Plugins
-
-### Power Pages (`plugins/power-pages`)
-
-Create and deploy Power Pages sites using modern development approaches.
-
-**Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
-
-### Power Apps (`plugins/power-apps`) — *Coming Soon*
-
-> **Note**: This plugin is under active development and not yet available in the marketplace.
-
-Build and deploy Power Apps generative pages for model-driven apps.
-
-**Stack**: React + TypeScript + Fluent, deployed via PAC CLI
-
-## Installation
-
-### Quick Install (Recommended)
-
-Run the installer to set up all plugins with auto-update enabled:
-
-**Windows (PowerShell)**:
-```powershell
-iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js; del install.js
-```
-
-**Mac OS/Linux**:
-```bash
-curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
-```
-
-
-The installer automatically:
-- Detects available tools (Claude Code, GitHub Copilot CLI)
-- Registers the plugin marketplace and installs all listed plugins
-- Enables auto-update so plugins stay current
-
-### Manual Installation
-
-If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
-
-1. Add the marketplace
-
-    ```
-    /plugin marketplace add microsoft/power-platform-skills
-    ```
-
-2. Install the desired plugin
-
-    ```
-    /plugin install power-pages@power-platform-skills
-    ```
-
-## Local Development
-
-To develop and test plugins locally, follow these steps:
-
-1. Clone this repository
-1. Launch Claude Code with plugin path:
-
-    ```bash
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
-    ```
-
-## Running Without Interruption
-
-Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
-
-> **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
-
-### Claude Code
-
-**Option 1 — Permission mode (recommended)**
-
-Set the `acceptEdits` mode to auto-approve file edits while still prompting for shell commands:
-
-```jsonc
-// .claude/settings.json (project-level) or ~/.claude/settings.json (user-level)
-{
-  "defaultMode": "acceptEdits",
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(git *)",
-      "Bash(pac *)"
-      // add other commands your workflow needs
-    ]
-  }
-}
-```
-
-**Option 2 — Allow all tools**
-
-Press <kbd>Shift</kbd>+<kbd>Tab</kbd> during a session to cycle to **auto-accept** mode, or launch with:
-
-```bash
-claude --dangerously-skip-permissions
-```
-
-See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
-
-### GitHub Copilot CLI
-
-**Option 1 — Allow specific tools (recommended)**
-
-Pre-approve only the tools your workflow needs:
-
-```bash
-copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
-```
-
-**Option 2 — Allow all tools**
-
-```bash
-copilot --allow-all-tools
-```
-
-To allow everything except dangerous commands:
-
-```bash
-copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
-```
-
-**Option 3 — Non-interactive single prompt**
-
-Pass a prompt directly with auto-approval for fully unattended runs:
-
-```bash
-copilot -p "Create a Power Pages code site with React" --allow-all-tools
-```
-
-See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
 
 ## Documentation
 
