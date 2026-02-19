@@ -69,8 +69,7 @@ function detectBrowser() {
 }
 
 const browser = detectBrowser();
-const configPath = path.join(__dirname, 'playwright-mcp-config.json');
-const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser, '--config', configPath], {
+const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser], {
   stdio: 'inherit',
   shell: true,
 });
