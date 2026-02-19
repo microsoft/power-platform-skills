@@ -71,10 +71,7 @@ onMounted(() => {
   const particlesEl = document.getElementById('particles')
   const connectorsEl = document.getElementById('connectors')
   const statusArea = document.getElementById('statusArea')
-  const progressTrack = document.getElementById('progressTrack')
   const progressLabel = document.getElementById('progressLabel')
-  const mainHeading = document.getElementById('mainHeading')
-  const centerStage = document.getElementById('centerStage')
   const tipTextEl = document.getElementById('tipText')
 
   // Particles
@@ -135,7 +132,6 @@ onMounted(() => {
       existing.classList.add('exiting')
       timeouts.push(window.setTimeout(() => existing.remove(), 700))
     }
-    if (index >= statuses.length) return
     const msg = document.createElement('div')
     msg.classList.add('status-message')
     const icon = document.createElement('div')
@@ -152,37 +148,12 @@ onMounted(() => {
     }
   }
 
-  function onComplete() {
-    if (progressTrack) progressTrack.classList.add('complete')
-    if (progressLabel) { progressLabel.textContent = 'Complete!'; progressLabel.style.color = 'rgba(100, 200, 150, 0.7)' }
-    const existing = statusArea?.querySelector('.status-message')
-    if (existing) { existing.classList.remove('active'); existing.classList.add('exiting'); timeouts.push(window.setTimeout(() => existing.remove(), 700)) }
-    timeouts.push(window.setTimeout(() => {
-      if (!statusArea) return
-      const msg = document.createElement('div')
-      msg.classList.add('status-message')
-      const icon = document.createElement('div')
-      icon.classList.add('status-icon', 'done')
-      msg.appendChild(icon)
-      const text = document.createElement('span')
-      text.textContent = 'Your site is ready!'
-      text.style.color = '#64C896'
-      msg.appendChild(text)
-      statusArea.appendChild(msg)
-      requestAnimationFrame(() => msg.classList.add('active'))
-      if (mainHeading) mainHeading.textContent = 'Your site is ready'
-      if (centerStage) centerStage.classList.add('complete')
-    }, 800))
-  }
-
   function advanceStatus() {
-    if (currentStatusIndex >= statuses.length) return
-    showStatus(currentStatusIndex)
-    const duration = statuses[currentStatusIndex].duration
+    showStatus(currentStatusIndex % statuses.length)
+    const duration = statuses[currentStatusIndex % statuses.length].duration
     timeouts.push(window.setTimeout(() => {
       currentStatusIndex++
-      if (currentStatusIndex < statuses.length) advanceStatus()
-      else onComplete()
+      advanceStatus()
     }, duration))
   }
 
