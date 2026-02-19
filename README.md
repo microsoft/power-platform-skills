@@ -54,14 +54,16 @@ Build and deploy Power Apps generative pages for model-driven apps.
 
 Run the installer to set up all plugins with auto-update enabled:
 
+**Windows (PowerShell)**:
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js -OutFile install.js; node install.js; del install.js
+```
+
+**Mac OS/Linux**:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js | node
 ```
 
-> **Windows (PowerShell)**:
-> ```powershell
-> iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js -OutFile install.js; node install.js; del install.js
-> ```
 
 The installer automatically:
 - Detects available tools (Claude Code, GitHub Copilot CLI)
