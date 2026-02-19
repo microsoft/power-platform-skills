@@ -1,6 +1,6 @@
 {
   "name": "power-pages",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Create and deploy Power Pages sites using modern development approaches. Supports code sites (SPAs) with React, Angular, Vue, or Astro, with more site types coming soon.",
   "author": {
     "name": "Microsoft",
