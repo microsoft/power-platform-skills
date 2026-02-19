@@ -7,7 +7,7 @@ description: >
   or wants to activate/provision a Power Pages website in their
   Power Platform environment via the Power Platform REST API.
 user-invocable: true
-allowed-tools: ["Read", "Bash", "Glob", "Grep", "AskUserQuestion", "TaskCreate", "TaskUpdate", "TaskList"]
+allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
 hooks:
   Stop:
