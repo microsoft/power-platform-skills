@@ -221,19 +221,7 @@ description: >-                  # User-facing description listing trigger phras
   <when to use this skill and synonym phrases>
 user-invocable: true
 argument-hint: <optional hint>   # Describes optional argument the user can pass
-allowed-tools:                   # Declare exactly what tools this skill needs
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Task
-  - TaskCreate
-  - TaskUpdate
-  - TaskList
-  - AskUserQuestion
-  # ... plus any MCP tools needed (e.g., Playwright browser_*)
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskCreate, TaskUpdate, TaskList, AskUserQuestion  # Comma-separated list (not JSON array or YAML list)
 model: opus
 hooks:
   Stop:
