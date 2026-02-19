@@ -5,7 +5,7 @@ description: Creates, updates, and deploys Power Apps generative pages for model
 author: Microsoft Corporation
 argument-hint: "[optional: page description or 'deploy' or 'update']"
 user-invocable: true
-allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "AskUserQuestion", "EnterPlanMode"]
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, EnterPlanMode
 ---
 
 # Power Apps Generative Pages Builder

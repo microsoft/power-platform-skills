@@ -3,7 +3,7 @@ name: create-site
 description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList", "mcp__plugin_power-pages_playwright__browser_navigate", "mcp__plugin_power-pages_playwright__browser_snapshot", "mcp__plugin_power-pages_playwright__browser_click"]
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 hooks:
   Stop:
@@ -81,6 +81,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 **Goal**: Get a running site immediately so the user has something to preview while features and design are planned
 
+> **The scaffold is a temporary branded loading screen** — it shows a Power Pages animated "Building your site" experience with orbiting elements, status messages, and feature cards. Its only purpose is to get the dev server running quickly so the user has something to look at while you plan and build. **During Phase 5 (Implementation), the entire scaffold — including theme.css, Layout, Home page, and all placeholder components — is completely replaced** with the user's actual site: their chosen typography, color palette, pages, components, and navigation. Do NOT try to build on top of the loading screen; replace it entirely.
+
 > See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
 
 **Actions**:
@@ -105,16 +107,8 @@ Use `Glob` to discover all files in the asset directory, `Read` each file, then 
 After copying, replace all `__PLACEHOLDER__` tokens in every file. Use `Edit` with `replace_all: true` on each file.
 
 - **Name/slug/description placeholders**: Use the actual values from Phase 1 (`__SITE_NAME__`, `__SITE_SLUG__`, `__SITE_DESCRIPTION__`).
-- **Color placeholders**: Use neutral defaults for now — these will be replaced with the user's chosen palette during Implementation (Phase 5):
 
-  | Placeholder | Default Value |
-  |-------------|---------------|
-  | `__PRIMARY_COLOR__` | `#3b82f6` |
-  | `__SECONDARY_COLOR__` | `#6366f1` |
-  | `__BG_COLOR__` | `#ffffff` |
-  | `__SURFACE_COLOR__` | `#f8fafc` |
-  | `__TEXT_COLOR__` | `#1e293b` |
-  | `__TEXT_MUTED__` | `#64748b` |
+> **Note:** The scaffold loading screen uses hardcoded Power Pages branding colors — there are no color placeholders (`__PRIMARY_COLOR__`, etc.) to replace. The user's chosen color palette is applied fresh during Phase 5 when the scaffold is completely replaced.
 
 ### 2.3 Rename gitignore
 
@@ -208,16 +202,16 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
-5. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will replace the scaffold defaults during implementation:
+5. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
 
-   | Placeholder | Description | Value |
+   | CSS Variable | Description | Value |
    |-------------|-------------|-------|
-   | `__PRIMARY_COLOR__` | Primary hex color | *(choose based on aesthetic + mood)* |
-   | `__SECONDARY_COLOR__` | Complementary hex color | *(choose based on aesthetic + mood)* |
-   | `__BG_COLOR__` | Background color | *(choose based on aesthetic + mood)* |
-   | `__SURFACE_COLOR__` | Surface/card color | *(choose based on aesthetic + mood)* |
-   | `__TEXT_COLOR__` | Main text color | *(choose based on aesthetic + mood)* |
-   | `__TEXT_MUTED__` | Muted text color | *(choose based on aesthetic + mood)* |
+   | `--color-primary` | Primary hex color | *(choose based on aesthetic + mood)* |
+   | `--color-secondary` | Complementary hex color | *(choose based on aesthetic + mood)* |
+   | `--color-bg` | Background color | *(choose based on aesthetic + mood)* |
+   | `--color-surface` | Surface/card color | *(choose based on aesthetic + mood)* |
+   | `--color-text` | Main text color | *(choose based on aesthetic + mood)* |
+   | `--color-text-muted` | Muted text color | *(choose based on aesthetic + mood)* |
 
 **Output**: Confirmed list of pages, components, design elements, and routes to create
 
@@ -282,15 +276,19 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 Each todo should have a clear `subject`, `activeForm`, and `description` that includes the file path and what the page/component does. Then work through the todos in order, marking each `in_progress` → `completed`.
 
-### 5.2 Build Order
+### 5.2 Replace the Scaffold & Build
 
-1. **Design foundations** — Replace the scaffold's default CSS variables with the chosen color palette, add Google Fonts, motion/animation utilities, and background treatments. Update the theme CSS file (e.g., `src/styles/theme.css`) with the actual hex values chosen in Phase 3, then commit.
-2. **Shared components** — Build reusable components first so pages can use them
-3. **Pages** — Create route components for each requested page
-4. **Router** — Register all new routes
-5. **Navigation** — Add links to the Layout/Header component
+The scaffold is a temporary loading screen — it must be **completely replaced** during this phase. Do NOT build on top of it or try to modify the loading animation into a real page. Start fresh with the user's chosen design.
 
-**Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created.
+1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step.
+2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure.
+3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use
+4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely
+5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
+6. **Navigation** — Add links to the new Layout/Header component
+7. **Entry HTML** — Update `index.html` (or `Layout.astro` for Astro) to load the chosen Google Fonts instead of the scaffold's DM Sans + Outfit
+
+**Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
 
 ### 5.3 Source Real Images
 

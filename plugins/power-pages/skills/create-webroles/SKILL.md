@@ -6,7 +6,7 @@ description: >
   "add authenticated role", "add anonymous role", or wants to create web roles for
   their Power Pages code site. Web roles control access and permissions for site users.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList"]
+allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
 hooks:
   Stop:

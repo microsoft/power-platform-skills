@@ -9,7 +9,7 @@ description: >
   and deployment. This skill orchestrates the full integration lifecycle:
   code integration, permissions setup, and deployment.
 user-invocable: true
-allowed-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "Task", "TaskCreate", "TaskUpdate", "TaskList"]
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
 hooks:
   Stop:

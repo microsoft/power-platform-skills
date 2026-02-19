@@ -48,6 +48,8 @@ Each plugin follows this structure:
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
 
+**`allowed-tools` format:** Always use a comma-separated string, not a JSON array. Example: `allowed-tools: Read, Write, Edit, Bash, Glob, Grep` (not `["Read", "Write", ...]`).
+
 ## Code Conventions
 
 **DRY (Don't Repeat Yourself):** Never duplicate logic across files. Each plugin has shared utilities (e.g., `scripts/lib/`) and shared reference docs (e.g., `references/`). Always check for and reuse existing helpers before writing new code. When adding shared logic, put it in the plugin's shared modules — not in individual skill directories.

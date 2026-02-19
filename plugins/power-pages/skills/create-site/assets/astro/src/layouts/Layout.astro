@@ -1,7 +1,5 @@
 ---
 import { ViewTransitions } from 'astro:transitions'
-import Header from '../components/Header.astro'
-import Footer from '../components/Footer.astro'
 import '../styles/theme.css'
 
 interface Props {
@@ -21,16 +19,10 @@ const pageTitle = title === 'Home' ? '__SITE_NAME__' : `${title} | __SITE_NAME__
     <meta name="description" content="__SITE_DESCRIPTION__" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Outfit:wght@200;300;400;500;600;700&display=swap" rel="stylesheet" />
     <ViewTransitions />
   </head>
   <body>
-    <div class="app">
-      <Header currentPath={Astro.url.pathname} />
-      <main class="main">
-        <slot />
-      </main>
-      <Footer />
-    </div>
+    <slot />
   </body>
 </html>
