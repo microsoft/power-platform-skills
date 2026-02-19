@@ -56,12 +56,12 @@ Run the installer to set up all plugins with auto-update enabled:
 
 **Windows (PowerShell)**:
 ```powershell
-iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js -OutFile install.js; node install.js; del install.js
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js; del install.js
 ```
 
 **Mac OS/Linux**:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/install.js | node
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
 ```
 
 
