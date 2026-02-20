@@ -271,23 +271,33 @@ async function main() {
     const versionMatch = ver.ok && ver.output.match(/Version:\s*(.+)/i);
     ok(`PAC CLI ${versionMatch ? versionMatch[1].trim() : "(installed)"}`);
 
-    // Try to update to the latest version
+    // Check NuGet for a newer version and update if available
     if (hasCommand("dotnet")) {
-      info("Checking for updates...");
-      const updateResult = run(
-        "dotnet tool update --global Microsoft.PowerApps.CLI.Tool"
-      );
-      if (updateResult.ok) {
-        const updatedMatch = updateResult.output.match(/version '([^']+)'/);
-        if (updateResult.output.includes("was reinstalled")) {
-          ok(`Already on latest version`);
-        } else if (updatedMatch) {
-          ok(`Updated to ${updatedMatch[1]}`);
+      const localVersion = versionMatch ? versionMatch[1].trim().split("+")[0] : null;
+      let latestVersion = null;
+      try {
+        const nugetJson = await httpsGet(
+          "https://api.nuget.org/v3-flatcontainer/microsoft.powerapps.cli.tool/index.json"
+        );
+        const versions = JSON.parse(nugetJson).versions;
+        latestVersion = versions[versions.length - 1];
+      } catch {
+        warn("Could not check NuGet for latest version");
+      }
+
+      if (latestVersion && localVersion && latestVersion === localVersion) {
+        ok("Already on latest version");
+      } else if (latestVersion) {
+        info(`Newer version available: ${latestVersion} (installed: ${localVersion || "unknown"})`);
+        info("Updating PAC CLI...");
+        const updateResult = run(
+          "dotnet tool update --global Microsoft.PowerApps.CLI.Tool"
+        );
+        if (updateResult.ok) {
+          ok(`Updated to ${latestVersion}`);
         } else {
-          ok("Update check complete");
+          warn(`Could not update: ${updateResult.output}`);
         }
-      } else {
-        warn(`Could not check for updates: ${updateResult.output}`);
       }
     }
   } else {
