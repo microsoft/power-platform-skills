@@ -263,6 +263,40 @@ async function main() {
     process.exit(1);
   }
 
+  // ── PAC CLI ──────────────────────────────────────────────────
+  header("Power Platform CLI (pac)");
+
+  if (hasCommand("pac")) {
+    const ver = run("pac help");
+    const versionMatch = ver.ok && ver.output.match(/Version:\s*(.+)/i);
+    ok(`PAC CLI ${versionMatch ? versionMatch[1].trim() : "(installed)"}`);
+  } else {
+    warn("PAC CLI not found in PATH");
+
+    if (hasCommand("dotnet")) {
+      info("Installing PAC CLI via dotnet tool...");
+      const installResult = run(
+        "dotnet tool install --global Microsoft.PowerApps.CLI.Tool"
+      );
+      if (installResult.ok) {
+        ok("PAC CLI installed");
+        info("You may need to restart your terminal for the 'pac' command to be available.");
+      } else if (installResult.output.includes("already installed")) {
+        ok("PAC CLI already installed (not on PATH — restart your terminal)");
+      } else {
+        fail(`Failed to install PAC CLI: ${installResult.output}`);
+        info("Install manually: https://aka.ms/PowerPlatformCLI");
+      }
+    } else {
+      fail("dotnet SDK not found — cannot auto-install PAC CLI");
+      console.log("");
+      console.log("  Install the PAC CLI manually using one of these methods:");
+      console.log("    .NET Tool (cross-platform)  https://aka.ms/PowerPlatformCLI");
+      console.log("    VS Code Extension           https://aka.ms/PowerPlatformCLI");
+      console.log("    Windows MSI                 https://aka.ms/PowerPlatformCLI");
+    }
+  }
+
   // ── Marketplace ────────────────────────────────────────────
   header("Reading marketplace");
 
