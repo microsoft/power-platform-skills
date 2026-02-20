@@ -270,6 +270,26 @@ async function main() {
     const ver = run("pac help");
     const versionMatch = ver.ok && ver.output.match(/Version:\s*(.+)/i);
     ok(`PAC CLI ${versionMatch ? versionMatch[1].trim() : "(installed)"}`);
+
+    // Try to update to the latest version
+    if (hasCommand("dotnet")) {
+      info("Checking for updates...");
+      const updateResult = run(
+        "dotnet tool update --global Microsoft.PowerApps.CLI.Tool"
+      );
+      if (updateResult.ok) {
+        const updatedMatch = updateResult.output.match(/version '([^']+)'/);
+        if (updateResult.output.includes("was reinstalled")) {
+          ok(`Already on latest version`);
+        } else if (updatedMatch) {
+          ok(`Updated to ${updatedMatch[1]}`);
+        } else {
+          ok("Update check complete");
+        }
+      } else {
+        warn(`Could not check for updates: ${updateResult.output}`);
+      }
+    }
   } else {
     warn("PAC CLI not found in PATH");
 
