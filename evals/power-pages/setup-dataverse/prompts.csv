@@ -1,0 +1,11 @@
+id,should_trigger,prompt,expected_skill,notes
+test-01,true,"Set up Dataverse tables using /setup-dataverse",setup-dataverse,Explicit skill invocation
+test-02,true,"Create the database schema for my Power Pages site",setup-dataverse,Implicit - database schema creation
+test-03,true,"I need to design tables for a customer portal with orders and products",setup-dataverse,Implicit - table design for portal
+test-04,true,"Set up Dataverse with tables for blog posts and categories",setup-dataverse,Implicit - Dataverse table setup
+test-05,true,"Create the data model for my Power Pages application",setup-dataverse,Implicit - data model creation
+test-06,false,"How do I query Dataverse tables?",setup-dataverse,Negative control - query question not setup
+test-07,false,"Add a lookup column to my existing table",setup-dataverse,Negative control - schema modification not initial setup
+test-08,false,"What's the difference between Dataverse and SQL Server?",setup-dataverse,Negative control - informational question
+test-09,true,"Define the database tables for event registration system",setup-dataverse,Implicit - table definition for specific use case
+test-10,false,"Export data from my Dataverse table",setup-dataverse,Negative control - data operation not schema setup

@@ -1,0 +1,31 @@
+{
+  "name": "add-sample-data",
+  "description": "Evaluates the add-sample-data skill execution",
+  "checks": [
+    {
+      "id": "read_memory_bank",
+      "description": "Read memory-bank.md to understand table structure",
+      "weight": 25
+    },
+    {
+      "id": "mentioned_relationships",
+      "description": "Discussed handling foreign key relationships in sample data",
+      "weight": 20
+    },
+    {
+      "id": "mentioned_realistic_data",
+      "description": "Discussed generating realistic/meaningful test data",
+      "weight": 20
+    },
+    {
+      "id": "mentioned_pac_cli",
+      "description": "Mentioned using PAC CLI or Web API for data insertion",
+      "weight": 15
+    },
+    {
+      "id": "response_quality",
+      "description": "Response is helpful, clear, and appropriate for the request",
+      "weight": 20
+    }
+  ]
+}

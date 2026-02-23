@@ -1,0 +1,11 @@
+id,should_trigger,prompt,expected_skill,notes
+test-01,true,"Set up authentication using /setup-auth",setup-auth,Explicit skill invocation
+test-02,true,"Add user login to my Power Pages site",setup-auth,Implicit - adding login functionality
+test-03,true,"Configure authentication for my customer portal",setup-auth,Implicit - authentication configuration
+test-04,true,"I need to implement Azure AD B2C login for my site",setup-auth,Implicit - specific auth provider setup
+test-05,true,"Set up user registration and authentication flows",setup-auth,Implicit - auth flow setup
+test-06,false,"Why can't users log into my site?",setup-auth,Negative control - troubleshooting not setup
+test-07,false,"How does Power Pages authentication work?",setup-auth,Negative control - informational question
+test-08,false,"Change the login page styling",setup-auth,Negative control - styling not auth setup
+test-09,true,"Configure local authentication with email registration",setup-auth,Implicit - local auth configuration
+test-10,false,"What authentication providers does Power Pages support?",setup-auth,Negative control - informational question

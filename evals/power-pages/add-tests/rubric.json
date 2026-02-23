@@ -1,0 +1,31 @@
+{
+  "name": "add-tests",
+  "description": "Evaluates the add-tests skill execution",
+  "checks": [
+    {
+      "id": "mentioned_vitest",
+      "description": "Mentioned Vitest for unit testing",
+      "weight": 25
+    },
+    {
+      "id": "mentioned_playwright",
+      "description": "Mentioned Playwright for E2E testing",
+      "weight": 25
+    },
+    {
+      "id": "mentioned_test_structure",
+      "description": "Discussed test file structure and organization",
+      "weight": 15
+    },
+    {
+      "id": "mentioned_coverage",
+      "description": "Discussed test coverage",
+      "weight": 10
+    },
+    {
+      "id": "response_quality",
+      "description": "Response is helpful, clear, and appropriate for the request",
+      "weight": 25
+    }
+  ]
+}

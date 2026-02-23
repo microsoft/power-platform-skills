@@ -1,0 +1,11 @@
+id,should_trigger,prompt,expected_skill,notes
+test-01,true,"Add SEO using /add-seo",add-seo,Explicit skill invocation
+test-02,true,"Add meta tags and sitemap to my Power Pages site",add-seo,Implicit - SEO assets mentioned
+test-03,true,"Optimize my site for search engines",add-seo,Implicit - SEO optimization
+test-04,true,"I need robots.txt and sitemap.xml for my portal",add-seo,Implicit - specific SEO files
+test-05,true,"Add favicon and Open Graph tags",add-seo,Implicit - SEO-related assets
+test-06,false,"How does Google index Power Pages sites?",add-seo,Negative control - informational question
+test-07,false,"Why isn't my site appearing in Google search?",add-seo,Negative control - troubleshooting
+test-08,false,"Change the page title in my React component",add-seo,Negative control - component change not SEO setup
+test-09,true,"Set up search engine optimization assets",add-seo,Implicit - SEO assets setup
+test-10,false,"What meta tags should I use for my site?",add-seo,Negative control - recommendation question

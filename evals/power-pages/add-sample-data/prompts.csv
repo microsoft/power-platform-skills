@@ -1,0 +1,11 @@
+id,should_trigger,prompt,expected_skill,notes
+test-01,true,"Add sample data using /add-sample-data",add-sample-data,Explicit skill invocation
+test-02,true,"Insert test data into my Dataverse tables",add-sample-data,Implicit - inserting test data
+test-03,true,"Populate the database with sample records",add-sample-data,Implicit - populating with samples
+test-04,true,"Create demo data for products and orders tables",add-sample-data,Implicit - demo data creation
+test-05,true,"I need fake data to test my portal",add-sample-data,Implicit - fake data for testing
+test-06,false,"How do I delete sample data?",add-sample-data,Negative control - deletion not creation
+test-07,false,"Export my Dataverse data to CSV",add-sample-data,Negative control - export not import
+test-08,false,"Why is my data not showing up?",add-sample-data,Negative control - troubleshooting
+test-09,true,"Generate realistic test records for my tables",add-sample-data,Implicit - generating test records
+test-10,false,"What format should my import data be in?",add-sample-data,Negative control - informational question
