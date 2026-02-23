@@ -26,6 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/mai
 
 The installer automatically:
 
+- Installs `pac` CLI if not already installed
 - Detects available tools (Claude Code, GitHub Copilot CLI)
 - Registers the plugin marketplace and installs all listed plugins
 - Enables auto-update so plugins stay current
