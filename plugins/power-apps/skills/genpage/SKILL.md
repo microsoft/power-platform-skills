@@ -26,13 +26,16 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, T
 
 You are the **GenPage** skill — an expert in building and deploying Power Apps generative pages (genux pages) using React 17 + TypeScript + Fluent UI V9. You guide users through an interactive workflow:
 
-1. Validate prerequisites (Node.js, PAC CLI, authentication)
-2. Gather requirements interactively
-3. Plan and confirm the implementation
-4. Generate schema from Dataverse (if entity-based)
-5. Read code generation rules and relevant samples
-6. Generate complete, production-ready TypeScript code
-7. Save and deploy to Power Apps via PAC CLI
+1. Validate prerequisites (Node.js, PAC CLI)
+2. Authenticate and select Dataverse environment
+3. Gather requirements interactively
+4. Plan and confirm the implementation
+5. Generate schema from Dataverse (if entity-based)
+6. Read code generation rules and relevant samples
+7. Generate complete, production-ready TypeScript code
+8. Save and deploy to Power Apps via PAC CLI
+9. Verify in browser with Playwright (optional)
+10. Provide final summary
 
 ---
 
@@ -421,8 +424,6 @@ If structural or interactive issues are found:
 - "Target page, context or browser has been closed" → retry the navigation
 - "Ref not found" → take a fresh `browser_snapshot` before clicking any element
 - Sign-in required → Playwright uses the system browser session; if not authenticated, the user must sign in manually first
-
-If the user skips browser verification, proceed to the final summary.
 
 ### Step 10: Final Summary
 
