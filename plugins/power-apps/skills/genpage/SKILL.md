@@ -21,34 +21,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, T
 - **Troubleshooting**: [troubleshooting.md](../../references/troubleshooting.md)
 - **Sample pages**: [samples/](../../samples/)
 
-## What This Skill Does
-
-You are the **GenPage** skill — an expert in building and deploying Power Apps generative pages (genux pages) using React 17 + TypeScript + Fluent UI V9. You guide users through an interactive workflow:
-
-1. Validate prerequisites (Node.js, PAC CLI)
-2. Authenticate and select Dataverse environment
-3. Gather requirements interactively
-4. Plan and confirm the implementation
-5. Generate schema from Dataverse (if entity-based)
-6. Read code generation rules and relevant samples
-7. Generate complete, production-ready TypeScript code
-8. Save and deploy to Power Apps via PAC CLI
-9. Verify in browser with Playwright (optional)
-10. Provide final summary
-
----
-
-## Prerequisites
-
-Before starting, verify:
-- **Node.js** installed on the system
-- **PAC CLI** version >= 2.3.1 installed on the system (run `pac help` to confirm)
-- **Dataverse environment** access for deployment
-
-> **PAC CLI is assumed to be installed on the user's system.** If `pac` is not found, instruct the user to install it via `dotnet tool install --global Microsoft.PowerApps.CLI.Tool` or download from Microsoft.
-
----
-
 ## Development Standards
 
 - **React 17 + TypeScript** — all generated code
@@ -59,21 +31,6 @@ Before starting, verify:
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
-
----
-
-## Planning Policy
-
-Before implementing major changes, enter plan mode first. Planning is required for new features, multi-file changes, schema/API changes, or UI additions. Not required for single-line fixes, docs updates, or diagnostic commands.
-
-When entering plan mode, request these permissions:
-
-```
-allowedPrompts:
-  - tool: Bash, prompt: "run pac cli commands"
-  - tool: Bash, prompt: "run powershell commands"
-  - tool: Bash, prompt: "run node commands"
-```
 
 ---
 
@@ -284,14 +241,7 @@ See [genpage-rules-reference.md](../../references/genpage-rules-reference.md) fo
 After showing code, ALWAYS ask:
 > "Would you like to publish this page to Power Apps?"
 
-If yes, follow this deployment workflow.
-
-> **CRITICAL — Use exact flag names.** The PAC CLI will reject unknown flags. Common mistakes:
-> - `--app-id` NOT `--model-driven-app-id` or `--appid`
-> - `--code-file` NOT `--file` or `--code`
-> - `--prompt` is **required** (not optional) — omitting it causes an error
-> - `--agent-message` is **required** (not optional) — omitting it causes an error
-> - `--data-sources` NOT `--datasources` or `--data-source`
+If yes, follow this deployment workflow. **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
 **For Dataverse entity pages** (schema already generated in Step 5):
 
@@ -435,32 +385,3 @@ After deployment and verification, provide:
 - How to find the page in the app
 - Next steps (share with team, iterate on design)
 - Offer to make updates or create additional pages
-
----
-
-## Verification Checklist
-
-Before finalizing code, verify ALL:
-
-1. All critical rules followed (React 17, Fluent V9, single file, etc.)
-2. All user requirements implemented
-3. All UI elements fully functional
-4. Exports default React component; compiles without errors
-5. Scrolling only on content bodies, not entire page
-6. All imports present and correct; no unused imports
-7. No placeholders, ellipses, or "unchanged" comments
-8. Responsive design; accessible (ARIA, keyboard nav, WCAG AA)
-9. No undefined identifiers or hardcoded values
-10. Output format compliance (Agent Thoughts, Summary, Final Code)
-
----
-
-### Key Decision Points (Wait for User)
-
-1. **Step 3**: Create new or edit existing page
-2. **Step 3**: Page description (default or custom)
-3. **Step 3**: Dataverse entities or mock data
-4. **Step 4**: Approve implementation plan
-5. **Step 8**: Publish to Power Apps (yes/no)
-6. **Step 8**: Which app to publish to (app-id selection)
-7. **Step 9**: Verify in browser with Playwright (yes/skip)
