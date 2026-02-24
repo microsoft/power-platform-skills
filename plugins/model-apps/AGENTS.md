@@ -1,6 +1,6 @@
-# AGENTS.md — Power Apps Plugin
+# AGENTS.md — Model Apps Plugin
 
-This file provides guidance to AI Agents when working with the **power-apps** plugin.
+This file provides guidance to AI Agents when working with the **model-apps** plugin.
 
 ## What This Plugin Is
 
@@ -13,7 +13,7 @@ Single-session workflow — each `/genpage` invocation completes the full cycle:
 Test this plugin locally:
 
 ```bash
-claude --plugin-dir /path/to/plugins/power-apps
+claude --plugin-dir /path/to/plugins/model-apps
 ```
 
 ## Architecture

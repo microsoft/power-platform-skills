@@ -54,7 +54,7 @@ Create and deploy Power Pages sites using modern development approaches.
 
 **Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
 
-### Power Apps (`plugins/power-apps`) — *Coming Soon*
+### Power Apps (`plugins/model-apps`) — *Coming Soon*
 
 > **Note**: This plugin is under active development and not yet available in the marketplace.
 
@@ -71,7 +71,7 @@ To develop and test plugins locally, follow these steps:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
     ```
 
 ## Running Without Interruption
@@ -150,7 +150,7 @@ power-platform-skills/
 │   │   ├── commands/
 │   │   ├── shared/
 │   │   └── skills/
-│   └── power-apps/           # Power Apps plugin
+│   └── model-apps/           # Model Apps plugin
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── commands/

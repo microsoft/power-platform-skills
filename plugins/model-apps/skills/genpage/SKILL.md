@@ -6,7 +6,7 @@ author: Microsoft Corporation
 argument-hint: "[optional: page description or 'deploy' or 'update']"
 user-invocable: true
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-apps_playwright__browser_navigate, mcp__plugin_power-apps_playwright__browser_snapshot, mcp__plugin_power-apps_playwright__browser_click, mcp__plugin_power-apps_playwright__browser_take_screenshot, mcp__plugin_power-apps_playwright__browser_wait_for
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 ---
 
 # Power Apps Generative Pages Builder
