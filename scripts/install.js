@@ -327,6 +327,52 @@ async function main() {
     }
   }
 
+  // ── Azure CLI ───────────────────────────────────────────────
+  header("Azure CLI (az)");
+
+  if (hasCommand("az")) {
+    const ver = run("az version -o tsv");
+    const versionLine = ver.ok && ver.output.split("\n")[0];
+    const azVersion = versionLine ? versionLine.split("\t")[0] : null;
+    ok(`Azure CLI ${azVersion || "(installed)"}`);
+  } else {
+    warn("Azure CLI not found in PATH");
+
+    let installed = false;
+    if (process.platform === "win32" && hasCommand("winget")) {
+      info("Installing Azure CLI via winget...");
+      const installResult = run(
+        "winget install -e --id Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements"
+      );
+      if (installResult.ok) {
+        ok("Azure CLI installed");
+        info("You may need to restart your terminal for the 'az' command to be available.");
+        installed = true;
+      } else {
+        fail(`Failed to install via winget: ${installResult.output}`);
+      }
+    } else if (process.platform === "darwin" && hasCommand("brew")) {
+      info("Installing Azure CLI via Homebrew...");
+      const installResult = run("brew install azure-cli");
+      if (installResult.ok) {
+        ok("Azure CLI installed");
+        installed = true;
+      } else {
+        fail(`Failed to install via Homebrew: ${installResult.output}`);
+      }
+    }
+
+    if (!installed) {
+      fail("Could not auto-install Azure CLI");
+      console.log("");
+      console.log("  Install manually using one of these methods:");
+      console.log("    Windows (winget)  winget install -e --id Microsoft.AzureCLI");
+      console.log("    macOS (Homebrew)  brew install azure-cli");
+      console.log("    Linux (curl)      curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash");
+      console.log("    Docs              https://aka.ms/InstallAzureCLI");
+    }
+  }
+
   // ── Marketplace ────────────────────────────────────────────
   header("Reading marketplace");
 
