@@ -25,7 +25,6 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 references/                    ← Shared reference docs
   genpage-rules-reference.md   ← Full code-gen rules, DataAPI types, layout patterns, common errors
-  pac-cli-reference.md         ← PAC CLI commands and parameters
   troubleshooting.md           ← Common issues and fixes
 samples/                       ← Example .tsx files (8 samples)
 scripts/

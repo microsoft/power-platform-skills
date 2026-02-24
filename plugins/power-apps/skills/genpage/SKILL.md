@@ -18,7 +18,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, T
 ## References
 
 - **Code generation rules**: [genpage-rules-reference.md](../../references/genpage-rules-reference.md)
-- **PAC CLI commands**: [pac-cli-reference.md](../../references/pac-cli-reference.md)
 - **Troubleshooting**: [troubleshooting.md](../../references/troubleshooting.md)
 - **Sample pages**: [samples/](../../samples/)
 
@@ -127,7 +126,7 @@ Ask these questions one at a time:
 
 1. **"Create a new generative page or edit an existing one?"** (use `AskUserQuestion`)
    - If new: continue to next question
-   - If edit: ask for the app and page to edit, download it with `pac model genpage download`, then ask what changes to make
+   - If edit: ask for the app and page to edit, download it with `pac model genpage download --app-id <app-id> --page-id <page-id> --output-directory ./output-dir`, then ask what changes to make
 2. **"Describe the page you'd like to build"** (use `AskUserQuestion`) — present two example descriptions as options and let the user type their own via the "Other" option:
    - **Option 1:** "Build a page showing Account records as a gallery of cards using modern look & feel. All cards should have fixed size and tall enough to fit 4 lines of titles. Include name, entityimage on the top and, website, email, phone number. Make the component fill 100% of the space. Make the gallery scrollable. Use data from the Account table. Make each card clickable to open the Account record in a new window. The target URL should be current location path with following query string parameters: pagetype=entityrecord&etn=[entityname]&id=[recordid] where entityname is account and id is accountid."
    - **Option 2:** "Design a vertically scrollable checklist interface for Task records using a clean, flat layout. Each task should be a row with a left-aligned checkbox, subject in bold and right-aligned due date and priority. Use neutral tones for background and soft color tags for priority (e.g., red for High, gray for Low). Completed tasks should show a strikethrough and reduced opacity. Allow inline editing of due date with a date picker. On hover, rows should highlight with another background. Clicking a task opens the Task record in a new window using: pagetype=entityrecord&etn=[entityname]&id=[recordid] where entityname is task and id is related record id."
@@ -285,7 +284,14 @@ See [genpage-rules-reference.md](../../references/genpage-rules-reference.md) fo
 After showing code, ALWAYS ask:
 > "Would you like to publish this page to Power Apps?"
 
-If yes, follow this deployment workflow. See [pac-cli-reference.md](../../references/pac-cli-reference.md) for full command details.
+If yes, follow this deployment workflow.
+
+> **CRITICAL — Use exact flag names.** The PAC CLI will reject unknown flags. Common mistakes:
+> - `--app-id` NOT `--model-driven-app-id` or `--appid`
+> - `--code-file` NOT `--file` or `--code`
+> - `--prompt` is **required** (not optional) — omitting it causes an error
+> - `--agent-message` is **required** (not optional) — omitting it causes an error
+> - `--data-sources` NOT `--datasources` or `--data-source`
 
 **For Dataverse entity pages** (schema already generated in Step 5):
 
@@ -306,13 +312,9 @@ pac model genpage upload `
   --data-sources "entity1,entity2" `
   --prompt "User's original request summary" `
   --model "<current-model-id>" `
-  --agent-message "The agent's response message" `
+  --agent-message "The agent's response message describing what was built and any relevant details" `
   --add-to-sitemap
 ```
-
-> **`--model` parameter:** Use your current model identifier (the model running this session). This records which AI model generated the page.
->
-> **`--agent-message` parameter:** Include the agent's response message describing what was built and any relevant details.
 
 **For mock data pages** (skip schema generation):
 
@@ -325,7 +327,7 @@ pac model genpage upload `
   --name "Page Display Name" `
   --prompt "User's original request summary" `
   --model "<current-model-id>" `
-  --agent-message "The agent's response message" `
+  --agent-message "The agent's response message describing what was built and any relevant details" `
   --add-to-sitemap
 ```
 
@@ -337,9 +339,9 @@ pac model genpage upload `
   --page-id <page-id> `
   --code-file page-name.tsx `
   --data-sources "entity1,entity2" `
-  --prompt "Summary of changes" `
+  --prompt "User's original request summary" `
   --model "<current-model-id>" `
-  --agent-message "The agent's response message"
+  --agent-message "The agent's response message describing what was built and any relevant details"
 ```
 
 ### Step 9: Verify in Browser
