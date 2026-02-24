@@ -51,6 +51,7 @@ pac model genpage upload `
   --data-sources "entity1,entity2" `
   --prompt "Description of the page" `
   --model "<current-model-id>" `
+  --agent-message "The agent's response message" `
   --add-to-sitemap
 ```
 
@@ -65,7 +66,8 @@ pac model genpage upload `
   --code-file page.tsx `
   --data-sources "entity1,entity2" `
   --prompt "Summary of changes" `
-  --model "<current-model-id>"
+  --model "<current-model-id>" `
+  --agent-message "The agent's response message"
 # --name is optional when updating; omit to keep existing name
 ```
 
@@ -93,4 +95,5 @@ pac model genpage download `
 | `--data-sources` | Entity pages | Comma-separated logical names matching code + schema |
 | `--prompt` | Always (upload) | Original user request or summary. Essential for context. |
 | `--model` | Always (upload) | AI model that generated the page. Use the current model identifier. |
+| `--agent-message` | Always (upload) | The agent's response message describing what was built. |
 | `--add-to-sitemap` | New pages only | Adds page to app navigation. Do NOT use on updates. |

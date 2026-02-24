@@ -303,10 +303,13 @@ pac model genpage upload `
   --data-sources "entity1,entity2" `
   --prompt "User's original request summary" `
   --model "<current-model-id>" `
+  --agent-message "The agent's response message" `
   --add-to-sitemap
 ```
 
 > **`--model` parameter:** Use your current model identifier (the model running this session). This records which AI model generated the page.
+>
+> **`--agent-message` parameter:** Include the agent's response message describing what was built and any relevant details.
 
 **For mock data pages** (skip schema generation):
 
@@ -319,6 +322,7 @@ pac model genpage upload `
   --name "Page Display Name" `
   --prompt "User's original request summary" `
   --model "<current-model-id>" `
+  --agent-message "The agent's response message" `
   --add-to-sitemap
 ```
 
@@ -331,7 +335,8 @@ pac model genpage upload `
   --code-file page-name.tsx `
   --data-sources "entity1,entity2" `
   --prompt "Summary of changes" `
-  --model "<current-model-id>"
+  --model "<current-model-id>" `
+  --agent-message "The agent's response message"
 ```
 
 ### Step 9: Verify in Browser
