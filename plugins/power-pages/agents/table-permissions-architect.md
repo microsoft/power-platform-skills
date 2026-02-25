@@ -18,6 +18,7 @@ tools:
   - Write
   - EnterPlanMode
   - ExitPlanMode
+  - mcp__plugin_power-pages_playwright__browser_resize
   - mcp__plugin_power-pages_playwright__browser_navigate
   - mcp__plugin_power-pages_playwright__browser_take_screenshot
   - mcp__plugin_power-pages_playwright__browser_wait_for
@@ -247,7 +248,7 @@ Do NOT stop the entire workflow for auth errors. Use the data model manifest and
 
 ## Step 5: Propose Table Permissions Plan via Plan Mode
 
-Once you have completed Steps 1-4, prepare the permissions proposal. Sections 5.1-5.3 describe the plan content. Section 5.4 renders the diagram visually in the browser — do this **before** entering plan mode.
+Once you have completed Steps 1-4, prepare the permissions proposal. Sections 5.1-5.2 describe the plan content. Section 5.3 renders the diagram visually in the browser — do this **before** entering plan mode.
 
 ### 5.1 Table Permissions Plan
 

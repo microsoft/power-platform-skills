@@ -17,6 +17,7 @@ tools:
   - Bash
   - EnterPlanMode
   - ExitPlanMode
+  - mcp__plugin_power-pages_playwright__browser_resize
   - mcp__plugin_power-pages_playwright__browser_navigate
   - mcp__plugin_power-pages_playwright__browser_take_screenshot
   - mcp__plugin_power-pages_playwright__browser_wait_for
