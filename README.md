@@ -49,13 +49,13 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
 
 ## Available Plugins
 
-### Power Pages (`plugins/power-pages`)
+### [Power Pages](plugins/power-pages/README.md) (`plugins/power-pages`)
 
 Create and deploy Power Pages sites using modern development approaches.
 
 **Currently supported**: Code Sites (SPAs) with React, Angular, Vue, or Astro
 
-### Power Apps (`plugins/model-apps`) — *Coming Soon*
+### [Model Apps](plugins/model-apps/README.md) (`plugins/model-apps`) — *Coming Soon*
 
 > **Note**: This plugin is under active development and not yet available in the marketplace.
 
@@ -166,7 +166,7 @@ power-platform-skills/
 
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
-- [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/pages)
+- [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference)
 
 ## Contributing
 

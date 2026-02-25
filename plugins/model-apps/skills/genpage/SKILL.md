@@ -40,10 +40,13 @@ Follow these steps in order for every `/genpage` invocation.
 
 ### Step 1: Validate Prerequisites
 
-Run these checks (first invocation per session only):
+Run these checks (first invocation per session only). Run each command separately — do not chain with `&&`:
 
 ```powershell
 node --version
+```
+
+```powershell
 pac help
 ```
 

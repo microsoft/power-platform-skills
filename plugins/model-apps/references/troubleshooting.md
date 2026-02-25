@@ -4,6 +4,15 @@ Common issues when building and deploying generative pages.
 
 ---
 
+## User Wants to Create a New Model-Driven App
+
+This plugin creates **pages within existing** model-driven apps — it cannot create a new app. If the user asks to create a new model-driven app:
+
+- Direct them to [Power Apps maker portal](https://make.powerapps.com) to create the app: **New App → Start with Design → Blank page with Navigation**
+- Once the app exists, they can use `/genpage` to add pages to it
+
+---
+
 ## PAC CLI Not Found or Outdated
 
 - Install: `dotnet tool install --global Microsoft.PowerApps.CLI.Tool`

@@ -2,8 +2,6 @@
   "permissions": {
     "allow": [
       "Bash(pac *)",
-      "Bash(pac model *)",
-      "Bash(pac auth *)",
       "Bash(node *)",
       "Bash(dotnet *)",
       "Bash(cd:*)",
