@@ -41,7 +41,7 @@ The tracking script produces site setting files in code site git format (alphabe
 ```yaml
 description: Tracks usage count of the CreateSite skill
 id: 778fa3d0-a2ef-4d2b-98b8-e6c7d8ce1444
-name: Site/AI/CreateSite
+name: Site/AI/Skills/CreateSite
 value: 1
 ```
 
