@@ -89,7 +89,7 @@ Populates your Dataverse tables with realistic, contextually appropriate records
 
 Orchestrates the full Web API integration lifecycle — from analyzing your site's code to identify where data is needed, through generating typed API code for each table, to configuring table permissions and site settings so the APIs work in production.
 
-The skill first scans your codebase to find components using mock data, placeholder fetch calls, or hardcoded arrays, then maps them to your Dataverse tables. It processes each table sequentially, spawning a dedicated **Web API Integration** agent that creates the integration code. After all tables are wired up, a **Web API Permissions Architect** agent analyzes your site and proposes table permissions and site settings — or you can upload your own permissions diagram instead.
+The skill first scans your codebase to find components using mock data, placeholder fetch calls, or hardcoded arrays, then maps them to your Dataverse tables. It processes each table sequentially, spawning a dedicated **Web API Integration** agent that creates the integration code. After all tables are wired up, a **Table Permissions** agent proposes CRUD permissions and scopes, and a **Web API Settings** agent proposes site settings with case-sensitive validated column names queried directly from Dataverse — or you can upload your own permissions diagram instead.
 
 **What gets created:**
 
@@ -137,15 +137,16 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 
 ## Agents
 
-The plugin includes 3 specialized agents that are spawned automatically by skills when needed:
+The plugin includes 4 specialized agents that are spawned automatically by skills when needed:
 
 | Agent | Purpose | Triggered by |
 |---|---|---|
 | **Data Model Architect** | Analyzes your site and proposes a Dataverse data model with an ER diagram | `/setup-datamodel` |
 | **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` |
-| **Web API Permissions** | Proposes table permissions and site settings for Web API access | `/integrate-webapi` |
+| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi` |
+| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` |
 
-The Data Model Architect and Web API Permissions agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
+The Data Model Architect, Table Permissions, and Web API Settings agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
 
 ## Typical Workflow
 

@@ -24,15 +24,15 @@ The script exits silently if `.powerpages-site/site-settings/` does not exist, s
 
 | Skill | PascalCase (`--skillName`) | Setting Name |
 |-------|---------------------------|--------------|
-| create-site | CreateSite | Site/AI/CreateSite |
-| deploy-site | DeploySite | Site/AI/DeploySite |
-| setup-datamodel | SetupDatamodel | Site/AI/SetupDatamodel |
-| add-sample-data | AddSampleData | Site/AI/AddSampleData |
-| activate-site | ActivateSite | Site/AI/ActivateSite |
-| add-seo | AddSeo | Site/AI/AddSeo |
-| create-webroles | CreateWebroles | Site/AI/CreateWebroles |
-| integrate-webapi | IntegrateWebApi | Site/AI/IntegrateWebApi |
-| setup-auth | SetupAuth | Site/AI/SetupAuth |
+| create-site | CreateSite | Site/AI/Skills/CreateSite |
+| deploy-site | DeploySite | Site/AI/Skills/DeploySite |
+| setup-datamodel | SetupDatamodel | Site/AI/Skills/SetupDatamodel |
+| add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |
+| activate-site | ActivateSite | Site/AI/Skills/ActivateSite |
+| add-seo | AddSeo | Site/AI/Skills/AddSeo |
+| create-webroles | CreateWebroles | Site/AI/Skills/CreateWebroles |
+| integrate-webapi | IntegrateWebApi | Site/AI/Skills/IntegrateWebApi |
+| setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 
 ## YAML Format
 
@@ -45,5 +45,5 @@ name: Site/AI/CreateSite
 value: 1
 ```
 
-- **Skill counter** (`Site-AI-<SkillName>.sitesetting.yml`): Incremented each time the skill runs. The `id` is preserved across increments.
-- **Authoring tool** (`Site-AI-AuthoringTool.sitesetting.yml`): Created once on first skill invocation. Subsequent runs preserve the original value.
+- **Skill counter** (`Site-AI-Skills-<SkillName>.sitesetting.yml`): Incremented each time the skill runs. The `id` is preserved across increments.
+- **Authoring tool** (`Site-AI-Tools-AuthoringTool.sitesetting.yml`): Created once on first skill invocation. Subsequent runs preserve the original value.

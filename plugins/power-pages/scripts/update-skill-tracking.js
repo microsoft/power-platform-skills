@@ -77,8 +77,8 @@ function writeYaml(fields) {
 
 // --- Skill counter setting ---
 
-const skillSettingName = `Site/AI/${skillName}`;
-const skillFileName = `Site-AI-${skillName}.sitesetting.yml`;
+const skillSettingName = `Site/AI/Skills/${skillName}`;
+const skillFileName = `Site-AI-Skills-${skillName}.sitesetting.yml`;
 const skillFilePath = path.join(siteSettingsDir, skillFileName);
 
 if (fs.existsSync(skillFilePath)) {
@@ -100,18 +100,18 @@ if (fs.existsSync(skillFilePath)) {
 
 // --- Authoring tool setting ---
 
-const authoringFileName = 'Site-AI-AuthoringTool.sitesetting.yml';
+const authoringFileName = 'Site-AI-Tools-AuthoringTool.sitesetting.yml';
 const authoringFilePath = path.join(siteSettingsDir, authoringFileName);
 
 if (!fs.existsSync(authoringFilePath)) {
   const fields = {
     description: 'Records which AI authoring tool was used',
     id: generateUuid(),
-    name: 'Site/AI/AuthoringTool',
+    name: 'Site/AI/Tools/AuthoringTool',
     value: normalizedAuthoringTool
   };
   fs.writeFileSync(authoringFilePath, writeYaml(fields), 'utf8');
-  console.log(`Created Site/AI/AuthoringTool setting (value: ${normalizedAuthoringTool})`);
+  console.log(`Created Site/AI/Tools/AuthoringTool setting (value: ${normalizedAuthoringTool})`);
 } else {
-  console.log('Site/AI/AuthoringTool setting already exists — preserved');
+  console.log('Site/AI/Tools/AuthoringTool setting already exists — preserved');
 }
