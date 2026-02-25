@@ -18,6 +18,20 @@
                 "microsoft power platform",
                 "microsoft"
             ]
+        },
+        {
+            "name": "model-apps",
+            "source": "./plugins/model-apps",
+            "description": "Build and deploy generative pages for Power Apps model-driven apps",
+            "category": "development",
+            "tags": [
+                "power platform",
+                "power apps",
+                "model-driven apps",
+                "generative pages",
+                "genux",
+                "microsoft"
+            ]
         }
     ]
 }
