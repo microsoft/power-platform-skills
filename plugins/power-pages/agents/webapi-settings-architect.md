@@ -164,9 +164,17 @@ For each table that needs Web API access, collect **every column name** referenc
 
 For each table, compile the complete set of column names found in code. These will be cross-validated against Dataverse in Step 5.
 
+6. **Lookup column references** — OData uses `_<logicalname>_value` format to read lookup GUIDs:
+   ```text
+   Grep: "_cr[a-z0-9]+_\w+_value" in src/**/*.ts
+   ```
+
 **Common columns to check for:**
 - Primary key column (e.g., `cr4fc_productid`) — always needed for CRUD
-- Lookup GUID columns (e.g., `_cr4fc_category_value`) — needed for filtering and references
+- **Lookup columns** (e.g., `cr4fc_categoryid`) — these have TWO forms that both need to be in the fields list:
+  - `cr4fc_categoryid` — the Dataverse LogicalName (used for write operations / setting the lookup)
+  - `_cr4fc_categoryid_value` — the OData computed attribute (used for read operations in `$select`, `$filter`)
+  - **Both forms MUST be included** — see Step 5.3 for details
 - File/image columns (e.g., `cr4fc_photo`) — needed if the code downloads or uploads files
 - `createdon` / `modifiedon` — if displayed in the UI
 - Columns used in `$filter` or `$orderby` — must be in the fields list to be queryable
@@ -208,6 +216,8 @@ Store the results as a lookup map for each table:
 { LogicalName → { SchemaName, DisplayName, AttributeType, IsPrimaryId } }
 ```
 
+**Identify lookup columns:** Columns with `AttributeType = 'Lookup'` or `AttributeType = 'Customer'` or `AttributeType = 'Owner'` are lookup columns. These require special handling — see Step 5.3.
+
 ### Error Handling
 
 If any API calls fail:
@@ -241,34 +251,63 @@ Since Dataverse LogicalNames are already all-lowercase, this map effectively all
 For each column referenced in code (from Step 3.3):
 
 1. **Normalize** the code column name to lowercase
-2. **Look up** in the Dataverse map
-3. Classify the result:
+2. **Check for OData lookup format**: If the name matches `_<name>_value`, strip the prefix `_` and suffix `_value` to get the base logical name, then look up that base name in the Dataverse map
+3. **Look up** in the Dataverse map
+4. Classify the result:
 
 | Scenario | Action |
 |----------|--------|
 | Exact match (code = Dataverse) | Include in fields list as-is |
 | Case mismatch (code ≠ Dataverse but lowercase matches) | **Use the Dataverse LogicalName** and log a warning |
+| OData lookup format (`_<name>_value`) matched to a Lookup column | Include **both** the LogicalName AND the `_<name>_value` format (see 5.3) |
 | Not found in Dataverse | **Exclude** from fields list and flag as a potential error |
 | In Dataverse but not in code | Note as available but not currently used |
 
-### 5.3 Present Validation Results
+### 5.3 Lookup Column Handling (CRITICAL)
+
+Lookup columns have **two attribute names** in OData, and the Power Pages Web API fields setting does a **literal match**. Both forms must be included:
+
+| Form | Example | Used For |
+|------|---------|----------|
+| LogicalName | `cr87b_productcategoryid` | Write operations (setting the lookup value via POST/PATCH) |
+| OData computed attribute | `_cr87b_productcategoryid_value` | Read operations (`$select`, `$filter`, response body GUID) |
+
+**Rule:** For every lookup column (AttributeType = `Lookup`, `Customer`, or `Owner`) that is referenced in the code — whether the code uses `cr87b_productcategoryid` or `_cr87b_productcategoryid_value` — **always include BOTH forms** in the fields list.
+
+Example: If the code references `_cr87b_productcategoryid_value` in a `$select`:
+- Include `cr87b_productcategoryid` (the LogicalName)
+- Include `_cr87b_productcategoryid_value` (the OData read format)
+
+The fields value becomes:
+```
+_cr87b_productcategoryid_value,cr87b_description,cr87b_name,cr87b_price,cr87b_productcategoryid,cr87b_productid
+```
+
+Note: The `_..._value` entries sort alphabetically with the underscore prefix placing them before regular column names.
+
+### 5.4 Present Validation Results
 
 For each table, present a comparison table in the plan:
 
 ```text
 Column Validation for cra5b_product:
 
-| Column in Code    | Dataverse LogicalName | Match          | Action                                |
-|-------------------|-----------------------|----------------|---------------------------------------|
-| cra5b_productid   | cra5b_productid       | ✓ Exact        | Include                               |
-| cra5b_name        | cra5b_name            | ✓ Exact        | Include                               |
-| Cra5b_Description | cra5b_description     | ✗ CASE MISMATCH | Use `cra5b_description` (Dataverse)  |
-| cra5b_bogusfield  | —                     | ✗ NOT FOUND    | Exclude — column does not exist      |
+| Column in Code                     | Dataverse LogicalName      | Type   | Match          | Action                                          |
+|------------------------------------|----------------------------|--------|----------------|------------------------------------------------|
+| cra5b_productid                    | cra5b_productid            | PK     | ✓ Exact        | Include                                         |
+| cra5b_name                         | cra5b_name                 | String | ✓ Exact        | Include                                         |
+| _cra5b_productcategoryid_value     | cra5b_productcategoryid    | Lookup | ✓ Lookup       | Include BOTH: cra5b_productcategoryid AND _cra5b_productcategoryid_value |
+| Cra5b_Description                  | cra5b_description          | String | ✗ CASE MISMATCH | Use `cra5b_description` (Dataverse)            |
+| cra5b_bogusfield                   | —                          | —      | ✗ NOT FOUND    | Exclude — column does not exist                |
 ```
 
 **If any case mismatches are found**, add a prominent warning:
 
 > **WARNING: Case mismatches detected.** The following columns in code use incorrect casing. The `Webapi/<table>/fields` site setting requires exact Dataverse LogicalNames (all lowercase). Using incorrect casing causes 403 Forbidden errors. The proposed site settings use the corrected Dataverse LogicalNames.
+
+**If any lookup columns are found**, add a note:
+
+> **Lookup columns detected.** The following lookup columns require both the LogicalName and `_<name>_value` OData format in the fields list. Both forms have been included automatically.
 
 ---
 
@@ -294,9 +333,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 **CRITICAL: The `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use `*` (wildcard). NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5.**
 
-Example:
+**CRITICAL: Lookup columns MUST include BOTH the LogicalName AND the `_<name>_value` OData format.** See Step 5.3.
+
+Example (with lookup column `cra5b_productcategoryid`):
 ```powershell
---value "cra5b_productid,cra5b_name,cra5b_description,cra5b_price,cra5b_imageurl"
+--value "_cra5b_productcategoryid_value,cra5b_description,cra5b_name,cra5b_price,cra5b_productcategoryid,cra5b_productid"
 ```
 
 **3. Optionally**, if `Webapi/error/innererror` does not already exist, suggest it for debugging:
@@ -313,9 +354,10 @@ End the plan with:
    | Setting Name | Value | Type |
    |-------------|-------|------|
    | `Webapi/cra5b_product/enabled` | `true` | boolean |
-   | `Webapi/cra5b_product/fields` | `cra5b_productid,cra5b_name,...` | string |
+   | `Webapi/cra5b_product/fields` | `_cra5b_categoryid_value,cra5b_categoryid,cra5b_name,...` | string |
 
 2. **Column validation summary** — How many columns were validated, any mismatches found, any columns excluded
+3. **Lookup columns** — List which columns are lookups and confirm both forms are included
 3. **Security notes** — Confirm that no wildcard `*` is used for fields
 4. **Script invocations** — The exact `create-site-setting.js` commands for each setting (from section 6.1)
 5. **Any discovery steps skipped** due to auth errors
@@ -354,6 +396,7 @@ After creating all files, return a summary to the calling context:
 
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
 - **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName (all lowercase). Never use SchemaName (PascalCase), DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
+- **LOOKUP COLUMNS NEED BOTH FORMS**: For every lookup column, include both the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields list. Missing either form causes 403 errors — the LogicalName is needed for writes, the `_..._value` form is needed for reads.
 - **NEVER use `*` for fields**: Always list specific column logical names in `Webapi/<table>/fields` settings. Using `*` is a security risk.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.

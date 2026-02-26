@@ -444,6 +444,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 **Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase). Using incorrect casing causes 403 Forbidden errors.
 
+**Lookup columns**: For every lookup column, include **both** the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields value. The Power Pages Web API does a literal match — the LogicalName is needed for write operations, the `_..._value` form is needed for read operations (`$select`, `$filter`). Missing either form causes 403 errors.
+
 ### 6.6 Git Commit
 
 Stage and commit the permission and settings files:
