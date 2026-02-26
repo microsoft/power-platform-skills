@@ -68,7 +68,7 @@ const fields = {
 const yamlContent = writeYaml(fields);
 
 // File name: kebab-case with .yml extension (matching create-webroles skill convention)
-const fileName = `${roleName.toLowerCase().replace(/\s+/g, '-')}.yml`;
+const fileName = `${roleName.toLowerCase().replace(/\s+/g, '-')}.webrole.yml`;
 const filePath = path.join(webRolesDir, fileName);
 
 fs.writeFileSync(filePath, yamlContent, 'utf8');
