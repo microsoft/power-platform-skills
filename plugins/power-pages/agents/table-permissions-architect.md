@@ -180,8 +180,24 @@ For each table that needs permissions, determine:
    - `create` — Can create new records
    - `write` — Can update existing records. **Also required for file/image column uploads** — uploading a file uses `PATCH` which requires write permission even if the role doesn't need to update other fields on the record.
    - `delete` — Can delete records
-   - `append` — Can associate records to other records (needed when this table has child relationships)
-   - `appendto` — Can be associated as a child to other records (needed when this table is referenced by lookups)
+   - `append` — Can associate records to other records. **Required when this table has lookup columns that are set during create/write operations.** Setting a lookup (e.g., `cr87b_ProductCategoryId@odata.bind` on a product) is an association operation — Power Pages requires `append` on the source table to allow attaching a relationship to it.
+   - `appendto` — Can be associated as a child to other records. **Required when this table is the TARGET of a lookup column on another table.** For example, if `cr87b_product` has a lookup to `cr87b_productcategory`, then `cr87b_productcategory` needs `appendto: true` to allow products to reference it.
+
+   **Lookup column detection (CRITICAL for append/appendto):**
+   When a table has `create` or `write` permissions AND has lookup columns to other tables, you MUST set:
+   - `append: true` on the **source table** (the one with the lookup column)
+   - `appendto: true` on the **target table** (the one being referenced by the lookup)
+
+   Detect lookup columns by searching for `@odata.bind` patterns in service code:
+   ```text
+   Grep: "@odata\.bind|_value" in src/**/*.ts
+   ```
+
+   Also check the data model manifest or Dataverse column metadata for columns with `AttributeType = 'Lookup'`.
+
+   **Example:** If `cr87b_product` has a lookup `cr87b_productcategoryid` → `cr87b_productcategory`:
+   - `cr87b_product` permission needs `append: true` (it sets the lookup)
+   - `cr87b_productcategory` permission needs `appendto: true` (it is referenced)
 
    **File/image upload detection:** If the integration code contains `uploadFileColumn`, `uploadFile`, or PATCH requests targeting a column endpoint (pattern: `/_api/<table>(<id>)/<column>`), the table requires `write: true`. Search for these patterns:
    ```text
@@ -205,9 +221,9 @@ For each table that needs permissions, determine:
 
 ---
 
-## Step 4: Discover Relationships
+## Step 4: Discover Relationships & Lookup Columns
 
-Query the Dataverse OData API to get relationship names for tables that use Parent scope.
+Query the Dataverse OData API to get relationship names for parent-scope permissions AND to identify lookup columns that require append/appendto permissions.
 
 ### 4.1 Get Environment URL and Token
 
@@ -234,6 +250,32 @@ $rels.value | ForEach-Object { [PSCustomObject]@{ Name = $_.SchemaName; From = $
 ```
 
 Use the relationship `SchemaName` as the `parentrelationshipname` value in the child table permission.
+
+### 4.3 Query Lookup Columns (for append/appendto)
+
+For each table that has `create` or `write` permissions, query its lookup columns to determine which tables need `appendto`:
+
+```powershell
+$lookups = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?`$select=LogicalName,Targets" -Headers $headers
+$lookups.value | ForEach-Object { [PSCustomObject]@{ Lookup = $_.LogicalName; Targets = ($_.Targets -join ', ') } } | Format-Table -AutoSize
+```
+
+This returns each lookup column and its target table(s). Use this to build the append/appendto map:
+- The **source table** (with the lookup) needs `append: true`
+- Each **target table** in the `Targets` array needs `appendto: true`
+
+**Example output:**
+```
+Lookup                      Targets
+------                      -------
+cr87b_productcategoryid     cr87b_productcategory
+cr87b_contactid             contact
+```
+
+This means:
+- `cr87b_product` needs `append: true` (it has lookup columns)
+- `cr87b_productcategory` needs `appendto: true` (it is referenced by the product lookup)
+- `contact` — system table, typically already has permissions
 
 ### Error Handling
 
@@ -481,6 +523,7 @@ After creating all files, return a summary to the calling context:
 ## Critical Constraints
 
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`. The only file you may write directly is the temporary `permissions-diagram.html` in the system temp directory for visualization.
+- **LOOKUP COLUMNS REQUIRE APPEND/APPENDTO**: When a table has `create` or `write` permissions AND has lookup columns to other tables, the source table MUST have `append: true` and each target table MUST have `appendto: true`. Missing these causes "You don't have permission to associate or disassociate" errors. Always query Dataverse for lookup columns (Step 4.3) to detect these requirements.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
 - **Parent before child**: Always create parent table permissions before child permissions that reference them.
