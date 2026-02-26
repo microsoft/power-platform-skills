@@ -1,6 +1,6 @@
 {
   "name": "model-apps",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Build and deploy Power Apps generative pages for model-driven apps.",
   "author": {
     "name": "Microsoft",
