@@ -85,8 +85,9 @@ claude --dangerously-skip-permissions
 
 ## Documentation
 
-- [Power Apps Model-Driven Apps](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/model-driven-app-overview)
+- [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
 - [Generative Pages Overview](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-pages)
+- [Power Apps Model-Driven Apps](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/model-driven-app-overview)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/model)
 
 ## License
