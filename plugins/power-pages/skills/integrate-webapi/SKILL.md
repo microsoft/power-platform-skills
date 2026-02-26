@@ -358,9 +358,16 @@ Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAU
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables."
+> "Analyze this Power Pages code site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables. After I approve the plan, create the web role and table permission YAML files using the deterministic scripts."
 
-Wait for the agent to complete and the user to approve its plan before proceeding.
+The agent will:
+1. Analyze the site and propose a plan (with Mermaid diagram)
+2. Present the plan via plan mode for user approval
+3. After approval, create any needed web roles using `create-web-role.js`
+4. Create all table permission files using `create-table-permission.js`
+5. Return a summary of created files
+
+Wait for the agent to complete before proceeding.
 
 ### 6.4 Invoke Web API Settings Agent
 
@@ -368,33 +375,74 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${CLAUDE
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names."
+> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
 
-Wait for the agent to complete and the user to approve its plan before proceeding.
+The agent will:
+1. Analyze the site, query Dataverse for exact column LogicalNames
+2. Cross-validate column names (case-sensitive)
+3. Present the plan via plan mode for user approval
+4. After approval, create all site setting files using `create-site-setting.js`
+5. Return a summary of created files
 
-### 6.5 Create Permission & Settings Files
+Wait for the agent to complete before proceeding.
 
-After data is available — either from the user's uploaded diagram (Path A) or from both agents' approved plans (Path B) — create the actual YAML files:
+### 6.5 Create Permission & Settings Files (Path A Only)
 
-- **Table permission files** in `.powerpages-site/table-permissions/`
-- **Site setting files** in `.powerpages-site/site-settings/`
+**This section applies only to Path A (user-provided permissions diagram).** For Path B, the architect agents create the files directly in sections 6.3 and 6.4.
 
-For each file that needs a UUID, generate one using the shared script:
+After parsing the user's diagram, create the YAML files using the deterministic scripts below. **Do NOT write YAML files manually** — always use these scripts which handle UUID generation, field ordering, formatting, and file naming automatically.
+
+#### 6.5.1 Create Web Roles (if needed)
+
+If the plan requires new web roles that don't already exist, create them first (their UUIDs are needed for table permissions):
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
 ```
 
-**CRITICAL YAML FORMATTING RULES when writing these files:**
-- **Code site git format**: Table permission fields have `adx_` prefix stripped (e.g., `append`, `read`, `scope`) EXCEPT `adx_entitypermission_webrole` (M2M relationship keeps prefix). The display name field is `entityname` (NOT `entitypermissionname`). Entity reference lookups (like `parententitypermission`) store only the GUID, not a nested object.
-- Boolean values MUST be unquoted: `value: true` — NEVER `value: "true"` or `value: "false"`
-- Numeric values MUST be unquoted: `scope: 756150000` — NEVER `scope: "756150000"`
-- UUIDs MUST be unquoted: `id: a1b2c3d4-...` — NEVER `id: "a1b2c3d4-..."`
-- String values (like field lists) are also unquoted: `value: cr87b_name,cr87b_email`
-- CRUD flags are unquoted booleans: `read: true` — NEVER `read: "true"`
-- Fields MUST be alphabetically sorted
-- **Site setting field lists MUST use exact Dataverse LogicalNames** — case-sensitive, all lowercase. Using incorrect casing causes 403 Forbidden errors.
-- Follow the exact YAML format specified by the agents' plan output
+Capture the JSON output (`{ "id": "<uuid>", "filePath": "<path>" }`) — use the `id` as the `--webRoleIds` value when creating table permissions.
+
+#### 6.5.2 Create Table Permissions
+
+For each table permission in the plan. Process **parent permissions before child permissions** — children need the parent's UUID from the JSON output.
+
+**For Global/Contact/Account/Self scope:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+```
+
+**For Parent scope** (requires parent permission UUID and relationship name):
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+```
+
+Each invocation outputs `{ "id": "<uuid>", "filePath": "<path>" }`. Use the `id` as `--parentPermissionId` for child permissions.
+
+#### 6.5.3 Create Site Settings
+
+For each site setting in the plan:
+
+**Enabled setting (boolean):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
+```
+
+**Fields setting (string — use the validated column names from the diagram):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<comma-separated-validated-columns>" --description "Allowed fields for <table> Web API access"
+```
+
+**Inner error setting (boolean, optional for debugging):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
+```
+
+**Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase). Using incorrect casing causes 403 Forbidden errors.
 
 ### 6.6 Git Commit
 
