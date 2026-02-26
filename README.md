@@ -45,6 +45,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
 
     ```bash
     /plugin install power-pages@power-platform-skills
+    /plugin install model-apps@power-platform-skills
     ```
 
 ## Available Plugins
