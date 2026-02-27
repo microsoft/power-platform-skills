@@ -33,6 +33,7 @@ The script exits silently if `.powerpages-site/site-settings/` does not exist, s
 | create-webroles | CreateWebroles | Site/AI/Skills/CreateWebroles |
 | integrate-webapi | IntegrateWebApi | Site/AI/Skills/IntegrateWebApi |
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
+| test-site | TestSite | Site/AI/Skills/TestSite |
 
 ## YAML Format
 
