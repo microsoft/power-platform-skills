@@ -29,7 +29,7 @@ Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colo
 Use animations for effects and micro-interactions. Prioritize CSS-only solutions. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (`animation-delay`) creates more delight than scattered micro-interactions.
 
 ### Accessibility
-Accessibility is mandatory (WCAG 2.1 AA). Semantic structure, strong contrast, visible focus states, keyboard navigation, accessible form validation.
+Accessibility is mandatory (WCAG 2.2 AA). Semantic structure, strong contrast, visible focus states, keyboard navigation, accessible form validation.
 
 - **Semantic HTML**: Use `<header>`, `<nav>`, `<main>`, `<section>`, `<footer>`, `<article>` — never rely on `<div>` soup. Headings (`h1`–`h6`) must follow a logical hierarchy with no skipped levels.
 - **Color contrast**: Text must meet WCAG AA minimums — 4.5:1 for normal text, 3:1 for large text (18px+ bold or 24px+ regular). Never convey meaning through color alone.
