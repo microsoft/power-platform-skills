@@ -370,6 +370,7 @@ Conventions for the diagram:
 - Dashed arrows `-.->|parent|`: parent-child permission relationships
 - Use checkmarks `✓` and crosses `✗` for CRUD flags in the permission nodes
 - Group nodes in subgraphs for visual clarity
+- **Line breaks in node labels**: Use `<br/>` for line breaks inside node labels. **NEVER use `\n`** — Mermaid does not interpret `\n` as a newline and will render it as literal text
 
 ### 5.3 Render Diagram Visually
 
