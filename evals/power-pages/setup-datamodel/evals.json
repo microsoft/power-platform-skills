@@ -1,0 +1,93 @@
+{
+  "skill_name": "setup-datamodel",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I'm building an e-commerce Power Pages site. I need tables for Products, Categories, and Orders. Can you set up the data model for me? The site is already created and connected via PAC CLI.",
+      "expected_output": "The skill invokes the Data Model Architect agent to analyze the site and propose a data model with Products, Categories, and Orders tables including appropriate columns and relationships. After user approval, it creates the tables via OData deep-insert, sets up 1:N and M:N relationships, publishes customizations, and writes the manifest file.",
+      "files": [],
+      "expectations": [
+        "Verifies PAC CLI authentication and Azure CLI token before proceeding",
+        "Chooses Path B (Data Model Architect) since no ER diagram was provided",
+        "Spawns the Data Model Architect agent to analyze the site and propose tables, columns, and relationships",
+        "Presents a Mermaid ER diagram showing Products, Categories, and Orders with their relationships",
+        "Waits for explicit user approval of the proposed data model before creating anything",
+        "Refreshes the Azure CLI token before making API calls",
+        "Queries existing tables via OData to check for conflicts and builds a creation plan",
+        "Creates tables and columns using OData POST to EntityDefinitions with deep-insert pattern",
+        "Creates 1:N lookup relationship from Orders to Products",
+        "Creates 1:N or M:N relationship between Products and Categories",
+        "Calls PublishXml to publish all created customizations",
+        "Verifies the created tables are accessible after publishing",
+        "Writes a .datamodel-manifest.json file listing all created tables, columns, and relationships",
+        "Displays a summary of what was created with suggested next steps"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I have an ER diagram for a blog data model. Please set up these tables:\n\n```mermaid\nerDiagram\n    cr_author {\n        string cr_name\n        string cr_email\n        string cr_bio\n    }\n    cr_post {\n        string cr_title\n        string cr_body\n        datetime cr_publishedon\n        boolean cr_isfeatured\n    }\n    cr_comment {\n        string cr_text\n        datetime cr_createdon\n        string cr_guestname\n    }\n    cr_author ||--o{ cr_post : writes\n    cr_post ||--o{ cr_comment : has\n```",
+      "expected_output": "The skill accepts the uploaded Mermaid ER diagram, parses the three tables (Author, Post, Comment) with their columns and relationships, presents the model for approval, then creates everything via OData and publishes.",
+      "files": [],
+      "expectations": [
+        "Verifies PAC CLI authentication and Azure CLI token before proceeding",
+        "Chooses Path A (user-provided ER diagram) since a Mermaid diagram was supplied",
+        "Parses the Mermaid ER diagram to extract tables, columns, and relationships",
+        "Presents the parsed data model back to the user with a formatted Mermaid ER diagram for confirmation",
+        "Waits for explicit user approval before creating any tables",
+        "Refreshes the Azure CLI token before making OData API calls",
+        "Queries existing tables to check whether cr_author, cr_post, or cr_comment already exist",
+        "Creates cr_author table with cr_name, cr_email, and cr_bio columns via OData POST deep-insert",
+        "Creates cr_post table with cr_title, cr_body, cr_publishedon, and cr_isfeatured columns via OData POST deep-insert",
+        "Creates cr_comment table with cr_text, cr_createdon, and cr_guestname columns via OData POST deep-insert",
+        "Creates 1:N lookup relationship from cr_author to cr_post",
+        "Creates 1:N lookup relationship from cr_post to cr_comment",
+        "Calls PublishXml to publish all customizations",
+        "Writes a .datamodel-manifest.json file documenting the created schema",
+        "Displays a summary with next steps for configuring the Power Pages site"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I need to extend my Power Pages site data model. I already have a cr_customer table and a cr_product table. I need to add a cr_review table (with rating and comment columns) linked to both, and add a cr_loyaltypoints column to the existing cr_customer table.",
+      "expected_output": "The skill detects that cr_customer and cr_product already exist, plans to reuse them, creates the new cr_review table, adds the cr_loyaltypoints column to cr_customer, sets up relationships, and publishes.",
+      "files": [],
+      "expectations": [
+        "Verifies PAC CLI authentication and Azure CLI token before proceeding",
+        "Chooses Path B (Data Model Architect) to analyze requirements since no ER diagram was provided",
+        "Presents a Mermaid ER diagram showing cr_customer, cr_product (existing), and cr_review (new) with relationships",
+        "Waits for explicit user approval of the proposed changes",
+        "Refreshes the Azure CLI token before making API calls",
+        "Queries existing tables and discovers cr_customer and cr_product already exist in the environment",
+        "Builds a creation plan that distinguishes between new tables, existing tables to modify, and tables to reuse as-is",
+        "Creates the new cr_review table with rating and comment columns via OData POST deep-insert",
+        "Adds the cr_loyaltypoints column to the existing cr_customer table via OData PATCH or POST to the existing entity",
+        "Creates 1:N lookup relationship from cr_customer to cr_review",
+        "Creates 1:N lookup relationship from cr_product to cr_review",
+        "Calls PublishXml to publish all new and modified customizations",
+        "Verifies the created and modified tables are accessible after publishing",
+        "Writes a .datamodel-manifest.json file reflecting both new and existing entities",
+        "Displays a summary clearly indicating which tables were created, which were modified, and which were reused"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I just need a simple feedback table for my Power Pages site. It should have a subject field (text, required), a description field (multiline text), a rating field (whole number 1-5), and a submitted on field (date). Nothing else.",
+      "expected_output": "The skill creates a single cr_feedback table with the four specified columns, publishes it, and writes the manifest. No relationships are needed.",
+      "files": [],
+      "expectations": [
+        "Verifies PAC CLI authentication and Azure CLI token before proceeding",
+        "Recognizes this is a simple single-table request and proposes a straightforward data model",
+        "Presents a Mermaid ER diagram showing the cr_feedback table with its four columns",
+        "Waits for explicit user approval before creating the table",
+        "Refreshes the Azure CLI token before making API calls",
+        "Queries existing tables to confirm cr_feedback does not already exist",
+        "Creates cr_feedback table with cr_subject (text, required), cr_description (multiline text), cr_rating (whole number), and cr_submittedon (date) columns via OData POST deep-insert",
+        "Does not attempt to create any relationships since none are needed",
+        "Calls PublishXml to publish the new table",
+        "Verifies the cr_feedback table is accessible after publishing",
+        "Writes a .datamodel-manifest.json file documenting the single table and its columns",
+        "Displays a summary confirming the table was created with suggested next steps"
+      ]
+    }
+  ]
+}

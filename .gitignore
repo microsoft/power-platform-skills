@@ -4,6 +4,7 @@ evals/temp/
 
 # Eval reports (aggregated results)
 evals/reports/
+evals/**/*-workspace/
 
 # Python
 __pycache__/

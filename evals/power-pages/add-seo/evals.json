@@ -1,0 +1,78 @@
+{
+  "skill_name": "add-seo",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have a React-based Power Pages code site in c:\\repos\\ghe\\contoso-portal. I want the full SEO treatment: robots.txt, sitemap.xml, meta tags with Open Graph and Twitter Card tags, and a favicon. The site URL is https://contoso.powerappsportals.com and it has routes for /, /about, /contact, /products, and /products/:id. Use the favicon at public/favicon.ico that already exists.",
+      "expected_output": "The skill detects a React framework, discovers all routes, generates robots.txt and sitemap.xml in the public directory, adds meta tags (title, description, viewport, OG, Twitter Card, favicon link) to index.html, confirms the plan with the user, verifies with Playwright, and commits to git.",
+      "files": [],
+      "expectations": [
+        "Detects the project as a React-based Power Pages code site by examining package.json or project structure",
+        "Discovers routes including /, /about, /contact, /products, and /products/:id",
+        "Creates public/robots.txt with User-agent: *, Allow: /, and a Sitemap directive pointing to https://contoso.powerappsportals.com/sitemap.xml",
+        "Creates public/sitemap.xml containing <url> entries for https://contoso.powerappsportals.com/, /about, /contact, and /products",
+        "Adds <meta name=\"description\"> and <meta name=\"viewport\"> tags to public/index.html or the root HTML template",
+        "Adds Open Graph meta tags (og:title, og:description, og:url, og:type) to the root HTML template",
+        "Adds Twitter Card meta tags (twitter:card, twitter:title, twitter:description) to the root HTML template",
+        "Adds a <link rel=\"icon\" href=\"/favicon.ico\"> reference in the HTML head",
+        "Presents an SEO plan to the user and waits for approval before making changes",
+        "Runs a Playwright-based verification to confirm SEO elements are present on the rendered site",
+        "Creates a git commit with the SEO changes"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add SEO to my Astro Power Pages code site at c:\\repos\\ghe\\northwind-portal. The site URL is https://northwind.powerappsportals.com. It has pages at src/pages/index.astro, src/pages/services.astro, and src/pages/blog/[slug].astro. I want robots.txt, sitemap, meta tags with OG tags, and a favicon.",
+      "expected_output": "The skill detects an Astro framework, places meta tags in the Layout.astro component rather than a standalone index.html, generates robots.txt and sitemap.xml in the public directory, and follows the standard verification and commit workflow.",
+      "files": [],
+      "expectations": [
+        "Detects the project as an Astro-based Power Pages code site by examining astro.config.mjs or package.json",
+        "Discovers routes /, /services, and /blog/[slug] from the src/pages directory structure",
+        "Creates public/robots.txt with User-agent: *, Allow: /, and a Sitemap directive pointing to https://northwind.powerappsportals.com/sitemap.xml",
+        "Creates public/sitemap.xml containing <url> entries for https://northwind.powerappsportals.com/, /services, and /blog",
+        "Adds meta tags (description, viewport, OG tags, Twitter Card tags) inside the <head> of the Astro layout file (e.g., src/layouts/Layout.astro) rather than a plain index.html",
+        "Adds a <link rel=\"icon\"> reference in the Astro layout head",
+        "Presents an SEO plan to the user and waits for approval before making changes",
+        "Runs a Playwright-based verification to confirm SEO elements render correctly",
+        "Creates a git commit with the SEO changes"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I need SEO for my React Power Pages code site at c:\\repos\\ghe\\fabrikam-portal. Site URL is https://fabrikam.powerappsportals.com. The site has routes /, /dashboard, /admin, /admin/settings, /auth/login, /auth/register, /pricing, and /docs. Exclude all /admin and /auth routes from the sitemap and block them in robots.txt. I want full SEO with OG tags and favicon.",
+      "expected_output": "The skill generates robots.txt with Disallow rules for /admin and /auth paths, creates sitemap.xml that excludes those routes, adds all meta tags, and follows the approval, verification, and commit workflow.",
+      "files": [],
+      "expectations": [
+        "Detects the project as a React-based Power Pages code site",
+        "Discovers all routes including /, /dashboard, /admin, /admin/settings, /auth/login, /auth/register, /pricing, and /docs",
+        "Creates robots.txt with Disallow: /admin and Disallow: /auth directives to block crawlers from those paths",
+        "Creates sitemap.xml that includes /, /dashboard, /pricing, and /docs but excludes /admin, /admin/settings, /auth/login, and /auth/register",
+        "Adds meta tags (title, description, viewport) to the root HTML template",
+        "Adds Open Graph and Twitter Card meta tags to the root HTML template",
+        "Adds a favicon link in the HTML head",
+        "Presents the SEO plan showing excluded routes and waits for user approval",
+        "Runs Playwright verification to confirm SEO elements and that excluded routes are properly handled",
+        "Creates a git commit with the SEO changes"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Add minimal SEO to my React Power Pages site at c:\\repos\\ghe\\litware-portal. Site URL is https://litware.powerappsportals.com. It only has / and /about pages. I just need a basic robots.txt and sitemap.xml. No Open Graph tags, no Twitter Card tags, no favicon. Keep it simple.",
+      "expected_output": "The skill generates only robots.txt and sitemap.xml with the two routes, adds basic meta tags (title, description, viewport) without OG or Twitter Card tags, skips favicon setup, and follows the approval, verification, and commit workflow.",
+      "files": [],
+      "expectations": [
+        "Detects the project as a React-based Power Pages code site",
+        "Discovers routes / and /about",
+        "Creates public/robots.txt with User-agent: * and Allow: / along with a Sitemap directive",
+        "Creates public/sitemap.xml containing <url> entries for https://litware.powerappsportals.com/ and /about only",
+        "Adds basic meta tags (title, description, viewport) to the root HTML template",
+        "Does NOT add Open Graph meta tags (og:title, og:description, og:url, og:type)",
+        "Does NOT add Twitter Card meta tags (twitter:card, twitter:title, twitter:description)",
+        "Does NOT add a favicon link element",
+        "Presents the minimal SEO plan to the user and waits for approval",
+        "Runs Playwright verification to confirm the basic SEO elements are present",
+        "Creates a git commit with the SEO changes"
+      ]
+    }
+  ]
+}

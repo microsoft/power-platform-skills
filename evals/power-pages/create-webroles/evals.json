@@ -1,0 +1,81 @@
+{
+  "skill_name": "create-webroles",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just deployed my Power Pages site for the first time and I need to set up the basic web roles. Can you create the standard roles -- Administrators, Authenticated Users, and Anonymous Users?",
+      "expected_output": "The skill verifies the .powerpages-site/web-roles/ directory exists, finds no existing roles, suggests the three standard roles (Administrators, Authenticated Users, Anonymous Users), asks the user to confirm, generates a unique UUID for each role via generate-uuid.js, creates three YAML files with correct flags (anonymoususersrole: true only on Anonymous Users, authenticatedusersrole: true only on Authenticated Users), validates all files, and offers deployment.",
+      "files": [],
+      "expectations": [
+        "The .powerpages-site/web-roles/ directory is checked for existence",
+        "Existing web role YAML files are read to discover current roles (none found)",
+        "The three standard roles (Administrators, Authenticated Users, Anonymous Users) are suggested",
+        "User is asked to confirm which roles to create",
+        "generate-uuid.js script is called once per role to produce 3 unique UUIDs",
+        "administrators.yml is created with anonymoususersrole: false and authenticatedusersrole: false",
+        "authenticated-users.yml is created with authenticatedusersrole: true and anonymoususersrole: false",
+        "anonymous-users.yml is created with anonymoususersrole: true and authenticatedusersrole: false",
+        "Each YAML file contains exactly 4 fields: anonymoususersrole, authenticatedusersrole, id, name",
+        "All created files are verified for valid UUID v4 format and correct boolean flags",
+        "Uniqueness constraints are validated: only one role has anonymoususersrole: true and only one has authenticatedusersrole: true",
+        "A summary table of created roles is presented to the user",
+        "User is asked whether to deploy the site to apply the new roles"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I already have Administrators, Authenticated Users, and Anonymous Users roles set up. I need to add a Content Editors role and a Moderators role for my community site.",
+      "expected_output": "The skill finds the existing three roles in .powerpages-site/web-roles/, lists them for the user, suggests Content Editors and Moderators as new roles without duplicating any existing roles, generates UUIDs for the two new roles, creates YAML files with both anonymoususersrole and authenticatedusersrole set to false (since those flags are already assigned to existing roles), validates all files including existing ones for constraint compliance, and offers deployment.",
+      "files": [],
+      "expectations": [
+        "The .powerpages-site/web-roles/ directory is checked and found to exist",
+        "Existing YAML files are read and 3 roles are discovered (Administrators, Authenticated Users, Anonymous Users)",
+        "Existing roles are presented to the user before suggesting new ones",
+        "Suggestions do not include any already-existing role names",
+        "User is asked to confirm creation of Content Editors and Moderators",
+        "generate-uuid.js script is called once per new role to produce 2 unique UUIDs",
+        "content-editors.yml is created with anonymoususersrole: false and authenticatedusersrole: false",
+        "moderators.yml is created with anonymoususersrole: false and authenticatedusersrole: false",
+        "Neither new role sets anonymoususersrole or authenticatedusersrole to true since those flags are already assigned to existing roles",
+        "Uniqueness constraints are validated across all 5 roles (existing + new): no duplicate IDs, at most one anonymous flag, at most one authenticated flag",
+        "Summary table includes only the newly created roles",
+        "User is asked whether to deploy the site to apply the new roles"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create web roles for my Power Pages site. I haven't deployed it yet though.",
+      "expected_output": "The skill checks for the .powerpages-site directory and does not find it. It informs the user that the site must be deployed first to create the .powerpages-site folder, and asks whether to deploy now. If the user agrees, the deploy-site skill is invoked first. If the user declines, the skill stops and reminds the user to deploy before creating web roles.",
+      "files": [],
+      "expectations": [
+        "Glob search is performed for .powerpages-site/web-roles/ directory",
+        "The .powerpages-site folder is determined to be missing",
+        "User is informed that .powerpages-site is created during first deployment",
+        "User is asked whether to deploy now using AskUserQuestion with options (Yes, deploy now / No, I'll do it later)",
+        "If user declines deployment, the skill stops without creating any web role files",
+        "If user accepts deployment, the deploy-site skill is invoked before continuing",
+        "No UUID generation or YAML file creation occurs before deployment completes",
+        "Progress is tracked with TaskCreate/TaskUpdate throughout all phases"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I need a Content Editors role for my Power Pages site so certain users can manage pages and content. Just that one role please.",
+      "expected_output": "The skill verifies the site structure, discovers any existing roles, confirms the user wants only a Content Editors role, generates a single UUID via generate-uuid.js, creates content-editors.yml with both special flags set to false, validates the file, and offers deployment.",
+      "files": [],
+      "expectations": [
+        "The .powerpages-site/web-roles/ directory is checked for existence",
+        "Existing web role YAML files are read to discover current roles and their flags",
+        "User is asked to confirm creation of the Content Editors role",
+        "generate-uuid.js script is called exactly once to produce a UUID for the role",
+        "content-editors.yml is created in .powerpages-site/web-roles/ with kebab-case filename",
+        "The YAML file has anonymoususersrole: false and authenticatedusersrole: false",
+        "The YAML file has the correct name field set to Content Editors",
+        "The id field contains a valid UUID v4 generated by the script",
+        "Verification confirms the file exists, has valid format, and no uniqueness constraints are violated",
+        "A summary table showing the single created role is presented",
+        "User is asked whether to deploy the site to apply the new role"
+      ]
+    }
+  ]
+}

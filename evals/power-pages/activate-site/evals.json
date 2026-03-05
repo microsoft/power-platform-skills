@@ -1,0 +1,77 @@
+{
+  "skill_name": "activate-site",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just created my Power Pages code site and now I need to activate it so I can actually see it in the browser. Can you provision it for me?",
+      "expected_output": "The skill verifies PAC CLI auth and Azure CLI login, checks that the site is not already activated via check-activation-status.js, reads the site name from powerpages.config.json, runs generate-subdomain.js to produce a random subdomain suggestion, asks the user whether to use the generated subdomain or enter a custom one, presents the full activation parameters (site name, subdomain, environment ID) for user approval, runs activate-site.js to POST to the websites API and poll for completion, and presents a summary with the provisioned site URL and next steps.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified via 'pac help'",
+        "Authentication is checked via 'pac auth who' and Environment ID, Organization ID, and Cloud are extracted",
+        "Azure CLI login is verified via 'az account show'",
+        "Activation status is checked by running check-activation-status.js before gathering parameters",
+        "Site name is read from powerpages.config.json",
+        "generate-subdomain.js script is run to produce a subdomain suggestion",
+        "User is asked via AskUserQuestion whether to use the generated subdomain or enter a custom one",
+        "User is presented with full activation parameters and asked to confirm before proceeding",
+        "activate-site.js is run with --siteName, --subdomain, --organizationId, --environmentId, --cloud, and --websiteRecordId",
+        "Bash timeout for the activation script is at least 360 seconds",
+        "A summary is presented showing site name, site URL, environment, and status",
+        "Skill usage is recorded with --skillName 'ActivateSite'",
+        "Next steps are suggested including test-site, setup-datamodel, and add-sample-data",
+        "Progress is tracked using TaskCreate/TaskUpdate for each phase"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "activate my power pages site please. i want to use my own subdomain though -- 'contoso-hr-portal' instead of whatever random one you come up with",
+      "expected_output": "The skill completes all prerequisite checks, reads the site name from config, runs the subdomain generator but the user declines the suggestion and provides 'contoso-hr-portal' as their custom subdomain. The custom subdomain is validated (lowercase, alphanumeric with hyphens, 3-50 chars). The user confirms activation parameters with the custom subdomain, the activation script runs, and a summary is presented with the site URL using the custom subdomain.",
+      "files": [],
+      "expectations": [
+        "PAC CLI auth and Azure CLI login are verified",
+        "Activation status is checked before gathering parameters",
+        "Site name is read from powerpages.config.json",
+        "generate-subdomain.js is still run to produce a suggestion",
+        "User is asked via AskUserQuestion and selects the custom subdomain option",
+        "Custom subdomain 'contoso-hr-portal' is validated (lowercase, alphanumeric with hyphens, 3-50 characters)",
+        "Confirmation prompt shows the custom subdomain in the full URL (e.g., contoso-hr-portal.powerappsportals.com)",
+        "activate-site.js is called with --subdomain 'contoso-hr-portal'",
+        "Summary shows the site URL using the custom subdomain",
+        "Progress is tracked using TaskCreate/TaskUpdate for each phase"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "hey can you provision my power pages website? i think it might already be set up but i'm not sure",
+      "expected_output": "The skill verifies PAC CLI auth and Azure CLI login, then runs check-activation-status.js which returns activated: true. The skill informs the user that the site is already activated, shows the existing site URL, suggests next steps, and stops early without proceeding to parameter gathering or activation.",
+      "files": [],
+      "expectations": [
+        "PAC CLI auth is verified via 'pac auth who'",
+        "Azure CLI login is verified via 'az account show'",
+        "check-activation-status.js is run to check current activation status",
+        "When the script returns activated: true, the skill stops early",
+        "User is informed the site is already activated with the existing site URL",
+        "The skill does NOT proceed to Phase 2 (subdomain generation or parameter gathering)",
+        "The skill does NOT run activate-site.js",
+        "Next steps are still suggested (test-site, setup-datamodel, add-sample-data)",
+        "Progress is tracked using TaskCreate/TaskUpdate"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "turn on my power pages site so i can start building on it",
+      "expected_output": "The skill attempts to verify PAC CLI authentication via 'pac auth who' and discovers the user is not authenticated. It prompts the user to authenticate by providing their environment URL and runs 'pac auth create'. It does not proceed with activation until authentication is established.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified via 'pac help'",
+        "'pac auth who' is run and the unauthenticated status is detected",
+        "User is informed they need to authenticate with PAC CLI",
+        "User is asked for their environment URL to run 'pac auth create --environment'",
+        "The skill does NOT proceed to activation without valid PAC CLI authentication",
+        "If Azure CLI is also not logged in, the user is instructed to run 'az login'",
+        "The skill blocks on authentication and does not skip to parameter gathering or activation"
+      ]
+    }
+  ]
+}
