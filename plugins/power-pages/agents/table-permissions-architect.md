@@ -341,9 +341,9 @@ flowchart TD
     end
 
     subgraph Table Permissions
-        TP1["Product - Anonymous Read<br/>Scope: Global<br/>Read: ✓ | Create: ✗ | Write: ✗ | Delete: ✗"]
-        TP2["Order - Authenticated Access<br/>Scope: Self<br/>Read: ✓ | Create: ✓ | Write: ✗ | Delete: ✗"]
-        TP3["Order Item - Authenticated Access<br/>Scope: Parent → Order<br/>Read: ✓ | Create: ✓ | Write: ✗ | Delete: ✗"]
+        TP1["Product - Anonymous Read<br/>Scope: Global<br/>Read: ✓ | Create: ✗ | Write: ✗ | Delete: ✗ | Append: ✗ | AppendTo: ✓"]
+        TP2["Order - Authenticated Access<br/>Scope: Self<br/>Read: ✓ | Create: ✓ | Write: ✗ | Delete: ✗ | Append: ✓ | AppendTo: ✗"]
+        TP3["Order Item - Authenticated Access<br/>Scope: Parent → Order<br/>Read: ✓ | Create: ✓ | Write: ✗ | Delete: ✗ | Append: ✗ | AppendTo: ✗"]
     end
 
     subgraph Tables
@@ -369,6 +369,7 @@ Conventions for the diagram:
 - Solid arrows `-->`: role-to-permission and permission-to-table associations
 - Dashed arrows `-.->|parent|`: parent-child permission relationships
 - Use checkmarks `✓` and crosses `✗` for CRUD flags in the permission nodes
+- **Always use full flag names**: `Read`, `Create`, `Write`, `Delete`, `Append`, `AppendTo`. **NEVER abbreviate** to short forms like `R`, `C`, `W`, `D`, `Ap`, `ApTo` or use `Y`/`N` instead of `✓`/`✗`
 - Group nodes in subgraphs for visual clarity
 - **Line breaks in node labels**: Use `<br/>` for line breaks inside node labels. **NEVER use `\n`** — Mermaid does not interpret `\n` as a newline and will render it as literal text
 
@@ -437,27 +438,31 @@ Use `browser_resize` with **width: 1920** and **height: 1080** before navigating
 If Playwright fails, fall back to an ASCII representation:
 
 ```
-┌─────────────────────┐     ┌──────────────────────────┐
-│   Anonymous Users   │     │   Authenticated Users    │
-└─────────┬───────────┘     └───────────┬──────────────┘
-          │                             │
-          ▼                             ▼
-┌─────────────────────┐     ┌──────────────────────────┐
-│ Product - Anon Read │     │ Order - Auth Access      │
-│ Scope: Global       │     │ Scope: Self              │
-│ R:✓ C:✗ W:✗ D:✗    │     │ R:✓ C:✓ W:✗ D:✗         │
-└─────────┬───────────┘     └───────────┬──────────────┘
-          │                             │  ┌─ parent
-          ▼                             ▼  ▼
-┌─────────────────────┐     ┌──────────────────────────┐
-│   cra5b_product     │     │ OrderItem - Auth Access   │
-└─────────────────────┘     │ Scope: Parent             │
-                            │ R:✓ C:✓ W:✗ D:✗          │
-                            └───────────┬──────────────┘
-                                        ▼
-                            ┌──────────────────────────┐
-                            │   cra5b_orderitem        │
-                            └──────────────────────────┘
+┌──────────────────────────┐     ┌──────────────────────────┐
+│     Anonymous Users      │     │   Authenticated Users    │
+└────────────┬─────────────┘     └───────────┬──────────────┘
+             │                               │
+             ▼                               ▼
+┌──────────────────────────┐     ┌──────────────────────────┐
+│ Product - Anon Read      │     │ Order - Auth Access      │
+│ Scope: Global            │     │ Scope: Self              │
+│ Read:✓ Create:✗          │     │ Read:✓ Create:✓          │
+│ Write:✗ Delete:✗         │     │ Write:✗ Delete:✗         │
+│ Append:✗ AppendTo:✓      │     │ Append:✓ AppendTo:✗      │
+└────────────┬─────────────┘     └───────────┬──────────────┘
+             │                               │  ┌─ parent
+             ▼                               ▼  ▼
+┌──────────────────────────┐     ┌──────────────────────────┐
+│     cra5b_product        │     │ OrderItem - Auth Access   │
+└──────────────────────────┘     │ Scope: Parent             │
+                                 │ Read:✓ Create:✓           │
+                                 │ Write:✗ Delete:✗          │
+                                 │ Append:✗ AppendTo:✗       │
+                                 └───────────┬──────────────┘
+                                             ▼
+                                 ┌──────────────────────────┐
+                                 │   cra5b_orderitem        │
+                                 └──────────────────────────┘
 ```
 
 ### 5.4 Summary and Next Steps
