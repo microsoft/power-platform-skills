@@ -287,6 +287,78 @@ const formatCurrency = (amount: number): string => {
 
 ---
 
+## Page Input
+
+The generated component may receive an optional `pageInput` prop for accepting context from the hosting page (e.g., a selected record or custom data).
+
+### PageInput Interface
+
+```typescript
+export interface PageInput {
+    /** The logical name of the entity associated with the current page context. */
+    entityName?: string;
+    /** The unique identifier (GUID) of the selected record. */
+    recordId?: string;
+    /**
+     * A key-value map of additional data passed from the page.
+     * Keys are strings, values are primitives of unknown type (string, number, boolean, etc.).
+     * No functions are allowed as values.
+     */
+    data?: Record<string, unknown>;
+}
+```
+
+`PageInput` is already part of `GeneratedComponentProps` — destructure it from props: `const { dataApi, pageInput } = props;`
+
+### Rules
+
+- Only use `pageInput` when the user specifically asks for it — do not assume what inputs are needed.
+- **CRITICAL:** Do not give default values for `pageInput` fields if they are not provided.
+- `entityName` is an entity's logical name, not display name.
+- The `data` object values are primitives of unknown type — never assume the type, always cast robustly.
+
+### Usage Examples
+
+**Using `dataApi` with `pageInput.entityName` and `pageInput.recordId`:**
+
+```typescript
+const { dataApi, pageInput } = props;
+const [selectedRowData, setSelectedRowData] = useState(undefined);
+
+useEffect(() => {
+    if (pageInput && pageInput.entityName === "table2" && pageInput.recordId && dataApi) {
+        (async () => {
+            const row = await dataApi.retrieveRow("table2", {
+                id: pageInput.recordId,
+                select: ["status", "name", "_mainContact_value"],
+            });
+            setSelectedRowData(row);
+        })();
+    }
+}, [dataApi, pageInput]);
+```
+
+**Using `pageInput.data` with safe type casting:**
+
+```typescript
+// IMPORTANT: Never assume the type of data values. Robustly handle type casting.
+function toNumberOrDefault(value: unknown, fallback: number): number {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
+}
+
+const { pageInput } = props;
+// Always handle pageInput, pageInput.data, or any value potentially being null or undefined
+const [latitude, setLatitude] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
+const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
+```
+
+---
+
 ## Special Patterns
 
 ### Charts and Visualization
