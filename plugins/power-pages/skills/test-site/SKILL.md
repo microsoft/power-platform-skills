@@ -18,10 +18,13 @@ hooks:
             If a Power Pages site was being tested in this session (via /power-pages:test-site),
             verify before allowing stop: 1) A site URL was resolved (from user input, activation
             status check, or .powerpages-site config), 2) The browser navigated to the site and
-            the homepage loaded successfully, 3) Discoverable links were crawled and each page was
-            tested for load errors, 4) Network requests were captured and API endpoints (/_api/ or
-            OData) were analyzed for errors, 5) A test report summary was presented to the user
-            with pass/fail status for pages and API endpoints.
+            the homepage loaded successfully, 3) Authentication was handled — if the site had a
+            private site gate (identity provider redirect), the user was asked to log in; if the
+            site had site-level authentication (Sign in links), the user was asked to log in or
+            chose to skip, 4) Discoverable links were crawled and each page was tested for load
+            errors, 5) Network requests were captured and API endpoints (/_api/ or OData) were
+            analyzed for errors, 6) A test report summary was presented to the user with pass/fail
+            status for pages and API endpoints.
             If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
             If no site testing happened or everything is complete, return { "ok": true }.
           timeout: 30
@@ -146,34 +149,63 @@ Set the browser to a standard desktop viewport:
 
 ## Phase 3: Authentication Check
 
-**Goal:** Detect if the site requires authentication and handle login if needed.
+**Goal:** Detect if the site requires authentication and handle login if needed. Power Pages sites can have **two layers** of authentication:
+
+1. **Private site gate** — The entire site is private. Navigating to the site redirects to an identity provider (Azure AD B2C, etc.) before any site content is visible. The browser URL will typically change to a different domain (e.g., `login.microsoftonline.com`, `*.b2clogin.com`).
+2. **Site-level authentication** — The site is publicly accessible (homepage loads), but certain pages or features require a logged-in user with a specific web role. Indicated by "Sign in" / "Log in" links in the navigation, or pages that show restricted-access messages.
 
 ### Actions
 
-#### 3.1 Analyze Homepage Snapshot
+#### 3.1 Analyze Homepage Snapshot for Private Site Gate
 
-Review the browser snapshot from Phase 2.4 for signs of an authentication wall:
-- Login form, "Sign in" / "Log in" buttons
-- Redirect to an identity provider (Azure AD B2C, etc.)
-- 401 or 403 status indicators in the page content
-- Content that indicates restricted access
+Review the browser snapshot from Phase 2.4 and the current browser URL for signs of a **private site redirect**:
+- The page content shows an identity provider login form (Azure AD B2C, Azure AD, etc.)
+- The browser URL has changed to a different domain than `SITE_URL` (e.g., `login.microsoftonline.com`, `*.b2clogin.com`, or a custom identity provider domain)
+- A 401/403 response was returned before any site content loaded
+- The page is blank or shows "Access denied" / "You do not have access" with no site navigation visible
 
-#### 3.2 Handle Public Site
+#### 3.2 Handle Private Site Gate
 
-If no authentication is required (the homepage shows normal content):
-- Inform the user: "Site is publicly accessible. Proceeding with page and API testing."
-- Skip to Phase 4.
-
-#### 3.3 Handle Authenticated Site
-
-If authentication is detected, use `AskUserQuestion`:
+If a private site gate is detected, use `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| The site requires authentication. A browser window should be open — please log in there using your credentials. Once you have successfully logged in, select "I have logged in" below. | Login | I have logged in (Recommended) — I've completed the login process in the browser, Skip authenticated pages — Only test publicly accessible pages, Cancel testing — Stop the test |
+| This site is **private** — it redirected to an identity provider login page before any content could load. A browser window should be open showing the login page. Please log in there using credentials that have access to this site. Once you have successfully logged in and can see the site homepage, select "I have logged in" below. | Private Site Login | I have logged in (Recommended) — I've completed the login and can see the site, Cancel testing — Stop the test |
 
 **If "I have logged in"**:
-1. Use `browser_snapshot` to verify the user is now on an authenticated page (no login form visible, actual site content displayed).
+1. Use `browser_snapshot` to verify the user is now on the actual site (site content visible, navigation present, URL is back on the `SITE_URL` domain).
+2. If still on the identity provider login page:
+   - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
+   - Repeat until login is confirmed or user cancels.
+3. Once confirmed, re-run Phase 2.5 and 2.6 (capture console errors and network requests on the now-loaded homepage).
+4. Continue to step 3.3 to check for site-level authentication.
+
+**If "Cancel testing"**:
+- Stop the skill and inform the user they can re-run it after resolving access.
+
+#### 3.3 Analyze for Site-Level Authentication
+
+After the homepage is loaded (either directly for public sites, or after passing the private site gate), review the snapshot for signs of **site-level authentication**:
+- "Sign in" / "Log in" / "Register" links or buttons in the site navigation
+- Pages that show "You must be signed in to view this page" or similar messages
+- Content that indicates some areas are restricted to authenticated users
+
+#### 3.4 Handle Public Site (No Authentication Needed)
+
+If neither a private site gate nor site-level authentication indicators are found:
+- Inform the user: "Site is publicly accessible. Proceeding with page and API testing."
+- Skip to Phase 4.
+
+#### 3.5 Handle Site-Level Authentication
+
+If site-level authentication indicators are detected (login links in navigation, etc.), use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| The site has a **Sign in** option, which means some pages or API calls may require authentication. A browser window should be open — you can click "Sign in" and log in with a user account that has the appropriate web role. Once you have successfully logged in, select "I have logged in" below. | Site Authentication | I have logged in (Recommended) — I've signed in through the site's login flow, Skip authenticated pages — Only test publicly accessible pages and APIs, Cancel testing — Stop the test |
+
+**If "I have logged in"**:
+1. Use `browser_snapshot` to verify the user is now logged in (login link replaced with user name/profile, or authenticated content is visible).
 2. If the login form is still showing:
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
@@ -187,7 +219,9 @@ If authentication is detected, use `AskUserQuestion`:
 
 ### Output
 
-- Authentication status resolved: logged in, skipped, or not needed
+- Authentication status resolved for both layers:
+  - Private site gate: passed, not needed, or cancelled
+  - Site-level auth: logged in, skipped, or not needed
 
 ---
 
@@ -423,9 +457,10 @@ Based on the test results, suggest relevant skills:
 
 1. **Phase 1.3**: If the site is not activated, stop and redirect to `/power-pages:activate-site`
 2. **Phase 1.4**: If no URL can be auto-detected, must ask the user
-3. **Phase 3.3**: If authentication is required, must ask the user to log in — cannot bypass
-4. **Phase 4.3**: Stop crawling at 25 pages to prevent infinite loops
-5. **Phase 5.5**: Before interacting with forms (which may create/modify data), must get explicit user permission
+3. **Phase 3.2**: If the site is private (redirects to identity provider), must ask the user to log in — cannot bypass
+4. **Phase 3.5**: If site-level authentication is available, must ask the user whether to log in or skip — cannot auto-login
+5. **Phase 4.3**: Stop crawling at 25 pages to prevent infinite loops
+6. **Phase 5.5**: Before interacting with forms (which may create/modify data), must get explicit user permission
 
 ### Progress Tracking
 
