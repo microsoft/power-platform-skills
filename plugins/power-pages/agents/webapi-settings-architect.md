@@ -346,9 +346,14 @@ Example (with lookup column `cra5b_productcategoryid`):
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
-### 6.2 Summary and Next Steps
+### 6.2 Rationale, Summary, and Next Steps
 
-End the plan with:
+Start with an explanation of the reasoning behind the proposed settings:
+- **Why these tables need Web API access** — For each table, explain what site functionality requires API access (e.g., "The `cr87b_product` table needs Web API access because the product listing page fetches products via `/_api/cr87b_products` and the admin panel creates/updates products through the service layer.")
+- **Column inclusion rationale** — Explain why specific columns are included and any that were deliberately excluded (e.g., "The `cr87b_internalnotes` column exists in Dataverse but is excluded from the fields list because no frontend code references it, following the principle of least privilege.")
+- **Lookup column decisions** — For lookup columns, explain which relationships they support (e.g., "Both `cr87b_productcategoryid` and `_cr87b_productcategoryid_value` are included because the product service reads the category GUID via `$select` and writes it via `@odata.bind` during product creation.")
+
+Then include:
 1. **Summary table** of all site settings to be created:
 
    | Setting Name | Value | Type |

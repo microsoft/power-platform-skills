@@ -34,6 +34,7 @@ The script exits silently if `.powerpages-site/site-settings/` does not exist, s
 | integrate-webapi | IntegrateWebApi | Site/AI/Skills/IntegrateWebApi |
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 | test-site | TestSite | Site/AI/Skills/TestSite |
+| audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
 
 ## YAML Format
 

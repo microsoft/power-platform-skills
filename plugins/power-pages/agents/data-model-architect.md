@@ -195,9 +195,11 @@ Existing/reused standard tables (e.g., `contact`, `account`) keep their original
 
 ### 4.2 Table Proposals
 
-For each table, always include **both the logical name and display name**:
+For each table, always include **both the logical name and display name** and explain **why** it is being proposed:
 
 **`<table_logical_name>`** — *<Display Name>* (`new` | `modified` | `reused`)
+
+**Rationale:** Explain why this table is needed — what site functionality or data requirement drives it, why you chose to create it new vs. reuse an existing table, and any key design decisions (e.g., "This table stores customer orders. A new table is needed because no existing table matches the order schema inferred from the `/orders` page and `OrderForm` component. Contact scope is recommended because each order belongs to a specific user.").
 
 | Column (Logical Name) | Display Name | Type | Required | Notes |
 |------------------------|-------------|------|----------|-------|
@@ -338,9 +340,15 @@ Follow these conventions for the ASCII diagram:
 - Label cardinality (`1`, `many`) near the connection points
 - Keep tables aligned horizontally or vertically for readability
 
-### 4.6 Recommendations & Next Steps
+### 4.6 Design Rationale & Recommendations
 
-End the plan with:
+Summarize the overall reasoning behind the proposed data model:
+
+- **Why this structure** — Explain the key architectural decisions: why certain entities are separate tables vs. columns on an existing table, why specific relationship cardinalities were chosen, and how the model supports the site's workflows (e.g., "Orders and Order Items are separate tables with a 1:many relationship because the site's checkout flow allows multiple line items per order, and parent-scoped permissions will let authenticated users access their order items through the order.")
+- **Reuse decisions** — For each reused or extended table, explain why it fits (e.g., "The standard Contact table is reused because the site's user profile page maps directly to Contact fields — no custom user table is needed.")
+- **Trade-offs** — Note any alternatives considered and why they were rejected
+
+Also include:
 - Any suggestions for indexes, alternate keys, or security roles
 - Note which discovery steps were skipped (if any) due to auth errors
 - State that the main agent will use this proposal to create the tables in Dataverse

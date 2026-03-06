@@ -8,7 +8,7 @@ description: >
   Power Platform environment via the Power Platform REST API.
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: opus
+model: sonnet
 hooks:
   Stop:
     - hooks:

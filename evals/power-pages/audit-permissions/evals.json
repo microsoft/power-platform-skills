@@ -1,0 +1,97 @@
+{
+  "skill_name": "audit-permissions",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just set up table permissions for my e-commerce site but I'm not sure if I got everything right. Can you audit the permissions and let me know if there are any issues? I have tables for Products, Orders, Order Items, and Customers.",
+      "expected_output": "The skill reads existing web roles and table permissions from .powerpages-site/, analyzes the site code for /_api/ patterns, @odata.bind lookups, and file upload patterns, checks .datamodel-manifest.json for the authoritative table list, queries Dataverse for lookup columns using query-table-lookups.js, runs all audit checks, generates an HTML audit report using the template with findings sorted by severity, displays it in the browser, records skill usage, and presents a summary asking if the user wants to fix issues.",
+      "files": [],
+      "expectations": [
+        "Task tracking is set up at Step 1 with TaskCreate for all 6 tasks (Verify site deployment, Gather configuration, Discover relationships, Run audit checks, Generate audit report, Present findings)",
+        "Site deployment is verified by checking .powerpages-site folder and table permissions exist",
+        "All existing web roles are read from .powerpages-site/web-roles/",
+        "All existing table permissions are read from .powerpages-site/table-permissions/",
+        "Site source code is searched for /_api/ patterns to identify tables used in code",
+        "Site source code is searched for @odata.bind patterns to identify lookup relationships",
+        "Site source code is searched for file upload patterns (uploadFileColumn, uploadFile, etc.)",
+        ".datamodel-manifest.json is checked for the authoritative table list",
+        "pac env who is run to get the environment URL for Dataverse API calls",
+        "query-table-lookups.js script is used to query Dataverse for lookup columns on tables with create/write permissions",
+        "Missing permissions are flagged as critical for tables referenced in code but lacking permissions",
+        "Missing append/appendto flags are checked for tables with lookup relationships",
+        "Overly broad Global scope with write/delete is flagged as warning",
+        "HTML audit report is generated using the template from assets/audit-report.html with placeholder replacement",
+        "Health score is calculated based on findings (critical: -15, warning: -5, info: -1)",
+        "Report is saved to docs/permissions-audit.html in the project directory",
+        "Report is opened in browser via Playwright with 1920x1080 resize and full-page screenshot taken",
+        "Skill usage is recorded via skill tracking reference",
+        "Summary is presented with health score, critical/warning counts, and offer to fix issues",
+        "Each task is marked in_progress when starting and completed when done"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "audit my power pages permissions. i think something is wrong because users are getting 403 errors when trying to create orders. the site has products, orders, and order items tables",
+      "expected_output": "The skill should identify likely causes of 403 errors — most commonly missing append/appendto for lookup relationships or missing create permissions. The audit uses query-table-lookups.js to discover lookup columns and flags missing append/appendto as critical findings with reasoning about why they cause 403 errors and specific fix suggestions.",
+      "files": [],
+      "expectations": [
+        "Task tracking is used throughout all 6 tasks",
+        "Existing permissions are discovered from .powerpages-site/table-permissions/",
+        "Code analysis identifies which CRUD operations are performed on each table",
+        "pac env who is run to get the environment URL",
+        "query-table-lookups.js is used to discover lookup columns on tables with create/write permissions",
+        "Missing append flag is detected if orders have lookups to products without append: true",
+        "Missing appendto flag is detected if products are referenced by order lookups without appendto: true",
+        "Missing create permission is flagged if no permission grants create on the orders table",
+        "Findings specifically reference the association/disassociation error message in reasoning",
+        "HTML report includes critical findings at the top of the findings list",
+        "Suggested fixes include exact permission changes needed (enable append, appendto, or create)",
+        "Report health score reflects the severity of found issues",
+        "Skill usage is recorded via skill tracking reference",
+        "User is asked if they want the issues fixed after presenting the report"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "can you do a security review of my table permissions? I want to make sure we're following least-privilege principles. we have a portal with case management -- cases, notes, attachments, contacts, and knowledge articles",
+      "expected_output": "The skill should focus on scope analysis — checking for overly permissive Global scope where Contact or Parent would be safer, validating parent-child chains for notes/attachments inheriting from cases using query-table-relationships.js, and flagging any Global write/delete permissions. Knowledge articles with Global read-only should pass as appropriate for public content.",
+      "files": [],
+      "expectations": [
+        "Task tracking is used with TaskCreate at the start for all 6 tasks",
+        "All table permissions are inventoried",
+        "Parent chain integrity is verified for notes and attachments inheriting from cases",
+        "query-table-relationships.js is used to validate parentrelationshipname values for parent-scope permissions",
+        "Contact scope is validated as appropriate for case records (users see only own cases)",
+        "Global scope with read-only for knowledge articles is marked as pass (appropriate for public content)",
+        "Global scope with write or delete is flagged as warning with reasoning about least-privilege",
+        "Write-without-read is flagged if any permission has write: true but read: false",
+        "Orphaned permissions are detected for tables not referenced in site code",
+        "Missing web role associations are flagged as warning",
+        "HTML report is generated with correct health score",
+        "Inventory data is included in the report with all permissions in a clean table",
+        "Findings include both issues and passed checks to show thoroughness",
+        "If Dataverse API scripts fail, those checks are skipped and noted in the report rather than stopping the audit"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "check my permissions setup. this is a brand new site and I haven't configured any table permissions yet, but I already have web roles and my site code references several tables via the Web API",
+      "expected_output": "The skill should detect that no table permissions exist at all but tables are used in code, flagging each missing permission as critical. The report should have a low health score and multiple critical findings, one for each table referenced in code.",
+      "files": [],
+      "expectations": [
+        "Site deployment is verified (.powerpages-site exists)",
+        "The absence of any table permissions is detected and noted as a critical finding",
+        "Web roles are still read and noted as existing",
+        "Site code is analyzed to identify which tables need permissions via /_api/ and @odata.bind patterns",
+        "Each table referenced in code gets a critical finding for missing permission",
+        "Findings include reasoning about which code files reference each table",
+        "Suggested fixes recommend appropriate scope and CRUD flags based on code analysis",
+        "Health score is very low (near 0) due to multiple critical findings",
+        "No passed checks for permission configuration (since none exist)",
+        "HTML report is generated using the template and displayed via Playwright",
+        "Skill usage is recorded via skill tracking reference",
+        "User is offered to fix all issues, potentially suggesting /power-pages:setup-permissions for a complete permissions plan"
+      ]
+    }
+  ]
+}

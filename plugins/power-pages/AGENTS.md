@@ -61,6 +61,8 @@ Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML lis
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.
 - **Git commits** — Commit after every significant milestone (each page/component, design foundations, phase completion).
 - **Agent spawning** — Process sequentially (not parallel), wait for completion, present output for approval.
+- **Skill tracking** — Every skill must record usage in its final phase via `> Reference: ${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` (pointer pattern, not hardcoded command). When adding a new skill, also add its entry to the skill name mapping table in `references/skill-tracking-reference.md`.
+- **Dataverse API calls** — Use deterministic Node.js scripts (in the skill's `scripts/` directory) for Dataverse API queries. Scripts should import `getAuthToken` and `makeRequest` from `scripts/lib/validation-helpers.js`. Never use inline PowerShell `Invoke-RestMethod` for API calls — scripts are more reliable, testable, and cross-platform.
 
 ## Maintaining This File
 
