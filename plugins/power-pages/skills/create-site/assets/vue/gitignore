@@ -37,6 +37,8 @@ coverage
 *.sln
 *.sw?
 
+.playwright-mcp/
+
 # OS
 .DS_Store
 Thumbs.db
