@@ -187,27 +187,29 @@ This is the critical step that prevents 403 errors. Query the Dataverse OData AP
 
 ### 4.1 Get Environment URL and Token
 
-```powershell
-# Get environment URL
+```
 pac env who
 ```
 
-Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `$envUrl`.
+Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`).
 
-```powershell
-# Get auth token
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
+Verify Dataverse access and obtain an auth token:
+
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+```
+
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
 
 ### 4.2 Query Table Columns
 
 For each table that needs Web API access, fetch its columns:
 
-```powershell
-$attrs = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?`$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&`$filter=IsCustomAttribute eq true or IsPrimaryId eq true" -Headers $headers
-$attrs.value | ForEach-Object { [PSCustomObject]@{ LogicalName = $_.LogicalName; SchemaName = $_.SchemaName; DisplayName = $_.DisplayName.UserLocalizedLabel.Label; Type = $_.AttributeType; IsPK = $_.IsPrimaryId } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `SchemaName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
 
 **Important:** The query returns both `LogicalName` (all-lowercase, authoritative) and `SchemaName` (PascalCase). Always use `LogicalName` for the site settings fields list.
 
@@ -222,7 +224,7 @@ Store the results as a lookup map for each table:
 
 If any API calls fail:
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
-- **`az account get-access-token` fails**: Note that Azure CLI login is required (`az login`)
+- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
 - **OData 401/403**: Token expired or insufficient privileges — note in plan
 - **OData 404**: Table doesn't exist — exclude from plan
 

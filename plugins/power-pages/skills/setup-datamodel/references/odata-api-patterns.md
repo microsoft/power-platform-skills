@@ -269,9 +269,8 @@ Lookups are NOT created as standalone columns. They are created as part of a rel
 
 Use the same column JSON bodies as above. The column is added to the specified table.
 
-```powershell
-$body = '<column JSON>' | ConvertFrom-Json | ConvertTo-Json -Depth 20
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')/Attributes" -Headers $headers -Body $body
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')/Attributes" --body '<column JSON>'
 ```
 
 ---
@@ -370,14 +369,8 @@ After creating tables, columns, and relationships, publish them so they become a
 }
 ```
 
-```powershell
-$tables = @("cr123_project", "cr123_task")
-$entityXml = ($tables | ForEach-Object { "<entity>$_</entity>" }) -join ""
-$publishBody = @{
-  ParameterXml = "<importexportxml><entities>$entityXml</entities></importexportxml>"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/PublishXml" -Headers $headers -Body $publishBody -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
 ```
 
 ### Publish All Customizations (Fallback)

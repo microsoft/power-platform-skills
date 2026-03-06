@@ -18,24 +18,26 @@ All requests require the following headers:
 }
 ```
 
-PowerShell helper:
+To verify access and obtain a token:
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{
-  Authorization  = "Bearer $token"
-  "Content-Type" = "application/json"
-  Accept         = "application/json"
-}
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+```
+
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`.
+
+For making requests, use `dataverse-request.js` which handles authentication headers automatically:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET /api/data/v9.2/entities
 ```
 
 ### Token Refresh
 
-Azure CLI tokens expire after ~60 minutes. Refresh before each major step or every 20 records:
+Azure CLI tokens expire after ~60 minutes. The `dataverse-request.js` script handles 401 token refresh automatically. For long-running operations (many records or multiple tables), re-run `verify-dataverse-access.js` periodically (every ~20 records or 3-4 tables) to confirm access is still valid:
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers["Authorization"] = "Bearer $token"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 ---
@@ -80,25 +82,15 @@ Parse `error.message` for user-friendly reporting. Common error codes:
 
 ### Retry Pattern
 
-For transient errors (401, 429, 5xx):
+The `dataverse-request.js` script handles retries internally:
 
-```powershell
-$maxRetries = 2
-for ($i = 0; $i -le $maxRetries; $i++) {
-    try {
-        $result = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body -ContentType "application/json"
-        break
-    } catch {
-        $statusCode = $_.Exception.Response.StatusCode.value__
-        if ($statusCode -eq 401) {
-            # Refresh token and retry
-            $token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-            $headers["Authorization"] = "Bearer $token"
-        } elseif ($statusCode -in @(429, 500, 502, 503)) {
-            Start-Sleep -Seconds 5
-        } else {
-            throw
-        }
-    }
-}
+- **401** — Automatically refreshes the token and retries
+- **429 / 5xx** — Waits and retries automatically
+
+No manual retry logic is needed. Simply call the script and check the returned status code:
+
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST /api/data/v9.2/cr123_projects --body "{\"cr123_name\":\"My Project\"}"
+```
+
+The output is JSON: `{ "status": <code>, "data": {...} }`. If the request fails after retries, inspect `status` and `data.error.message` to determine the appropriate action from the error tables above.

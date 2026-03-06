@@ -22,8 +22,8 @@ hooks:
           prompt: >
             If a permissions audit was being performed in this session (via /power-pages:audit-permissions),
             verify before allowing stop: 1) The site's permissions structure was analyzed (web roles,
-            table permissions, code references), 2) An HTML audit report was generated with findings,
-            health score, and inventory, 3) The report was displayed to the user via Playwright or
+            table permissions, code references), 2) An HTML audit report was generated with findings
+            and inventory, 3) The report was displayed to the user via Playwright or
             the file path was communicated, 4) A summary with finding counts was presented. If any of
             these are incomplete, return { "ok": false, "reason": "<specific issues>" }. If no audit
             work happened or everything is complete, return { "ok": true }.
@@ -227,15 +227,6 @@ If the code contains file upload patterns (detected in Step 2.3) but the table's
 
 For each check that passes (e.g., a table has correct permissions, a scope is appropriate), create a `pass` severity finding briefly noting what was verified. This gives the user confidence that the audit was thorough.
 
-### Health Score Calculation
-
-Calculate a health score (0-100) based on findings:
-- Start at 100
-- Each `critical` finding: -15 points
-- Each `warning` finding: -5 points
-- Each `info` finding: -1 point
-- Minimum score: 0
-
 ---
 
 ## Step 5: Generate Report
@@ -256,7 +247,6 @@ Read the HTML template from `${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/asse
 | `__SUMMARY__` | 2-3 sentence summary of the audit results |
 | `__FINDINGS_DATA__` | JSON array of finding objects |
 | `__INVENTORY_DATA__` | JSON array of current permission objects |
-| `__HEALTH_SCORE__` | Number 0-100 |
 
 **FINDINGS_DATA format:**
 
@@ -324,10 +314,9 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 Present a summary to the user:
 
-1. **Health score** and overall assessment
-2. **Critical findings count** — these need immediate attention
-3. **Warning findings count** — should be addressed
-4. **Report location** — where the HTML file was saved
+1. **Critical findings count** — these need immediate attention
+2. **Warning findings count** — should be addressed
+3. **Report location** — where the HTML file was saved
 5. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
 If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/power-pages:setup-permissions` to architect a complete permissions plan.

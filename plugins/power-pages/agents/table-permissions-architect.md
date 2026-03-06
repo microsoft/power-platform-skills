@@ -20,7 +20,6 @@ tools:
   - ExitPlanMode
   - mcp__plugin_power-pages_playwright__browser_resize
   - mcp__plugin_power-pages_playwright__browser_navigate
-  - mcp__plugin_power-pages_playwright__browser_take_screenshot
   - mcp__plugin_power-pages_playwright__browser_wait_for
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search
@@ -227,27 +226,29 @@ Query the Dataverse OData API to get relationship names for parent-scope permiss
 
 ### 4.1 Get Environment URL and Token
 
-```powershell
-# Get environment URL
+```
 pac env who
 ```
 
-Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `$envUrl`.
+Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`).
 
-```powershell
-# Get auth token
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
+Verify Dataverse access and obtain auth credentials:
+
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+```
+
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
 
 ### 4.2 Query Relationships
 
 For tables that have parent-child relationships (Parent scope permissions), fetch the relationship names:
 
-```powershell
-$rels = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<parent_table>')/OneToManyRelationships?`$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute" -Headers $headers
-$rels.value | ForEach-Object { [PSCustomObject]@{ Name = $_.SchemaName; From = $_.ReferencedEntity; To = $_.ReferencingEntity; ForeignKey = $_.ReferencingAttribute } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<parent_table>')/OneToManyRelationships?\$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute"
+```
+
+The output JSON contains a `data.value` array with each relationship's `SchemaName`, `ReferencedEntity`, `ReferencingEntity`, and `ReferencingAttribute`.
 
 Use the relationship `SchemaName` as the `parentrelationshipname` value in the child table permission.
 
@@ -255,10 +256,11 @@ Use the relationship `SchemaName` as the `parentrelationshipname` value in the c
 
 For each table that has `create` or `write` permissions, query its lookup columns to determine which tables need `appendto`:
 
-```powershell
-$lookups = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?`$select=LogicalName,Targets" -Headers $headers
-$lookups.value | ForEach-Object { [PSCustomObject]@{ Lookup = $_.LogicalName; Targets = ($_.Targets -join ', ') } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?\$select=LogicalName,Targets"
+```
+
+The output JSON contains a `data.value` array with each lookup column's `LogicalName` and `Targets` array.
 
 This returns each lookup column and its target table(s). Use this to build the append/appendto map:
 - The **source table** (with the lookup) needs `append: true`
@@ -281,8 +283,8 @@ This means:
 
 If any API calls fail:
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
-- **`az account get-access-token` fails**: Note that Azure CLI login is required (`az login`)
-- **OData 401/403**: Token expired or insufficient privileges — note in plan
+- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
+- **OData 401/403**: The `dataverse-request.js` script handles 401 token refresh automatically; persistent 401/403 indicates insufficient privileges — note in plan
 - **OData 404**: Table doesn't exist — exclude from plan
 
 Do NOT stop the entire workflow for auth errors. Use the data model manifest and code analysis as fallback for relationship discovery, and note which API-based steps were skipped and why.
@@ -444,16 +446,11 @@ Use `Write` to create the HTML file at the determined output location. When writ
 #### 5.3.4 Open in Browser
 
 1. **Resize the browser** to a large viewport:
-
    Use `browser_resize` with **width: 1920** and **height: 1080** before navigating.
 
-2. Navigate Playwright to the file using a `file:///` URL:
-   - On Windows: `file:///C:/path/to/permissions-plan.html`
-   - Convert backslashes to forward slashes in the path
+2. Navigate Playwright to the HTML file using `browser_navigate` with the full file path.
 
 3. Wait for the page to render (~2 seconds).
-
-4. Take a **full-page screenshot** using `browser_take_screenshot` with `fullPage: true`.
 
 ### 5.4 Summary and Next Steps
 

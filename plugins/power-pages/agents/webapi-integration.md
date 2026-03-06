@@ -137,28 +137,29 @@ If uncertain, use the name as provided by the user or manifest. The API-verified
 
 Get the environment URL from the manifest's `environmentUrl` field, or fall back to `pac env who`:
 
-```powershell
+```
 pac env who
-# Extract the "Environment URL" value → $envUrl
 ```
 
-Get an Azure CLI access token:
+Extract the `Environment URL` value (e.g., `https://org12345.crm.dynamics.com`).
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
+Verify Dataverse access and obtain an auth token:
+
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+```
+
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
 
 #### 2.5.2 Query Entity Set Name
 
 Get the actual OData entity set name from Dataverse (do not guess from pluralization):
 
-```powershell
-$entityDef = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')?`$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute" -Headers $headers
-$entitySetName = $entityDef.EntitySetName
-$primaryIdAttribute = $entityDef.PrimaryIdAttribute
-$primaryNameAttribute = $entityDef.PrimaryNameAttribute
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')?\$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "EntitySetName": "...", "PrimaryIdAttribute": "...", "PrimaryNameAttribute": "..." } }`.
 
 Use the returned `EntitySetName` for all `/_api/` URLs. Use `PrimaryIdAttribute` as the record ID column name.
 
@@ -166,10 +167,11 @@ Use the returned `EntitySetName` for all `/_api/` URLs. Use `PrimaryIdAttribute`
 
 Fetch actual column logical names, display names, and types:
 
-```powershell
-$attrs = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?`$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&`$filter=IsCustomAttribute eq true or IsPrimaryId eq true" -Headers $headers
-$attrs.value | ForEach-Object { [PSCustomObject]@{ LogicalName = $_.LogicalName; DisplayName = $_.DisplayName.UserLocalizedLabel.Label; Type = $_.AttributeType } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
 
 This returns the **real** column logical names. Cross-reference against the manifest:
 
@@ -181,10 +183,11 @@ This returns the **real** column logical names. Cross-reference against the mani
 
 If the table has lookup columns, fetch relationship metadata to get the correct Navigation Property names (case-sensitive, needed for `$expand` and `@odata.bind`):
 
-```powershell
-$rels = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?`$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName" -Headers $headers
-$rels.value | ForEach-Object { [PSCustomObject]@{ NavigationProperty = $_.ReferencingEntityNavigationPropertyName; TargetTable = $_.ReferencedEntity; ForeignKey = $_.ReferencingAttribute } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?\$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `ReferencingEntityNavigationPropertyName`, `ReferencedEntity`, `ReferencingAttribute`, and `SchemaName`.
 
 Use `ReferencingEntityNavigationPropertyName` as the Navigation Property name in `$expand` and `@odata.bind`. This is the **case-sensitive** name that must be used exactly.
 

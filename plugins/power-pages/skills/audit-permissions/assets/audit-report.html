@@ -23,12 +23,8 @@
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
-body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;overflow-x:hidden;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 
-::-webkit-scrollbar{width:6px;}
-::-webkit-scrollbar-track{background:var(--bg);}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
-::-webkit-scrollbar-thumb:hover{background:var(--border-light);}
 
 /* Top Bar */
 .topbar{position:sticky;top:0;z-index:100;background:rgba(255,255,255,0.96);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
@@ -69,15 +65,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
 .stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;}
 .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
-
-/* Health Score */
-.health-score{display:flex;align-items:center;gap:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:var(--shadow-4);}
-.health-ring{position:relative;width:80px;height:80px;flex-shrink:0;}
-.health-ring svg{transform:rotate(-90deg);}
-.health-ring-label{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:22px;font-weight:800;font-family:var(--mono);}
-.health-details{flex:1;}
-.health-title{font-size:16px;font-weight:700;color:var(--text-bright);margin-bottom:4px;}
-.health-desc{font-size:13px;color:var(--text-dim);line-height:1.6;}
 
 /* Severity badges */
 .severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;}
@@ -170,8 +157,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         <h2>Audit Overview</h2>
         <p class="section-desc">__AUDIT_DESC__</p>
 
-        <div class="health-score" id="healthScore"></div>
-
         <div class="stats-grid">
           <div class="stat-card" style="--accent-color:var(--critical)"><div class="stat-num" style="color:var(--critical)" id="statCritical">0</div><div class="stat-label">Critical</div></div>
           <div class="stat-card"><div class="stat-num" style="color:var(--warning)" id="statWarning">0</div><div class="stat-label">Warning</div></div>
@@ -181,20 +166,63 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
         <h3>Audit Summary</h3>
         <div class="card" id="summaryBox" style="line-height:1.75;">__SUMMARY__</div>
+
       </div>
 
       <!-- FINDINGS -->
       <div class="section" id="tab-findings">
         <h2>Findings</h2>
         <p class="section-desc" id="findingsDesc"></p>
-        <div class="filter-bar" id="filterBar"></div>
-        <div id="findingsContainer"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div class="filter-bar" id="filterBar" style="margin-bottom:0;"></div>
+          <button class="filter-btn" id="expandAllBtn" onclick="toggleExpandAll()" style="white-space:nowrap;">Expand All</button>
+        </div>
+        <div id="findingsContainer" style="margin-top:16px;"></div>
       </div>
 
       <!-- INVENTORY -->
       <div class="section" id="tab-inventory">
         <h2>Permissions Inventory</h2>
         <p class="section-desc" id="invDesc"></p>
+
+        <h3>Legend</h3>
+        <div class="card" style="margin-bottom:16px;">
+          <div style="display:flex;gap:32px;flex-wrap:wrap;">
+            <div>
+              <div class="field-label" style="margin-bottom:6px;">Scope</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="scope-tag scope-Global">Global</span>
+                <span class="scope-tag scope-Contact">Contact</span>
+                <span class="scope-tag scope-Account">Account</span>
+                <span class="scope-tag scope-Parent">Parent</span>
+                <span class="scope-tag scope-Self">Self</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:6px;line-height:1.6;">
+                <strong>Global</strong> — all records &nbsp;|&nbsp;
+                <strong>Contact</strong> — user's contact &nbsp;|&nbsp;
+                <strong>Account</strong> — user's account &nbsp;|&nbsp;
+                <strong>Parent</strong> — via parent table &nbsp;|&nbsp;
+                <strong>Self</strong> — own record only
+              </div>
+            </div>
+            <div>
+              <div class="field-label" style="margin-bottom:6px;">Privileges</div>
+              <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">R</span><strong style="color:var(--text-bright);">Read</strong><span style="color:var(--text-dim);">— Retrieve and view records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">C</span><strong style="color:var(--text-bright);">Create</strong><span style="color:var(--text-dim);">— Add new records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">W</span><strong style="color:var(--text-bright);">Write</strong><span style="color:var(--text-dim);">— Update existing records (includes file uploads via PATCH)</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">D</span><strong style="color:var(--text-bright);">Delete</strong><span style="color:var(--text-dim);">— Remove records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">A</span><strong style="color:var(--text-bright);">Append</strong><span style="color:var(--text-dim);">— Attach this record to another via a lookup</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">AT</span><strong style="color:var(--text-bright);">AppendTo</strong><span style="color:var(--text-dim);">— Allow other records to reference this one via a lookup</span></div>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:8px;">
+                <span class="priv priv-on" style="font-size:8px;">R</span> enabled &nbsp;
+                <span class="priv priv-off" style="font-size:8px;">R</span> disabled
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="invContainer"></div>
       </div>
 
@@ -211,9 +239,6 @@ const FINDINGS = __FINDINGS_DATA__;
 
 const INVENTORY = __INVENTORY_DATA__;
 // Each item: { name, table, scope, roles, read, create, write, delete, append, appendto }
-
-const HEALTH_SCORE = __HEALTH_SCORE__;
-// Number 0-100
 
 // Tab navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -255,35 +280,6 @@ document.getElementById('findingsDesc').textContent =
 
 document.getElementById('invDesc').textContent =
   INVENTORY.length + ' table permission' + (INVENTORY.length !== 1 ? 's' : '') + ' currently configured.';
-
-// Health Score ring
-function renderHealthScore() {
-  const score = HEALTH_SCORE;
-  const color = score >= 80 ? 'var(--pass)' : score >= 60 ? 'var(--warning)' : 'var(--critical)';
-  const label = score >= 80 ? 'Good' : score >= 60 ? 'Needs Attention' : 'Critical Issues';
-  const desc = score >= 80
-    ? 'The permissions configuration is well-structured with no critical issues.'
-    : score >= 60
-    ? 'Some issues found that should be addressed to improve security posture.'
-    : 'Critical security issues detected that need immediate attention.';
-
-  const circumference = 2 * Math.PI * 34;
-  const offset = circumference - (score / 100) * circumference;
-
-  document.getElementById('healthScore').innerHTML = `
-    <div class="health-ring">
-      <svg width="80" height="80" viewBox="0 0 80 80">
-        <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border)" stroke-width="6"/>
-        <circle cx="40" cy="40" r="34" fill="none" stroke="${color}" stroke-width="6"
-          stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" stroke-linecap="round"/>
-      </svg>
-      <div class="health-ring-label" style="color:${color}">${score}</div>
-    </div>
-    <div class="health-details">
-      <div class="health-title" style="color:${color}">${label}</div>
-      <div class="health-desc">${desc}</div>
-    </div>`;
-}
 
 // Filter bar
 let activeFilter = 'all';
@@ -339,6 +335,17 @@ function renderFindings() {
   c.innerHTML = html;
 }
 
+// Expand/Collapse All
+let allExpanded = false;
+function toggleExpandAll() {
+  allExpanded = !allExpanded;
+  document.querySelectorAll('.finding-card').forEach(c => {
+    if (allExpanded) c.classList.add('expanded');
+    else c.classList.remove('expanded');
+  });
+  document.getElementById('expandAllBtn').textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
 // Render inventory
 function renderInventory() {
   const c = document.getElementById('invContainer');
@@ -363,10 +370,10 @@ function renderInventory() {
 }
 
 // Init
-renderHealthScore();
 renderFilterBar();
 renderFindings();
 renderInventory();
 </script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 </body>
 </html>

@@ -39,7 +39,8 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 
 ## Core Principles
 
-- **One table at a time**: Process tables sequentially because the first table creates the shared `powerPagesApi.ts` client that subsequent tables reuse, and each agent invocation may modify shared files.
+- **First table sequential, then parallel**: The first table must be processed alone because it creates the shared `powerPagesApi.ts` client. Once that exists, remaining tables can be processed in parallel since each creates independent files (types, service, hooks).
+- **Parallelize independent agents**: The `table-permissions-architect` and `webapi-settings-architect` agents are independent — invoke them in parallel rather than sequentially.
 - **Permissions require deployment**: The `.powerpages-site` folder must exist before table permissions and site settings can be configured. Integration code can be written without it, but permissions cannot.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 
@@ -215,15 +216,18 @@ For each table, use the `Task` tool to invoke the `webapi-integration` agent at 
 >
 > Create the TypeScript types, CRUD service layer, and framework-specific hooks/composables. Replace any mock data or placeholder API calls in the referencing source files with the new service."
 
-### 4.2 Process Tables Sequentially
+### 4.2 Process First Table, Then Parallelize Remaining
 
-Process tables **one at a time** (not in parallel), because:
-- The first table creates the shared `powerPagesApi.ts` client — subsequent tables reuse it
-- Each agent invocation may modify shared files
+The **first table** must be processed alone — it creates the shared `powerPagesApi.ts` client that all other tables depend on. After the first table completes and the shared client exists:
+
+- **Verify** the shared API client was created at `src/shared/powerPagesApi.ts`
+- **Then invoke all remaining tables in parallel** using multiple `Task` calls — each table creates independent files (its own types in `src/types/`, service in `src/shared/services/`, and hook/composable), so there are no conflicts
+
+If there is only one table, this step is simply sequential.
 
 ### 4.3 Verify Each Integration
 
-After each agent completes, verify the output:
+After each agent completes (or after all parallel agents complete), verify the output:
 - Check that the expected files were created (types, service, hook/composable)
 - Confirm the shared API client exists after the first table is processed
 - Note any issues reported by the agent
@@ -346,13 +350,17 @@ If the user chooses to upload an existing diagram:
    |----------|---------|
    | Does this permissions plan look correct? | Approve and create files (Recommended), Request changes, Cancel |
 
-7. Proceed directly to **section 6.5: Create Permission & Settings Files** with the parsed data.
+7. Proceed directly to **section 6.4: Create Permission & Settings Files** with the parsed data.
 
 #### Path B: Let the Architects Figure It Out
 
 If the user chooses to let the architects figure it out, proceed to **section 6.3: Invoke Table Permissions Agent**.
 
-### 6.3 Invoke Table Permissions Agent
+### 6.3 Invoke Table Permissions and Web API Settings Agents (in Parallel)
+
+These two agents are **independent** — invoke them in parallel using two `Task` calls simultaneously:
+
+#### Table Permissions Agent
 
 Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md`:
 
@@ -367,9 +375,7 @@ The agent will:
 4. Create all table permission files using `create-table-permission.js`
 5. Return a summary of created files
 
-Wait for the agent to complete before proceeding.
-
-### 6.4 Invoke Web API Settings Agent
+#### Web API Settings Agent
 
 Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-settings-architect.md`:
 
@@ -384,15 +390,15 @@ The agent will:
 4. After approval, create all site setting files using `create-site-setting.js`
 5. Return a summary of created files
 
-Wait for the agent to complete before proceeding.
+Wait for **both** agents to complete before proceeding to 6.4.
 
-### 6.5 Create Permission & Settings Files (Path A Only)
+### 6.4 Create Permission & Settings Files (Path A Only)
 
-**This section applies only to Path A (user-provided permissions diagram).** For Path B, the architect agents create the files directly in sections 6.3 and 6.4.
+**This section applies only to Path A (user-provided permissions diagram).** For Path B, the architect agents create the files directly in section 6.3.
 
 After parsing the user's diagram, create the YAML files using the deterministic scripts below. **Do NOT write YAML files manually** — always use these scripts which handle UUID generation, field ordering, formatting, and file naming automatically.
 
-#### 6.5.1 Create Web Roles (if needed)
+#### 6.4.1 Create Web Roles (if needed)
 
 If the plan requires new web roles that don't already exist, create them first (their UUIDs are needed for table permissions):
 
@@ -402,7 +408,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" -
 
 Capture the JSON output (`{ "id": "<uuid>", "filePath": "<path>" }`) — use the `id` as the `--webRoleIds` value when creating table permissions.
 
-#### 6.5.2 Create Table Permissions
+#### 6.4.2 Create Table Permissions
 
 For each table permission in the plan. Process **parent permissions before child permissions** — children need the parent's UUID from the JSON output.
 
@@ -420,7 +426,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<
 
 Each invocation outputs `{ "id": "<uuid>", "filePath": "<path>" }`. Use the `id` as `--parentPermissionId` for child permissions.
 
-#### 6.5.3 Create Site Settings
+#### 6.4.3 Create Site Settings
 
 For each site setting in the plan:
 
@@ -446,7 +452,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 **Lookup columns**: For every lookup column, include **both** the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields value. The Power Pages Web API does a literal match — the LogicalName is needed for write operations, the `_..._value` form is needed for read operations (`$select`, `$filter`). Missing either form causes 403 errors.
 
-### 6.6 Git Commit
+### 6.5 Git Commit
 
 Stage and commit the permission and settings files:
 
@@ -518,7 +524,7 @@ After deployment (or if skipped), remind the user:
 
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
-- **Process tables sequentially** — never in parallel, because the shared API client and shared files create ordering dependencies
+- **First table sequential, then parallel** — the first table creates the shared API client; after that, remaining tables can be processed in parallel since each creates independent files
 - **Commit at milestones** — after integration code and after permission files
 - **Verify each integration** — confirm expected files exist after each agent invocation
 
@@ -528,8 +534,7 @@ After deployment (or if skipped), remind the user:
 2. After Phase 3: Approve integration plan
 3. At Phase 6.1: Deploy now or skip permissions (if `.powerpages-site` missing)
 4. At Phase 6.2: Choose permissions source (upload diagram or let the architects analyze)
-5. At Phase 6.3: Approve table permissions plan (via plan mode within the table-permissions-architect agent for Path B)
-6. At Phase 6.4: Approve Web API site settings plan (via plan mode within the webapi-settings-architect agent for Path B)
+5. At Phase 6.3: Approve table permissions plan and Web API site settings plan (both agents run in parallel for Path B, each presents its own plan for approval)
 7. At Phase 7.2: Deploy now or deploy later
 
 ### Progress Tracking
@@ -541,9 +546,9 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, check data model and deployment status |
 | Explore integration points | Analyzing code for integration points | Use Explore agent to discover tables, existing services, and compile integration manifest |
 | Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
-| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent per table, verify output, git commit |
+| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent for first table (creates shared client), then remaining tables in parallel, verify output, git commit |
 | Verify integrations | Verifying integrations | Validate all expected files exist, check imports and API references, run project build |
-| Setup permissions and settings | Configuring permissions and site settings | Choose permissions source (upload diagram or architects), invoke table-permissions-architect and webapi-settings-architect agents sequentially, create YAML files with case-sensitive validated column names, git commit |
+| Setup permissions and settings | Configuring permissions and site settings | Choose permissions source (upload diagram or architects), invoke table-permissions-architect and webapi-settings-architect agents in parallel, create YAML files with case-sensitive validated column names, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
