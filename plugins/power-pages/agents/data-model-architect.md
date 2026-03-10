@@ -285,7 +285,10 @@ Build these JavaScript data structures from your analysis:
 ]
 ```
 
-- `status`: `"new"` | `"modified"` | `"reused"`
+- `status`: `"new"` | `"modified"` | `"reused"` — Classification rules:
+  - `"new"` — Table does not exist in Dataverse yet; will be created from scratch
+  - `"modified"` — Table already exists in Dataverse but you are proposing new columns, relationship changes, or other schema additions (i.e., any table with `isNew: true` columns must be `"modified"`)
+  - `"reused"` — Table already exists in Dataverse and is used as-is with NO schema changes (only existing columns are referenced)
 - `key`: `"PK"` | `"FK"` | `null`
 - `isNew` on columns: `true` for proposed new columns, `false` for existing ones
 
@@ -293,7 +296,7 @@ Build these JavaScript data structures from your analysis:
 ```json
 [
   { "icon": "🏗️", "title": "Why this structure", "desc": "Orders and Order Items are separate tables with a 1:many relationship because..." },
-  { "icon": "♻️", "title": "Reuse decisions", "desc": "The standard Contact table is reused because the site's user profile maps directly to Contact fields." },
+  { "icon": "♻️", "title": "Reuse decisions", "desc": "The standard Contact table is modified (not just reused) because 3 new profile columns are needed beyond the existing Contact fields." },
   { "icon": "⚖️", "title": "Trade-offs", "desc": "Considered using a single Products table but split into Products and Categories for..." }
 ]
 ```
