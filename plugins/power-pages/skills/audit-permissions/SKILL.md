@@ -236,17 +236,21 @@ For each check that passes (e.g., a table has correct permissions, a scope is ap
 - **If working in context of a website** (project root with `powerpages.config.json` exists): write to `<PROJECT_ROOT>/docs/permissions-audit.html`
 - **Otherwise**: write to the system temp directory
 
-### 5.2 Prepare Data & Replace Placeholders
+### 5.2 Prepare Data
 
-Read the HTML template from `${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/assets/audit-report.html`. Replace these placeholder tokens:
+**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
 
-| Placeholder | Replace With |
-|---|---|
-| `__SITE_NAME__` | The site name (from `powerpages.config.json` or folder name) |
-| `__AUDIT_DESC__` | Short description (e.g., "Security audit of table permissions for Contoso Portal") |
-| `__SUMMARY__` | 2-3 sentence summary of the audit results |
-| `__FINDINGS_DATA__` | JSON array of finding objects |
-| `__INVENTORY_DATA__` | JSON array of current permission objects |
+Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with these keys:
+
+```json
+{
+  "SITE_NAME": "The site name (from powerpages.config.json or folder name)",
+  "AUDIT_DESC": "Security audit of table permissions for Contoso Portal",
+  "SUMMARY": "2-3 sentence summary of the audit results",
+  "FINDINGS_DATA": [/* array of finding objects */],
+  "INVENTORY_DATA": [/* array of current permission objects */]
+}
+```
 
 **FINDINGS_DATA format:**
 
@@ -289,9 +293,15 @@ Read the HTML template from `${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/asse
 }
 ```
 
-### 5.3 Write the HTML File
+### 5.3 Render the HTML File
 
-Use `Write` to create the HTML file at the determined output location. Create the `docs/` directory if it doesn't exist.
+Run the render script (it creates the output directory if needed):
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/assets/audit-report.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+Delete the temporary data JSON file after the script succeeds.
 
 ### 5.4 Open in Browser
 

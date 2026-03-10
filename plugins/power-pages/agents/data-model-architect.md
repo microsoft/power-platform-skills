@@ -317,19 +317,28 @@ Include these rationale categories:
 
 #### 4.5.3 Write the HTML File
 
-1. Read the template from `${CLAUDE_PLUGIN_ROOT}/agents/assets/data-model-plan.html`.
-2. Replace placeholder tokens with your data:
+**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
 
-| Placeholder | Replace With |
-|---|---|
-| `__SITE_NAME__` | The site name (from `powerpages.config.json` or folder name) |
-| `__SUMMARY__` | A 2-3 sentence summary of the data model plan |
-| `__PREFIX__` | The publisher prefix string (e.g., `cr123`) |
-| `__TABLES_DATA__` | JSON array of table objects |
-| `__RATIONALE_DATA__` | JSON array of rationale objects |
-| `__ER_DIAGRAM__` | The Mermaid ER diagram code as a JSON string (e.g., `"erDiagram\n    CONTACT..."`) |
+1. Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/data-model-data.json`) containing:
 
-3. Write the populated HTML to the determined output location. When writing to the project's `docs/` folder, create the directory if it doesn't exist.
+```json
+{
+  "SITE_NAME": "The site name (from powerpages.config.json or folder name)",
+  "SUMMARY": "A 2-3 sentence summary of the data model plan",
+  "PREFIX": "cr123",
+  "TABLES_DATA": [/* array of table objects from section 4.5.1 */],
+  "RATIONALE_DATA": [/* array of rationale objects */],
+  "ER_DIAGRAM": "erDiagram\n    CONTACT[\"contact (Contact)\"] {\n    ..."
+}
+```
+
+2. Run the render script:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/agents/assets/data-model-plan.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+3. Delete the temporary data JSON file after the script succeeds.
 
 #### 4.5.4 Open in Browser
 

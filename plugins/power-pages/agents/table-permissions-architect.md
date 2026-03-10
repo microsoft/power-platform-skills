@@ -339,24 +339,26 @@ Prepare an array of design rationale items that explain the permissions architec
 
 **Do this BEFORE entering plan mode.** Generate an HTML plan file from the template and open it in the browser so the user can see it while reviewing the plan.
 
-The HTML template is at `${CLAUDE_PLUGIN_ROOT}/agents/assets/permissions-plan.html`. Read it, then create a copy with the placeholder tokens replaced with actual data.
+**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
 
 #### 5.3.1 Determine Output Location
 
 - **If working in the context of a website** (a project root with `powerpages.config.json` exists): write the file to `<PROJECT_ROOT>/docs/permissions-plan.html`
 - **Otherwise**: write to the system temp directory (`[System.IO.Path]::GetTempPath()`)
 
-#### 5.3.2 Prepare Data & Replace Placeholders
+#### 5.3.2 Prepare Data
 
-Read the template file and replace these placeholder tokens:
+Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/permissions-plan-data.json`) with these keys:
 
-| Placeholder | Replace With |
-|---|---|
-| `__SITE_NAME__` | The site name (from `powerpages.config.json` or folder name) |
-| `__SUMMARY__` | A 1-2 sentence summary of the plan (e.g., "This plan provisions a least-privilege permission model for 2 web roles across 4 Dataverse tables.") |
-| `__ROLES_DATA__` | JSON array of role objects |
-| `__PERMISSIONS_DATA__` | JSON array of permission objects |
-| `__RATIONALE_DATA__` | JSON array of rationale objects |
+```json
+{
+  "SITE_NAME": "The site name (from powerpages.config.json or folder name)",
+  "SUMMARY": "A 1-2 sentence summary of the plan",
+  "ROLES_DATA": [/* array of role objects */],
+  "PERMISSIONS_DATA": [/* array of permission objects */],
+  "RATIONALE_DATA": [/* array of rationale objects */]
+}
+```
 
 **ROLES_DATA format** — JSON array where each element is:
 
@@ -439,9 +441,15 @@ Read the template file and replace these placeholder tokens:
 
 Use HTML entity references for icons if needed: `&#x1F6E1;&#xFE0F;` (shield), `&#x1F517;` (link), `&#x1F464;` (user), `&#x1F512;` (lock).
 
-#### 5.3.3 Write the HTML File
+#### 5.3.3 Render the HTML File
 
-Use `Write` to create the HTML file at the determined output location. When writing to the project's `docs/` folder, create the directory if it doesn't exist.
+Run the render script (it creates the output directory if needed):
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/agents/assets/permissions-plan.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+Delete the temporary data JSON file after the script succeeds.
 
 #### 5.3.4 Open in Browser
 
