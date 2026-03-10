@@ -446,7 +446,7 @@ Use HTML entity references for icons if needed: `&#x1F6E1;&#xFE0F;` (shield), `&
 Run the render script (it creates the output directory if needed):
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/agents/assets/permissions-plan.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-permissions-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 Delete the temporary data JSON file after the script succeeds.

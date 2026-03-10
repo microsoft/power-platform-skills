@@ -298,7 +298,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
 Run the render script (it creates the output directory if needed):
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/assets/audit-report.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 Delete the temporary data JSON file after the script succeeds.

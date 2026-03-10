@@ -335,7 +335,7 @@ Include these rationale categories:
 2. Run the render script:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-plan.js" --template "${CLAUDE_PLUGIN_ROOT}/agents/assets/data-model-plan.html" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 3. Delete the temporary data JSON file after the script succeeds.
