@@ -10,7 +10,7 @@ description: >-
   and suggests fixes for any issues found.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_wait_for
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_wait_for
 model: opus
 hooks:
   Stop:
@@ -308,7 +308,6 @@ Delete the temporary data JSON file after the script succeeds.
 1. Use `browser_resize` with **width: 1920** and **height: 1080**
 2. Navigate Playwright to the file using `file:///` URL (convert backslashes to forward slashes)
 3. Wait ~2 seconds for rendering
-4. Take a **full-page screenshot** with `fullPage: true`
 
 ---
 
