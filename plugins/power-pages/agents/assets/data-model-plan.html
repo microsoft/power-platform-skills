@@ -47,6 +47,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 
 /* Content */
 .content{flex:1;padding:32px 40px;max-width:960px;}
+.content.full-width{max-width:none;}
 .section{display:none;}
 .section.active{display:block;animation:fadeIn 0.3s ease;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
@@ -128,8 +129,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .rel-arrow{color:var(--accent);font-weight:700;font-family:var(--mono);}
 
 /* ER Diagram */
-.er-container{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;min-height:400px;display:flex;justify-content:center;align-items:flex-start;overflow:auto;}
-.er-container svg{max-width:100%;height:auto !important;}
+.er-container{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0;min-height:calc(100vh - 250px);position:relative;overflow:hidden;cursor:grab;}
+.er-container.panning{cursor:grabbing;}
+.er-container svg{width:100% !important;max-width:100%;height:auto !important;}
+.er-zoom-controls{position:absolute;top:12px;right:12px;display:flex;flex-direction:column;gap:4px;z-index:10;}
+.er-zoom-btn{width:32px;height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:var(--mono);transition:all 0.15s;box-shadow:var(--shadow-4);}
+.er-zoom-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
+.er-zoom-level{text-align:center;font-size:10px;color:var(--text-dim);font-family:var(--mono);font-weight:600;padding:2px 0;}
 .er-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
 .er-legend{display:flex;gap:14px;flex-wrap:wrap;}
 .er-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);font-weight:500;}
@@ -220,7 +226,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
           </div>
           <button id="erCompactBtn" class="er-toggle" onclick="toggleErCompact()">Compact View</button>
         </div>
-        <div class="er-container" id="erDiagram"></div>
+        <div class="er-container" id="erDiagram">
+          <div class="er-zoom-controls">
+            <button class="er-zoom-btn" onclick="erZoom(0.2)" title="Zoom in">+</button>
+            <div class="er-zoom-level" id="erZoomLevel">100%</div>
+            <button class="er-zoom-btn" onclick="erZoom(-0.2)" title="Zoom out">&minus;</button>
+            <button class="er-zoom-btn" onclick="erResetView()" title="Reset view" style="font-size:12px;">&#8634;</button>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -248,6 +261,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    document.querySelector('.content').classList.toggle('full-width', btn.dataset.tab === 'diagram');
   });
 });
 
@@ -455,8 +469,92 @@ function colorErDiagram(container) {
 // Render ER diagram (compact = PK-only, full = all columns)
 let erCompact = false;
 let erRenderCounter = 0;
+let erScale = 1, erPanX = 0, erPanY = 0;
+let erIsPanning = false, erStartX = 0, erStartY = 0;
+
+function erApplyTransform() {
+  const container = document.getElementById('erDiagram');
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  svg.style.transform = 'translate(' + erPanX + 'px,' + erPanY + 'px) scale(' + erScale + ')';
+  document.getElementById('erZoomLevel').textContent = Math.round(erScale * 100) + '%';
+}
+
+function erZoom(delta) {
+  erScale = Math.min(3, Math.max(0.2, erScale + delta));
+  erApplyTransform();
+}
+
+function erFitToView() {
+  const container = document.getElementById('erDiagram');
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  // Temporarily remove transform so we can measure natural size
+  svg.style.transform = 'translate(0,0) scale(1)';
+  requestAnimationFrame(() => {
+    const cW = container.clientWidth;
+    const cH = container.clientHeight;
+    const box = svg.getBoundingClientRect();
+    const natW = box.width;
+    const natH = box.height;
+    if (natW === 0 || natH === 0) { erScale = 1; erPanX = 0; erPanY = 0; erApplyTransform(); return; }
+    const pad = 40;
+    erScale = Math.min((cW - pad) / natW, (cH - pad) / natH, 1);
+    erScale = Math.round(erScale * 100) / 100;
+    erPanX = (cW - natW * erScale) / 2;
+    erPanY = (cH - natH * erScale) / 2;
+    erApplyTransform();
+  });
+}
+
+function erResetView() {
+  erFitToView();
+}
+
+// Mouse wheel zoom (Ctrl/Cmd + scroll only)
+document.getElementById('erDiagram').addEventListener('wheel', function(e) {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  const oldScale = erScale;
+  erScale = Math.min(3, Math.max(0.2, erScale + delta));
+
+  // Zoom toward cursor position
+  const rect = this.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const ratio = erScale / oldScale;
+  erPanX = mx - ratio * (mx - erPanX);
+  erPanY = my - ratio * (my - erPanY);
+
+  erApplyTransform();
+}, { passive: false });
+
+// Pan with mouse drag
+document.getElementById('erDiagram').addEventListener('mousedown', function(e) {
+  if (e.target.closest('.er-zoom-controls')) return;
+  erIsPanning = true;
+  erStartX = e.clientX - erPanX;
+  erStartY = e.clientY - erPanY;
+  this.classList.add('panning');
+});
+document.addEventListener('mousemove', function(e) {
+  if (!erIsPanning) return;
+  erPanX = e.clientX - erStartX;
+  erPanY = e.clientY - erStartY;
+  erApplyTransform();
+});
+document.addEventListener('mouseup', function() {
+  if (erIsPanning) {
+    erIsPanning = false;
+    document.getElementById('erDiagram').classList.remove('panning');
+  }
+});
+
 function renderErDiagram() {
   const container = document.getElementById('erDiagram');
+  // Preserve zoom controls
+  const controls = container.querySelector('.er-zoom-controls');
   let code;
   try {
     code = buildErDiagram(erCompact);
@@ -465,20 +563,31 @@ function renderErDiagram() {
   }
 
   const renderId = 'erSvg' + (++erRenderCounter);
-  mermaid.render(renderId, code).then(({ svg }) => {
-    container.innerHTML = svg;
+  function injectSvg(svgStr) {
+    // Remove existing SVG but keep controls
+    const oldSvg = container.querySelector('svg');
+    if (oldSvg) oldSvg.remove();
+    container.insertAdjacentHTML('beforeend', svgStr);
     colorErDiagram(container);
+    erFitToView();
+  }
+
+  mermaid.render(renderId, code).then(({ svg }) => {
+    injectSvg(svg);
   }).catch(() => {
     // Fallback: try the agent-provided ER_DIAGRAM string
     if (code !== ER_DIAGRAM) {
       mermaid.render(renderId + 'fb', ER_DIAGRAM).then(({ svg }) => {
-        container.innerHTML = svg;
-        colorErDiagram(container);
+        injectSvg(svg);
       }).catch(() => {
-        container.innerHTML = '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>';
+        const oldSvg = container.querySelector('svg');
+        if (oldSvg) oldSvg.remove();
+        container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
       });
     } else {
-      container.innerHTML = '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>';
+      const oldSvg = container.querySelector('svg');
+      if (oldSvg) oldSvg.remove();
+      container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
     }
   });
 }
@@ -492,7 +601,7 @@ function toggleErCompact() {
 }
 
 // Init
-mermaid.initialize({ startOnLoad: false, theme: 'default', er: { fontSize: 16, useMaxWidth: false } });
+mermaid.initialize({ startOnLoad: false, theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
 renderRationale();
 renderTables();
 renderErDiagram();

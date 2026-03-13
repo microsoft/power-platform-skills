@@ -522,7 +522,8 @@ After creating all files, return a summary to the calling context:
 
 ## Critical Constraints
 
-- **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`. The only file you may write directly is the `permissions-plan.html` file (in `docs/` or the system temp directory).
+- **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`.
+- **No manual HTML generation**: Do NOT use `Write` or `Edit` to create the `permissions-plan.html` file directly. ALWAYS use `render-permissions-plan.js` with a JSON data file as described in Step 5.3. The only files you may write directly are the temporary JSON data file for the render script.
 - **LOOKUP COLUMNS REQUIRE APPEND/APPENDTO**: When a table has `create` or `write` permissions AND has lookup columns to other tables, the source table MUST have `append: true` and each target table MUST have `appendto: true`. Missing these causes "You don't have permission to associate or disassociate" errors. Always query Dataverse for lookup columns (Step 4.3) to detect these requirements.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
