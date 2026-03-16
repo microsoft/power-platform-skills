@@ -758,6 +758,22 @@ Use this approach when:
 
 When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup column's logical name (e.g., `cr4fc_categoryid`). The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns being selected in the `$expand`.
 
+### Table Permissions for Related Entities
+
+When using `$expand` to fetch related entities, the related table **must have its own table permission** with at least `read: true` for the same web role. Power Pages enforces table permissions on every entity accessed in the query — including expanded navigation properties. Without a read permission on the related table, the `$expand` silently returns empty results or the entire query fails with a permission error.
+
+**Rules:**
+- **Single-valued expand (lookup):** The target table of the lookup needs `read: true` table permission for the requesting web role
+- **Collection-valued expand (one-to-many):** The child table needs `read: true` table permission for the requesting web role. Use **Parent scope** (`756150003`) with the one-to-many relationship name to restrict access to only the related child records of the parent
+- **Nested expand:** Every table in the expansion chain needs `read: true` table permissions
+
+**Example:** If `cr4fc_order` expands `cr4fc_Category` (lookup) and `cr4fc_order_lines` (one-to-many):
+- `cr4fc_order` — needs its own table permission (e.g., Contact scope, CRUD as needed)
+- `cr4fc_category` — needs `read: true` table permission (e.g., Global scope for reference data)
+- `cr4fc_orderline` — needs `read: true` table permission with **Parent scope** referencing the order permission via the `cr4fc_order_orderline` relationship
+
+**Important:** This is in addition to the site settings requirements above. Both `Webapi/<table>/enabled` + `Webapi/<table>/fields` AND table permissions must be configured for each expanded related table.
+
 ---
 
 ## Framework Hooks (Step 6)

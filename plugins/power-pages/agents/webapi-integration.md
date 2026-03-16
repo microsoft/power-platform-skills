@@ -470,6 +470,8 @@ Include this in the core API client file only if the site's code requires user-s
 
 Web API calls will fail unless site settings (`Webapi/<table>/enabled`, `Webapi/<table>/fields`) and table permissions are configured. **This is handled by the `table-permissions-architect` and `webapi-settings-architect` agents** — not this agent. After creating the integration code, note that the user should run those agents if permissions and site settings are not yet set up.
 
+**Important for `$expand`:** When the service uses `$expand` to fetch related entities, each expanded related table also needs its own site settings AND table permissions with at least `read: true`. Without permissions on the related table, expanded properties return empty results or the query fails. Make sure to mention all expanded related tables when reminding the user about permissions setup.
+
 ---
 
 ## Service Factory Pattern (Optional)
@@ -561,7 +563,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 19. **File upload body is binary** — Send `ArrayBuffer` via `file.arrayBuffer()`, not JSON. Set `Content-Type` to the file's MIME type. Include `If-Match: *` and `x-ms-file-name` headers.
 20. **File download uses blob response** — Set `Accept: */*` (not `application/json`). Parse response as blob, not JSON. Return `null` on 404 instead of throwing.
 21. **Lookup GUID vs Navigation Property** — On GET, use `_{logicalname}_value` in `$select` for the raw GUID, and the Navigation Property in `$expand` for related data. On POST/PATCH, use `NavigationProperty@odata.bind` — never write directly to the `_value` property.
-22. **Remind about permissions** — After creating integration code, note that the `table-permissions-architect` and `webapi-settings-architect` agents must be run to configure table permissions and site settings if not already done.
+22. **Remind about permissions** — After creating integration code, note that the `table-permissions-architect` and `webapi-settings-architect` agents must be run to configure table permissions and site settings if not already done. If the service uses `$expand`, explicitly list each expanded related table that also needs permissions and site settings configured.
 23. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.
 24. **Always update existing components** — Creating service files is not enough. After generating the API client, types, service, and hooks, you MUST search for and update all existing components that use mock data, hardcoded arrays, or placeholder fetch calls for the target table. Replace their data sources with the new service/hook. This is the most critical step — without it, the integration is incomplete.
 25. **Supported OData query options** — Power Pages Web API supports exactly these query params: `$select`, `$expand`, `$filter`, `$apply`, `$count`, `$top`, `$orderby`, `$skiptoken`, and `fetchXml`. Any other query params (e.g., `$skip`, `$search`) will be rejected if query param validation is enabled. Use `$apply` for aggregation queries (groupby, aggregate) when the UI needs totals, averages, or grouped counts.

@@ -64,11 +64,11 @@ Use `Glob` to find:
 
 **If `.powerpages-site` folder does NOT exist:**
 
-Enter plan mode and state:
+Stop and tell the user:
 
 > "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. You need to deploy your site first using `/power-pages:deploy-site` before Web API site settings can be configured."
 
-Exit plan mode and stop. Do NOT proceed with the remaining steps.
+Do NOT proceed with the remaining steps.
 
 **If `.powerpages-site` exists:** Proceed to Step 2.
 

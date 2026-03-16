@@ -155,7 +155,22 @@ If found in the current working directory or a subdirectory, use that directory 
 
 If not found, ask the user to provide the path to the project root.
 
-### 4.2 Build the Site
+### 4.2 Offer Permissions Audit (Redeployments Only)
+
+If `.powerpages-site` already exists (i.e., this is not the first deployment), table permissions and site settings may have drifted from the code since the last deployment. Offer to audit before deploying.
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| This site has been deployed before. Would you like to run a permissions audit to verify table permissions match your current code before deploying? | Audit | Yes, audit permissions (Recommended), Skip — permissions are up to date |
+
+**If "Yes"**: Invoke `/power-pages:audit-permissions` to run the audit. After the audit completes, resume with Step 4.3.
+**If "Skip"**: Proceed to Step 4.3.
+
+If `.powerpages-site` does **not** exist (first deployment), skip this step — there are no existing permissions to audit.
+
+### 4.3 Build the Site
 
 Before uploading, ensure the site is built:
 
@@ -166,7 +181,7 @@ npm run build
 
 If the build fails, stop and help the user fix the build errors before retrying.
 
-### 4.3 Upload to Power Pages
+### 4.4 Upload to Power Pages
 
 Run the upload command:
 
@@ -236,7 +251,7 @@ Evaluate the result:
 
 - **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
 - **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
-- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
+- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.6.1. Do not block the deployment flow due to a failed activation check.
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
@@ -353,6 +368,7 @@ If the retry succeeds, proceed to Phase 5. If it fails with a different error, p
 If the user skips activation (or after activation completes), suggest:
 - `/power-pages:activate-site` — Provision the site with a subdomain and make it live (if not already activated)
 - `/power-pages:test-site` — Test the deployed site in the browser (verify pages load, check API calls)
+- `/power-pages:audit-permissions` — Audit table permissions against current code (recommended after redeployments)
 - `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
 - `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
 
@@ -370,9 +386,10 @@ If the user skips activation (or after activation completes), suggest:
 
 1. After Phase 2: If not authenticated, get environment URL from user
 2. At Phase 3: Confirm or switch the target environment
-3. At Phase 4: If multiple `powerpages.config.json` found, ask which project to deploy
-4. At Phase 5: Activate site now or later
-5. At Phase 6: Get permission before modifying blocked attachments setting
+3. At Phase 4.1: If multiple `powerpages.config.json` found, ask which project to deploy
+4. At Phase 4.2: Audit permissions now or skip (redeployments only)
+5. At Phase 5.5: Activate site now or later
+6. At Phase 6: Get permission before modifying blocked attachments setting
 
 ### Progress Tracking
 

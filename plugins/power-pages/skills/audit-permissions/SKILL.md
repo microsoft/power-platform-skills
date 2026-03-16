@@ -54,9 +54,11 @@ At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each t
 | Verify site deployment | Verifying site deployment | Check .powerpages-site folder and table permissions exist |
 | Gather configuration | Gathering configuration | Read web roles, table permissions, and site code |
 | Discover relationships | Discovering relationships | Query Dataverse for lookup columns and relationships |
-| Run audit checks | Running audit checks | Analyze permissions against code and best practices |
+| Run audit checks | Running audit checks | Create per-table tasks and run checklist (A–K) for each table, then cross-validate |
 | Generate audit report | Generating audit report | Create HTML report and display in browser |
 | Present findings | Presenting findings | Summarize results, record usage, and offer to fix issues |
+
+**Note:** The "Run audit checks" phase creates **additional per-table tasks** dynamically in Step 4.2. These per-table tasks track the systematic A–K checklist for each table independently.
 
 ---
 
@@ -95,11 +97,12 @@ Search the source code to understand which tables the site actually uses:
 Grep: "/_api/" in src/**/*.ts src/**/*.tsx src/**/*.js src/**/*.jsx
 Grep: "@odata\.bind" in src/**/*.ts src/**/*.tsx
 Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image" in src/**/*.ts
+Grep: "\$expand|buildExpandClause|ExpandOption" in src/**/*.ts
 ```
 
 Also check for `.datamodel-manifest.json` in the project root for the authoritative table list.
 
-Build a map of: which tables are referenced in code, which CRUD operations are performed on each, and which lookup relationships are used.
+Build a map of: which tables are referenced in code, which CRUD operations are performed on each, which lookup relationships are used, and which related tables are fetched via `$expand` (these need read permissions too).
 
 ---
 
@@ -145,87 +148,234 @@ If any script exits with code 1, skip the API-dependent checks and note which ch
 
 ## Step 4: Run Audit Checks
 
-Run every applicable check below. Each check produces a finding with severity, title, reasoning, and a suggested fix. Findings can be `critical`, `warning`, `info`, or `pass`.
+Use per-table task tracking to systematically run every audit check. Each check produces a finding with severity, title, reasoning, and a suggested fix. Findings can be `critical`, `warning`, `info`, or `pass`.
 
-### Check Categories
+### 4.1 Build Audit Inventory
 
-#### 4.1 Missing Permissions (Critical)
+First, build a combined list of all tables to audit from two sources:
 
-For each table referenced in site code (from Step 2.3), verify that a table permission exists. If a table is used in code but has no permission:
-- **Severity:** `critical`
-- **Title:** `Missing permission for <table>`
-- **Reasoning:** Explain which code file references this table and what operations it performs
-- **Fix:** Suggest creating a permission with the appropriate scope and CRUD flags
+1. **Tables referenced in code** (from Step 2.3) — these may or may not have permissions
+2. **Tables with existing permissions** (from Step 2.2) — these may or may not be referenced in code
 
-#### 4.2 Overly Broad Scope (Warning)
+The union of these two sets is the complete audit scope. Each table will be audited from both directions: "does the code need a permission that doesn't exist?" and "does the permission match what the code actually does?"
 
-For each permission with Global scope (`756150000`) that has `write` or `delete` enabled:
-- **Severity:** `warning`
-- **Title:** `Global scope with write/delete on <table>`
-- **Reasoning:** Explain why Global write/delete is risky — any user with this role can modify/delete any record
-- **Fix:** Suggest narrowing to Contact or Account scope, or removing write/delete if not needed
+### 4.2 Create Per-Table Audit Tasks
 
-For Global scope with only `read` enabled, this is acceptable for public reference data — mark as `pass`.
+For each table in the audit inventory, create a task:
 
-#### 4.3 Missing Append/AppendTo (Critical)
+```
+TaskCreate:
+  subject: "Audit <table_logical_name>"
+  activeForm: "Auditing <table_display_name> permissions"
+  description: "Run all audit checks for <table_logical_name>"
+```
 
-For each permission with `create` or `write` enabled, check if the table has lookup columns (from Step 3.2). If lookups exist:
-- The **source table** (with the lookup) needs `append: true`
-- The **target table** needs `appendto: true`
+Also create a summary task:
 
-If these are missing:
-- **Severity:** `critical`
-- **Title:** `Missing append on <source_table>` or `Missing appendto on <target_table>`
-- **Reasoning:** Explain which lookup column requires this and what error the user will see ("You don't have permission to associate or disassociate")
-- **Fix:** Suggest enabling the missing flag
+```
+TaskCreate:
+  subject: "Compile audit findings"
+  activeForm: "Compiling audit findings"
+  description: "Combine all per-table findings into the final report"
+```
 
-#### 4.4 Orphaned Permissions (Info)
+Use `TaskList` at any point to review progress and see which tables still need auditing.
 
-For each permission, check if the table is actually referenced in the site code. If not:
-- **Severity:** `info`
-- **Title:** `Unused permission for <table>`
-- **Reasoning:** The table is not referenced in any source code — the permission may be unnecessary
-- **Fix:** Suggest reviewing whether this permission is still needed
+### 4.3 Per-Table Audit Checklist
 
-#### 4.5 Missing Web Role Association (Warning)
+For each table, mark its task `in_progress` and run through the following checks **in order**. For every finding, note the **specific evidence** (file path, permission name, code pattern) that supports it. Skip checks that don't apply to this table.
 
-For each permission where `adx_entitypermission_webrole` is empty or missing:
-- **Severity:** `warning`
-- **Title:** `Permission <name> has no web role association`
-- **Reasoning:** A permission without a web role association has no effect — no users will receive this access
-- **Fix:** Suggest associating with the appropriate web role
+**A. Permission Existence**
 
-#### 4.6 Parent Chain Integrity (Critical)
+Does this table have a table permission?
+- If the table is referenced in code but has **no permission** → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing permission for <table>`
+  - **Reasoning:** Which code files reference this table and what operations they perform
+  - **Fix:** Create a permission with the appropriate scope and CRUD flags
+- If a permission exists but the table is **not referenced in code** → finding:
+  - **Severity:** `info`
+  - **Title:** `Unused permission for <table>`
+  - **Reasoning:** The table is not referenced in any source code — the permission may be unnecessary
+  - **Fix:** Review whether this permission is still needed
+- If both exist → `pass`, proceed to remaining checks
 
-For each permission with Parent scope (`756150003`):
+**B. Web Role Association**
+
+Does the permission have web role(s) assigned?
+- Check `adx_entitypermission_webrole` — if empty or missing → finding:
+  - **Severity:** `warning`
+  - **Title:** `Permission <name> has no web role association`
+  - **Reasoning:** A permission without a web role has no effect — no users will receive this access
+  - **Fix:** Associate with the appropriate web role
+- If roles are assigned → `pass`
+
+**C. Scope Appropriateness**
+
+Is the scope the least-privileged option that fits?
+- Search the service code for scope-relevant patterns:
+  ```text
+  Grep: "getCurrentContactId|_contactid_value|contactid" in src/**/*<tableName>*.ts
+  Grep: "_accountid_value|parentcustomerid" in src/**/*<tableName>*.ts
+  ```
+- If Global scope (`756150000`) with `write` or `delete` enabled → finding:
+  - **Severity:** `warning`
+  - **Title:** `Global scope with write/delete on <table>`
+  - **Reasoning:** Any user with this role can modify/delete any record in this table
+  - **Fix:** Narrow to Contact or Account scope, or remove write/delete if not needed
+- If Global scope with only `read` → `pass` (acceptable for public reference data)
+- If code uses contact-scoped filters but permission uses Global → finding:
+  - **Severity:** `warning`
+  - **Title:** `Scope could be narrower for <table>`
+  - **Reasoning:** Code filters by current contact but permission grants Global access
+  - **Fix:** Narrow to Contact scope
+- Otherwise → `pass`
+
+**D. Read Permission**
+
+Is `read` correctly set?
+- Search for GET/list/get patterns for this table:
+  ```text
+  Grep: "/_api/<entity_set>" in src/**/*.ts
+  Grep: "list<TableName>|get<TableName>" in src/**/*.ts
+  ```
+- If code reads this table but `read: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing read permission for <table>`
+  - **Reasoning:** Code reads from this table but permission does not grant read access
+  - **Fix:** Enable `read: true`
+- If `read: true` and code reads → `pass`
+
+**E. Create Permission**
+
+Is `create` correctly set?
+- Search for POST/create patterns:
+  ```text
+  Grep: "method:\s*['\"]POST['\"]" in src/**/*<tableName>*.ts
+  Grep: "create<TableName>" in src/**/*.ts
+  ```
+- If code creates records but `create: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing create permission for <table>`
+  - **Reasoning:** Code creates records in this table but permission does not grant create access
+  - **Fix:** Enable `create: true`
+- If `create: true` but no create patterns in code → finding:
+  - **Severity:** `info`
+  - **Title:** `Create enabled but not used for <table>`
+  - **Reasoning:** No create operations found in code — permission may be overly permissive
+  - **Fix:** Consider disabling `create` if not needed
+- If matched → `pass`
+
+**F. Write Permission**
+
+Is `write` correctly set?
+- Search for PATCH/update/upload patterns:
+  ```text
+  Grep: "method:\s*['\"]PATCH['\"]" in src/**/*<tableName>*.ts
+  Grep: "update<TableName>" in src/**/*.ts
+  Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image|upload\w+File" in src/**/*.ts
+  ```
+- If code updates records but `write: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing write permission for <table>`
+  - **Reasoning:** Code updates records (or uploads files) in this table but permission does not grant write access
+  - **Fix:** Enable `write: true`
+- If file upload patterns found but `write: false` → finding:
+  - **Severity:** `warning`
+  - **Title:** `File upload detected but write is disabled on <table>`
+  - **Reasoning:** File uploads use PATCH which requires write permission
+  - **Fix:** Enable `write: true`
+- If `write: true` but `read: false` → finding:
+  - **Severity:** `warning`
+  - **Title:** `Write enabled without read on <table>`
+  - **Reasoning:** Users can modify records they cannot see, which is unusual and likely unintended
+  - **Fix:** Enable `read: true`
+- If `write: true` but no write patterns in code → finding:
+  - **Severity:** `info`
+  - **Title:** `Write enabled but not used for <table>`
+  - **Reasoning:** No update operations found in code — permission may be overly permissive
+  - **Fix:** Consider disabling `write` if not needed
+- If matched → `pass`
+
+**G. Delete Permission**
+
+Is `delete` correctly set?
+- Search for DELETE patterns:
+  ```text
+  Grep: "method:\s*['\"]DELETE['\"]" in src/**/*<tableName>*.ts
+  Grep: "delete<TableName>" in src/**/*.ts
+  ```
+- If code deletes records but `delete: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing delete permission for <table>`
+  - **Reasoning:** Code deletes records in this table but permission does not grant delete access
+  - **Fix:** Enable `delete: true`
+- If `delete: true` but no delete patterns in code → finding:
+  - **Severity:** `info`
+  - **Title:** `Delete enabled but not used for <table>`
+  - **Reasoning:** No delete operations found in code — permission may be overly permissive
+  - **Fix:** Consider disabling `delete` if not needed
+- If matched → `pass`
+
+**H. Append/AppendTo**
+
+Are `append` and `appendto` correctly set?
+- If this table has `create` or `write` enabled, check for lookup columns (from Step 3.2):
+  ```text
+  Grep: "@odata\.bind" in src/**/*<tableName>*.ts
+  ```
+- If lookups exist and `append: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing append on <table>`
+  - **Reasoning:** This table sets lookup column `<column>` during create/write, which requires append permission. Users will see "You don't have permission to associate or disassociate"
+  - **Fix:** Enable `append: true`
+- If this table is the TARGET of a lookup from another table that has create/write, and `appendto: false` → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing appendto on <table>`
+  - **Reasoning:** Table `<source_table>` has a lookup to this table and sets it during create/write. The target table needs appendto permission.
+  - **Fix:** Enable `appendto: true`
+- If correctly set → `pass`
+
+**I. Parent Chain Integrity**
+
+If the permission has Parent scope (`756150003`):
 - Verify `parententitypermission` references a valid permission ID that exists
 - Verify `parentrelationshipname` is a valid Dataverse relationship (if API available, using Step 3.3 results)
+- If broken → finding:
+  - **Severity:** `critical`
+  - **Title:** `Broken parent chain for <permission>`
+  - **Reasoning:** The parent permission reference is invalid — this permission will not grant any access
+  - **Fix:** Correct the parent permission ID and/or relationship name
+- If valid → `pass`
 
-If broken:
-- **Severity:** `critical`
-- **Title:** `Broken parent chain for <permission>`
-- **Reasoning:** The parent permission reference is invalid — this permission will not grant any access
-- **Fix:** Suggest correcting the parent reference
+**J. $expand Related Table Coverage**
 
-#### 4.7 Write Without Read (Warning)
+Is this table fetched via `$expand` on another table's query?
+- Check the `$expand` analysis from Step 2.3:
+  ```text
+  Grep: "\$expand|buildExpandClause|ExpandOption" in src/**/*.ts
+  ```
+- If this table is expanded from another table but has no table permission with `read: true` for the same web role → finding:
+  - **Severity:** `critical`
+  - **Title:** `Missing read permission for expanded table <table>`
+  - **Reasoning:** This table is fetched via `$expand` on `<parent_table>` in `<service_file>`, but has no read permission. Power Pages enforces table permissions on every entity in the query.
+  - **Fix:** Create a table permission with `read: true` for the same web role. For collection-valued expansions (one-to-many), use Parent scope with the relationship name. For single-valued expansions (lookups to reference data), use Global scope with read-only access.
+- If properly covered → `pass`
 
-For each permission with `write: true` but `read: false`:
-- **Severity:** `warning`
-- **Title:** `Write enabled without read on <table>`
-- **Reasoning:** Users can modify records they cannot see, which is unusual and likely unintended
-- **Fix:** Suggest enabling read
+**K. Record Findings & Complete**
 
-#### 4.8 File Upload Without Write (Warning)
+After all checks, mark the table's task as `completed` via `TaskUpdate`.
 
-If the code contains file upload patterns (detected in Step 2.3) but the table's permission has `write: false`:
-- **Severity:** `warning`
-- **Title:** `File upload detected but write is disabled on <table>`
-- **Reasoning:** File uploads use PATCH which requires write permission
-- **Fix:** Suggest enabling write on the permission
+### 4.4 Cross-Table Validation
 
-#### 4.9 Passed Checks
+After all per-table audits are complete, run these cross-table checks:
 
-For each check that passes (e.g., a table has correct permissions, a scope is appropriate), create a `pass` severity finding briefly noting what was verified. This gives the user confidence that the audit was thorough.
+1. **Append/AppendTo consistency:** For every table with `append: true`, verify each lookup target has `appendto: true` and vice versa
+2. **$expand coverage:** For every `$expand` usage, verify the expanded table has `read: true`
+3. **Parent chain completeness:** For every Parent scope permission, verify the parent permission exists and is valid
+4. **Web role consistency:** If two related tables (e.g., parent and child) are accessed by the same feature, verify they share the same web role assignment
+
+Use `TaskList` to review all completed audits, then mark the "Compile audit findings" task as `in_progress` and proceed to Step 5.
 
 ---
 
