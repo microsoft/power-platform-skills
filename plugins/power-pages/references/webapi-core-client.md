@@ -12,18 +12,16 @@ Adapt imports and style to match the project's existing TypeScript conventions (
 
 // ── Anti-Forgery Token ────────────────────────────────────────────────────────
 // Power Pages Web API requires a __RequestVerificationToken header on every
-// mutating request. The token is fetched from /_layout/tokenhtml and cached.
+// mutating request. The token is fetched once from /_layout/tokenhtml and
+// reused for all subsequent requests. It is only re-fetched when a 403 response
+// with the anti-forgery error code (90040107) indicates the token has expired.
 // No Authorization/Bearer header is needed — authenticated users get cookie-based
 // session auth automatically.
 
-const TOKEN_TTL_MS = 8 * 60 * 1000; // 8 min cache
-
 let cachedAntiForgeryToken: string | null = null;
-let cachedAntiForgeryTimestamp = 0;
 
 const fetchAntiForgeryToken = async (): Promise<string> => {
-  const now = Date.now();
-  if (cachedAntiForgeryToken && now - cachedAntiForgeryTimestamp < TOKEN_TTL_MS) {
+  if (cachedAntiForgeryToken) {
     return cachedAntiForgeryToken;
   }
 
@@ -48,12 +46,16 @@ const fetchAntiForgeryToken = async (): Promise<string> => {
     );
 
     cachedAntiForgeryToken = token || '';
-    cachedAntiForgeryTimestamp = now;
     return cachedAntiForgeryToken;
   } catch (error) {
     console.warn('Failed to fetch anti-forgery token:', error);
     return '';
   }
+};
+
+/** Invalidate the cached token so the next request re-fetches it. */
+const invalidateAntiForgeryToken = (): void => {
+  cachedAntiForgeryToken = null;
 };
 
 // ── Header Builder ────────────────────────────────────────────────────────────
@@ -151,10 +153,14 @@ export async function powerPagesFetch<T>(
       throw new Error('Session expired. Please sign in again.');
     }
 
-    // On 403, the anti-forgery token may have expired — refresh and retry
+    // On 403, check if it's an anti-forgery token error — only retry for that
     if (response.status === 403 && attempt < MAX_RETRIES) {
-      cachedAntiForgeryToken = null;
-      continue;
+      const errorCode = await extractErrorCode(response.clone());
+      if (errorCode === WebApiErrorCode.AntiForgeryTokenInvalid) {
+        invalidateAntiForgeryToken();
+        continue;
+      }
+      // Not a token error — this is a real permission denial, don't retry
     }
 
     if (isTransientError(response.status) && attempt < MAX_RETRIES) {
@@ -196,10 +202,14 @@ export async function powerPagesFetchResponse(
       throw new Error('Session expired. Please sign in again.');
     }
 
-    // On 403, the anti-forgery token may have expired — refresh and retry
+    // On 403, check if it's an anti-forgery token error — only retry for that
     if (response.status === 403 && attempt < MAX_RETRIES) {
-      cachedAntiForgeryToken = null;
-      continue;
+      const errorCode = await extractErrorCode(response.clone());
+      if (errorCode === WebApiErrorCode.AntiForgeryTokenInvalid) {
+        invalidateAntiForgeryToken();
+        continue;
+      }
+      // Not a token error — this is a real permission denial, don't retry
     }
 
     if (isTransientError(response.status) && attempt < MAX_RETRIES) {
@@ -240,13 +250,28 @@ export const WebApiErrorCode = {
 } as const;
 
 /**
- * Parse the error code from a Web API error response.
+ * Extract the error code from a Web API Response object.
+ * Reads the JSON body: { error: { code: "90040120", message: "..." } }
+ * Returns the hex code string (e.g., '90040120') or undefined.
+ * Use response.clone() before passing if you need to read the body again.
+ */
+const extractErrorCode = async (response: Response): Promise<string | undefined> => {
+  try {
+    const payload = await response.json();
+    const code = payload?.error?.code;
+    return typeof code === 'string' ? code.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Parse the error code from a caught Error object.
  * Returns the hex code string (e.g., '90040120') or undefined.
  */
 export const parseErrorCode = (error: unknown): string | undefined => {
   if (error && typeof error === 'object' && 'message' in error) {
     const msg = (error as Error).message;
-    // The error code appears in the JSON: { error: { code: "90040120", message: "..." } }
     const match = msg.match(/[0-9a-f]{8}/i);
     return match?.[0]?.toLowerCase();
   }

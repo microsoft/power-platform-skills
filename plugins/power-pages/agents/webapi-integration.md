@@ -554,8 +554,8 @@ Only create this if the site's UI shows/hides controls based on user roles.
 10. **Formatted values** — Include `Prefer: odata.include-annotations="OData.Community.Display.V1.FormattedValue"` to get display names for lookups and option set labels.
 11. **Escape OData strings** — Always use `escapeODataString()` for user-provided values in `$filter` to prevent injection.
 12. **Safe `fetchAllPages` iteration limit** — Always cap the pagination loop (default 100 iterations) when following `@odata.nextLink` to prevent infinite loops.
-13. **Cache the anti-forgery token** — Use an 8-minute TTL cache to avoid fetching from `/_layout/tokenhtml` on every request.
-14. **Retry transient errors** — 429 and 5xx with exponential backoff. On 403, invalidate the cached anti-forgery token and retry. On 401, do **not** retry — the session has expired and the user must re-authenticate. Throw a clear "Session expired" error.
+13. **Cache the anti-forgery token** — Fetch the token once from `/_layout/tokenhtml` on first use and reuse it for all subsequent requests. Do NOT use a TTL-based cache. Only invalidate and re-fetch when a 403 response with the anti-forgery error code (`90040107`) indicates the token has expired.
+14. **Retry transient errors** — 429 and 5xx with exponential backoff. On 403, check the error code: if `90040107` (anti-forgery token invalid), invalidate the cached token and retry; otherwise it's a real permission denial — do **not** retry. On 401, do **not** retry — the session has expired and the user must re-authenticate. Throw a clear "Session expired" error.
 15. **Type everything** — Raw OData entity interface + clean domain type + mapper function.
 16. **Match existing patterns** — If the project has conventions for file locations, naming, or code style, follow them exactly.
 17. **One table per invocation** — This agent handles a single table. For multiple tables, the caller invokes it separately for each.
