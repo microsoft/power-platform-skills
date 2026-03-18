@@ -179,7 +179,7 @@ Generate complete TypeScript following ALL rules in [genpage-rules-reference.md]
 **Summary:** Non-technical bulleted list of what was built
 **Final Code:** Complete, ready-to-run TypeScript (no placeholders)
 
-**Localization:** If multiple languages were detected in Step 2, the generated code **must** follow the Localization rules in [genpage-rules-reference.md](../../references/genpage-rules-reference.md). This includes language detection boilerplate, a translations dictionary for all detected languages, `t()` helper usage for all user-visible text, RTL support if any RTL languages (Arabic, Hebrew) were detected, and user formatting settings from `usersettings`.
+**Localization:** If multiple languages were detected in Step 2, the generated code **must** follow the Localization rules in [genpage-rules-reference.md](../../references/genpage-rules-reference.md). This includes language detection boilerplate, a translations dictionary for all detected languages, a `translate()` helper for all user-visible text, RTL support if any RTL languages (Arabic, Hebrew) were detected, and user formatting settings from `usersettings`.
 
 Save the code to a `.tsx` file (e.g., `account-dashboard.tsx`).
 

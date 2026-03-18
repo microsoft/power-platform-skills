@@ -184,11 +184,11 @@ const translations: Record<string, Record<string, string>> = {
   // ... one entry per detected language
 };
 
-const t = (key: string): string =>
+const translate = (key: string): string =>
   translations[language.code]?.[key] || translations["en-US"]?.[key] || key;
 ```
 
-Usage: `<Text>{t("title")}</Text>` — never `<Text>Dashboard</Text>`.
+Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
 
 ### RTL Layout Support
 
@@ -236,7 +236,7 @@ Provide formatting helpers that use these settings. **NEVER hardcode date format
 - Do NOT display raw number or currency values — always wrap them with the appropriate formatting helper.
 - WRONG: `<span>${amount}</span>` or `{currencyValue}` — hardcodes `$` or displays raw number without locale formatting.
 - WRONG: `new Intl.NumberFormat(language, { style: 'currency', currency: 'USD' })` — hardcodes currency code; the user's currency comes from `usersettings.currencysymbol`, not from a hardcoded ISO code.
-- CORRECT: `{t('amount')}: {formatCurrency(amount)}` — use `t()` for labels and `formatCurrency()` for monetary values.
+- CORRECT: `{translate('amount')}: {formatCurrency(amount)}` — use `translate()` for labels and `formatCurrency()` for monetary values.
 
 ```typescript
 const formatDate = (date: Date | string | null): string => {
