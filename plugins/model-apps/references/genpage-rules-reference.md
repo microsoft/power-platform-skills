@@ -214,18 +214,22 @@ const [userSettings, setUserSettings] = React.useState<any>(null);
 
 React.useEffect(() => {
   const fetchUserSettings = async () => {
-    const currentUserId = (typeof Xrm !== "undefined" &&
-      Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
-      ?.replace("{", "").replace("}", "");
-    if (!currentUserId) return;
-    const settings = await dataApi.retrieveRow("usersettings" as any, {
-      id: currentUserId,
-      select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
-               "currencysymbol", "dateformatstring", "dateseparator"] as any,
-    });
-    setUserSettings(settings);
+    try {
+      const currentUserId = (typeof Xrm !== "undefined" &&
+        Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
+        ?.replace("{", "").replace("}", "");
+      if (!currentUserId) return;
+      const settings = await dataApi.retrieveRow("usersettings" as any, {
+        id: currentUserId,
+        select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
+                 "currencysymbol", "dateformatstring", "dateseparator"] as any,
+      });
+      setUserSettings(settings);
+    } catch (error) {
+      console.error("Failed to fetch user settings", error);
+    }
   };
-  fetchUserSettings();
+  void fetchUserSettings();
 }, [dataApi]);
 ```
 
@@ -243,8 +247,11 @@ const formatDate = (date: Date | string | null): string => {
   if (!date) return "";
   const d = typeof date === "string" ? new Date(date) : date;
   if (!userSettings) return d.toLocaleDateString();
-  const fmt = userSettings.dateformatstring || "MM/dd/yyyy";
-  const sep = userSettings.dateseparator || "/";
+  const fmt = userSettings.dateformatstring;
+  const sep = userSettings.dateseparator;
+  if (!fmt || !sep) {
+    return d.toLocaleDateString();
+  }
   return fmt
     .replace("yyyy", String(d.getFullYear()))
     .replace("MM", String(d.getMonth() + 1).padStart(2, "0"))
