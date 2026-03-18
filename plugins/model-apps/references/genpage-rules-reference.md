@@ -260,17 +260,19 @@ const formatDate = (date: Date | string | null): string => {
 };
 
 const formatNumber = (num: number): string => {
-  if (!userSettings) return num.toLocaleString();
-  const dec = userSettings.decimalsymbol || ".";
-  const sep = userSettings.numberseparator || ",";
+  if (!userSettings?.decimalsymbol || !userSettings?.numberseparator) {
+    return num.toLocaleString();
+  }
   const [intPart, decPart] = num.toString().split(".");
-  const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, sep);
-  return decPart ? `${formatted}${dec}${decPart}` : formatted;
+  const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, userSettings.numberseparator);
+  return decPart ? `${formatted}${userSettings.decimalsymbol}${decPart}` : formatted;
 };
 
 const formatCurrency = (amount: number): string => {
-  const sym = userSettings?.currencysymbol || "$";
-  return `${sym}${formatNumber(amount)}`;
+  if (!userSettings?.currencysymbol) {
+    return formatNumber(amount);
+  }
+  return `${userSettings.currencysymbol}${formatNumber(amount)}`;
 };
 ```
 
