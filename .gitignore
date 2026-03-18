@@ -5,6 +5,7 @@ evals/temp/
 # Eval reports (aggregated results)
 evals/reports/
 evals/**/*-workspace/
+genpage-workspace/
 
 # Python
 __pycache__/
