@@ -1,0 +1,65 @@
+name: Feature Request
+description: Suggest a new feature or improvement for a Power Platform Skills plugin
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin is this feature request for?
+      options:
+        - power-pages
+        - model-apps
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin Version
+      description: What version of the plugin are you using?
+      placeholder: e.g., 1.0.0
+    validations:
+      required: false
+
+  - type: input
+    id: skill
+    attributes:
+      label: Skill / Command
+      description: Which skill or command is this related to? (Leave blank for new skills)
+      placeholder: e.g., deploy-site
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What's the motivation?
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution or feature you'd like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or workarounds you've considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or examples.
+    validations:
+      required: false
