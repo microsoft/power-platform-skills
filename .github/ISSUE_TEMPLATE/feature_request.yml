@@ -10,9 +10,17 @@ body:
       options:
         - power-pages
         - model-apps
-        - Other
     validations:
       required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin Version
+      description: What version of the plugin are you using?
+      placeholder: e.g., 1.0.0
+    validations:
+      required: false
 
   - type: input
     id: skill
