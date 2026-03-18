@@ -249,14 +249,23 @@ const formatDate = (date: Date | string | null): string => {
   if (!userSettings) return d.toLocaleDateString();
   const fmt = userSettings.dateformatstring;
   const sep = userSettings.dateseparator;
-  if (!fmt || !sep) {
-    return d.toLocaleDateString();
-  }
+  if (!fmt || !sep) return d.toLocaleDateString();
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
   return fmt
-    .replace("yyyy", String(d.getFullYear()))
-    .replace("MM", String(d.getMonth() + 1).padStart(2, "0"))
-    .replace("dd", String(d.getDate()).padStart(2, "0"))
-    .replace(/[/-]/g, sep);
+    .replace(/[/\-.]/g, sep)
+    .replace(/yyyy|yy|MM|M|dd|d/g, (token: string) => {
+      switch (token) {
+        case "yyyy": return String(year);
+        case "yy": return String(year).slice(-2);
+        case "MM": return String(month).padStart(2, "0");
+        case "M": return String(month);
+        case "dd": return String(day).padStart(2, "0");
+        case "d": return String(day);
+        default: return token;
+      }
+    });
 };
 
 const formatNumber = (num: number): string => {
