@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Table Permissions Plan — __SITE_NAME__</title>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
+  --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --critical:#d13438; --critical-bg:#d134380a; --critical-border:#d1343820;
+  --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+  --shadow-16:0 6.4px 14.4px 0 rgba(0,0,0,0.132),0 1.2px 3.6px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+
+
+/* Top Bar */
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+
+/* Layout */
+.layout{display:flex;min-height:calc(100vh - 65px);}
+
+/* Sidebar */
+.sidebar{width:200px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.nav-badge{position:absolute;right:14px;font-size:10px;font-family:var(--mono);padding:1px 6px;border-radius:8px;font-weight:700;}
+
+/* Content */
+.content{flex:1;padding:32px 40px;max-width:900px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+
+/* Stats Grid */
+.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--purple);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+
+/* Summary Box */
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+
+/* Principles */
+.principle{display:flex;gap:16px;padding:16px 0;border-bottom:1px solid var(--border);}
+.principle:last-child{border-bottom:none;}
+.principle-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.principle-title{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:3px;}
+.principle-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+
+/* Scope Tags */
+.scope-tag{font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-align:center;min-width:58px;}
+.scope-Global{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
+.scope-Contact{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+.scope-Account{color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);}
+.scope-Parent{color:var(--purple);background:var(--purple-bg);border:1px solid var(--purple-border);}
+.scope-Self{color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);}
+
+/* Privilege Chips */
+.priv{font-size:9px;font-weight:700;padding:2px 5px;border-radius:3px;font-family:var(--mono);}
+.priv-on{color:var(--pass);background:var(--pass-bg);}
+.priv-off{color:var(--text-dim);background:var(--surface2);opacity:0.5;}
+
+/* Role Chips */
+.role-chip{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-block;margin-right:4px;margin-bottom:2px;}
+
+/* Role status badges */
+.new-badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
+.existing-badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
+.builtin-badge{font-size:10px;background:var(--surface2);color:var(--text-dim);padding:2px 6px;border-radius:3px;font-weight:600;border:1px solid var(--border);margin-left:8px;}
+
+/* Field label */
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
+
+/* Reasoning list */
+.reasoning-list{margin:0;padding-left:18px;list-style:disc;}
+.reasoning-list li{margin-bottom:2px;}
+.reasoning-list li strong{color:var(--text-bright);}
+
+/* Expandable */
+.expandable-header{display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-user-select:none;user-select:none;padding:11px 14px;border-radius:var(--radius-sm);}
+.expandable-header:hover{background:var(--surface2);}
+.expand-chevron{color:var(--text-dim);font-size:12px;transition:transform 0.2s;flex-shrink:0;}
+.expanded .expand-chevron{transform:rotate(90deg);}
+.expandable-body{display:none;padding:0 14px 14px;border-top:1px solid var(--border);margin-top:4px;}
+.expanded .expandable-body{display:block;animation:fadeIn 0.2s ease;}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px;}
+  .stats-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PP</div>
+      <div>
+        <div class="topbar-title">Table Permissions Plan</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="roles"><span class="nav-icon">&#9672;</span> Roles</button>
+      <button class="nav-btn" data-tab="permissions"><span class="nav-icon">&#9638;</span> Table Permissions</button>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- OVERVIEW -->
+      <div class="section active" id="tab-overview">
+        <h2>Plan Overview</h2>
+        <p class="section-desc">Table permissions architecture for <code>__SITE_NAME__</code></p>
+
+        <div class="summary-box" id="summaryBox">__SUMMARY__</div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--accent)" id="statRoles">0</div><div class="stat-label">Web Roles</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--purple)" id="statPerms">0</div><div class="stat-label">Table Perms</div></div>
+        </div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+      </div>
+
+      <!-- ROLES -->
+      <div class="section" id="tab-roles">
+        <h2>Web Roles</h2>
+        <p class="section-desc" id="rolesDesc"></p>
+        <div id="rolesContainer"></div>
+      </div>
+
+      <!-- PERMISSIONS -->
+      <div class="section" id="tab-permissions">
+        <h2>Table Permissions</h2>
+        <p class="section-desc" id="permsDesc"></p>
+
+        <h3>Legend</h3>
+        <div class="card" style="margin-bottom:16px;">
+          <div style="display:flex;gap:32px;flex-wrap:wrap;">
+            <div>
+              <div class="field-label" style="margin-bottom:6px;">Scope</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="scope-tag scope-Global">Global</span>
+                <span class="scope-tag scope-Contact">Contact</span>
+                <span class="scope-tag scope-Account">Account</span>
+                <span class="scope-tag scope-Parent">Parent</span>
+                <span class="scope-tag scope-Self">Self</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:6px;line-height:1.6;">
+                <strong>Global</strong> — all records &nbsp;|&nbsp;
+                <strong>Contact</strong> — user's contact &nbsp;|&nbsp;
+                <strong>Account</strong> — user's account &nbsp;|&nbsp;
+                <strong>Parent</strong> — via parent table &nbsp;|&nbsp;
+                <strong>Self</strong> — own record only
+              </div>
+            </div>
+            <div>
+              <div class="field-label" style="margin-bottom:6px;">Privileges</div>
+              <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">R</span><strong style="color:var(--text-bright);">Read</strong><span style="color:var(--text-dim);">— Retrieve and view records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">C</span><strong style="color:var(--text-bright);">Create</strong><span style="color:var(--text-dim);">— Add new records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">W</span><strong style="color:var(--text-bright);">Write</strong><span style="color:var(--text-dim);">— Update existing records (includes file uploads via PATCH)</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">D</span><strong style="color:var(--text-bright);">Delete</strong><span style="color:var(--text-dim);">— Remove records</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">A</span><strong style="color:var(--text-bright);">Append</strong><span style="color:var(--text-dim);">— Attach this record to another via a lookup</span></div>
+                <div style="display:flex;align-items:center;gap:6px;"><span class="priv priv-on">AT</span><strong style="color:var(--text-bright);">AppendTo</strong><span style="color:var(--text-dim);">— Allow other records to reference this one via a lookup</span></div>
+              </div>
+              <div style="font-size:11px;color:var(--text-dim);margin-top:8px;">
+                <span class="priv priv-on" style="font-size:8px;">R</span> enabled &nbsp;
+                <span class="priv priv-off" style="font-size:8px;">R</span> disabled
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:16px;">
+          <button id="expandAllBtn" onclick="toggleExpandAll()" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
+        </div>
+        <div id="permsContainer"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// Data is populated by the table-permissions-architect agent
+const SITE_NAME = "__SITE_NAME__";
+
+const ROLES = __ROLES_DATA__;
+// Each role: { id, name, desc, builtin, isNew, color }
+// builtin: true only for "Authenticated Users" and "Anonymous Users"
+// isNew: true if proposed by this plan, false if already exists in .powerpages-site/web-roles/
+
+const PERMS = __PERMISSIONS_DATA__;
+// Each perm: { id, name, displayName, table, scope, read, create, write, delete, append, appendto, roles (array of role ids), parent (perm id or null), parentRelationship, rationale: { scope, read, create, write, delete, append, appendto }, isNew }
+
+const RATIONALE = __RATIONALE_DATA__;
+// Array of { icon, title, desc }
+
+// Tab navigation
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+function getRoleName(id) { return ROLES.find(r => r.id === id)?.name || id; }
+function getRoleColor(id) { return ROLES.find(r => r.id === id)?.color || "#8890a4"; }
+
+const scopeColors = {
+  Global: 'var(--critical)', Contact: 'var(--pass)', Account: 'var(--accent)',
+  Parent: 'var(--purple)', Self: 'var(--text-dim)'
+};
+
+// Stats
+const uniqueTables = [...new Set(PERMS.map(p => p.table))];
+document.getElementById('statRoles').textContent = ROLES.length;
+document.getElementById('statPerms').textContent = PERMS.length;
+
+const newRoleCount = ROLES.filter(r => r.isNew).length;
+const existingRoleCount = ROLES.filter(r => !r.builtin && !r.isNew).length;
+const builtinRoleCount = ROLES.filter(r => r.builtin).length;
+const totalRoleCount = ROLES.length;
+const roleParts = [];
+if (builtinRoleCount > 0) roleParts.push(builtinRoleCount + ' built-in');
+if (existingRoleCount > 0) roleParts.push(existingRoleCount + ' existing');
+if (newRoleCount > 0) roleParts.push(newRoleCount + ' proposed');
+document.getElementById('rolesDesc').textContent =
+  totalRoleCount + ' role' + (totalRoleCount !== 1 ? 's' : '') +
+  (roleParts.length > 0 ? ' \u2014 ' + roleParts.join(', ') : '') +
+  '.';
+
+const newPermCount = PERMS.filter(p => p.isNew).length;
+const existingPermCount = PERMS.filter(p => !p.isNew).length;
+const permParts = [];
+if (existingPermCount > 0) permParts.push(existingPermCount + ' existing');
+if (newPermCount > 0) permParts.push(newPermCount + ' proposed');
+document.getElementById('permsDesc').textContent =
+  PERMS.length + ' permission' + (PERMS.length !== 1 ? 's' : '') +
+  ' across ' + uniqueTables.length + ' Dataverse table' + (uniqueTables.length !== 1 ? 's' : '') +
+  (permParts.length > 0 ? ' \u2014 ' + permParts.join(', ') : '') + '.';
+
+// Render Rationale
+function renderRationale() {
+  const c = document.getElementById('rationaleContainer');
+  let html = '';
+  RATIONALE.forEach(r => {
+    html += `<div class="principle">
+      <div class="principle-icon">${r.icon}</div>
+      <div>
+        <div class="principle-title">${r.title}</div>
+        <div class="principle-desc">${r.desc}</div>
+      </div>
+    </div>`;
+  });
+  c.innerHTML = html;
+}
+
+// Render Roles
+function renderRoles() {
+  const c = document.getElementById('rolesContainer');
+  let html = '';
+  const sortedRoles = [...ROLES].sort((a, b) => (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0));
+  sortedRoles.forEach(r => {
+    const perms = PERMS.filter(p => p.roles.includes(r.id));
+    html += `<div class="card" style="cursor:default;${r.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:10px;height:10px;border-radius:50%;background:${r.color};flex-shrink:0;"></div>
+          <div>
+            <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${r.name}</span>
+            ${r.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : r.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
+            <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${r.desc}</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;">
+        ${perms.length > 0 ? perms.map(p => `<span style="font-size:10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 8px;color:var(--text);"><span class="scope-tag scope-${p.scope}" style="font-size:9px;padding:1px 5px;min-width:auto;margin-right:4px;">${p.scope}</span>${p.name}</span>`).join('') : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">No direct table permissions</span>'}
+      </div>
+    </div>`;
+  });
+  c.innerHTML = html;
+}
+
+// Render Permissions
+function renderPerms() {
+  const c = document.getElementById('permsContainer');
+  let html = '';
+  const sortedPerms = [...PERMS].sort((a, b) => (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0));
+  sortedPerms.forEach(p => {
+    const parentName = p.parent ? PERMS.find(x => x.id === p.parent)?.name : null;
+    const privs = ['Read','Create','Write','Delete','Append','AppendTo'];
+    const privFlags = { Read: p.read, Create: p.create, Write: p.write, Delete: p.delete, Append: p.append, AppendTo: p.appendto };
+
+    html += `<div class="card" style="border-left:3px solid ${scopeColors[p.scope]};padding:0;${p.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
+      <div class="expandable-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <span class="scope-tag scope-${p.scope}">${p.scope}</span>
+        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${p.name}</span>
+        ${p.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
+        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${p.table}</code>
+        <span style="display:flex;gap:3px;">${privs.map(pr => `<span class="priv ${privFlags[pr] ? 'priv-on' : 'priv-off'}">${pr[0]}${pr === 'AppendTo' ? 'T' : ''}</span>`).join('')}</span>
+        <span class="expand-chevron">&#9654;</span>
+      </div>
+      <div class="expandable-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;font-size:12px;">
+          <div><div class="field-label">Scope</div><span class="scope-tag scope-${p.scope}" style="font-size:10px;padding:1px 6px;min-width:auto;">${p.scope}${p.scope === 'Parent' && parentName ? ' \u2192 ' + parentName : ''}</span></div>
+          <div><div class="field-label">Display Name</div><span style="color:var(--text-bright);font-weight:600;">${p.displayName || p.name}</span></div>
+          <div><div class="field-label">Table Logical Name</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${p.table}</span></div>
+          <div><div class="field-label">Roles</div>${p.roles.map(rid => `<span style="color:${getRoleColor(rid)};font-weight:600;margin-right:6px;">${getRoleName(rid)}</span>`).join('')}</div>
+          <div style="grid-column:span 2"><div class="field-label">Privileges</div>${privs.map(pr => `<span class="priv ${privFlags[pr] ? 'priv-on' : 'priv-off'}" style="margin-right:4px;">${pr}: ${privFlags[pr] ? '\u2713' : '\u2717'}</span>`).join('')}</div>
+          ${p.parentRelationship ? `<div style="grid-column:span 2"><div class="field-label">Relationship</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${p.parentRelationship}</span></div>` : ''}
+        </div>
+        ${p.rationale ? (() => { const labels = {read:'Read',create:'Create',write:'Write',delete:'Delete',append:'Append',appendto:'AppendTo'}; return `<div style="margin-top:12px;"><div class="field-label" style="margin-bottom:6px;">Reasoning</div><div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;"><ul class="reasoning-list">${p.rationale.scope ? `<li><strong>Scope:</strong> ${p.rationale.scope}</li>` : ''}${Object.entries(labels).map(([k,l]) => p.rationale[k] ? `<li><strong>${l}:</strong> ${p.rationale[k]}</li>` : '').join('')}</ul></div></div>`; })() : ''}
+      </div>
+    </div>`;
+  });
+  c.innerHTML = html;
+}
+
+// Expand All toggle
+let allExpanded = false;
+function toggleExpandAll() {
+  allExpanded = !allExpanded;
+  const cards = document.querySelectorAll('#permsContainer .card');
+  cards.forEach(card => {
+    if (allExpanded) card.classList.add('expanded');
+    else card.classList.remove('expanded');
+  });
+  document.getElementById('expandAllBtn').textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
+// Init
+renderRationale();
+renderRoles();
+renderPerms();
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+</body>
+</html>

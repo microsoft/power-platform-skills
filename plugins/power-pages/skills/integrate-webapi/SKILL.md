@@ -23,9 +23,11 @@ hooks:
             verify before allowing stop: 1) The site was analyzed and tables requiring Web API integration
             were identified, 2) The webapi-integration agent was invoked to create API client, types, and
             service files for each table, 3) All integration files were verified (types, services, hooks exist)
-            and the project builds successfully, 4) Table permissions and site settings were configured
-            (either via the webapi-permissions agent or by parsing a user-provided permissions diagram),
-            5) The user was asked whether to deploy the site.
+            and the project builds successfully, 4) Table permissions were configured (either via the
+            table-permissions-architect agent or by parsing a user-provided permissions diagram), 5) Web API site
+            settings were configured with case-sensitive validated column names (either via the webapi-settings-architect
+            agent or by parsing a user-provided permissions diagram), 6) The user was asked whether to deploy
+            the site.
             If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
             If no Web API integration work happened or everything is complete, return { "ok": true }.
           timeout: 30
@@ -37,7 +39,8 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 
 ## Core Principles
 
-- **One table at a time**: Process tables sequentially because the first table creates the shared `powerPagesApi.ts` client that subsequent tables reuse, and each agent invocation may modify shared files.
+- **First table sequential, then parallel**: The first table must be processed alone because it creates the shared `powerPagesApi.ts` client. Once that exists, remaining tables can be processed in parallel since each creates independent files (types, service, hooks).
+- **Parallelize independent agents**: The `table-permissions-architect` and `webapi-settings-architect` agents are independent — invoke them in parallel rather than sequentially.
 - **Permissions require deployment**: The `.powerpages-site` folder must exist before table permissions and site settings can be configured. Integration code can be written without it, but permissions cannot.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 
@@ -57,7 +60,7 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 3. **Review Integration Plan** — Present findings to the user and confirm which tables to integrate
 4. **Implement Integrations** — Use the `webapi-integration` agent for each table
 5. **Verify Integrations** — Validate all expected files exist and the project builds successfully
-6. **Setup Permissions** — Choose permissions source (upload diagram or let the Web API Permissions Architect analyze), then configure table permissions and site settings
+6. **Setup Permissions & Settings** — Choose permissions source (upload diagram or let the architects analyze), then configure table permissions and Web API site settings with case-sensitive validated column names
 7. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
 
 ---
@@ -213,15 +216,18 @@ For each table, use the `Task` tool to invoke the `webapi-integration` agent at 
 >
 > Create the TypeScript types, CRUD service layer, and framework-specific hooks/composables. Replace any mock data or placeholder API calls in the referencing source files with the new service."
 
-### 4.2 Process Tables Sequentially
+### 4.2 Process First Table, Then Parallelize Remaining
 
-Process tables **one at a time** (not in parallel), because:
-- The first table creates the shared `powerPagesApi.ts` client — subsequent tables reuse it
-- Each agent invocation may modify shared files
+The **first table** must be processed alone — it creates the shared `powerPagesApi.ts` client that all other tables depend on. After the first table completes and the shared client exists:
+
+- **Verify** the shared API client was created at `src/shared/powerPagesApi.ts`
+- **Then invoke all remaining tables in parallel** using multiple `Task` calls — each table creates independent files (its own types in `src/types/`, service in `src/shared/services/`, and hook/composable), so there are no conflicts
+
+If there is only one table, this step is simply sequential.
 
 ### 4.3 Verify Each Integration
 
-After each agent completes, verify the output:
+After each agent completes (or after all parallel agents complete), verify the output:
 - Check that the expected files were created (types, service, hook/composable)
 - Confirm the shared API client exists after the first table is processed
 - Note any issues reported by the agent
@@ -285,36 +291,36 @@ Present a table summarizing the verification:
 
 ---
 
-## Phase 6: Setup Permissions
+## Phase 6: Setup Permissions & Settings
 
-**Goal**: Configure table permissions and site settings for all integrated tables using the `webapi-permissions` agent
+**Goal**: Configure table permissions and Web API site settings for all integrated tables using the `table-permissions-architect` and `webapi-settings-architect` agents
 
 **Actions**:
 
-### 5.1 Check Deployment Prerequisite
+### 6.1 Check Deployment Prerequisite
 
-The permissions agent requires the `.powerpages-site` folder. If it doesn't exist:
+Both agents require the `.powerpages-site` folder. If it doesn't exist:
 
 Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| The `.powerpages-site` folder was not found. The site needs to be deployed once before permissions can be configured. Would you like to deploy now? | Yes, deploy now (Recommended), Skip permissions for now — I'll set them up later |
+| The `.powerpages-site` folder was not found. The site needs to be deployed once before permissions and site settings can be configured. Would you like to deploy now? | Yes, deploy now (Recommended), Skip permissions for now — I'll set them up later |
 
 **If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this phase.
 
-**If "Skip"**: Skip to Phase 7 with a note that permissions still need to be configured.
+**If "Skip"**: Skip to Phase 7 with a note that permissions and site settings still need to be configured.
 
-### 5.2 Choose Permissions Source
+### 6.2 Choose Permissions Source
 
 Ask the user how they want to define the permissions using the `AskUserQuestion` tool:
 
-**Question**: "How would you like to define the Web API permissions for your site?"
+**Question**: "How would you like to define the Web API permissions and settings for your site?"
 
 | Option | Description |
 |--------|-------------|
 | **Upload an existing permissions diagram** | Provide an image (PNG/JPG) or Mermaid diagram of your existing permissions structure |
-| **Let the Web API Permissions Architect figure it out** | The Web API Permissions Architect will analyze your site's code, data model, and Dataverse environment, then propose permissions automatically |
+| **Let the architects figure it out** | The Table Permissions Architect and Web API Settings Architect will analyze your site's code, data model, and Dataverse environment, then propose permissions and settings automatically |
 
 Route to the appropriate path:
 
@@ -327,65 +333,132 @@ If the user chooses to upload an existing diagram:
    - **Mermaid syntax** — The user can paste a Mermaid flowchart diagram text directly in chat
    - **Text description** — A structured list of web roles, table permissions, scopes, and site settings
 
-2. Parse the diagram into the same structured format used by the webapi-permissions agent:
+2. Parse the diagram into structured format:
    - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
    - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto), parent permission and relationship name (if Parent scope)
    - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields must list specific column logical names, NEVER use `*` wildcard**
 
-3. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
+3. **Validate column names against Dataverse** — Even when using a user-provided diagram, query Dataverse for each table's column LogicalNames and verify that every column in the `Webapi/<table>/fields` values uses the exact Dataverse LogicalName (case-sensitive). Correct any mismatches before creating files.
 
-4. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
+4. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
 
-5. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
+5. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
+
+6. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
 
    | Question | Options |
    |----------|---------|
    | Does this permissions plan look correct? | Approve and create files (Recommended), Request changes, Cancel |
 
-6. Proceed directly to **section 5.4: Create Permission Files** with the parsed permissions data.
+7. Proceed directly to **section 6.4: Create Permission & Settings Files** with the parsed data.
 
-#### Path B: Let the Web API Permissions Architect Figure It Out
+#### Path B: Let the Architects Figure It Out
 
-If the user chooses to let the Web API Permissions Architect figure it out, proceed to **section 5.3: Invoke Permissions Agent**.
+If the user chooses to let the architects figure it out, proceed to **section 6.3: Invoke Table Permissions Agent**.
 
-### 5.3 Invoke Permissions Agent
+### 6.3 Invoke Table Permissions and Web API Settings Agents (in Parallel)
 
-Use the `Task` tool to invoke the `webapi-permissions` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-permissions.md`:
+These two agents are **independent** — invoke them in parallel using two `Task` calls simultaneously:
+
+#### Table Permissions Agent
+
+Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md`:
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and set up Web API permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles, table permissions, and site settings. Propose a complete permissions plan covering all integrated tables."
+> "Analyze this Power Pages code site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables. After I approve the plan, create the web role and table permission YAML files using the deterministic scripts."
 
-### 5.4 Create Permission Files
+The agent will:
+1. Analyze the site and propose a plan (with Mermaid diagram)
+2. Present the plan via plan mode for user approval
+3. After approval, create any needed web roles using `create-web-role.js`
+4. Create all table permission files using `create-table-permission.js`
+5. Return a summary of created files
 
-After the permissions data is available — either from the user's uploaded diagram (Path A) or from the `webapi-permissions` agent's approved plan (Path B) — create the actual YAML files:
+#### Web API Settings Agent
 
-- **Table permission files** in `.powerpages-site/table-permissions/`
-- **Site setting files** in `.powerpages-site/site-settings/`
+Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-settings-architect.md`:
 
-For each file that needs a UUID, generate one using the shared script:
+**Prompt:**
+
+> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
+
+The agent will:
+1. Analyze the site, query Dataverse for exact column LogicalNames
+2. Cross-validate column names (case-sensitive)
+3. Present the plan via plan mode for user approval
+4. After approval, create all site setting files using `create-site-setting.js`
+5. Return a summary of created files
+
+Wait for **both** agents to complete before proceeding to 6.4.
+
+### 6.4 Create Permission & Settings Files (Path A Only)
+
+**This section applies only to Path A (user-provided permissions diagram).** For Path B, the architect agents create the files directly in section 6.3.
+
+After parsing the user's diagram, create the YAML files using the deterministic scripts below. **Do NOT write YAML files manually** — always use these scripts which handle UUID generation, field ordering, formatting, and file naming automatically.
+
+#### 6.4.1 Create Web Roles (if needed)
+
+If the plan requires new web roles that don't already exist, create them first (their UUIDs are needed for table permissions):
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
 ```
 
-**CRITICAL YAML FORMATTING RULES when writing these files:**
-- **Code site git format**: Table permission fields have `adx_` prefix stripped (e.g., `append`, `read`, `scope`) EXCEPT `adx_entitypermission_webrole` (M2M relationship keeps prefix). The display name field is `entityname` (NOT `entitypermissionname`). Entity reference lookups (like `parententitypermission`) store only the GUID, not a nested object.
-- Boolean values MUST be unquoted: `value: true` — NEVER `value: "true"` or `value: "false"`
-- Numeric values MUST be unquoted: `scope: 756150000` — NEVER `scope: "756150000"`
-- UUIDs MUST be unquoted: `id: a1b2c3d4-...` — NEVER `id: "a1b2c3d4-..."`
-- String values (like field lists) are also unquoted: `value: cr87b_name,cr87b_email`
-- CRUD flags are unquoted booleans: `read: true` — NEVER `read: "true"`
-- Fields MUST be alphabetically sorted
-- Follow the exact YAML format specified by the permissions plan output
+Capture the JSON output (`{ "id": "<uuid>", "filePath": "<path>" }`) — use the `id` as the `--webRoleIds` value when creating table permissions.
 
-### 5.5 Git Commit
+#### 6.4.2 Create Table Permissions
 
-Stage and commit the permission files:
+For each table permission in the plan. Process **parent permissions before child permissions** — children need the parent's UUID from the JSON output.
+
+**For Global/Contact/Account/Self scope:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+```
+
+**For Parent scope** (requires parent permission UUID and relationship name):
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+```
+
+Each invocation outputs `{ "id": "<uuid>", "filePath": "<path>" }`. Use the `id` as `--parentPermissionId` for child permissions.
+
+#### 6.4.3 Create Site Settings
+
+For each site setting in the plan:
+
+**Enabled setting (boolean):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
+```
+
+**Fields setting (string — use the validated column names from the diagram):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<comma-separated-validated-columns>" --description "Allowed fields for <table> Web API access"
+```
+
+**Inner error setting (boolean, optional for debugging):**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
+```
+
+**Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase). Using incorrect casing causes 403 Forbidden errors.
+
+**Lookup columns**: For every lookup column, include **both** the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields value. The Power Pages Web API does a literal match — the LogicalName is needed for write operations, the `_..._value` form is needed for read operations (`$select`, `$filter`). Missing either form causes 403 errors.
+
+### 6.5 Git Commit
+
+Stage and commit the permission and settings files:
 
 ```powershell
 git add -A
-git commit -m "Add Web API permissions and site settings for [table names]"
+git commit -m "Add table permissions and Web API site settings for [table names]"
 ```
 
 **Output**: Table permissions and site settings created, verified, and committed
@@ -437,7 +510,7 @@ Use `AskUserQuestion`:
 After deployment (or if skipped), remind the user:
 
 - **Test the API**: Open the deployed site and verify Web API calls work in the browser's Network tab
-- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct
+- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct. The most common cause of 403 errors is column names in `Webapi/<table>/fields` not matching the exact Dataverse LogicalName (case-sensitive — must be all lowercase).
 - **Disable innererror in production**: If `Webapi/error/innererror` was enabled for debugging, disable it before going live
 - **Web roles**: Users must be assigned the appropriate web roles to access protected APIs
 
@@ -451,7 +524,7 @@ After deployment (or if skipped), remind the user:
 
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
-- **Process tables sequentially** — never in parallel, because the shared API client and shared files create ordering dependencies
+- **First table sequential, then parallel** — the first table creates the shared API client; after that, remaining tables can be processed in parallel since each creates independent files
 - **Commit at milestones** — after integration code and after permission files
 - **Verify each integration** — confirm expected files exist after each agent invocation
 
@@ -460,9 +533,9 @@ After deployment (or if skipped), remind the user:
 1. After Phase 2: Confirm which tables to integrate
 2. After Phase 3: Approve integration plan
 3. At Phase 6.1: Deploy now or skip permissions (if `.powerpages-site` missing)
-4. At Phase 6.2: Choose permissions source (upload diagram or let the Web API Permissions Architect analyze)
-5. At Phase 6.3/6.4: Approve permissions plan (via user review for Path A, or plan mode within the agent for Path B)
-6. At Phase 7.2: Deploy now or deploy later
+4. At Phase 6.2: Choose permissions source (upload diagram or let the architects analyze)
+5. At Phase 6.3: Approve table permissions plan and Web API site settings plan (both agents run in parallel for Path B, each presents its own plan for approval)
+7. At Phase 7.2: Deploy now or deploy later
 
 ### Progress Tracking
 
@@ -473,9 +546,9 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, check data model and deployment status |
 | Explore integration points | Analyzing code for integration points | Use Explore agent to discover tables, existing services, and compile integration manifest |
 | Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
-| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent per table, verify output, git commit |
+| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent for first table (creates shared client), then remaining tables in parallel, verify output, git commit |
 | Verify integrations | Verifying integrations | Validate all expected files exist, check imports and API references, run project build |
-| Setup permissions | Configuring permissions and site settings | Choose permissions source (upload diagram or Web API Permissions Architect), create YAML files, git commit |
+| Setup permissions and settings | Configuring permissions and site settings | Choose permissions source (upload diagram or architects), invoke table-permissions-architect and webapi-settings-architect agents in parallel, create YAML files with case-sensitive validated column names, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.

@@ -12,7 +12,7 @@ hooks:
           command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js\""
           timeout: 15
         - type: prompt
-          prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) Design changes were applied to real files — distinctive typography via Google Fonts (no generic Inter/Roboto/Arial), cohesive color palette via CSS variables, motion/animations, and backgrounds, 3) The user was given the dev server URL and asked to review the site, 4) No build errors remain unresolved, 5) Git commits were made at key milestones, 6) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."
+          prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) Design changes were applied to real files — distinctive typography via Google Fonts (no generic Inter/Roboto/Arial), cohesive color palette via CSS variables, motion/animations, and backgrounds, 3) Accessibility verification was performed — axe-core was run on every page, all critical and serious violations were fixed, and a re-run confirmed zero critical/serious violations, 4) The user was given the dev server URL and asked to review the site, 5) No build errors remain unresolved, 6) Git commits were made at key milestones, 7) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."
           timeout: 30
 ---
 
@@ -40,7 +40,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 **Goal**: Understand what site needs to be built and what problem it solves
 
 **Actions**:
-1. Create todo list with all 7 phases (see [Progress Tracking](#progress-tracking) table)
+1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
 2. If site purpose is clear from arguments:
    - Summarize understanding
    - Identify site type (portal, dashboard, landing page, blog, etc.)
@@ -344,13 +344,87 @@ After each significant change (new page or component), browse the site via Playw
 
 The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
 
-> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to review.
+> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
 
 **Output**: All pages, components, and design elements implemented and verified
 
 ---
 
-## Phase 6: Review & User Testing
+## Phase 6: Accessibility Verification
+
+**Goal**: Verify the site meets WCAG 2.2 AA standards using axe-core automated testing and fix any violations
+
+> **Prerequisite:** All pages and components must be fully implemented (Phase 5 complete). The dev server MUST be running.
+
+**Actions**:
+
+### 6.1 Install Playwright Dependency
+
+Install `playwright` as a dev dependency in the project so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
+
+```powershell
+cd "<PROJECT_ROOT>"
+npm install --save-dev playwright
+```
+
+### 6.2 Run axe-core Audit on Every Page
+
+Run the audit script via `Bash`, passing the dev server URL and all site routes:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
+```
+
+The script launches a headless browser, navigates to each route, injects axe-core from CDN, runs the analysis, and outputs a JSON array of per-route results to stdout. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. The script exits with code 1 if any `critical` or `serious` violations are found.
+
+Parse the JSON output and record all violations.
+
+### 6.3 Fix Accessibility Violations
+
+For each violation found, identify the source file and apply the fix:
+
+| Violation | Fix |
+|-----------|-----|
+| Missing `alt` text on images | Add descriptive `alt` attributes to `<img>` tags |
+| Insufficient color contrast | Adjust CSS color variables to meet 4.5:1 (normal text) or 3:1 (large text) ratios |
+| Missing form labels | Add `<label>` elements or `aria-label` attributes |
+| Missing landmark regions | Wrap content in `<main>`, `<nav>`, `<header>`, `<footer>` |
+| Skipped heading levels | Correct heading hierarchy (h1 → h2 → h3, no gaps) |
+| Missing link text | Add descriptive text or `aria-label` to links |
+| Missing `lang` attribute | Add `lang="en"` to the `<html>` tag |
+| Inadequate focus indicators | Add visible `outline` styles to interactive elements |
+
+After fixing each group of related violations, commit:
+```powershell
+git add -A
+git commit -m "Fix accessibility: <violation description>"
+```
+
+### 6.4 Re-verify After Fixes
+
+After all fixes are applied, re-run the audit script (same command as 6.2) to confirm violations are resolved:
+
+1. If new violations appear (e.g., a fix introduced a regression), repeat 6.3–6.4
+2. Continue until the script exits with code 0 (zero `critical` and `serious` violations)
+
+Present a summary table to the user:
+
+```
+| Page | Route | Violations Found | Violations Fixed | Status |
+|------|-------|-----------------|-----------------|--------|
+| Home | / | 3 | 3 | Pass |
+| About | /about | 1 | 1 | Pass |
+| Contact | /contact | 2 | 2 | Pass |
+| **Total** | | **6** | **6** | **All passing** |
+```
+
+> **GATE: Do NOT proceed to Phase 7 until all pages pass axe-core with zero `critical` and `serious` violations.** Minor and moderate violations should also be fixed where possible, but are not blocking.
+
+**Output**: Accessibility-verified site with zero critical/serious axe-core violations
+
+---
+
+## Phase 7: Review & User Testing
 
 **Goal**: Ensure the site meets user expectations and all pages work correctly
 
@@ -374,7 +448,7 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 ---
 
-## Phase 7: Deployment & Next Steps
+## Phase 8: Deployment & Next Steps
 
 **Goal**: Deploy the site and suggest enhancements
 
@@ -422,8 +496,8 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 1. After Phase 1: Confirm site purpose, framework, and project location
 2. After Phase 4: Approve implementation plan
-3. After Phase 6: Accept site or request changes
-4. At Phase 7: Deploy or skip
+3. After Phase 7: Accept site or request changes
+4. At Phase 8: Deploy or skip
 
 ### Progress Tracking
 
@@ -436,6 +510,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
 | Implement pages and components | Building site | Apply chosen design tokens, create all pages, components, routing, navigation |
+| Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
@@ -449,6 +524,7 @@ Every site must meet these standards before completion:
 - Motion/animations (page transitions, hover states)
 - All requested pages and features implemented (not placeholders)
 - All routes working and navigation complete
+- Accessibility verified via axe-core — zero critical/serious violations on all pages
 - Git commits at key milestones
 - Verified via Playwright
 - User reviewed and approved
@@ -491,12 +567,18 @@ Every site must meet these standards before completion:
 - Git commits after each major piece
 - Playwright verified each page
 
-### Phase 6: Review
+### Phase 6: Accessibility Verification
+- axe-core injected and run on all 4 pages via `browser_evaluate`
+- Found 5 violations: 2 missing alt text, 1 insufficient contrast, 1 missing lang attribute, 1 skipped heading level
+- All violations fixed in source code and committed
+- Re-run confirmed zero critical/serious violations across all pages
+
+### Phase 7: Review
 - Summary table presented
 - User reviewed at `http://localhost:5173`, requested minor color adjustment
 - Adjustment applied, re-verified
 
-### Phase 7: Deploy
+### Phase 8: Deploy
 - User chose to deploy → invoked `/power-pages:deploy-site`
 - Final summary presented with next step suggestions
 

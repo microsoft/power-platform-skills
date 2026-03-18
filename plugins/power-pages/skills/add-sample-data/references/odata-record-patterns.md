@@ -12,10 +12,11 @@ Entity set names are required for all record operations. They differ from logica
 
 **Endpoint:** `GET {envUrl}/api/data/v9.2/EntityDefinitions(LogicalName='<table>')?$select=EntitySetName`
 
-```powershell
-$entityDef = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')?`$select=EntitySetName" -Headers $headers
-$entitySetName = $entityDef.EntitySetName  # e.g., "cr123_projects"
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='cr123_project')?\$select=EntitySetName"
+```
+
+The response JSON `data.EntitySetName` contains the entity set name (e.g., `"cr123_projects"`).
 
 ---
 
@@ -23,36 +24,19 @@ $entitySetName = $entityDef.EntitySetName  # e.g., "cr123_projects"
 
 **Endpoint:** `POST {envUrl}/api/data/v9.2/<EntitySetName>`
 
-```powershell
-$body = @{
-    cr123_name        = "Website Redesign"
-    cr123_description = "Modernize the corporate website with a fresh design"
-    cr123_startdate   = "2025-06-15T10:30:00Z"
-    cr123_budget      = 15000.00
-    cr123_isactive    = $true
-    cr123_status      = 100000000
-} | ConvertTo-Json
-
-$response = Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/cr123_projects" -Headers $headers -Body $body -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "cr123_projects" --body '{"cr123_name":"Website Redesign","cr123_description":"Modernize the corporate website with a fresh design","cr123_startdate":"2025-06-15T10:30:00Z","cr123_budget":15000.00,"cr123_isactive":true,"cr123_status":100000000}'
 ```
 
 ### Capturing the Created Record ID
 
-The record ID is returned in the `OData-EntityId` response header. To capture it:
+The record ID is returned in the `OData-EntityId` response header. Use `--include-headers` to capture it:
 
-```powershell
-$response = Invoke-WebRequest -Method Post -Uri "$envUrl/api/data/v9.2/cr123_projects" -Headers $headers -Body $body -ContentType "application/json"
-$entityId = $response.Headers["OData-EntityId"] -replace '.*\(([^)]+)\).*', '$1'
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "cr123_projects" --body '{"cr123_name":"Website Redesign"}' --include-headers
 ```
 
-Alternatively, use the `Prefer: return=representation` header to get the full record back:
-
-```powershell
-$headers["Prefer"] = "return=representation"
-$response = Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/cr123_projects" -Headers $headers -Body $body -ContentType "application/json"
-$recordId = $response.cr123_projectid
-$headers.Remove("Prefer")
-```
+The response JSON includes a `headers` object with the `OData-EntityId` value. Parse the GUID from it to use in subsequent lookups.
 
 ---
 
@@ -148,16 +132,11 @@ Before inserting records with picklist/choice columns, query the valid option va
 
 **Endpoint:** `GET {envUrl}/api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$expand=OptionSet`
 
-```powershell
-$picklistMeta = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='cr123_project')/Attributes(LogicalName='cr123_status')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?`$expand=OptionSet" -Headers $headers
-
-# Extract options
-$options = $picklistMeta.OptionSet.Options
-foreach ($opt in $options) {
-    $value = $opt.Value          # e.g., 100000000
-    $label = $opt.Label.LocalizedLabels[0].Label  # e.g., "Active"
-}
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='cr123_project')/Attributes(LogicalName='cr123_status')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
+```
+
+The response `data.OptionSet.Options` array contains objects with `Value` (e.g., `100000000`) and `Label.LocalizedLabels[0].Label` (e.g., `"Active"`).
 
 Use these actual `Value` integers in your sample data — never guess option values.
 
@@ -169,26 +148,16 @@ Use these actual `Value` integers in your sample data — never guess option val
 
 A task referencing a project:
 
-```powershell
-$body = @{
-    cr123_name = "Design mockups"
-    cr123_duedate = "2025-07-01T00:00:00Z"
-    "cr123_ProjectId@odata.bind" = "/cr123_projects($projectGuid)"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/cr123_tasks" -Headers $headers -Body $body -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "cr123_tasks" --body '{"cr123_name":"Design mockups","cr123_duedate":"2025-07-01T00:00:00Z","cr123_ProjectId@odata.bind":"/cr123_projects(<projectGuid>)"}' --include-headers
 ```
 
 ### Multiple Lookups
 
 A record referencing multiple parent tables:
 
-```powershell
-$body = @{
-    cr123_name = "Project Update Meeting"
-    "cr123_ProjectId@odata.bind" = "/cr123_projects($projectGuid)"
-    "cr123_ContactId@odata.bind" = "/contacts($contactGuid)"
-} | ConvertTo-Json
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<EntitySetName>" --body '{"cr123_name":"Project Update Meeting","cr123_ProjectId@odata.bind":"/cr123_projects(<projectGuid>)","cr123_ContactId@odata.bind":"/contacts(<contactGuid>)"}' --include-headers
 ```
 
 ---
@@ -199,10 +168,11 @@ Verify how many records exist in a table after insertion:
 
 **Endpoint:** `GET {envUrl}/api/data/v9.2/<EntitySetName>?$count=true&$top=0`
 
-```powershell
-$result = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/cr123_projects?`$count=true&`$top=0" -Headers $headers
-$recordCount = $result."@odata.count"
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "cr123_projects?\$count=true&\$top=0"
+```
+
+The response `data["@odata.count"]` contains the total record count.
 
 The `$top=0` ensures no actual records are returned — only the count.
 
@@ -216,13 +186,10 @@ For inserting many records efficiently, use OData batch requests to send multipl
 
 **Headers:**
 
-```powershell
-$batchId = [guid]::NewGuid().ToString()
-$batchHeaders = @{
-    Authorization  = "Bearer $token"
-    "Content-Type" = "multipart/mixed; boundary=batch_$batchId"
-    Accept         = "application/json"
-}
+Authentication is handled automatically by `dataverse-request.js`. To send a batch request, use POST to the `$batch` endpoint. The script handles auth headers and token refresh internally:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "\$batch" --body '<batch body>'
 ```
 
 **Body format:**

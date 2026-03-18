@@ -3,7 +3,7 @@ name: deploy-site
 description: This skill should be used when the user asks to "deploy to power pages", "upload site", "publish site", "deploy site", "push to power pages", "upload code site", or wants to deploy/upload an existing Power Pages code site to a Power Pages environment using PAC CLI.
 user-invocable: true
 allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, TaskList
-model: opus
+model: sonnet
 ---
 
 # Deploy Power Pages Code Site
@@ -352,6 +352,7 @@ If the retry succeeds, proceed to Phase 5. If it fails with a different error, p
 
 If the user skips activation (or after activation completes), suggest:
 - `/power-pages:activate-site` — Provision the site with a subdomain and make it live (if not already activated)
+- `/power-pages:test-site` — Test the deployed site in the browser (verify pages load, check API calls)
 - `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
 - `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
 

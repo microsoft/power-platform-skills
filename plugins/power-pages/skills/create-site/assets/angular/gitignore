@@ -43,6 +43,8 @@ coverage
 .sass-cache
 testem.log
 
+.playwright-mcp/
+
 # OS
 .DS_Store
 Thumbs.db

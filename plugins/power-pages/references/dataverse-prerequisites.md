@@ -8,35 +8,20 @@ Shared prerequisite steps for skills that interact with the Dataverse OData Web 
 
 Run `pac env who` to get the current environment URL:
 
-```powershell
+```bash
 pac env who
 ```
 
-Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `$envUrl`.
+Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `envUrl`.
 
-**If `pac env who` fails**: Tell the user to authenticate first:
+**If `pac env who` fails**: Tell the user to authenticate first with `pac auth create`.
 
-```powershell
-pac auth create
+## 2. Get Azure CLI Token & Verify API Access
+
+Run the shared script to obtain an Azure CLI token and verify Dataverse API access in one step:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
-## 2. Get Azure CLI Token
-
-Get an access token for the Dataverse environment:
-
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-```
-
-**If `az` fails**: Tell the user to run `az login` first.
-
-## 3. Verify API Access
-
-Make a lightweight test request to confirm the token works:
-
-```powershell
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/WhoAmI" -Headers $headers
-```
-
-If this returns a valid response, proceed. If it returns 401/403, the token is invalid — ask the user to re-authenticate.
+On success (exit 0), it outputs JSON to stdout with `token`, `userId`, `organizationId`, and `tenantId`. On failure (exit 1), stderr explains the issue (missing `az login`, expired token, etc.).

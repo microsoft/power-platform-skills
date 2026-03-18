@@ -1,0 +1,112 @@
+{
+  "skill_name": "integrate-webapi",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need to hook up the Web API for my Power Pages site. It's a React app with three tables -- Products, Categories, and Reviews. Reviews has lookups to both Products and Categories. I've got mock data scattered around the components right now. Just let the architects figure out the permissions, I don't have a diagram.",
+      "expected_output": "The skill locates the project via powerpages.config.json, detects React from package.json, reads .datamodel-manifest.json to discover Products, Categories, and Reviews tables with their columns and relationships. It presents the three tables to the user for confirmation, then sequentially invokes the webapi-integration agent for each table — creating the shared powerPagesApi.ts client on the first table. After all integrations, it verifies type files, service files, and React hooks exist for each table, runs npm run build to confirm no errors, and commits. It then invokes the table-permissions-architect and webapi-settings-architect agents sequentially (Path B), which propose permissions and site settings with case-sensitive validated column names queried from Dataverse. After user approval of each plan, YAML files are created and committed. Finally, it presents a summary and asks whether to deploy.",
+      "files": [],
+      "expectations": [
+        "Project root is located by finding powerpages.config.json",
+        "React framework is detected from package.json dependencies",
+        "Tables (Products, Categories, Reviews) are discovered from .datamodel-manifest.json",
+        "Mock data and placeholder fetch calls are identified in source files via the Explore agent",
+        "User is asked to confirm which tables to integrate",
+        "Tables are processed sequentially (not in parallel) via the webapi-integration agent",
+        "The shared powerPagesApi.ts API client is created during the first table's integration",
+        "Type definition files are created in src/types/ for each table (e.g., product.ts, category.ts, review.ts)",
+        "Service files are created in src/shared/services/ for each table (e.g., productService.ts, categoryService.ts, reviewService.ts)",
+        "React hooks are created in src/shared/hooks/ for each table (e.g., useProducts.ts, useCategories.ts, useReviews.ts)",
+        "Mock data in components is replaced with actual Web API service calls",
+        "npm run build is executed to verify no compilation or import errors",
+        "A git commit is made after integration code is complete",
+        "The table-permissions-architect agent is invoked to propose and create table permission YAML files",
+        "The webapi-settings-architect agent is invoked to propose site settings with case-sensitive column names validated against Dataverse",
+        "Lookup columns in site settings include both the LogicalName and the _value OData computed form",
+        "A git commit is made after permissions and site settings files are created",
+        "A summary table of all created files is presented to the user",
+        "User is asked whether to deploy the site",
+        "TaskCreate/TaskUpdate is used to track progress through all phases"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "integrate web api into my vue power pages site. I have Events and Registrations tables. Here's my permissions diagram -- I'll paste it as Mermaid:\n\n```mermaid\nflowchart TD\n  AR[Authenticated Role] --> EP[Events - Read]\n  AR --> RP[Registrations - CRUD]\n  EP -->|Parent: cr87b_event_registrations| RP\n```\n\nThe fields for Events should be cr87b_name, cr87b_date, cr87b_location and for Registrations cr87b_name, cr87b_email, cr87b_eventid.",
+      "expected_output": "The skill detects Vue framework, discovers Events and Registrations from .datamodel-manifest.json, confirms tables with the user, then sequentially integrates both tables via the webapi-integration agent creating Vue composables. After verification and build, it follows Path A for permissions — parsing the user-provided Mermaid diagram to extract the Authenticated Role, two table permissions (Events with Read, Registrations with CRUD and Parent scope), and site settings. It validates the column names against Dataverse (case-sensitive), creates the YAML files using deterministic scripts, commits, and offers deployment.",
+      "files": [],
+      "expectations": [
+        "Vue framework is detected from package.json (vue dependency)",
+        "Events and Registrations tables are discovered from .datamodel-manifest.json",
+        "User is asked to confirm which tables to integrate",
+        "Tables are processed sequentially via the webapi-integration agent",
+        "The shared powerPagesApi.ts API client is created during the first table's integration",
+        "Vue composables are created (e.g., src/composables/useEvents.ts, src/composables/useRegistrations.ts)",
+        "Type definition files are created for each table in src/types/",
+        "Service files are created for each table",
+        "npm run build is executed to verify the project compiles",
+        "A git commit is made after integration code",
+        "Path A is followed for permissions since the user provided a Mermaid diagram",
+        "The Mermaid diagram is parsed to extract web roles, table permissions, scopes, and CRUD flags",
+        "The Authenticated Role is matched to an existing web role in .powerpages-site/web-roles/ to get its UUID",
+        "Events table permission is created with Read-only access and Global or appropriate scope",
+        "Registrations table permission is created with CRUD access and Parent scope referencing Events via cr87b_event_registrations",
+        "Column names (cr87b_name, cr87b_date, cr87b_location, cr87b_email, cr87b_eventid) are validated against Dataverse for exact case-sensitive LogicalNames",
+        "Registrations site settings fields include both cr87b_eventid and _cr87b_eventid_value for the lookup column",
+        "Site setting YAML files are created using the create-site-setting.js script, not manually written",
+        "Table permission YAML files are created using the create-table-permission.js script",
+        "A git commit is made after permissions and site settings files",
+        "User is asked whether to deploy the site"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "add web api to my power pages site for the Projects and Tasks tables. it's a react site but I haven't deployed it yet so the .powerpages-site folder doesn't exist.",
+      "expected_output": "The skill detects React, discovers Projects and Tasks tables, confirms with the user, and proceeds with integration code (Phases 1-5) since those don't require deployment. After integration and build verification, at Phase 6 it detects the missing .powerpages-site folder and warns the user that permissions cannot be configured without deployment. It asks whether to deploy now or skip permissions. If the user chooses to deploy, it invokes deploy-site first then resumes permissions setup. If the user skips, it notes that permissions are pending and presents a partial summary.",
+      "files": [],
+      "expectations": [
+        "Project root is located via powerpages.config.json",
+        "React framework is detected from package.json",
+        "Projects and Tasks tables are discovered from .datamodel-manifest.json",
+        "The absence of .powerpages-site folder is detected during Phase 1",
+        "A warning is issued that permissions setup will require deployment first",
+        "Integration code phases (2-5) proceed despite missing .powerpages-site",
+        "Tables are processed sequentially via the webapi-integration agent",
+        "The shared powerPagesApi.ts API client is created",
+        "Type files, service files, and React hooks are created for both tables",
+        "npm run build is executed to verify the project compiles",
+        "A git commit is made after integration code",
+        "At Phase 6, user is asked whether to deploy now or skip permissions",
+        "If user chooses to skip, the summary notes that table permissions and site settings still need to be configured",
+        "If user chooses to deploy, deploy-site is invoked before permissions setup resumes",
+        "User is presented with a summary of completed work",
+        "TaskCreate/TaskUpdate tracks progress including the deployment prerequisite status"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I need to add web api integration for just the Contacts table in my react site. I already have a powerPagesApi.ts client set up from a previous integration. Let the architects handle permissions.",
+      "expected_output": "The skill detects React, discovers the Contacts table, and during exploration notices that src/shared/powerPagesApi.ts already exists. It confirms the single table with the user, then invokes the webapi-integration agent for Contacts only, which reuses the existing API client rather than creating a new one. After verifying the new type, service, and hook files exist and the build succeeds, it invokes the table-permissions-architect and webapi-settings-architect agents for the single table. After approval and file creation, it commits and offers deployment.",
+      "files": [],
+      "expectations": [
+        "Project root is located via powerpages.config.json",
+        "React framework is detected from package.json",
+        "Contacts table is discovered from .datamodel-manifest.json",
+        "The Explore agent detects that src/shared/powerPagesApi.ts already exists",
+        "User is asked to confirm integration for the Contacts table",
+        "Only one table is processed via the webapi-integration agent",
+        "The existing powerPagesApi.ts API client is reused, not recreated",
+        "A type definition file is created for Contacts in src/types/",
+        "A service file is created for Contacts (e.g., contactService.ts)",
+        "A React hook is created for Contacts (e.g., useContacts.ts)",
+        "npm run build is executed to verify no errors",
+        "A git commit is made after integration code",
+        "The table-permissions-architect agent is invoked for the single Contacts table",
+        "The webapi-settings-architect agent is invoked and validates column names against Dataverse (case-sensitive)",
+        "Site settings for Contacts use exact Dataverse LogicalNames (all lowercase)",
+        "A git commit is made after permissions and site settings",
+        "A summary is presented showing the single table integration",
+        "User is asked whether to deploy"
+      ]
+    }
+  ]
+}

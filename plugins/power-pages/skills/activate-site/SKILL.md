@@ -8,7 +8,7 @@ description: >
   Power Platform environment via the Power Platform REST API.
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: opus
+model: sonnet
 hooks:
   Stop:
     - hooks:
@@ -283,6 +283,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 #### 5.3 Suggest Next Steps
 
 After the summary, suggest:
+- Test the site: `/power-pages:test-site` — Verify the site loads correctly and API calls are working
 - Set up the data model: `/power-pages:setup-datamodel`
 - Add sample data: `/power-pages:add-sample-data`
 - View the site in the browser at the provisioned URL (note: it may take a few minutes for DNS to propagate)

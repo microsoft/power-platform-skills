@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Data Model Plan — __SITE_NAME__</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
+  --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --critical:#d13438; --critical-bg:#d134380a; --critical-border:#d1343820;
+  --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+  --shadow-16:0 6.4px 14.4px 0 rgba(0,0,0,0.132),0 1.2px 3.6px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+
+
+/* Top Bar */
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+
+/* Layout */
+.layout{display:flex;min-height:calc(100vh - 65px);}
+
+/* Sidebar */
+.sidebar{width:200px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+
+/* Content */
+.content{flex:1;padding:32px 40px;max-width:960px;}
+.content.full-width{max-width:none;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+
+/* Stats Grid */
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--pass);}
+.stat-card:nth-child(2)::after{background:var(--high);}
+.stat-card:nth-child(3)::after{background:var(--accent);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+
+/* Summary Box */
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+
+/* Prefix Box */
+.prefix-box{display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--accent-border);border-radius:var(--radius);padding:8px 16px;margin-bottom:20px;}
+.prefix-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;}
+.prefix-value{font-size:16px;font-weight:800;font-family:var(--mono);color:var(--accent);}
+
+/* Principles / Rationale */
+.principle{display:flex;gap:16px;padding:16px 0;border-bottom:1px solid var(--border);}
+.principle:last-child{border-bottom:none;}
+.principle-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.principle-title{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:3px;}
+.principle-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+
+/* Status Tags */
+.status-tag{font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-align:center;min-width:58px;text-transform:uppercase;letter-spacing:0.5px;}
+.status-new{color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);}
+.status-modified{color:var(--high);background:var(--high-bg);border:1px solid var(--high-border);}
+.status-reused{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+
+/* Key badge */
+.key-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;font-family:var(--mono);}
+.key-PK{color:var(--accent);background:var(--accent-bg);}
+.key-FK{color:var(--purple);background:var(--purple-bg);}
+
+/* Column type chip */
+.type-chip{font-size:10px;font-family:var(--mono);color:var(--text-dim);background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
+
+/* Required dot */
+.req-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--critical);margin-right:2px;vertical-align:middle;}
+
+/* Field label */
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
+
+/* Expandable */
+.expandable-header{display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-user-select:none;user-select:none;padding:11px 14px;border-radius:var(--radius-sm);}
+.expandable-header:hover{background:var(--surface2);}
+.expand-chevron{color:var(--text-dim);font-size:12px;transition:transform 0.2s;flex-shrink:0;}
+.expanded .expand-chevron{transform:rotate(90deg);}
+.expandable-body{display:none;padding:0 14px 14px;border-top:1px solid var(--border);margin-top:4px;}
+.expanded .expandable-body{display:block;animation:fadeIn 0.2s ease;}
+
+/* Columns table */
+.col-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+.col-table th{text-align:left;font-size:10px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:6px 8px;border-bottom:2px solid var(--border);background:var(--surface2);}
+.col-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.col-table tr:last-child td{border-bottom:none;}
+.col-table tr:hover td{background:var(--surface2);}
+.col-table .col-logical{font-family:var(--mono);font-size:11px;color:var(--text-bright);}
+.col-table .col-display{color:var(--text);font-weight:500;}
+.col-table .col-new{background:var(--accent-bg);}
+
+/* Relationship chips */
+.rel-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:4px 10px;border-radius:4px;background:var(--surface2);border:1px solid var(--border);margin-right:6px;margin-bottom:4px;}
+.rel-arrow{color:var(--accent);font-weight:700;font-family:var(--mono);}
+
+/* ER Diagram */
+.er-container{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0;min-height:calc(100vh - 250px);position:relative;overflow:hidden;cursor:grab;}
+.er-container.panning{cursor:grabbing;}
+.er-container svg{width:100% !important;max-width:100%;height:auto !important;}
+.er-zoom-controls{position:absolute;top:12px;right:12px;display:flex;flex-direction:column;gap:4px;z-index:10;}
+.er-zoom-btn{width:32px;height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:var(--mono);transition:all 0.15s;box-shadow:var(--shadow-4);}
+.er-zoom-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
+.er-zoom-level{text-align:center;font-size:10px;color:var(--text-dim);font-family:var(--mono);font-weight:600;padding:2px 0;}
+.er-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+.er-legend{display:flex;gap:14px;flex-wrap:wrap;}
+.er-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);font-weight:500;}
+.er-legend-swatch{width:12px;height:12px;border-radius:2px;border:2px solid;}
+.er-toggle{padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;}
+.er-toggle:hover{border-color:var(--accent);color:var(--accent);}
+.er-toggle.active{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px;}
+  .stats-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PP</div>
+      <div>
+        <div class="topbar-title">Data Model Plan</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="tables"><span class="nav-icon">&#9638;</span> Tables</button>
+      <button class="nav-btn" data-tab="diagram"><span class="nav-icon">&#9672;</span> ER Diagram</button>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- OVERVIEW -->
+      <div class="section active" id="tab-overview">
+        <h2>Plan Overview</h2>
+        <p class="section-desc">Data model architecture for <code>__SITE_NAME__</code></p>
+
+        <div class="summary-box" id="summaryBox">__SUMMARY__</div>
+
+        <div class="prefix-box">
+          <span class="prefix-label">Publisher Prefix</span>
+          <span class="prefix-value" id="prefixValue"></span>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--pass)" id="statNew">0</div><div class="stat-label">New Tables</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--high)" id="statModified">0</div><div class="stat-label">Modified Tables</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--accent)" id="statReused">0</div><div class="stat-label">Reused Tables</div></div>
+        </div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+      </div>
+
+      <!-- TABLES -->
+      <div class="section" id="tab-tables">
+        <h2>Tables</h2>
+        <p class="section-desc" id="tablesDesc"></p>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <span class="status-tag status-new">New</span>
+            <span class="status-tag status-modified">Modified</span>
+            <span class="status-tag status-reused">Reused</span>
+          </div>
+          <button id="expandAllBtn" onclick="toggleExpandAll()" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
+        </div>
+        <div id="tablesContainer"></div>
+      </div>
+
+      <!-- ER DIAGRAM -->
+      <div class="section" id="tab-diagram">
+        <h2>ER Diagram</h2>
+        <p class="section-desc">Entity-relationship diagram showing all tables and their relationships</p>
+        <div class="er-toolbar">
+          <div class="er-legend">
+            <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(0,120,212,0.08);border-color:#0078d4;"></span> New</div>
+            <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(202,80,16,0.08);border-color:#ca5010;"></span> Modified</div>
+            <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(16,124,16,0.08);border-color:#107c10;"></span> Reused</div>
+          </div>
+          <button id="erCompactBtn" class="er-toggle" onclick="toggleErCompact()">Compact View</button>
+        </div>
+        <div class="er-container" id="erDiagram">
+          <div class="er-zoom-controls">
+            <button class="er-zoom-btn" onclick="erZoom(0.2)" title="Zoom in">+</button>
+            <div class="er-zoom-level" id="erZoomLevel">100%</div>
+            <button class="er-zoom-btn" onclick="erZoom(-0.2)" title="Zoom out">&minus;</button>
+            <button class="er-zoom-btn" onclick="erResetView()" title="Reset view" style="font-size:12px;">&#8634;</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// Data is populated by the data-model-architect agent
+const SITE_NAME = "__SITE_NAME__";
+const PREFIX = "__PREFIX__";
+
+const TABLES = __TABLES_DATA__;
+// Each table: { id, logicalName, displayName, status ("new"|"modified"|"reused"), rationale, columns: [{ logicalName, displayName, type, required, key ("PK"|"FK"|null), isNew }], relationships: [{ description, relatedTable, type, foreignKey }] }
+
+const RATIONALE = __RATIONALE_DATA__;
+// Array of { icon, title, desc }
+
+const ER_DIAGRAM = `__ER_DIAGRAM__`;
+// Mermaid erDiagram code as a string
+
+// Tab navigation
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    document.querySelector('.content').classList.toggle('full-width', btn.dataset.tab === 'diagram');
+  });
+});
+
+const statusColors = {
+  new: 'var(--accent)', modified: 'var(--high)', reused: 'var(--pass)'
+};
+const statusBorderColors = {
+  new: 'var(--accent-border)', modified: 'var(--high-border)', reused: 'var(--pass-border)'
+};
+
+// Stats
+document.getElementById('prefixValue').textContent = PREFIX || '—';
+document.getElementById('statNew').textContent = TABLES.filter(t => t.status === 'new').length;
+document.getElementById('statModified').textContent = TABLES.filter(t => t.status === 'modified').length;
+document.getElementById('statReused').textContent = TABLES.filter(t => t.status === 'reused').length;
+
+const totalColumns = TABLES.reduce((sum, t) => sum + (t.columns ? t.columns.length : 0), 0);
+const totalRelationships = TABLES.reduce((sum, t) => sum + (t.relationships ? t.relationships.length : 0), 0);
+document.getElementById('tablesDesc').textContent =
+  TABLES.length + ' table' + (TABLES.length !== 1 ? 's' : '') +
+  ', ' + totalColumns + ' column' + (totalColumns !== 1 ? 's' : '') +
+  ', ' + totalRelationships + ' relationship' + (totalRelationships !== 1 ? 's' : '') + '.';
+
+// Render Rationale
+function renderRationale() {
+  const c = document.getElementById('rationaleContainer');
+  let html = '';
+  RATIONALE.forEach(r => {
+    html += `<div class="principle">
+      <div class="principle-icon">${r.icon}</div>
+      <div>
+        <div class="principle-title">${r.title}</div>
+        <div class="principle-desc">${r.desc}</div>
+      </div>
+    </div>`;
+  });
+  c.innerHTML = html;
+}
+
+// Render Tables
+function renderTables() {
+  const c = document.getElementById('tablesContainer');
+  let html = '';
+  const order = { new: 0, modified: 1, reused: 2 };
+  const sorted = [...TABLES].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
+  sorted.forEach(t => {
+    const statusClass = 'status-' + t.status;
+    const bgStyle = t.status === 'new' ? 'background:var(--accent-bg);border-color:var(--accent-border);' : t.status === 'modified' ? 'background:var(--high-bg);border-color:var(--high-border);' : '';
+
+    // Columns table
+    let colHtml = '';
+    if (t.columns && t.columns.length > 0) {
+      colHtml = `<div style="margin-top:12px;"><div class="field-label">Columns</div>
+        <table class="col-table">
+          <thead><tr><th></th><th>Logical Name</th><th>Display Name</th><th>Type</th><th>Required</th></tr></thead>
+          <tbody>${t.columns.map(col => `<tr class="${col.isNew ? 'col-new' : ''}">
+            <td>${col.key ? `<span class="key-badge key-${col.key}">${col.key}</span>` : ''}</td>
+            <td class="col-logical">${col.logicalName}</td>
+            <td class="col-display">${col.displayName}</td>
+            <td><span class="type-chip">${col.type}</span></td>
+            <td>${col.required ? '<span class="req-dot"></span> Yes' : '<span style="color:var(--text-dim)">No</span>'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+    }
+
+    // Relationships
+    let relHtml = '';
+    if (t.relationships && t.relationships.length > 0) {
+      relHtml = `<div style="margin-top:12px;"><div class="field-label">Relationships</div>
+        <div style="margin-top:4px;">${t.relationships.map(r =>
+          `<div class="rel-chip"><span class="rel-arrow">${r.type || '1:N'}</span> ${r.description}${r.foreignKey ? ` <code style="font-size:10px;color:var(--accent);background:var(--accent-bg);padding:0 4px;border-radius:2px;">${r.foreignKey}</code>` : ''}</div>`
+        ).join('')}</div></div>`;
+    }
+
+    // Rationale
+    let ratHtml = '';
+    if (t.rationale) {
+      ratHtml = `<div style="margin-top:12px;"><div class="field-label">Rationale</div>
+        <div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid ${statusColors[t.status]};line-height:1.7;margin-top:4px;">${t.rationale}</div></div>`;
+    }
+
+    html += `<div class="card" style="border-left:3px solid ${statusColors[t.status]};padding:0;${bgStyle}">
+      <div class="expandable-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <span class="status-tag ${statusClass}">${t.status}</span>
+        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${t.displayName}</span>
+        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${t.logicalName}</code>
+        <span style="font-size:11px;color:var(--text-dim);">${t.columns ? t.columns.length : 0} cols</span>
+        <span class="expand-chevron">&#9654;</span>
+      </div>
+      <div class="expandable-body">
+        ${colHtml}
+        ${relHtml}
+        ${ratHtml}
+      </div>
+    </div>`;
+  });
+  c.innerHTML = html;
+}
+
+// Expand All toggle
+let allExpanded = false;
+function toggleExpandAll() {
+  allExpanded = !allExpanded;
+  const cards = document.querySelectorAll('#tablesContainer .card');
+  cards.forEach(card => {
+    if (allExpanded) card.classList.add('expanded');
+    else card.classList.remove('expanded');
+  });
+  document.getElementById('expandAllBtn').textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
+// Build ER diagram Mermaid code from TABLES data
+function buildErDiagram(compact) {
+  const lines = ['erDiagram'];
+  const entityIds = {};
+
+  TABLES.forEach(t => {
+    const eid = t.logicalName.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    entityIds[t.logicalName] = eid;
+    entityIds[t.id] = eid;
+    lines.push('    ' + eid + '["' + t.logicalName + ' (' + t.displayName + ')"] {');
+
+    const cols = compact
+      ? (t.columns || []).filter(c => c.key === 'PK')
+      : (t.columns || []);
+
+    cols.forEach(col => {
+      const type = col.type.replace(/[.\s]/g, '_');
+      const key = col.key || '';
+      lines.push('        ' + type + ' ' + col.logicalName + (key ? ' ' + key : ''));
+    });
+    lines.push('    }');
+  });
+
+  // Add relationships (deduplicate by pair)
+  const seen = new Set();
+  TABLES.forEach(t => {
+    if (!t.relationships) return;
+    const fromId = entityIds[t.logicalName] || entityIds[t.id];
+    t.relationships.forEach(r => {
+      const toId = entityIds[r.relatedTable];
+      if (!fromId || !toId || fromId === toId) return;
+
+      const pairKey = [fromId, toId].sort().join('|');
+      if (seen.has(pairKey)) return;
+      seen.add(pairKey);
+
+      let card = '||--o{';
+      if (r.type === '1:1' || r.type === '||--||') card = '||--||';
+      else if (r.type === 'N:N' || r.type === '}o--o{') card = '}o--o{';
+
+      const label = (r.description || 'relates').substring(0, 40).replace(/"/g, "'");
+      lines.push('    ' + toId + ' ' + card + ' ' + fromId + ' : "' + label + '"');
+    });
+  });
+
+  return lines.join('\n');
+}
+
+// Apply status-based colors to rendered SVG entity boxes
+// Mermaid v11 uses <path> elements inside g.node groups with IDs like "entity-CONTACT-0"
+function colorErDiagram(container) {
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+
+  const headerFills = { new: '#d0e4f5', modified: '#f5dcc8', reused: '#c8e6c9' };
+  const rowOddFills = { new: '#e8f2fc', modified: '#fdf0e6', reused: '#e8f5e9' };
+  const rowEvenFills = { new: '#f0f7fe', modified: '#fef6ee', reused: '#f1f9f1' };
+  const strokes = { new: '#0078d4', modified: '#ca5010', reused: '#107c10' };
+
+  // Build lookup: entity ID (uppercase) → status
+  const entityStatusMap = {};
+  TABLES.forEach(t => {
+    const eid = t.logicalName.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    entityStatusMap[eid] = t.status;
+  });
+
+  // Find entity nodes by their IDs (pattern: entity-{NAME}-{index})
+  svg.querySelectorAll('g.node').forEach(node => {
+    const id = node.getAttribute('id') || '';
+    const match = id.match(/^entity-(.+)-\d+$/);
+    if (!match) return;
+
+    const entityName = match[1];
+    const status = entityStatusMap[entityName];
+    if (!status) return;
+
+    // First child <g> contains two <path>: header fill + header outline
+    const headerGroup = node.children[0];
+    if (headerGroup && headerGroup.tagName === 'g') {
+      const paths = headerGroup.querySelectorAll('path');
+      if (paths[0]) paths[0].setAttribute('fill', headerFills[status]);
+      if (paths[1]) { paths[1].setAttribute('stroke', strokes[status]); paths[1].setAttribute('stroke-width', '2'); }
+    }
+
+    // Color alternating row backgrounds
+    node.querySelectorAll('.row-rect-odd, .row-rect-even').forEach(row => {
+      const isOdd = row.classList.contains('row-rect-odd');
+      const fillPath = row.querySelector('path');
+      if (fillPath) fillPath.setAttribute('fill', isOdd ? rowOddFills[status] : rowEvenFills[status]);
+    });
+  });
+}
+
+// Render ER diagram (compact = PK-only, full = all columns)
+let erCompact = false;
+let erRenderCounter = 0;
+let erScale = 1, erPanX = 0, erPanY = 0;
+let erIsPanning = false, erStartX = 0, erStartY = 0;
+
+function erApplyTransform() {
+  const container = document.getElementById('erDiagram');
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  svg.style.transform = 'translate(' + erPanX + 'px,' + erPanY + 'px) scale(' + erScale + ')';
+  document.getElementById('erZoomLevel').textContent = Math.round(erScale * 100) + '%';
+}
+
+function erZoom(delta) {
+  erScale = Math.min(3, Math.max(0.2, erScale + delta));
+  erApplyTransform();
+}
+
+function erFitToView() {
+  const container = document.getElementById('erDiagram');
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  // Temporarily remove transform so we can measure natural size
+  svg.style.transform = 'translate(0,0) scale(1)';
+  requestAnimationFrame(() => {
+    const cW = container.clientWidth;
+    const cH = container.clientHeight;
+    const box = svg.getBoundingClientRect();
+    const natW = box.width;
+    const natH = box.height;
+    if (natW === 0 || natH === 0) { erScale = 1; erPanX = 0; erPanY = 0; erApplyTransform(); return; }
+    const pad = 40;
+    erScale = Math.min((cW - pad) / natW, (cH - pad) / natH, 1);
+    erScale = Math.round(erScale * 100) / 100;
+    erPanX = (cW - natW * erScale) / 2;
+    erPanY = (cH - natH * erScale) / 2;
+    erApplyTransform();
+  });
+}
+
+function erResetView() {
+  erFitToView();
+}
+
+// Mouse wheel zoom (Ctrl/Cmd + scroll only)
+document.getElementById('erDiagram').addEventListener('wheel', function(e) {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  const oldScale = erScale;
+  erScale = Math.min(3, Math.max(0.2, erScale + delta));
+
+  // Zoom toward cursor position
+  const rect = this.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const ratio = erScale / oldScale;
+  erPanX = mx - ratio * (mx - erPanX);
+  erPanY = my - ratio * (my - erPanY);
+
+  erApplyTransform();
+}, { passive: false });
+
+// Pan with mouse drag
+document.getElementById('erDiagram').addEventListener('mousedown', function(e) {
+  if (e.target.closest('.er-zoom-controls')) return;
+  erIsPanning = true;
+  erStartX = e.clientX - erPanX;
+  erStartY = e.clientY - erPanY;
+  this.classList.add('panning');
+});
+document.addEventListener('mousemove', function(e) {
+  if (!erIsPanning) return;
+  erPanX = e.clientX - erStartX;
+  erPanY = e.clientY - erStartY;
+  erApplyTransform();
+});
+document.addEventListener('mouseup', function() {
+  if (erIsPanning) {
+    erIsPanning = false;
+    document.getElementById('erDiagram').classList.remove('panning');
+  }
+});
+
+function renderErDiagram() {
+  const container = document.getElementById('erDiagram');
+  // Preserve zoom controls
+  const controls = container.querySelector('.er-zoom-controls');
+  let code;
+  try {
+    code = buildErDiagram(erCompact);
+  } catch (e) {
+    code = ER_DIAGRAM; // Fallback to agent-provided diagram
+  }
+
+  const renderId = 'erSvg' + (++erRenderCounter);
+  function injectSvg(svgStr) {
+    // Remove existing SVG but keep controls
+    const oldSvg = container.querySelector('svg');
+    if (oldSvg) oldSvg.remove();
+    container.insertAdjacentHTML('beforeend', svgStr);
+    colorErDiagram(container);
+    erFitToView();
+  }
+
+  mermaid.render(renderId, code).then(({ svg }) => {
+    injectSvg(svg);
+  }).catch(() => {
+    // Fallback: try the agent-provided ER_DIAGRAM string
+    if (code !== ER_DIAGRAM) {
+      mermaid.render(renderId + 'fb', ER_DIAGRAM).then(({ svg }) => {
+        injectSvg(svg);
+      }).catch(() => {
+        const oldSvg = container.querySelector('svg');
+        if (oldSvg) oldSvg.remove();
+        container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
+      });
+    } else {
+      const oldSvg = container.querySelector('svg');
+      if (oldSvg) oldSvg.remove();
+      container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
+    }
+  });
+}
+
+function toggleErCompact() {
+  erCompact = !erCompact;
+  const btn = document.getElementById('erCompactBtn');
+  btn.textContent = erCompact ? 'Full View' : 'Compact View';
+  btn.classList.toggle('active', erCompact);
+  renderErDiagram();
+}
+
+// Init
+mermaid.initialize({ startOnLoad: false, theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
+renderRationale();
+renderTables();
+renderErDiagram();
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+</body>
+</html>

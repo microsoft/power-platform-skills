@@ -1,0 +1,87 @@
+{
+  "skill_name": "test-site",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Test my Power Pages site at https://contoso-portal.powerappsportals.com and make sure all the pages and APIs are working correctly.",
+      "expected_output": "The agent uses the provided URL directly without needing to resolve it from activation status. It launches a Playwright browser, resizes the viewport, navigates to the homepage, and verifies it loads successfully. It captures console errors and network requests during the initial load. Since the site is public (no login wall), it proceeds to crawl discoverable links up to a maximum of 25 pages, checking each for errors. It captures /_api/ requests, analyzes their status codes (all returning 200 OK), and confirms the APIs are healthy. Finally, it generates a test report with pass/fail results per page and per API endpoint, closes the browser, and provides next steps.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://contoso-portal.powerappsportals.com directly without prompting or checking activation status",
+        "Resizes the browser viewport to an appropriate dimension before navigating",
+        "Navigates to the homepage URL and verifies it loads without critical errors",
+        "Captures and reports any browser console errors during page loads",
+        "Captures network requests during navigation to identify API calls",
+        "Detects no login wall and proceeds without asking the user to authenticate",
+        "Crawls discoverable links on the site, visiting up to a maximum of 25 pages",
+        "Checks each crawled page for load errors, console errors, and failed network requests",
+        "Identifies /_api/ requests and analyzes their HTTP status codes",
+        "Reports all API endpoints as healthy when status codes are 200",
+        "Generates a final test report with per-page pass/fail results and per-API-endpoint results",
+        "Closes the browser session after testing is complete",
+        "Provides actionable next steps or recommendations based on the test results"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Run a full test on my Power Pages site. I don't have the URL handy but it should be activated already.",
+      "expected_output": "The agent detects that no URL was provided. It attempts to auto-detect the site URL by checking the activation status of the Power Pages site in the current environment. Once the URL is resolved from the activation status, it launches a Playwright browser, resizes the viewport, navigates to the resolved homepage, and verifies it loads. It captures console errors and network requests, confirms no login wall is present, crawls up to 25 pages, tests API endpoints, and generates a comprehensive test report before closing the browser.",
+      "files": [],
+      "expectations": [
+        "Recognizes that the user did not provide a site URL",
+        "Attempts to resolve the site URL from the activation status or environment configuration",
+        "Falls back to asking the user for the URL if auto-detection fails",
+        "Resizes the browser viewport before navigating to the site",
+        "Navigates to the resolved homepage and verifies successful load",
+        "Captures browser console errors and network requests during navigation",
+        "Crawls discoverable links up to a maximum of 25 pages",
+        "Identifies and analyzes /_api/ network requests with their status codes",
+        "Generates a test report summarizing pass/fail results for each page and API endpoint",
+        "Closes the browser after all tests are complete",
+        "Provides recommendations or next steps based on test findings"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Test https://hr-portal.powerappsportals.com to see if all pages load correctly. This site requires employees to log in.",
+      "expected_output": "The agent uses the provided URL, launches a Playwright browser, resizes the viewport, and navigates to the homepage. During the initial load, it detects a login wall (redirect to a sign-in page or presence of authentication prompts). It informs the user that authentication is required and asks the user to complete the login process in the browser. After the user logs in, the agent resumes testing by verifying the authenticated homepage, capturing console errors and network requests, crawling up to 25 pages behind the login wall, testing API endpoints, and generating a full test report before closing the browser.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://hr-portal.powerappsportals.com directly",
+        "Resizes the browser viewport to an appropriate dimension",
+        "Navigates to the homepage and detects a login wall or authentication redirect",
+        "Informs the user that the site requires authentication and asks them to log in",
+        "Waits for the user to complete the login process before continuing",
+        "After authentication, verifies the homepage loads correctly in the authenticated state",
+        "Captures browser console errors and network requests throughout testing",
+        "Crawls discoverable links up to a maximum of 25 pages in the authenticated context",
+        "Identifies /_api/ requests and analyzes their HTTP status codes",
+        "Generates a test report with per-page and per-API pass/fail results",
+        "Closes the browser session after testing is complete",
+        "Provides next steps or recommendations based on the test outcomes"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I need to test https://partner-portal.powerappsportals.com -- some of our API endpoints have been returning errors lately. Please check everything.",
+      "expected_output": "The agent uses the provided URL, launches a Playwright browser, resizes the viewport, and navigates to the homepage. It verifies the homepage loads, captures console errors and network requests, and confirms no login wall is present. It crawls up to 25 pages, finding some pages that load correctly and others that may show errors. Critically, it captures /_api/ requests and identifies several returning 403 Forbidden status codes. It provides detailed remediation guidance for the 403 errors, such as checking table permissions, web roles, and site settings. The final test report includes per-page pass/fail results, per-API-endpoint results with status codes, specific remediation steps for failing endpoints, and an overall summary with recommendations.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://partner-portal.powerappsportals.com directly",
+        "Resizes the browser viewport before navigating to the site",
+        "Navigates to the homepage and verifies it loads without critical failure",
+        "Captures browser console errors during all page loads",
+        "Captures network requests including /_api/ calls during navigation",
+        "Detects no login wall and proceeds with testing without authentication prompts",
+        "Crawls discoverable links on the site up to a maximum of 25 pages",
+        "Checks each crawled page for load errors and console issues",
+        "Identifies /_api/ requests that return 403 Forbidden status codes",
+        "Provides actionable remediation guidance for 403 errors such as reviewing table permissions, web roles, or site settings",
+        "Generates a final test report with per-page pass/fail results and per-API-endpoint results including status codes",
+        "Includes an overall summary distinguishing healthy endpoints from failing ones",
+        "Closes the browser session after all testing is complete",
+        "Provides prioritized next steps focusing on resolving the API failures"
+      ]
+    }
+  ]
+}

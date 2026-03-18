@@ -8,7 +8,7 @@ description: >
   so they can test and demo their Power Pages site.
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
-model: opus
+model: sonnet
 hooks:
   Stop:
     - hooks:
@@ -70,14 +70,14 @@ See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full
 
 If no manifest exists, discover custom tables via OData:
 
-```powershell
-$tables = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions?`$select=LogicalName,DisplayName,EntitySetName&`$filter=IsCustomEntity eq true" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
 For each discovered table, fetch its custom columns:
 
-```powershell
-$columns = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes?`$select=LogicalName,DisplayName,AttributeType,RequiredLevel&`$filter=IsCustomAttribute eq true" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
 ```
 
 ### 2.1 Present Available Tables
@@ -172,17 +172,16 @@ Refer to `references/odata-record-patterns.md` for full patterns.
 
 For each table, get the entity set name (needed for the API URL):
 
-```powershell
-$entityDef = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')?`$select=EntitySetName" -Headers $headers
-$entitySetName = $entityDef.EntitySetName
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
 ```
 
 ### 5.2 Get Picklist Options
 
 For any picklist/choice columns, query valid option values before insertion:
 
-```powershell
-$picklistMeta = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?`$expand=OptionSet" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
 ```
 
 Use the actual `Value` integers from the option set in your sample data.
@@ -191,21 +190,11 @@ Use the actual `Value` integers from the option set in your sample data.
 
 Insert records into parent/referenced tables first to capture their IDs:
 
-```powershell
-$body = @{
-    cr123_name = "Sample Record"
-    cr123_description = "A sample record for testing"
-} | ConvertTo-Json
-
-$response = Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/<EntitySetName>" -Headers $headers -Body $body -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<EntitySetName>" --body '{"cr123_name":"Sample Record","cr123_description":"A sample record for testing"}' --include-headers
 ```
 
-Capture the returned record ID from the `OData-EntityId` response header or by querying back:
-
-```powershell
-# The ID is in the response headers
-# Or query: GET {envUrl}/api/data/v9.2/<EntitySetName>?$filter=cr123_name eq 'Sample Record'&$select=cr123_<table>id
-```
+The `--include-headers` flag includes the `OData-EntityId` response header, which contains the created record ID. Parse the GUID from the response to use in child table lookups.
 
 Store parent record IDs for use in child table lookups.
 
@@ -213,13 +202,8 @@ Store parent record IDs for use in child table lookups.
 
 For child/referencing tables, use `@odata.bind` syntax to set lookup fields:
 
-```powershell
-$body = @{
-    cr123_name = "Child Record"
-    "cr123_ParentId@odata.bind" = "/<ParentEntitySetName>(<parent_guid>)"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/<ChildEntitySetName>" -Headers $headers -Body $body -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<ChildEntitySetName>" --body '{"cr123_name":"Child Record","cr123_ParentId@odata.bind":"/<ParentEntitySetName>(<parent_guid>)"}' --include-headers
 ```
 
 ### 5.5 Track Progress
@@ -231,11 +215,10 @@ Track each insertion attempt:
 
 ### 5.6 Refresh Token Periodically
 
-Refresh the Azure CLI token every 20 records to avoid expiration:
+The `dataverse-request.js` script handles 401 token refresh internally. For long-running operations (many records), periodically re-run `verify-dataverse-access.js` to confirm the session is still valid:
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers["Authorization"] = "Bearer $token"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 **Output**: All approved records inserted with parent-child relationships established
@@ -252,8 +235,8 @@ $headers["Authorization"] = "Bearer $token"
 
 For each table that was populated, query the record count:
 
-```powershell
-$count = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/<EntitySetName>?`$count=true&`$top=0" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "<EntitySetName>?\$count=true&\$top=0"
 ```
 
 The `@odata.count` field in the response gives the total record count.

@@ -1,0 +1,80 @@
+{
+  "skill_name": "deploy-site",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Deploy my Power Pages site. I'm already authenticated and the environment is correct. The project is in the current directory.",
+      "expected_output": "The skill verifies PAC CLI installation, confirms authentication via pac auth who, presents the current environment for user confirmation, locates powerpages.config.json, runs npm run build, executes pac pages upload-code-site, verifies the .powerpages-site folder exists, commits deployment artifacts, checks activation status, and offers to activate or suggests next steps.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified by running pac help",
+        "Authentication is checked via pac auth who",
+        "Current environment name and URL are presented to the user for confirmation",
+        "Project root is located by finding powerpages.config.json",
+        "npm run build is executed before uploading",
+        "pac pages upload-code-site is run with the correct --rootPath",
+        ".powerpages-site folder is verified to exist after upload",
+        "Deployment artifacts are committed via git add -A and git commit",
+        "Activation status is checked using the check-activation-status.js script",
+        "If site is not activated, user is asked whether to activate now or skip",
+        "Next steps are suggested including activate-site, test-site, setup-datamodel, and add-seo",
+        "TaskCreate is used to create a task list covering all 6 phases before starting work"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I want to push my code site to Power Pages. I haven't set up PAC CLI auth yet.",
+      "expected_output": "The skill verifies PAC CLI is installed, detects that the user is not authenticated via pac auth who, asks the user for their environment URL, runs pac auth create with the provided URL, verifies authentication succeeded, then proceeds with environment confirmation, build, upload, verification, and post-deployment steps.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified by running pac help",
+        "pac auth who is run and the unauthenticated status is detected",
+        "User is informed they are not authenticated with PAC CLI",
+        "AskUserQuestion is used to request the environment URL from the user",
+        "pac auth create --environment is run with the user-provided URL",
+        "pac auth who is run again to verify authentication succeeded",
+        "After successful auth, the environment is presented for confirmation",
+        "Project root is located, site is built with npm run build, and uploaded with pac pages upload-code-site",
+        "Post-deployment verification is performed including .powerpages-site check and git commit",
+        "TaskCreate is used upfront to track all phases"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Deploy my site to Power Pages. I've been getting errors about JavaScript files being blocked.",
+      "expected_output": "The skill completes pre-deployment checks, attempts the upload which fails due to blocked .js attachments, explains the issue to the user, asks for permission to unblock .js, retrieves the current blocked attachments list via pac env list-settings, removes js from the list, updates the setting via pac env update-settings, retries the upload successfully, and proceeds to verify deployment.",
+      "files": [],
+      "expectations": [
+        "PAC CLI and authentication are verified before attempting upload",
+        "Environment is confirmed with the user",
+        "pac pages upload-code-site is attempted and the blocked JavaScript error is detected",
+        "User is informed that .js attachments are blocked in the environment",
+        "AskUserQuestion is used to ask permission before modifying the blocked attachments setting",
+        "pac env list-settings is run to retrieve the current blockedattachments value",
+        "The js extension is removed from the semicolon-separated blocked attachments list",
+        "pac env update-settings is run with the updated list (without js)",
+        "pac pages upload-code-site is retried after unblocking",
+        "Post-deployment verification proceeds normally after successful retry",
+        "Git commit is made with deployment artifacts"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Upload my code site to Power Pages. I previously deployed to a different environment and now I'm getting an error about .html attachments being blocked.",
+      "expected_output": "The skill completes pre-deployment checks, attempts the upload which fails with a misleading HTML blocked attachment error, recognizes this is caused by a stale environment manifest in .powerpages-site, locates and deletes the old environment-specific manifest.yml file, retries the upload successfully, and proceeds to verify deployment.",
+      "files": [],
+      "expectations": [
+        "PAC CLI and authentication are verified",
+        "Environment is confirmed with the user",
+        "pac pages upload-code-site is attempted and the HTML blocked attachment error is detected",
+        "The error is recognized as misleading — not an actual .html block issue",
+        "The .powerpages-site folder is inspected for stale environment manifest files matching *-manifest.yml",
+        "The old environment-specific manifest.yml file is deleted",
+        "The skill does NOT attempt to unblock .html in the environment's blocked attachments list",
+        "pac pages upload-code-site is retried after deleting the manifest",
+        "Post-deployment verification proceeds after successful retry including .powerpages-site check and git commit",
+        "Activation status is checked and next steps are suggested"
+      ]
+    }
+  ]
+}

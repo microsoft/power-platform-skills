@@ -5,7 +5,7 @@ description: |
   frontend code. Trigger examples: "integrate web api for products table", "add api calls for orders",
   "connect my site to the blog posts table", "implement crud for categories", "set up web api client",
   "create a service for the products table", "add data fetching for my table", "hook up the products api".
-  This agent is NOT for configuring permissions or site settings — use the webapi-permissions agent for that.
+  This agent is NOT for configuring permissions or site settings — use the table-permissions-architect and webapi-settings-architect agents for that.
   This agent is NOT for designing data models — use the data-model-architect agent for that.
   This agent creates production-ready Web API integration code — a centralized API client, TypeScript types,
   and a CRUD service layer for a single Dataverse table. Called by the user or main agent.
@@ -137,28 +137,29 @@ If uncertain, use the name as provided by the user or manifest. The API-verified
 
 Get the environment URL from the manifest's `environmentUrl` field, or fall back to `pac env who`:
 
-```powershell
+```
 pac env who
-# Extract the "Environment URL" value → $envUrl
 ```
 
-Get an Azure CLI access token:
+Extract the `Environment URL` value (e.g., `https://org12345.crm.dynamics.com`).
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
+Verify Dataverse access and obtain an auth token:
+
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+```
+
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
 
 #### 2.5.2 Query Entity Set Name
 
 Get the actual OData entity set name from Dataverse (do not guess from pluralization):
 
-```powershell
-$entityDef = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')?`$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute" -Headers $headers
-$entitySetName = $entityDef.EntitySetName
-$primaryIdAttribute = $entityDef.PrimaryIdAttribute
-$primaryNameAttribute = $entityDef.PrimaryNameAttribute
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')?\$select=EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "EntitySetName": "...", "PrimaryIdAttribute": "...", "PrimaryNameAttribute": "..." } }`.
 
 Use the returned `EntitySetName` for all `/_api/` URLs. Use `PrimaryIdAttribute` as the record ID column name.
 
@@ -166,10 +167,11 @@ Use the returned `EntitySetName` for all `/_api/` URLs. Use `PrimaryIdAttribute`
 
 Fetch actual column logical names, display names, and types:
 
-```powershell
-$attrs = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?`$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&`$filter=IsCustomAttribute eq true or IsPrimaryId eq true" -Headers $headers
-$attrs.value | ForEach-Object { [PSCustomObject]@{ LogicalName = $_.LogicalName; DisplayName = $_.DisplayName.UserLocalizedLabel.Label; Type = $_.AttributeType } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
 
 This returns the **real** column logical names. Cross-reference against the manifest:
 
@@ -181,10 +183,11 @@ This returns the **real** column logical names. Cross-reference against the mani
 
 If the table has lookup columns, fetch relationship metadata to get the correct Navigation Property names (case-sensitive, needed for `$expand` and `@odata.bind`):
 
-```powershell
-$rels = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?`$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName" -Headers $headers
-$rels.value | ForEach-Object { [PSCustomObject]@{ NavigationProperty = $_.ReferencingEntityNavigationPropertyName; TargetTable = $_.ReferencedEntity; ForeignKey = $_.ReferencingAttribute } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?\$select=SchemaName,ReferencedEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName"
+```
+
+The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `ReferencingEntityNavigationPropertyName`, `ReferencedEntity`, `ReferencingAttribute`, and `SchemaName`.
 
 Use `ReferencingEntityNavigationPropertyName` as the Navigation Property name in `$expand` and `@odata.bind`. This is the **case-sensitive** name that must be used exactly.
 
@@ -453,7 +456,7 @@ Include this in the core API client file only if the site's code requires user-s
 
 ## Site Settings Prerequisites
 
-Web API calls will fail unless site settings (`Webapi/<table>/enabled`, `Webapi/<table>/fields`) and table permissions are configured. **This is handled by the `webapi-permissions` agent** — not this agent. After creating the integration code, note that the user should run the `webapi-permissions` agent if permissions are not yet set up.
+Web API calls will fail unless site settings (`Webapi/<table>/enabled`, `Webapi/<table>/fields`) and table permissions are configured. **This is handled by the `table-permissions-architect` and `webapi-settings-architect` agents** — not this agent. After creating the integration code, note that the user should run those agents if permissions and site settings are not yet set up.
 
 ---
 
@@ -546,7 +549,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 19. **File upload body is binary** — Send `ArrayBuffer` via `file.arrayBuffer()`, not JSON. Set `Content-Type` to the file's MIME type. Include `If-Match: *` and `x-ms-file-name` headers.
 20. **File download uses blob response** — Set `Accept: */*` (not `application/json`). Parse response as blob, not JSON. Return `null` on 404 instead of throwing.
 21. **Lookup GUID vs Navigation Property** — On GET, use `_{logicalname}_value` in `$select` for the raw GUID, and the Navigation Property in `$expand` for related data. On POST/PATCH, use `NavigationProperty@odata.bind` — never write directly to the `_value` property.
-22. **Remind about permissions** — After creating integration code, note that the `webapi-permissions` agent must be run to configure site settings and table permissions if not already done.
+22. **Remind about permissions** — After creating integration code, note that the `table-permissions-architect` and `webapi-settings-architect` agents must be run to configure table permissions and site settings if not already done.
 23. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.
 24. **Always update existing components** — Creating service files is not enough. After generating the API client, types, service, and hooks, you MUST search for and update all existing components that use mock data, hardcoded arrays, or placeholder fetch calls for the target table. Replace their data sources with the new service/hook. This is the most critical step — without it, the integration is incomplete.
 25. **Supported OData query options** — Power Pages Web API supports exactly these query params: `$select`, `$expand`, `$filter`, `$apply`, `$count`, `$top`, `$orderby`, `$skiptoken`, and `fetchXml`. Any other query params (e.g., `$skip`, `$search`) will be rejected if query param validation is enabled. Use `$apply` for aggregation queries (groupby, aggregate) when the UI needs totals, averages, or grouped counts.
@@ -600,5 +603,5 @@ Before confirming that work is done, verify every item below. Do not skip any ch
 - [ ] File placement follows existing project conventions (or the default layout from the File Placement Summary)
 
 ### User Guidance
-- [ ] Reminded user to run the `webapi-permissions` agent if table permissions and site settings are not yet configured
+- [ ] Reminded user to run the `table-permissions-architect` and `webapi-settings-architect` agents if table permissions and site settings are not yet configured
 - [ ] Noted that `Webapi/error/innererror` should be disabled before going live (if mentioned in context)

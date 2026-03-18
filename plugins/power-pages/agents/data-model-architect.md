@@ -17,8 +17,8 @@ tools:
   - Bash
   - EnterPlanMode
   - ExitPlanMode
+  - mcp__plugin_power-pages_playwright__browser_resize
   - mcp__plugin_power-pages_playwright__browser_navigate
-  - mcp__plugin_power-pages_playwright__browser_take_screenshot
   - mcp__plugin_power-pages_playwright__browser_wait_for
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search
@@ -76,7 +76,7 @@ Also factor in context from the user's original request (e.g., "I need a custome
 
 ## Step 2: Discover Existing Tables
 
-Always query the Dataverse OData API to discover what already exists in the environment. Use Azure CLI authentication.
+Always query the Dataverse OData API to discover what already exists in the environment. Use the shared Node.js scripts for authentication and API requests.
 
 ### 2.1 Get Environment URL
 
@@ -86,62 +86,62 @@ Run `pac env who` and parse the `Environment URL` field:
 pac env who
 ```
 
-Extract the environment URL (e.g., `https://org12345.crm.dynamics.com`). Store this as `$envUrl`.
+Extract the environment URL (e.g., `https://org12345.crm.dynamics.com`). Use this as the `<envUrl>` argument for subsequent script calls.
 
-### 2.2 Get Auth Token
+### 2.2 Verify Access
 
-Get an Azure CLI access token for the environment:
+Verify Dataverse access and obtain authentication details using the shared script:
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
-If `az` is not authenticated or not installed, inform the user and ask them to run `az login` first.
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. If it fails, inform the user that Azure CLI login is required (`az login`).
 
 ### 2.3 Query Existing Tables
 
 Fetch custom tables from Dataverse:
 
-```powershell
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-$tables = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions?`$select=LogicalName,DisplayName,Description&`$filter=IsCustomEntity eq true" -Headers $headers
-$tables.value | ForEach-Object { [PSCustomObject]@{ LogicalName = $_.LogicalName; DisplayName = $_.DisplayName.UserLocalizedLabel.Label; Description = $_.Description.UserLocalizedLabel.Label } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions?$select=LogicalName,DisplayName,Description&$filter=IsCustomEntity eq true"
+```
+
+The script outputs JSON with `status` and `data`. Parse `data.value` to list each table's `LogicalName`, `DisplayName.UserLocalizedLabel.Label`, and `Description.UserLocalizedLabel.Label`.
 
 ### 2.4 Query Table Columns
 
 For each relevant table, fetch its columns:
 
-```powershell
-$attrs = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_name>')/Attributes?`$select=LogicalName,DisplayName,AttributeType,RequiredLevel" -Headers $headers
-$attrs.value | ForEach-Object { [PSCustomObject]@{ LogicalName = $_.LogicalName; DisplayName = $_.DisplayName.UserLocalizedLabel.Label; Type = $_.AttributeType; Required = $_.RequiredLevel.Value } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/Attributes?$select=LogicalName,DisplayName,AttributeType,RequiredLevel"
+```
+
+Parse `data.value` to list each column's `LogicalName`, `DisplayName.UserLocalizedLabel.Label`, `AttributeType`, and `RequiredLevel.Value`.
 
 ### 2.5 Query Relationships
 
 Fetch relationships for relevant tables:
 
-```powershell
-$rels = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_name>')/OneToManyRelationships?`$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute" -Headers $headers
-$rels.value | ForEach-Object { [PSCustomObject]@{ Name = $_.SchemaName; From = $_.ReferencedEntity; To = $_.ReferencingEntity; ForeignKey = $_.ReferencingAttribute } } | Format-Table -AutoSize
 ```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_name>')/OneToManyRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute"
+```
+
+Parse `data.value` to list each relationship's `SchemaName`, `ReferencedEntity`, `ReferencingEntity`, and `ReferencingAttribute`.
 
 ### 2.6 Look Up Default Publisher Prefix
 
 Query the `CDS Default Publisher` to get the customization prefix used for new tables and columns:
 
-```powershell
-$publishers = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/publishers?`$filter=friendlyname eq 'CDS Default Publisher'&`$select=customizationprefix" -Headers $headers
-$prefix = $publishers.value[0].customizationprefix
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$filter=friendlyname eq 'CDS Default Publisher'&$select=customizationprefix"
 ```
 
-Store the result as `$prefix` (e.g., `cr123`). All new table logical names must be prefixed with `{prefix}_` (e.g., `cr123_project`) and all new custom column logical names must also use this prefix (e.g., `cr123_projectname`). This ensures new entities are created under the environment's default publisher.
+Parse `data.value[0].customizationprefix` to get the prefix (e.g., `cr123`). All new table logical names must be prefixed with `{prefix}_` (e.g., `cr123_project`) and all new custom column logical names must also use this prefix (e.g., `cr123_projectname`). This ensures new entities are created under the environment's default publisher.
 
 If the query returns no results, try querying all publishers and pick the first non-Microsoft one:
 
-```powershell
-$allPubs = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/publishers?`$select=friendlyname,customizationprefix" -Headers $headers
-$allPubs.value | ForEach-Object { [PSCustomObject]@{ FriendlyName = $_.friendlyname; Prefix = $_.customizationprefix } } | Format-Table -AutoSize
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "publishers?$select=friendlyname,customizationprefix"
 ```
 
 If still unable to determine the prefix, use `cr` as a placeholder and note in the proposal that the user should confirm their publisher prefix.
@@ -151,9 +151,9 @@ If still unable to determine the prefix, use `cr` as a placeholder and note in t
 If any of the above commands fail, include the error in your plan output so the user can see what went wrong:
 
 - If `pac env who` fails: Note that PAC CLI auth is required (`pac auth create`)
-- If `az account get-access-token` fails: Note that Azure CLI login is required (`az login`)
-- If OData API returns 401/403: Note that the token may have expired or permissions are insufficient
-- If OData API returns 404: Note that the environment URL may be incorrect
+- If `verify-dataverse-access.js` fails: Note that Azure CLI login is required (`az login`)
+- If `dataverse-request.js` returns a non-2xx `status`: Check the status code — 401/403 means permissions are insufficient, 404 means the environment URL or API path may be incorrect
+- The `dataverse-request.js` script handles 401 token refresh and 429/5xx retries automatically
 
 Do NOT stop the entire workflow for auth errors. Proceed with the steps you can complete (e.g., code analysis) and note which discovery steps were skipped and why.
 
@@ -182,7 +182,7 @@ Categorize each table as:
 
 ## Step 4: Propose Data Model via Plan Mode
 
-Once you have completed Steps 1-3, prepare the data model proposal. Sections 4.1–4.4 describe the plan content to assemble. Section 4.5 renders the ER diagram visually in the browser — do this **before** entering plan mode so the user can see the diagram while reviewing the textual plan. Sections 4.6–4.7 handle the plan mode interaction.
+Once you have completed Steps 1-3, prepare the data model proposal. Sections 4.1–4.3 describe the data to assemble. Section 4.4 covers the ER diagram. Section 4.5 renders the interactive HTML plan in the browser. Sections 4.6–4.7 handle plan mode for user approval.
 
 ### 4.1 Publisher Prefix
 
@@ -194,9 +194,11 @@ Existing/reused standard tables (e.g., `contact`, `account`) keep their original
 
 ### 4.2 Table Proposals
 
-For each table, always include **both the logical name and display name**:
+For each table, always include **both the logical name and display name** and explain **why** it is being proposed:
 
 **`<table_logical_name>`** — *<Display Name>* (`new` | `modified` | `reused`)
+
+**Rationale:** Explain why this table is needed — what site functionality or data requirement drives it, why you chose to create it new vs. reuse an existing table, and any key design decisions (e.g., "This table stores customer orders. A new table is needed because no existing table matches the order schema inferred from the `/orders` page and `OrderForm` component. Contact scope is recommended because each order belongs to a specific user.").
 
 | Column (Logical Name) | Display Name | Type | Required | Notes |
 |------------------------|-------------|------|----------|-------|
@@ -252,111 +254,121 @@ Follow these conventions:
 - Show cardinality: `||--o{` (one-to-many), `||--||` (one-to-one), `}o--o{` (many-to-many)
 - Include all proposed tables (new, modified, and reused)
 
-### 4.5 Render ER Diagram Visually
+### 4.5 Render Data Model Plan in Browser
 
-**Do this BEFORE entering plan mode.** Render the Mermaid ER diagram in the browser so the user can see it while reviewing the plan.
+**Do this BEFORE entering plan mode.** Render the complete data model plan — including tables, columns, rationale, and the ER diagram — as an interactive HTML page in the browser.
 
-1. Write a temporary HTML file to the **system temp directory** (NOT the project directory — avoid polluting the repo):
+The HTML template is at `${CLAUDE_PLUGIN_ROOT}/agents/assets/data-model-plan.html`. It uses placeholder tokens that you replace with actual data.
+
+#### 4.5.1 Prepare the Data
+
+Build these JavaScript data structures from your analysis:
+
+**TABLES array** — one object per table:
+```json
+[
+  {
+    "id": "cr123_order",
+    "logicalName": "cr123_order",
+    "displayName": "Order",
+    "status": "new",
+    "rationale": "Stores customer orders. A new table is needed because...",
+    "columns": [
+      { "logicalName": "cr123_orderid", "displayName": "Order ID", "type": "Uniqueidentifier", "required": true, "key": "PK", "isNew": true },
+      { "logicalName": "cr123_contactid", "displayName": "Contact", "type": "Lookup", "required": true, "key": "FK", "isNew": true },
+      { "logicalName": "cr123_ordernumber", "displayName": "Order Number", "type": "SingleLine.Text", "required": true, "key": null, "isNew": true }
+    ],
+    "relationships": [
+      { "description": "One Contact has many Orders", "relatedTable": "contact", "type": "1:N", "foreignKey": "cr123_contactid" }
+    ]
+  }
+]
+```
+
+- `status`: `"new"` | `"modified"` | `"reused"` — Classification rules:
+  - `"new"` — Table does not exist in Dataverse yet; will be created from scratch
+  - `"modified"` — Table already exists in Dataverse but you are proposing new columns, relationship changes, or other schema additions (i.e., any table with `isNew: true` columns must be `"modified"`)
+  - `"reused"` — Table already exists in Dataverse and is used as-is with NO schema changes (only existing columns are referenced)
+- `key`: `"PK"` | `"FK"` | `null`
+- `isNew` on columns: `true` for proposed new columns, `false` for existing ones
+
+**RATIONALE array** — design rationale items:
+```json
+[
+  { "icon": "🏗️", "title": "Why this structure", "desc": "Orders and Order Items are separate tables with a 1:many relationship because..." },
+  { "icon": "♻️", "title": "Reuse decisions", "desc": "The standard Contact table is modified (not just reused) because 3 new profile columns are needed beyond the existing Contact fields." },
+  { "icon": "⚖️", "title": "Trade-offs", "desc": "Considered using a single Products table but split into Products and Categories for..." }
+]
+```
+
+Include these rationale categories:
+- **Why this structure** — Key architectural decisions, relationship cardinalities, workflow support
+- **Reuse decisions** — Why specific existing tables were reused or extended
+- **Trade-offs** — Alternatives considered and why they were rejected
+- Any notes about skipped discovery steps due to auth errors
+- Any suggestions for indexes, alternate keys, or security roles
+
+**ER_DIAGRAM** — the Mermaid ER diagram code (from section 4.4), as a string.
+
+#### 4.5.2 Determine Output Location
+
+- **If working in the context of a website** (a project root with `powerpages.config.json` exists): write the file to `<PROJECT_ROOT>/docs/data-model-plan.html`
+- **Otherwise**: write to the system temp directory (`[System.IO.Path]::GetTempPath()`)
+
+#### 4.5.3 Write the HTML File
+
+**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
+
+1. Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/data-model-data.json`) containing:
+
+```json
+{
+  "SITE_NAME": "The site name (from powerpages.config.json or folder name)",
+  "SUMMARY": "A 2-3 sentence summary of the data model plan",
+  "PREFIX": "cr123",
+  "TABLES_DATA": [/* array of table objects from section 4.5.1 */],
+  "RATIONALE_DATA": [/* array of rationale objects */],
+  "ER_DIAGRAM": "erDiagram\n    CONTACT[\"contact (Contact)\"] {\n    ..."
+}
+```
+
+2. Run the render script:
 
 ```powershell
-# Get the temp directory path
-$tempDir = [System.IO.Path]::GetTempPath()
-# File path: $tempDir/er-diagram.html
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
-HTML template:
+3. Delete the temporary data JSON file after the script succeeds.
 
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>ER Diagram</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-  <style>
-    body {
-      background: #ffffff;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      margin: 0;
-      padding: 40px;
-      font-family: system-ui, sans-serif;
-    }
-    .mermaid {
-      width: 100%;
-      min-width: 1200px;
-    }
-    .mermaid svg {
-      width: 100% !important;
-      height: auto !important;
-    }
-  </style>
-</head>
-<body>
-  <pre class="mermaid">
-    <!-- paste the Mermaid erDiagram code here -->
-  </pre>
-  <script>mermaid.initialize({ startOnLoad: true, theme: 'default', er: { fontSize: 16, useMaxWidth: false } });</script>
-</body>
-</html>
-```
+#### 4.5.4 Open in Browser
 
-2. **Resize the browser** to a large viewport for a legible diagram:
+1. **Resize the browser** to a large viewport:
+   Use `browser_resize` with **width: 1920** and **height: 1080**.
 
-Use `browser_resize` with **width: 1920** and **height: 1080** before navigating.
+2. Navigate Playwright to the HTML file using `browser_navigate` with the full file path.
 
-3. Navigate Playwright to the file using a `file:///` URL:
-   - On Windows: `file:///C:/Users/<user>/AppData/Local/Temp/er-diagram.html`
-   - Convert backslashes to forward slashes in the path
+3. Wait for the page to render (wait for the `.stat-num` element, or wait ~3 seconds). The browser window remains open so the user can interact with the tabs.
 
-4. Wait for the diagram to render (wait for the `svg` element to appear, or wait ~3 seconds).
+If Playwright fails, fall back to presenting the plan as text in plan mode (section 4.7).
 
-5. Take a **full-page screenshot** using `browser_take_screenshot` with `fullPage: true` — this captures the entire diagram regardless of viewport height. The browser window also remains open so the user can view and interact with it directly.
+### 4.6 Design Rationale & Recommendations
 
-If Playwright fails to launch or navigate, fall back to printing an ASCII ER diagram directly in the conversation. Use box-drawing characters to represent tables and arrows for relationships:
-
-```
-┌──────────────────────┐       ┌──────────────────────────┐
-│ contact (Contact)    │       │ cr123_order (Order)      │
-├──────────────────────┤       ├──────────────────────────┤
-│ PK contactid         │       │ PK cr123_orderid         │
-│    fullname          │───┐   │ FK cr123_contactid       │
-│    emailaddress1     │   │   │    cr123_ordernumber     │
-└──────────────────────┘   │   │    cr123_totalamount     │
-                           │   └──────────────────────────┘
-                           │              ▲
-                           └──────────────┘
-                            1           many
-```
-
-Follow these conventions for the ASCII diagram:
-- Use `┌─┐│└─┘` box-drawing characters for table borders
-- Show `PK` and `FK` prefixes for key columns
-- Use `───` lines and `▲` arrows to show relationships
-- Label cardinality (`1`, `many`) near the connection points
-- Keep tables aligned horizontally or vertically for readability
-
-### 4.6 Recommendations & Next Steps
-
-End the plan with:
-- Any suggestions for indexes, alternate keys, or security roles
-- Note which discovery steps were skipped (if any) due to auth errors
-- State that the main agent will use this proposal to create the tables in Dataverse
+The rationale is embedded in the HTML plan (in the RATIONALE data and per-table `rationale` fields). When entering plan mode (section 4.7), include a brief text summary referencing the HTML for full details. Also note:
+- That the main agent will use this proposal to create the tables in Dataverse
+- Which discovery steps were skipped (if any) due to auth errors
 
 ### 4.7 Enter Plan Mode & Exit
 
-Use `EnterPlanMode` to present the complete proposal (sections 4.1–4.4 and 4.6) to the user. Then use `ExitPlanMode` for user review and approval.
+Use `EnterPlanMode` to present a brief summary directing the user to the HTML plan open in the browser. Include:
+- Total table counts by status (new/modified/reused)
+- Publisher prefix
+- Note that the interactive HTML has full details (tables, columns, rationale, ER diagram)
+
+Then use `ExitPlanMode` for user review and approval.
 
 ---
 
-## Step 5: Clean Up
-
-After the user approves the plan, delete the temporary `er-diagram.html` file from the system temp directory if it was created.
-
----
-
-## Step 6: Return Structured Output
+## Step 5: Return Structured Output
 
 After the user approves the plan, return the complete proposal back to the calling context. The output **must** include both logical names and display names for every table and column, so the main agent can create them in Dataverse. Structure the return as:
 

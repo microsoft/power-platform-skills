@@ -172,19 +172,18 @@ Only proceed to creation after explicit user approval.
 
 ### 5.1 Refresh Token
 
-Re-acquire the Azure CLI token (tokens expire after ~60 minutes):
+Re-acquire the auth token (tokens expire after ~60 minutes):
 
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 ### 5.2 Query Existing Tables
 
 For each table in the approved proposal marked as `new`, check whether it already exists:
 
-```powershell
-$headers = @{ Authorization = "Bearer $token"; Accept = "application/json" }
-Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table_logical_name>')"
 ```
 
 - **If 404**: Table does not exist, proceed to create it
@@ -219,14 +218,8 @@ Refer to `references/odata-api-patterns.md` for full JSON body templates.
 
 For each new table, POST to the EntityDefinitions endpoint:
 
-```powershell
-$body = <JSON body from references/odata-api-patterns.md>
-$headers = @{
-  Authorization = "Bearer $token"
-  "Content-Type" = "application/json"
-  Accept = "application/json"
-}
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/EntityDefinitions" -Headers $headers -Body $body
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions" --body '<JSON body from references/odata-api-patterns.md>'
 ```
 
 Use the deep-insert pattern to create the table and its columns in a single POST request. See `references/odata-api-patterns.md` for the complete JSON structure.
@@ -235,9 +228,8 @@ Use the deep-insert pattern to create the table and its columns in a single POST
 
 For tables marked as `modified`, add new columns one at a time:
 
-```powershell
-$body = <column JSON from references/odata-api-patterns.md>
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes" -Headers $headers -Body $body
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/EntityDefinitions(LogicalName='<table>')/Attributes" --body '<column JSON from references/odata-api-patterns.md>'
 ```
 
 ### 6.3 Track Progress
@@ -246,11 +238,7 @@ Track each creation attempt and its result (success/failure/skipped). Do NOT att
 
 ### 6.4 Refresh Token if Needed
 
-If creating many tables, refresh the token between batches (every 3–4 tables) to avoid expiration:
-
-```powershell
-$token = az account get-access-token --resource "$envUrl" --query accessToken -o tsv
-```
+If creating many tables, the `dataverse-request.js` script handles 401 token refresh automatically. No manual refresh is needed between batches.
 
 **Output**: All approved tables and columns created (or failures reported)
 
@@ -266,18 +254,16 @@ $token = az account get-access-token --resource "$envUrl" --query accessToken -o
 
 Create lookup columns that establish 1:N relationships:
 
-```powershell
-$body = <relationship JSON from references/odata-api-patterns.md>
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/RelationshipDefinitions" -Headers $headers -Body $body
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<relationship JSON from references/odata-api-patterns.md>'
 ```
 
 ### 7.2 Many-to-Many Relationships
 
 Create M:N relationships (intersect tables are created automatically):
 
-```powershell
-$body = <M:N relationship JSON from references/odata-api-patterns.md>
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/RelationshipDefinitions" -Headers $headers -Body $body
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/RelationshipDefinitions" --body '<M:N relationship JSON from references/odata-api-patterns.md>'
 ```
 
 ### 7.3 Track Relationship Creation
@@ -298,12 +284,8 @@ Track each relationship creation attempt. Report failures without rolling back.
 
 Publish all customizations so the new tables and columns become available:
 
-```powershell
-$publishBody = @{
-  ParameterXml = "<importexportxml><entities><entity>$( ($tables | ForEach-Object { $_.logicalName }) -join '</entity><entity>' )</entity></entities></importexportxml>"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post -Uri "$envUrl/api/data/v9.2/PublishXml" -Headers $headers -Body $publishBody -ContentType "application/json"
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "api/data/v9.2/PublishXml" --body '{"ParameterXml":"<importexportxml><entities><entity>cr123_project</entity><entity>cr123_task</entity></entities></importexportxml>"}'
 ```
 
 See `references/odata-api-patterns.md` for the full PublishXml pattern.
@@ -312,8 +294,8 @@ See `references/odata-api-patterns.md` for the full PublishXml pattern.
 
 For each created table, run a verification query:
 
-```powershell
-Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/EntityDefinitions(LogicalName='<table>')?`$select=LogicalName,DisplayName" -Headers $headers
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "api/data/v9.2/EntityDefinitions(LogicalName='<table>')?$select=LogicalName,DisplayName"
 ```
 
 ### 8.3 Write Manifest
@@ -381,7 +363,7 @@ After the summary, suggest:
 
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
-- **Refresh tokens proactively** — re-acquire the Azure CLI token before any batch of API calls, especially if more than a few minutes have passed
+- **Token refresh is automatic** — the `dataverse-request.js` script handles 401 token refresh and 429/5xx retry internally
 - **Report failures without rollback** — track each creation attempt and continue with remaining items on failure
 
 ### Key Decision Points (Wait for User)

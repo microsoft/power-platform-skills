@@ -1,0 +1,78 @@
+{
+  "skill_name": "add-sample-data",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just set up my datamodel with a few tables -- Projects, Tasks, and Team Members. Tasks have a lookup to Projects and Team Members. Can you add some sample data so I can test my site? Maybe like 10 records per table would be good.",
+      "expected_output": "The skill discovers the 3 tables (Projects, Tasks, Team Members) from .datamodel-manifest.json or OData API, determines the correct insertion order (Projects and Team Members first, then Tasks), asks the user to confirm table selection and record count, generates contextually appropriate sample data with realistic names/descriptions, inserts records via OData API respecting lookup relationships, and presents a verification summary with record counts per table.",
+      "files": [],
+      "expectations": [
+        "Prerequisites are verified (PAC CLI auth, Azure CLI token, API access)",
+        "Tables are discovered from .datamodel-manifest.json or OData API",
+        "User is asked to confirm which tables to populate",
+        "User is asked to select record count (with 10 as the chosen option)",
+        "Insertion order respects parent-child relationships (Projects and Team Members before Tasks)",
+        "Sample data uses contextually appropriate values (realistic project names, task descriptions, team member names)",
+        "Lookup columns in Tasks use @odata.bind syntax referencing parent record IDs",
+        "OData POST calls are made to insert records",
+        "A verification summary with record counts per table is presented",
+        "Token is refreshed if more than 20 records are being inserted"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "add sample data to my power pages site. i have tables for Courses, Students, and Enrollments. just 5 records each is fine, i just want to see if my lists and forms work",
+      "expected_output": "The skill discovers Courses, Students, and Enrollments tables, determines Courses and Students must be inserted before Enrollments (which references both), generates 5 records per table with realistic course names, student names, and enrollment dates, inserts them via OData API, and shows a summary.",
+      "files": [],
+      "expectations": [
+        "Prerequisites are verified before any data operations",
+        "All 3 tables (Courses, Students, Enrollments) are discovered",
+        "Insertion order: Courses and Students first, then Enrollments",
+        "Picklist/choice columns are queried for valid option values before generating data",
+        "Sample courses have realistic names (not generic 'Course 1', 'Course 2')",
+        "Sample students have realistic names",
+        "Enrollments reference actual inserted Course and Student record IDs via @odata.bind",
+        "Exactly 5 records per table are requested for insertion",
+        "A markdown preview of sample data is shown before insertion",
+        "Final summary includes record counts and any failures"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I need to populate my Dataverse tables with demo data for a presentation tomorrow. I have a Property Listings table, an Agents table, and a Showings table. Showings has lookups to both Properties and Agents. Can you add 25 records to each table? I want it to look realistic for the demo.",
+      "expected_output": "The skill handles the larger dataset (25 records x 3 tables = 75 total), discovers the tables and relationships, generates highly realistic real estate data (property addresses, agent names, showing dates/times), inserts parent tables first, refreshes the token during insertion since >20 records, and provides a detailed verification summary.",
+      "files": [],
+      "expectations": [
+        "Prerequisites are verified including API access confirmation",
+        "All 3 tables are discovered with their columns and relationships",
+        "User is presented with table list and confirms selection",
+        "25 records per table is confirmed as the record count",
+        "Insertion order: Property Listings and Agents first, then Showings",
+        "Property data includes realistic addresses, prices, and descriptions",
+        "Agent data includes realistic names, phone numbers, and email addresses",
+        "Showings reference actual Property and Agent record IDs",
+        "Azure CLI token is refreshed during insertion (75 records exceeds 20-record threshold)",
+        "Progress is tracked using TaskCreate/TaskUpdate throughout all phases",
+        "Verification queries confirm record counts match expected 25 per table",
+        "Summary table shows Records Requested vs Records Created vs Failures for each table"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "seed some test data into my tables. I only have one table -- a simple FAQ table with question, answer, and category columns. throw in about 10 records",
+      "expected_output": "The skill handles the simple single-table case with no relationships. Discovers the FAQ table, generates 10 realistic FAQ entries with varied categories, inserts them via OData, and verifies.",
+      "files": [],
+      "expectations": [
+        "Prerequisites are verified",
+        "FAQ table is discovered with its columns (question, answer, category)",
+        "No insertion order complexity since there's only one table with no lookups",
+        "If category is a picklist/choice column, valid option values are queried first",
+        "Generated FAQs cover diverse topics relevant to the site context",
+        "Questions and answers are realistic and substantive (not placeholder text)",
+        "All 10 records are inserted via OData POST calls",
+        "Verification confirms 10 records were created",
+        "Summary is presented even for this simple single-table case"
+      ]
+    }
+  ]
+}
