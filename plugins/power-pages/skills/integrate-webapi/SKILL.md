@@ -535,7 +535,7 @@ After deployment (or if skipped), remind the user:
 3. At Phase 6.1: Deploy now or skip permissions (if `.powerpages-site` missing)
 4. At Phase 6.2: Choose permissions source (upload diagram or let the architects analyze)
 5. At Phase 6.3: Approve table permissions plan and Web API site settings plan (both agents run in parallel for Path B, each presents its own plan for approval)
-7. At Phase 7.2: Deploy now or deploy later
+6. At Phase 7.2: Deploy now or deploy later
 
 ### Progress Tracking
 

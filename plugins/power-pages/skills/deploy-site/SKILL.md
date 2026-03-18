@@ -251,7 +251,7 @@ Evaluate the result:
 
 - **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
 - **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
-- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.6.1. Do not block the deployment flow due to a failed activation check.
+- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
