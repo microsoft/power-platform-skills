@@ -1,5 +1,6 @@
 {
   "skill_name": "genpage",
+  "eval_instructions": "When running these evals, the agent MUST save a workflow-log.md file alongside the generated code. The log must document every step attempted (Step 1 through Step 10), including: commands run (or attempted), questions asked, files read, decisions made, and infrastructure barriers encountered. This is required for grading workflow-level assertions.",
   "evals": [
     {
       "id": 1,
@@ -7,6 +8,7 @@
       "expected_output": "The skill validates prerequisites (node, pac), authenticates with PAC CLI, runs pac model list-languages, gathers requirements (acknowledges the description, confirms Dataverse entity usage with Account table), presents a plan, generates RuntimeTypes.ts via pac model genpage generate-types, reads genpage-rules-reference.md and a relevant sample (8-responsive-cards.tsx), generates a complete .tsx file using only verified column names from RuntimeTypes.ts, saves it, asks about deployment, runs pac model list, asks the user which app to publish to, deploys with pac model genpage upload, offers browser verification, and provides a final summary.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: node --version is run to verify Node.js is installed",
         "Step 1: pac help is run and PAC CLI version >= 2.3.1 is verified",
         "Step 1: Commands are run separately — not chained with &&",
@@ -45,6 +47,7 @@
       "expected_output": "The skill validates prerequisites, authenticates, detects languages, gathers requirements (confirms mock data usage, notes dark theme preference), presents a plan, skips schema generation (mock data), reads genpage-rules-reference.md and a relevant sample, generates a complete .tsx with D3.js for the chart, realistic mock data, Fluent UI V9 DataGrid for the table, and styled KPI cards using makeStyles with tokens. Deploys without --data-sources flag.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: node --version and pac help are run separately",
         "Step 2: pac auth list is run and environment is confirmed",
         "Step 2: pac model list-languages is run after confirming the environment",
@@ -76,6 +79,7 @@
       "expected_output": "The skill validates prerequisites, authenticates, detects languages, identifies this as an edit request, asks for the app-id and page-id, downloads the existing page with pac model genpage download, shows the current code, asks what changes to make (user confirms search + sorting), generates the updated code preserving existing functionality while adding search and sort, re-deploys with --page-id (no --add-to-sitemap), and offers verification.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: Prerequisites are validated",
         "Step 2: Authentication is confirmed and environment reported",
         "Step 2: pac model list-languages is run",
@@ -100,6 +104,7 @@
       "expected_output": "The skill validates prerequisites, authenticates, detects languages, gathers remaining requirements, presents a plan for a 3-step wizard, generates RuntimeTypes.ts for incident and contact entities, reads genpage-rules-reference.md and the wizard sample (2-wizard-multi-step.tsx), generates a complete .tsx with step navigation (Next/Back), form validation, Fluent UI V9 form components, and dataApi.createRow for submission. Deploys with --data-sources 'incident,contact'.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: Prerequisites validated with separate commands",
         "Step 2: Authentication confirmed, pac model list-languages run",
         "Step 3: Question 2 is skipped (user provided description)",
@@ -126,6 +131,7 @@
       "expected_output": "The skill validates prerequisites, authenticates, detects languages, gathers remaining requirements, presents a plan for a kanban-style board, generates RuntimeTypes.ts for the task entity, reads genpage-rules-reference.md and a relevant sample, generates a complete .tsx with column-based layout, task cards, drag-and-drop using native HTML5 drag events (no external DnD libraries), and dataApi.updateRow to persist status changes.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: Prerequisites validated",
         "Step 2: Authentication confirmed, pac model list-languages run",
         "Step 3: Description is acknowledged from the command — question 2 is skipped",
@@ -148,6 +154,7 @@
       "expected_output": "The skill validates prerequisites, authenticates, detects languages, confirms mock data usage, presents a minimal plan, skips schema generation, reads rules and samples, generates a clean .tsx with D3.js charts for traffic trends (line/area chart) and demographics (pie/bar chart), realistic mock data, and minimal Fluent UI styling. Deploys without --data-sources.",
       "files": [],
       "expectations": [
+        "A workflow-log.md file is saved documenting all steps attempted",
         "Step 2: pac model list-languages is run",
         "Step 3: Mock data usage is confirmed (no Dataverse entities)",
         "Step 4: Plan reflects minimal/clean design preference",
