@@ -36,7 +36,7 @@
         "Step 8: User is asked 'Would you like to publish this page to Power Apps?'",
         "Step 8: pac model list is run to show available apps",
         "Step 8: User is asked which app to publish to — no default is assumed",
-        "Step 8: pac model genpage upload is run with --app-id, --code-file, --data-sources, --prompt, --model, --agent-message, --add-to-sitemap flags",
+        "Step 8: pac model genpage upload is run with --app-id, --code-file, --data-sources, --prompt, --model, --name, --agent-message, --add-to-sitemap flags",
         "Step 9: User is asked about browser verification via AskUserQuestion",
         "Step 10: Final summary includes confirmation, how to find the page, and offer to make updates"
       ]
