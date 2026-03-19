@@ -91,14 +91,12 @@ Read all files matching `**/.powerpages-site/table-permissions/*.tablepermission
 
 ### 2.3 Analyze Site Code
 
-Search the source code to understand which tables the site actually uses:
+Search the site source code for:
 
-```text
-Grep: "/_api/" in src/**/*.ts src/**/*.tsx src/**/*.js src/**/*.jsx
-Grep: "@odata\.bind" in src/**/*.ts src/**/*.tsx
-Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image" in src/**/*.ts
-Grep: "\$expand|buildExpandClause|ExpandOption" in src/**/*.ts
-```
+- Web API calls (`/_api/`)
+- Lookup bindings (`@odata.bind`)
+- File uploads (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`)
+- `$expand` usage (`$expand`, `buildExpandClause`, `ExpandOption`)
 
 Also check for `.datamodel-manifest.json` in the project root for the authoritative table list.
 
@@ -213,11 +211,7 @@ Does the permission have web role(s) assigned?
 **C. Scope Appropriateness**
 
 Is the scope the least-privileged option that fits?
-- Search the service code for scope-relevant patterns:
-  ```text
-  Grep: "getCurrentContactId|_contactid_value|contactid" in src/**/*<tableName>*.ts
-  Grep: "_accountid_value|parentcustomerid" in src/**/*<tableName>*.ts
-  ```
+- Search the service code for scope-relevant patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`)
 - If Global scope (`756150000`) with `write` or `delete` enabled → finding:
   - **Severity:** `warning`
   - **Title:** `Global scope with write/delete on <table>`
@@ -234,11 +228,7 @@ Is the scope the least-privileged option that fits?
 **D. Read Permission**
 
 Is `read` correctly set?
-- Search for GET/list/get patterns for this table:
-  ```text
-  Grep: "/_api/<entity_set>" in src/**/*.ts
-  Grep: "list<TableName>|get<TableName>" in src/**/*.ts
-  ```
+- Search the service code for GET/list/get patterns for this table: API calls to `/_api/<entity_set>`, list/get functions (`list<TableName>`, `get<TableName>`)
 - If code reads this table but `read: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing read permission for <table>`
@@ -249,11 +239,7 @@ Is `read` correctly set?
 **E. Create Permission**
 
 Is `create` correctly set?
-- Search for POST/create patterns:
-  ```text
-  Grep: "method:\s*['\"]POST['\"]" in src/**/*<tableName>*.ts
-  Grep: "create<TableName>" in src/**/*.ts
-  ```
+- Search the service code for POST/create patterns: POST method usage (`method: 'POST'`), create functions (`create<TableName>`)
 - If code creates records but `create: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing create permission for <table>`
@@ -269,12 +255,7 @@ Is `create` correctly set?
 **F. Write Permission**
 
 Is `write` correctly set?
-- Search for PATCH/update/upload patterns:
-  ```text
-  Grep: "method:\s*['\"]PATCH['\"]" in src/**/*<tableName>*.ts
-  Grep: "update<TableName>" in src/**/*.ts
-  Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image|upload\w+File" in src/**/*.ts
-  ```
+- Search the service code for PATCH/update/upload patterns: PATCH method usage (`method: 'PATCH'`), update functions (`update<TableName>`), file upload patterns (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`, `upload*File`)
 - If code updates records but `write: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing write permission for <table>`
@@ -300,11 +281,7 @@ Is `write` correctly set?
 **G. Delete Permission**
 
 Is `delete` correctly set?
-- Search for DELETE patterns:
-  ```text
-  Grep: "method:\s*['\"]DELETE['\"]" in src/**/*<tableName>*.ts
-  Grep: "delete<TableName>" in src/**/*.ts
-  ```
+- Search the service code for DELETE patterns: DELETE method usage (`method: 'DELETE'`), delete functions (`delete<TableName>`)
 - If code deletes records but `delete: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing delete permission for <table>`
@@ -320,10 +297,7 @@ Is `delete` correctly set?
 **H. Append/AppendTo**
 
 Are `append` and `appendto` correctly set?
-- If this table has `create` or `write` enabled, check for lookup columns (from Step 3.2):
-  ```text
-  Grep: "@odata\.bind" in src/**/*<tableName>*.ts
-  ```
+- If this table has `create` or `write` enabled, search the service code for lookup column usage (`@odata.bind` patterns for this table, from Step 3.2)
 - If lookups exist and `append: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing append on <table>`
@@ -351,10 +325,7 @@ If the permission has Parent scope (`756150003`):
 **J. $expand Related Table Coverage**
 
 Is this table fetched via `$expand` on another table's query?
-- Check the `$expand` analysis from Step 2.3:
-  ```text
-  Grep: "\$expand|buildExpandClause|ExpandOption" in src/**/*.ts
-  ```
+- Check the `$expand` analysis from Step 2.3 (search site source code for `$expand`, `buildExpandClause`, `ExpandOption`)
 - If this table is expanded from another table but has no table permission with `read: true` for the same web role → finding:
   - **Severity:** `critical`
   - **Title:** `Missing read permission for expanded table <table>`

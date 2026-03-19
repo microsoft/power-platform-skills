@@ -177,11 +177,7 @@ buildExpandClause
 
 ### 3.2.1 Detect `$expand` Related Tables
 
-Search for `$expand` usage in service code to identify related tables that need read permissions:
-
-```text
-Grep: "\$expand|buildExpandClause|ExpandOption" in src/**/*.ts
-```
+Search the site source code for `$expand` usage (`$expand`, `buildExpandClause`, `ExpandOption`) to identify related tables that need read permissions.
 
 For each expanded navigation property found:
 - **Single-valued (lookup):** The target table needs `read: true` table permission for the same web role
@@ -252,68 +248,39 @@ Evaluate the scope based on code patterns. Check **each scope option** and pick 
 | **Parent** (`756150003`) | Table is a child accessed via parent (e.g., order lines under orders), `$expand` with one-to-many | Child tables that inherit access from parent |
 | **Global** (`756150000`) | No user/contact filter, public browsing, anonymous access | **Last resort** — only for read-only public reference data |
 
-Search the service code for filter patterns:
-```text
-Grep: "getCurrentContactId|_contactid_value|contactid" in src/**/*.ts
-Grep: "_accountid_value|parentcustomerid" in src/**/*.ts
-```
+Search the service code for scope-relevant filter patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`).
 
 **D. Determine Read**
 
 Is `read: true` needed?
-- Search for: GET requests to `/_api/<entity_set>`, list/get functions, `$select` patterns, `$expand` that references this table
-- **Evidence patterns:**
-  ```text
-  Grep: "/_api/<entity_set>" in src/**/*.ts (GET or general fetch)
-  Grep: "list<TableName>|get<TableName>" in src/**/*.ts
-  ```
+- Search the service code for: GET requests to `/_api/<entity_set>`, list/get functions (`list<TableName>`, `get<TableName>`), `$select` patterns, `$expand` that references this table
 - If this table is only accessed via `$expand` from another table → still needs `read: true`
 - **Decision:** `true` if any read pattern found, `false` otherwise
 
 **E. Determine Create**
 
 Is `create: true` needed?
-- Search for: POST requests to `/_api/<entity_set>`, create functions
-- **Evidence patterns:**
-  ```text
-  Grep: "method:\s*['\"]POST['\"]" in src/**/*<tableName>*.ts
-  Grep: "create<TableName>" in src/**/*.ts
-  ```
+- Search the service code for: POST requests (`method: 'POST'`) to `/_api/<entity_set>`, create functions (`create<TableName>`)
 - **Decision:** `true` only if POST/create pattern found for this specific table, `false` otherwise
 
 **F. Determine Write**
 
 Is `write: true` needed?
-- Search for: PATCH requests to `/_api/<entity_set>`, update functions, file upload patterns
-- **Evidence patterns:**
-  ```text
-  Grep: "method:\s*['\"]PATCH['\"]" in src/**/*<tableName>*.ts
-  Grep: "update<TableName>" in src/**/*.ts
-  Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image|upload\w+File" in src/**/*.ts
-  ```
+- Search the service code for: PATCH requests (`method: 'PATCH'`) to `/_api/<entity_set>`, update functions (`update<TableName>`), file upload patterns (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`, `upload*File`)
 - **Important:** File/image uploads use PATCH → require `write: true` even if no other field updates exist
 - **Decision:** `true` if PATCH/update/upload pattern found, `false` otherwise
 
 **G. Determine Delete**
 
 Is `delete: true` needed?
-- Search for: DELETE requests to `/_api/<entity_set>`, delete functions
-- **Evidence patterns:**
-  ```text
-  Grep: "method:\s*['\"]DELETE['\"]" in src/**/*<tableName>*.ts
-  Grep: "delete<TableName>" in src/**/*.ts
-  ```
+- Search the service code for: DELETE requests (`method: 'DELETE'`) to `/_api/<entity_set>`, delete functions (`delete<TableName>`)
 - **Decision:** `true` only if DELETE pattern found for this specific table, `false` otherwise
 
 **H. Determine Append**
 
 Is `append: true` needed?
 - **Required when:** This table has lookup columns that are set during create or write operations
-- Search for: `@odata.bind` patterns in create/update functions for this table
-- **Evidence patterns:**
-  ```text
-  Grep: "@odata\.bind" in src/**/*<tableName>*.ts
-  ```
+- Search the service code for `@odata.bind` patterns in create/update functions for this table
 - Also check Dataverse column metadata (Step 4.3) for lookup columns on this table
 - **Decision:** `true` if this table sets lookup columns during create/write, `false` otherwise
 - **If `true`:** Record which lookup columns trigger this (needed for rationale)
@@ -322,11 +289,7 @@ Is `append: true` needed?
 
 Is `appendto: true` needed?
 - **Required when:** This table is the TARGET of a lookup column on another table that has create or write permissions
-- Check: Which other tables have lookup columns pointing to this table?
-- **Evidence patterns:**
-  ```text
-  Grep: "<entity_set>\(" in src/**/*.ts (look for @odata.bind references to this table's entity set)
-  ```
+- Search the service code for `@odata.bind` references to this table's entity set (e.g., `<entity_set>(`)
 - Also check Dataverse column metadata (Step 4.3) — for each table with create/write, check if its lookup `Targets` include this table
 - **Decision:** `true` if any other table with create/write has a lookup to this table, `false` otherwise
 - **If `true`:** Record which source table's lookup triggers this (needed for rationale)
@@ -366,6 +329,7 @@ After all individual table analyses are complete, do a cross-table validation pa
 3. **Parent chain completeness:** For every Parent scope permission, verify the parent permission exists in the inventory and will be created first.
 4. **No orphaned permissions:** If a table is only in the inventory because of `appendto` (lookup target) but has no direct code references, confirm that read-only + appendto is sufficient — it does not need create/write/delete.
 5. **Web role coverage:** Collect all web roles referenced across all table analyses. For each role, verify it exists in the Step 2.1 discovery. If any required role does not exist, add it to a "roles to create" list that will be included in the plan and created in Step 6 before table permissions.
+6. **Role consolidation (critical):** Group all per-table permission entries by `(table, scope, CRUD flags, append, appendto, parent, parentRelationship)`. If two or more roles produce an **identical** permission tuple for the same table, merge them into a **single** permission with multiple `webRoleIds` instead of creating separate per-role permissions. For example, if both Anonymous Users and Authenticated Users need `read-only + Global scope` on the Product table, create one permission `Product - Read` assigned to both roles — not two permissions `Product - Anonymous Read` and `Product - Authenticated Read`. This prevents count inflation and matches how Power Pages actually enforces permissions (one permission record, many role associations).
 
 Use `TaskList` to review all completed analyses, then mark the "Compile final permissions plan" task as `in_progress`.
 
@@ -460,7 +424,7 @@ Once you have completed Steps 1-4, prepare the permissions proposal. Sections 5.
 
 For each table permission to create, specify:
 
-**Permission Name Convention:** `<DisplayName> - <RoleName> <AccessType>` (e.g., `Product - Anonymous Read`, `Order - Authenticated Access`)
+**Permission Name Convention:** Use `<DisplayName> - <AccessType>` when multiple roles share the same CRUD+scope (e.g., `Product - Read`, `Order - Full Access`). Only include the role name `<DisplayName> - <RoleName> <AccessType>` when different roles need **different** CRUD or scope configurations for the same table (e.g., `Order - Anonymous Read` with Global/read-only vs `Order - Authenticated Access` with Contact/RCWD).
 
 For each permission, include:
 - Which web role(s) it is associated with (by UUID from Step 2.1, or note that a new web role needs to be created)
@@ -553,7 +517,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/permissions-plan-data.json
 ```json
 {
   "id": "p1",
-  "name": "Product - Anonymous Read",
+  "name": "Product - Read",
   "displayName": "Product",
   "table": "cra5b_product",
   "scope": "Global",
@@ -563,7 +527,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/permissions-plan-data.json
   "delete": false,
   "append": false,
   "appendto": true,
-  "roles": ["r1"],
+  "roles": ["r1", "r2"],
   "parent": null,
   "parentRelationship": null,
   "rationale": {
@@ -628,7 +592,7 @@ Prepare for the plan mode message. Include:
 
    | Permission Name | Table | Scope | Web Role | CRUD |
    |----------------|-------|-------|----------|------|
-   | `Product - Anonymous Read` | `cra5b_product` | Global | Anonymous Users | R |
+   | `Product - Read` | `cra5b_product` | Global | Anonymous Users, Authenticated Users | R |
    | `Order - Authenticated Access` | `cra5b_order` | Contact | Authenticated Users | RCWD |
 
 2. **New web roles needed** — List any web roles that need to be created (the script will generate UUIDs)

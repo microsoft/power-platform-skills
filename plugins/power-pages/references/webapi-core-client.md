@@ -350,10 +350,13 @@ export interface ExpandedCollection<T> {
 export const parseExpandedCollection = <T>(
   entity: Record<string, unknown>,
   property: string
-): ExpandedCollection<T> => ({
-  items: (entity[property] as T[] | undefined) ?? [],
-  nextLink: entity[`${property}@odata.nextLink`] as string | undefined,
-});
+): ExpandedCollection<T> => {
+  const raw = entity[property];
+  return {
+    items: Array.isArray(raw) ? (raw as T[]) : [],
+    nextLink: entity[`${property}@odata.nextLink`] as string | undefined,
+  };
+};
 
 // ── Formatted Value Helper ────────────────────────────────────────────────────
 

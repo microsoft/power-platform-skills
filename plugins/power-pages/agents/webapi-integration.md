@@ -217,7 +217,7 @@ If API calls fail (no PAC auth, no Azure CLI token, network error, 401/403):
 
 **Skip this step entirely if an API client already exists** (detected in Step 1.3). Read the existing client and import from it in subsequent steps.
 
-Create `src/shared/powerPagesApi.ts` — a centralized fetch wrapper shared by all table services. This file is created once and reused for every future integration. It includes anti-forgery token management (8-min TTL cache, fetched from `/_layout/tokenhtml`), header builder, response parsing, retry logic (exponential backoff, 403 token refresh, 401 session expiry), error code constants, OData URL builder, pagination helpers, lookup binding, and file column helpers.
+Create `src/shared/powerPagesApi.ts` — a centralized fetch wrapper shared by all table services. This file is created once and reused for every future integration. It includes anti-forgery token management (fetch-once-reuse, refresh on 403 error code `90040107`, fetched from `/_layout/tokenhtml`), header builder, response parsing, retry logic (exponential backoff, 403 token refresh, 401 session expiry), error code constants, OData URL builder, pagination helpers, lookup binding, and file column helpers.
 
 Read the complete file template:
 

@@ -376,6 +376,10 @@ If the user skips activation (or after activation completes), suggest:
 
 ## Important Notes
 
+### NEVER Use `pac pages upload`
+
+Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt code site metadata if used on a code site project. This applies to every upload step in this skill (Phase 4.4, Phase 6.4, and troubleshooting retries).
+
 ### Throughout All Phases
 
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
