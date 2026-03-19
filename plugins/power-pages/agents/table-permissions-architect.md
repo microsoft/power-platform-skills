@@ -21,9 +21,6 @@ tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - mcp__plugin_power-pages_playwright__browser_resize
-  - mcp__plugin_power-pages_playwright__browser_navigate
-  - mcp__plugin_power-pages_playwright__browser_wait_for
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
@@ -578,12 +575,11 @@ Delete the temporary data JSON file after the script succeeds.
 
 #### 5.3.4 Open in Browser
 
-1. **Resize the browser** to a large viewport:
-   Use `browser_resize` with **width: 1920** and **height: 1080** before navigating.
+Open the generated HTML file in the user's default browser:
 
-2. Navigate Playwright to the HTML file using `browser_navigate` with the full file path.
-
-3. Wait for the page to render (~2 seconds).
+```powershell
+Start-Process "<OUTPUT_PATH>"
+```
 
 ### 5.4 Summary and Next Steps
 

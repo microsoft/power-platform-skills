@@ -10,7 +10,7 @@ description: >-
   and suggests fixes for any issues found.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_wait_for
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
 hooks:
   Stop:
@@ -23,7 +23,7 @@ hooks:
             If a permissions audit was being performed in this session (via /power-pages:audit-permissions),
             verify before allowing stop: 1) The site's permissions structure was analyzed (web roles,
             table permissions, code references), 2) An HTML audit report was generated with findings
-            and inventory, 3) The report was displayed to the user via Playwright or
+            and inventory, 3) The report was opened in the default browser or
             the file path was communicated, 4) A summary with finding counts was presented. If any of
             these are incomplete, return { "ok": false, "reason": "<specific issues>" }. If no audit
             work happened or everything is complete, return { "ok": true }.
@@ -426,9 +426,11 @@ Delete the temporary data JSON file after the script succeeds.
 
 ### 5.4 Open in Browser
 
-1. Use `browser_resize` with **width: 1920** and **height: 1080**
-2. Navigate Playwright to the file using `file:///` URL (convert backslashes to forward slashes)
-3. Wait ~2 seconds for rendering
+Open the generated HTML file in the user's default browser:
+
+```powershell
+Start-Process "<OUTPUT_PATH>"
+```
 
 ---
 
