@@ -35,6 +35,7 @@ The script exits silently if `.powerpages-site/site-settings/` does not exist, s
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 | test-site | TestSite | Site/AI/Skills/TestSite |
 | audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
+| integrate-serverlogic | IntegrateServerlogic | Site/AI/Skills/IntegrateServerlogic |
 
 ## YAML Format
 
