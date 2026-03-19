@@ -80,9 +80,9 @@ pac auth select --index <user-chosen-index>
 
 Report: "Working with environment: [name]" and proceed.
 
-#### Detect Configured Languages
+#### Detect Configured Languages (New Pages Only)
 
-After confirming the active environment, detect configured languages:
+When creating a **new** page, detect configured languages after confirming the active environment. Skip this for edit flows — the existing page already has its localization set up.
 
 ```powershell
 pac model list-languages

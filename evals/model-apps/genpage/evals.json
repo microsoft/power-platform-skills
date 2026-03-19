@@ -83,7 +83,7 @@
         "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: Prerequisites are validated",
         "Step 2: Authentication is confirmed and environment reported",
-        "Step 2: pac model list-languages is run",
+        "Step 2: pac model list-languages is NOT run (edit flow — existing page already has localization)",
         "Step 3: Question 1 identifies this as an edit (not new)",
         "Step 3: User is asked for the app and page to edit",
         "Step 3: pac model genpage download --app-id <id> --page-id <id> --output-directory is run to download existing code",
