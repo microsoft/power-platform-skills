@@ -1,4 +1,4 @@
-﻿---
+---
 name: add-mcscopilot
 description: Adds Microsoft Copilot Studio connector to a Power Apps code app. Use when invoking Copilot Studio agents, sending prompts to agents, or integrating agent responses.
 user-invocable: true

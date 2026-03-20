@@ -143,6 +143,8 @@ pwsh -NoProfile -Command "pac code init --displayName '{user-provided-app-name}'
 
 ### Step 7: Build & Deploy (baseline)
 
+> **Pre-approved**: This baseline deploy is part of the scaffold flow and does not require a separate confirmation prompt.
+
 Build and deploy the bare template to verify the pipeline works before adding data sources.
 
 ```powershell
@@ -213,6 +215,8 @@ npm run build
 ```
 
 Fix any TypeScript errors. Verify `dist/` contains the updated app.
+
+Ask the user: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit confirmation before proceeding.
 
 ```bash
 pwsh -NoProfile -Command "pac code push"

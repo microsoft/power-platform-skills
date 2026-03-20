@@ -8,7 +8,7 @@ All non-Dataverse connectors require a **connection ID** (`-c`) when adding via 
 
 ### Step 1: List Existing Connections
 
-Run the `/list-connections` skill. It uses the Power Platform REST API (Azure CLI auth) to return a table of connection IDs and connector names — no pac CLI or npm package needed.
+Run the `/list-connections` skill. It runs `pac connection list` and returns a table of connection IDs and connector names (requires the Power Platform CLI to be installed and authenticated).
 
 Look for the connector in the output. Note the **ConnectionId** column value.
 

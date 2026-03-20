@@ -37,6 +37,8 @@ Verify `dist/` exists with `index.html` before continuing.
 
 ### Step 3: Deploy
 
+Ask the user: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit confirmation before proceeding.
+
 ```bash
 pwsh -NoProfile -Command "pac code push"
 ```

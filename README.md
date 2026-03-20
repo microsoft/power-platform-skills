@@ -180,7 +180,7 @@ power-platform-skills/
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
-- [Power Apps Code Apps](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/code-components-best-practices)
+- [Power Apps Code Apps](https://learn.microsoft.com/power-apps/developer/code-apps/)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference)
 
 ## Contributing
