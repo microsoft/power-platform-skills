@@ -87,7 +87,8 @@ Read all files matching `**/.powerpages-site/table-permissions/*.tablepermission
 - `scope` (numeric code)
 - `read`, `create`, `write`, `delete`, `append`, `appendto` (boolean flags)
 - `adx_entitypermission_webrole` (array of web role UUIDs)
-- `parententitypermission`, `parentrelationshipname` (if parent scope)
+- `contactrelationship`, `accountrelationship` (if Contact/Account scope)
+- `parententitypermission`, `parentrelationship` (if parent scope)
 
 ### 2.3 Analyze Site Code
 
@@ -136,7 +137,7 @@ For tables with parent-scope permissions, verify the relationship names using th
 $rels = node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-relationships.js" --envUrl "$envUrl" --table "<parent_table>"
 ```
 
-The script returns a JSON array of `{ schemaName, referencedEntity, referencingEntity, referencingAttribute }`. Use `schemaName` to validate the `parentrelationshipname` value in parent-scope permissions.
+The script returns a JSON array of `{ schemaName, referencedEntity, referencingEntity, referencingAttribute }`. Use `schemaName` to validate the `parentrelationship` value in parent-scope permissions.
 
 ### Error Handling
 
@@ -314,7 +315,7 @@ Are `append` and `appendto` correctly set?
 
 If the permission has Parent scope (`756150003`):
 - Verify `parententitypermission` references a valid permission ID that exists
-- Verify `parentrelationshipname` is a valid Dataverse relationship (if API available, using Step 3.3 results)
+- Verify `parentrelationship` is a valid Dataverse relationship (if API available, using Step 3.3 results)
 - If broken → finding:
   - **Severity:** `critical`
   - **Title:** `Broken parent chain for <permission>`

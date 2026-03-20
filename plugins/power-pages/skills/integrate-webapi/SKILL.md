@@ -336,7 +336,7 @@ If the user chooses to upload an existing diagram:
 2. Parse the diagram into structured format:
    - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
    - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto), parent permission and relationship name (if Parent scope)
-   - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields must list specific column logical names, NEVER use `*` wildcard**
+   - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields normally list specific column logical names; only use `*` when the site relies on aggregate OData queries (`$apply`/aggregate) that otherwise fail with 403**
 
 3. **Validate column names against Dataverse** — Even when using a user-provided diagram, query Dataverse for each table's column LogicalNames and verify that every column in the `Webapi/<table>/fields` values uses the exact Dataverse LogicalName (case-sensitive). Correct any mismatches before creating files.
 
@@ -415,7 +415,10 @@ For each table permission in the plan. Process **parent permissions before child
 **For Global/Contact/Account/Self scope:**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Self" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 ```
 
 **For Parent scope** (requires parent permission UUID and relationship name):
@@ -448,7 +451,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
-**Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase). Using incorrect casing causes 403 Forbidden errors.
+**Important**: The `--value` for fields settings MUST use exact Dataverse LogicalNames (case-sensitive, all lowercase) for normal CRUD/read scenarios. Using incorrect casing causes 403 Forbidden errors.
+
+**Aggregate exception**: If the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals, etc.), set `Webapi/<table>/fields` to `*`. Power Pages rejects some aggregate queries with 403 unless wildcard field access is enabled.
 
 **Lookup columns**: For every lookup column, include **both** the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields value. The Power Pages Web API does a literal match — the LogicalName is needed for write operations, the `_..._value` form is needed for read operations (`$select`, `$filter`). Missing either form causes 403 errors.
 
@@ -510,7 +515,7 @@ Use `AskUserQuestion`:
 After deployment (or if skipped), remind the user:
 
 - **Test the API**: Open the deployed site and verify Web API calls work in the browser's Network tab
-- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct. The most common cause of 403 errors is column names in `Webapi/<table>/fields` not matching the exact Dataverse LogicalName (case-sensitive — must be all lowercase).
+- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct. The most common cause of 403 errors is column names in `Webapi/<table>/fields` not matching the exact Dataverse LogicalName (case-sensitive — must be all lowercase). If the failing request uses aggregate OData (`$apply`, `aggregate`, grouped totals), also verify `Webapi/<table>/fields` is set to `*`.
 - **Disable innererror in production**: If `Webapi/error/innererror` was enabled for debugging, disable it before going live
 - **Web roles**: Users must be assigned the appropriate web roles to access protected APIs
 

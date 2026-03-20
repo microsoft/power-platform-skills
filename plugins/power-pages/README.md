@@ -97,7 +97,7 @@ The skill first scans your codebase to find components using mock data, placehol
 - TypeScript entity types and domain mappers per table
 - CRUD service layer per table using `/_api/` endpoints with dual token headers and `@odata.bind` for lookups
 - Framework-specific patterns: React hooks, Vue composables, Angular injectable services
-- Table permission YAML files and site setting YAML files (with explicit column lists — never `*` wildcards)
+- Table permission YAML files and site setting YAML files (with explicit validated column lists by default; use `*` only for aggregate OData scenarios that otherwise 403)
 
 **What gets updated:**
 

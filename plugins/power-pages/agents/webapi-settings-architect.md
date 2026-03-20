@@ -92,7 +92,7 @@ name: Webapi/cra5b_product/enabled
 value: true
 ```
 
-**Fields setting (lists specific columns — NEVER uses `*`):**
+**Fields setting (lists specific columns by default; use `*` only for aggregate OData scenarios):**
 ```yaml
 description: Allowed fields for cra5b_product Web API access
 id: a1b2c3d4-2112-4111-8111-111111111112
@@ -333,7 +333,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
-**CRITICAL: The `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use `*` (wildcard). NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5.**
+**CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead because Power Pages can otherwise return 403 for aggregate requests.**
 
 **CRITICAL: Lookup columns MUST include BOTH the LogicalName AND the `_<name>_value` OData format.** See Step 5.3.
 
@@ -404,7 +404,7 @@ After creating all files, return a summary to the calling context:
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
 - **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName (all lowercase). Never use SchemaName (PascalCase), DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
 - **LOOKUP COLUMNS NEED BOTH FORMS**: For every lookup column, include both the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields list. Missing either form causes 403 errors — the LogicalName is needed for writes, the `_..._value` form is needed for reads.
-- **NEVER use `*` for fields**: Always list specific column logical names in `Webapi/<table>/fields` settings. Using `*` is a security risk.
+- **Use `*` only for aggregate OData scenarios**: Default to specific validated column logical names in `Webapi/<table>/fields`. Switch to `*` only when the site relies on aggregate OData queries (`$apply`, `aggregate`, grouped totals) that require wildcard access to avoid 403 errors.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.

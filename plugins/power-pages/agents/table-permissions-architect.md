@@ -130,7 +130,7 @@ entitylogicalname: cra5b_orderitem
 entityname: Order Item - Authenticated Access
 id: a3b4c5d6-7890-4abc-def0-123456789012
 parententitypermission: d75934c2-5ea2-4b95-9309-e15637820626
-parentrelationshipname: cra5b_order_orderitem
+parentrelationship: cra5b_order_orderitem
 read: true
 scope: 756150003
 write: false
@@ -295,7 +295,7 @@ Is `appendto: true` needed?
 
 If scope is Parent (`756150003`):
 - Identify the parent table and its permission (must be analyzed first)
-- Identify the Dataverse relationship name (from Step 4.2) — use `SchemaName` as `parentrelationshipname`
+- Identify the Dataverse relationship name (from Step 4.2) — use `SchemaName` as `parentrelationship`
 
 **K. Record Decision Summary**
 
@@ -372,7 +372,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDe
 
 The output JSON contains a `data.value` array with each relationship's `SchemaName`, `ReferencedEntity`, `ReferencingEntity`, and `ReferencingAttribute`.
 
-Use the relationship `SchemaName` as the `parentrelationshipname` value in the child table permission.
+Use the relationship `SchemaName` as the `parentrelationship` value in the child table permission.
 
 ### 4.3 Query Lookup Columns (for append/appendto)
 
@@ -439,7 +439,10 @@ For each permission, prepare the exact `create-table-permission.js` script invoc
 **For Global/Contact/Account/Self scope:**
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Self" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 ```
 
 **For Parent scope:**
@@ -449,6 +452,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<
 ```
 
 Note: Parent permissions must be created before child permissions — the child's `--parentPermissionId` uses the UUID from the parent's JSON output.
+For Contact and Account scopes, the relationship argument is mandatory and must use the lookup logical name from the table being secured.
 
 ### 5.2 Design Rationale
 
@@ -620,7 +624,9 @@ Run each script invocation prepared in section 5.1:
 
 ```powershell
 # Parent permission first
-$parentResult = node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Parent Permission Name>" --tableName "<table>" --webRoleIds "<uuid>" --scope "<scope>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+$parentResult = node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Parent Permission Name>" --tableName "<table>" --webRoleIds "<uuid>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+$contactResult = node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Contact Permission Name>" --tableName "<table>" --webRoleIds "<uuid>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+$accountResult = node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Account Permission Name>" --tableName "<table>" --webRoleIds "<uuid>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 
 # Then child permissions using parent's UUID
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Child Permission Name>" --tableName "<child_table>" --webRoleIds "<uuid>" --scope "Parent" --parentPermissionId "<parent-uuid-from-above>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
