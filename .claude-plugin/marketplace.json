@@ -32,6 +32,19 @@
                 "genux",
                 "microsoft"
             ]
+        },
+        {
+            "name": "mcp-apps",
+            "source": "./plugins/mcp-apps",
+            "description": "Generate MCP App widgets for MCP tools",
+            "category": "development",
+            "tags": [
+                "mcp",
+                "mcp-apps",
+                "widget",
+                "power platform",
+                "microsoft"
+            ]
         }
     ]
 }
