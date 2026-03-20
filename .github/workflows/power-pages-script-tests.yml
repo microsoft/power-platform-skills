@@ -1,0 +1,25 @@
+name: power-pages-script-tests
+
+on:
+    pull_request:
+        paths:
+            - "plugins/power-pages/**"
+    workflow_dispatch:
+
+jobs:
+    test-power-pages-scripts:
+        name: test-power-pages-scripts
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: run-power-pages-script-tests
+              shell: bash
+              working-directory: plugins/power-pages/scripts/tests
+              run: node --test

@@ -61,8 +61,22 @@ function findPath(dir, target) {
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
-  const configPath = findPath(dir, 'powerpages.config.json');
-  return configPath ? path.dirname(configPath) : null;
+  let current = path.resolve(dir);
+  while (true) {
+    const configPath = path.join(current, 'powerpages.config.json');
+    if (fs.existsSync(configPath)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  const fallbackConfigPath = findPath(dir, 'powerpages.config.json');
+  return fallbackConfigPath ? path.dirname(fallbackConfigPath) : null;
 }
 
 /**

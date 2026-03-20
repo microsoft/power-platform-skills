@@ -202,6 +202,23 @@ claude --dangerously-skip-permissions
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [Dataverse Web API](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/overview)
 
+## Testing validator scripts
+
+Run the validator unit tests with Node's built-in test runner:
+
+```powershell
+$files = Get-ChildItem .\plugins\power-pages\scripts\tests\*.test.js | ForEach-Object { $_.FullName }
+node --test $files
+```
+
+To validate table-permission relationship names against live Dataverse metadata during local testing, run:
+
+```powershell
+node .\plugins\power-pages\scripts\validate-permissions-schema.js --projectRoot C:\path\to\site --validate-dataverse-relationships --envUrl https://your-org.crm.dynamics.com
+```
+
+This Dataverse relationship check is intended for local validation only and should not be used in CI.
+
 ## License
 
 [MIT](../../LICENSE)

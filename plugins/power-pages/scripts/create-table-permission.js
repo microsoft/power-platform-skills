@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const generateUuid = require('./generate-uuid');
+const { loadTablePermissions, TABLE_PERMISSION_FILE_SUFFIX } = require('./lib/powerpages-config');
 
 // --- CLI arg parsing ---
 
@@ -56,75 +57,6 @@ const SCOPE_MAP = {
 const VALID_SCOPE_CODES = new Set(Object.values(SCOPE_MAP));
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TABLE_PERMISSION_FILE_SUFFIX = '.tablepermission.yml';
-
-function parseYamlScalar(value) {
-  const trimmed = value.trim();
-  if (trimmed === 'true') {
-    return true;
-  }
-  if (trimmed === 'false') {
-    return false;
-  }
-  if (trimmed === 'null') {
-    return null;
-  }
-  if (/^-?\d+$/.test(trimmed)) {
-    return Number(trimmed);
-  }
-  return trimmed;
-}
-
-function parseTablePermissionYaml(content, filePath) {
-  const parsed = { filePath };
-  let currentArrayKey = null;
-  const lines = content.split(/\r?\n/);
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    if (line.startsWith('- ')) {
-      if (!currentArrayKey || !Array.isArray(parsed[currentArrayKey])) {
-        throw new Error(`Invalid YAML array entry in ${filePath}`);
-      }
-      parsed[currentArrayKey].push(parseYamlScalar(line.slice(2)));
-      continue;
-    }
-
-    const separatorIndex = line.indexOf(':');
-    if (separatorIndex === -1) {
-      throw new Error(`Invalid YAML line "${line}" in ${filePath}`);
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim();
-
-    if (value === '') {
-      parsed[key] = [];
-      currentArrayKey = key;
-      continue;
-    }
-
-    parsed[key] = parseYamlScalar(value);
-    currentArrayKey = null;
-  }
-
-  return parsed;
-}
-
-function loadExistingTablePermissions(tablePermissionsDir) {
-  return fs
-    .readdirSync(tablePermissionsDir)
-    .filter(fileName => fileName.endsWith(TABLE_PERMISSION_FILE_SUFFIX))
-    .map(fileName => {
-      const filePath = path.join(tablePermissionsDir, fileName);
-      const fileContent = fs.readFileSync(filePath, 'utf8');
-      return parseTablePermissionYaml(fileContent, filePath);
-    });
-}
 
 // --- Validation ---
 
@@ -225,7 +157,7 @@ if (!fs.existsSync(tablePermissionsDir)) {
 
 let existingPermissions;
 try {
-  existingPermissions = loadExistingTablePermissions(tablePermissionsDir);
+  existingPermissions = loadTablePermissions(tablePermissionsDir);
 } catch (error) {
   console.error(`Error: Failed to read existing table permissions. ${error.message}`);
   process.exit(1);
@@ -237,18 +169,6 @@ const existingPermissionByName = existingPermissions.find(
 if (existingPermissionByName) {
   console.error(`Error: A table permission named "${permissionName}" already exists (ID: ${existingPermissionByName.id}) in ${existingPermissionByName.filePath}.`);
   console.error('Use a unique permission name instead of overwriting an existing permission file.');
-  process.exit(1);
-}
-
-const duplicatePermission = existingPermissions.find(
-  permission =>
-    typeof permission.entitylogicalname === 'string' &&
-    permission.entitylogicalname.toLowerCase() === tableName.toLowerCase() &&
-    permission.scope === scopeCode
-);
-if (duplicatePermission) {
-  console.error(`Error: A table permission for "${tableName}" with scope "${scopeRaw}" already exists: "${duplicatePermission.entityname}" (ID: ${duplicatePermission.id}).`);
-  console.error('Use a different scope or update the existing permission instead of creating a duplicate.');
   process.exit(1);
 }
 

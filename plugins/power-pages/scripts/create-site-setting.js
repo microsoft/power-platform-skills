@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const generateUuid = require('./generate-uuid');
+const { loadSiteSettings, SITE_SETTING_FILE_SUFFIX } = require('./lib/powerpages-config');
 
 // --- CLI arg parsing (same pattern as update-skill-tracking.js) ---
 
@@ -54,6 +55,14 @@ if (!fs.existsSync(siteSettingsDir)) {
   process.exit(1);
 }
 
+let existingSiteSettings;
+try {
+  existingSiteSettings = loadSiteSettings(siteSettingsDir);
+} catch (error) {
+  console.error(`Error: Failed to read existing site settings. ${error.message}`);
+  process.exit(1);
+}
+
 // --- Helpers ---
 
 function writeYaml(fields) {
@@ -64,6 +73,23 @@ function writeYaml(fields) {
 // --- Create site setting ---
 
 const uuid = generateUuid();
+const fileName = `${settingName.replace(/\//g, '-')}${SITE_SETTING_FILE_SUFFIX}`;
+
+const existingSettingByName = existingSiteSettings.find(
+  setting => typeof setting.name === 'string' && setting.name.toLowerCase() === settingName.toLowerCase()
+);
+if (existingSettingByName) {
+  console.error(`Error: A site setting named "${settingName}" already exists (ID: ${existingSettingByName.id}) in ${existingSettingByName.filePath}.`);
+  process.exit(1);
+}
+
+const existingSettingByFileName = existingSiteSettings.find(
+  setting => path.basename(setting.filePath).toLowerCase() === fileName.toLowerCase()
+);
+if (existingSettingByFileName) {
+  console.error(`Error: Site setting file "${fileName}" would collide with existing setting "${existingSettingByFileName.name}" in ${existingSettingByFileName.filePath}.`);
+  process.exit(1);
+}
 
 const fields = {
   description: description,
@@ -75,7 +101,6 @@ const fields = {
 const yamlContent = writeYaml(fields);
 
 // File name: replace / with - (e.g., "Webapi/cra5b_product/enabled" → "Webapi-cra5b_product-enabled.sitesetting.yml")
-const fileName = `${settingName.replace(/\//g, '-')}.sitesetting.yml`;
 const filePath = path.join(siteSettingsDir, fileName);
 
 fs.writeFileSync(filePath, yamlContent, 'utf8');

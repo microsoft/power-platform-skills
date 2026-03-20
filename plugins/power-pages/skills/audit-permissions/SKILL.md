@@ -38,10 +38,11 @@ Audit existing table permissions on a Power Pages code site. Analyze permissions
 
 1. **Verify Site Deployment** — Check that `.powerpages-site` folder and table permissions exist
 2. **Gather Configuration** — Read all web roles, table permissions, and site code
-3. **Analyze & Discover** — Query Dataverse for relationships and lookup columns using deterministic scripts
-4. **Run Audit Checks** — Compare permissions against code usage and best practices
-5. **Generate Report** — Create the HTML audit report and display in browser
-6. **Present Findings & Track** — Summarize findings, record skill usage, and ask user if they want to fix issues
+3. **Run Local Schema Validation** — Use the shared validator to detect invalid permission/site-setting YAML before deeper analysis
+4. **Analyze & Discover** — Query Dataverse for relationships and lookup columns using deterministic scripts
+5. **Run Audit Checks** — Compare permissions against code usage and best practices
+6. **Generate Report** — Create the HTML audit report and display in browser
+7. **Present Findings & Track** — Summarize findings, record skill usage, and ask user if they want to fix issues
 
 **Important:** Do NOT ask the user questions during analysis. Autonomously gather all data, then present findings.
 
@@ -53,6 +54,7 @@ At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each t
 |-------------|------------|-------------|
 | Verify site deployment | Verifying site deployment | Check .powerpages-site folder and table permissions exist |
 | Gather configuration | Gathering configuration | Read web roles, table permissions, and site code |
+| Run local schema validation | Validating local permissions schema | Run shared validator against existing table permission and site setting YAML |
 | Discover relationships | Discovering relationships | Query Dataverse for lookup columns and relationships |
 | Run audit checks | Running audit checks | Create per-table tasks and run checklist (A–K) for each table, then cross-validate |
 | Generate audit report | Generating audit report | Create HTML report and display in browser |
@@ -102,6 +104,29 @@ Search the site source code for:
 Also check for `.datamodel-manifest.json` in the project root for the authoritative table list.
 
 Build a map of: which tables are referenced in code, which CRUD operations are performed on each, which lookup relationships are used, and which related tables are fetched via `$expand` (these need read permissions too).
+
+### 2.4 Run Shared Schema Validator
+
+Run the shared validator against the existing site:
+
+```powershell
+$schemaValidation = node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Parse the JSON output and carry the findings into the audit. Treat:
+- `error` findings as **critical**
+- `warning` findings as **warning**
+- `info` findings as **info**
+
+These findings should be included in the final audit report even if the later code/Dataverse analysis also finds additional issues.
+
+After Step 3.1 determines `$envUrl`, if this audit is running locally with Dataverse access available, rerun the shared validator with live relationship verification enabled and merge any additional findings:
+
+```powershell
+$schemaValidation = node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "$envUrl"
+```
+
+Use this Dataverse-backed relationship validation only for local runs. Do **not** require it in CI or other offline contexts.
 
 ---
 
@@ -360,7 +385,7 @@ Use `TaskList` to review all completed audits, then mark the "Compile audit find
 
 ### 5.2 Prepare Data
 
-**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
+**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-audit-report.js` script which mechanically reads the template and replaces placeholder tokens with your data.
 
 Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with these keys:
 
@@ -452,7 +477,7 @@ Present a summary to the user:
 3. **Report location** — where the HTML file was saved
 5. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
-If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/power-pages:setup-permissions` to architect a complete permissions plan.
+If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/power-pages:integrate-webapi` so the permissions and Web API settings architects can produce a complete plan.
 
 ---
 
