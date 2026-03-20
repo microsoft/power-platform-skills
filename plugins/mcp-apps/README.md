@@ -41,5 +41,5 @@ A single HTML file that:
 skills/generate-mcp-app/SKILL.md    - Main skill
 references/mcp-apps-reference.md    - MCP Apps API, Fluent UI components, CDN patterns
 references/design-guidelines.md     - Visual design defaults, theme tokens
-samples/travel-map-widget.html      - Example generated widget
+samples/flight-status-widget.html   - Example generated widget
 ```
