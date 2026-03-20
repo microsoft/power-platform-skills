@@ -24,8 +24,9 @@ hooks:
             If Server Logic work was being performed in this session (via /power-pages:integrate-serverlogic),
             verify before allowing stop: 1) The site was verified to exist with powerpages.config.json,
             2) Microsoft Learn documentation was fetched as source of truth before writing code,
-            3) The server logic .js file was created in the server-logics/ folder with only allowed
-            top-level functions (get, post, put, patch, del), 4) Every function returns a string
+            3) The server logic .js file was created in .powerpages-site/server-logic/<name>/ with only allowed
+            top-level functions (get, post, put, patch, del), and a .serverlogic.yml metadata file was created
+            with a valid id (UUID) and non-empty adx_serverlogic_adx_webrole array, 4) Every function returns a string
             (JSON.stringify for objects), 5) No external dependencies or browser APIs were used,
             6) Proper error handling (try/catch) exists in every function, 7) Server.Logger calls
             were added for diagnostics, 8) Site settings were configured if needed,
@@ -50,7 +51,7 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 
 > **Prerequisites:**
 > - An existing Power Pages code site created via `/power-pages:create-site`
-> - The site should be deployed at least once (`.powerpages-site` folder) for site settings configuration
+> - The site **must** be deployed at least once (`.powerpages-site` folder must exist) — server logic files live inside `.powerpages-site/server-logic/`, so deployment is required before any server logic can be created
 
 **Initial request:** $ARGUMENTS
 
@@ -62,7 +63,7 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 2. **Understand Requirements** — Determine what the server logic should do and which HTTP methods are needed
 3. **Fetch Latest Documentation** — Query Microsoft Learn for the most current Server Logic SDK reference
 4. **Review Implementation Plan** — Present the plan to the user and confirm before writing code
-5. **Implement Server Logic** — Create the .js file in the server-logics folder following all constraints
+5. **Implement Server Logic** — Create the .js and .serverlogic.yml files in `.powerpages-site/server-logic/<name>/`
 6. **Configure Site Settings** — Set up ServerLogic site settings if needed
 7. **Client-Side Integration** — Help wire the server logic into the site's frontend code
 8. **Verify & Test Guidance** — Validate the code and provide testing instructions
@@ -105,12 +106,13 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 **Prompt for the Explore agent:**
 
 > "Analyze this Power Pages code site for server logic context. Check:
-> 1. Does a `server-logics/` folder exist? If yes, list all .js files and summarize what each one does (which functions it implements, what SDK features it uses).
+> 1. Does `.powerpages-site/server-logic/` exist? If yes, list all subdirectories and their .js files. Summarize what each server logic does (which functions it implements, what SDK features it uses). Also read the corresponding .serverlogic.yml files to check web role assignments.
 > 2. Search the frontend source code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for any existing calls to `/_api/serverlogics/` — these indicate server logic endpoints already being consumed.
 > 3. Look for `shell.safeAjax` calls or CSRF token handling patterns (`__RequestVerificationToken`, `_layout/tokenhtml`) — these show how the site currently makes authenticated API calls.
 > 4. Check for any TODO/FIXME comments mentioning server logic, backend, or server-side processing.
 > 5. Look for hardcoded API URLs, mock data, or placeholder fetch calls that might need to be replaced with server logic calls.
 > 6. Check for any existing service layer or API utility files in `src/shared/`, `src/services/`, or similar directories that could be reused for server logic integration.
+> 7. Read `.powerpages-site/web-roles/*.webrole.yml` files to list available web roles and their GUIDs — these are needed when creating the server logic metadata YAML.
 > Report all findings so we can avoid duplicating work and match existing patterns."
 
 From the Explore agent's findings, note:
@@ -119,7 +121,7 @@ From the Explore agent's findings, note:
 - **Existing service/utility files** — reuse these when adding client-side integration
 - **Gaps** — frontend code that references server logic endpoints that don't exist yet
 
-### 1.5 Check Deployment Status
+### 1.5 Check Deployment Status (Mandatory)
 
 Look for the `.powerpages-site` folder:
 
@@ -127,9 +129,21 @@ Look for the `.powerpages-site` folder:
 Glob: **/.powerpages-site
 ```
 
-**If not found**: Note that site settings configuration (Phase 6) requires deployment first. The server logic code (Phases 2–5) and client-side integration (Phase 7) can still proceed.
+**If not found**: The site **must** be deployed before server logic can be created — server logic files live inside `.powerpages-site/server-logic/`. Tell the user:
 
-**Output**: Confirmed project root, existing server logics (if any), and deployment status
+> "The `.powerpages-site` folder was not found. Server logic files are stored inside this folder, so the site must be deployed at least once before creating server logic. Would you like to deploy now?"
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| The `.powerpages-site` folder is required for server logic. Would you like to deploy the site now? | Yes, deploy now (Required), Cancel |
+
+**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then continue to Phase 2.
+
+**If "Cancel"**: Stop the workflow — server logic cannot be created without `.powerpages-site`.
+
+**Output**: Confirmed project root, `.powerpages-site` exists, existing server logics (if any), available web roles
 
 ---
 
@@ -261,9 +275,11 @@ Show the user a clear summary of what will be built:
 | Item | Value |
 |------|-------|
 | **Server logic name** | `<name>` |
-| **File path** | `server-logics/<name>.js` |
+| **JS file** | `.powerpages-site/server-logic/<name>/<name>.js` |
+| **YAML metadata** | `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` |
 | **API URL** | `https://<site-url>/_api/serverlogics/<name>` |
 | **Functions to implement** | get, post, put, patch, del (whichever are needed) |
+| **Web roles assigned** | List web roles (from `.powerpages-site/web-roles/`) |
 | **SDK features used** | HttpClient / Dataverse / Context / User / Sitesetting / etc. |
 | **External APIs called** | List any external URLs or services (if applicable) |
 | **Dataverse tables accessed** | List any tables (if applicable) |
@@ -300,17 +316,38 @@ Use `AskUserQuestion`:
 
 **Actions**:
 
-### 5.1 Create Server Logics Folder
+### 5.1 Create Server Logic Folder
 
-If the `server-logics` folder doesn't exist at the project root, create it:
+Create the server logic folder inside `.powerpages-site/server-logic/` (note: singular `server-logic`, no trailing 's'):
 
 ```powershell
-New-Item -ItemType Directory -Path "<PROJECT_ROOT>/server-logics" -Force
+New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/server-logic/<name>" -Force
 ```
 
-### 5.2 Create the Server Logic File
+### 5.2 Read Web Roles
 
-Create `<PROJECT_ROOT>/server-logics/<name>.js` with these mandatory patterns:
+Read all web role YAML files to get the available web role GUIDs. These are needed for the metadata YAML in step 5.4.
+
+```
+Glob: <PROJECT_ROOT>/.powerpages-site/web-roles/*.webrole.yml
+```
+
+For each file, read the `id` field. By default, assign **all available web roles** (typically Administrators, Anonymous Users, Authenticated Users) to the server logic. The user can narrow this down if needed.
+
+Example web role file content:
+```yaml
+adx_anonymoususersrole: false
+adx_authenticatedusersrole: true
+description: Role for authenticated users
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+name: Authenticated Users
+```
+
+Collect all `id` values into an array for the YAML.
+
+### 5.3 Create the Server Logic File
+
+Create `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.js` with these mandatory patterns:
 
 #### Structure Rules
 
@@ -354,7 +391,7 @@ async function get() {
 }
 ```
 
-### 5.3 SDK Usage Patterns
+#### SDK Usage Patterns
 
 Apply the correct SDK patterns based on what the server logic needs:
 
@@ -458,7 +495,36 @@ function get() {
 }
 ```
 
-### 5.4 Validate the Code
+### 5.4 Create the Metadata YAML
+
+Create `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` with the following structure. **Fields must be alphabetically sorted** to match PAC CLI conventions:
+
+```yaml
+adx_serverlogic_adx_webrole:
+  - <web-role-guid-1>
+  - <web-role-guid-2>
+  - <web-role-guid-3>
+description: <description of what this server logic does>
+display_name: <human-readable display name>
+id: <generated-uuid>
+name: <name>
+```
+
+**Critical requirements:**
+
+- **`id` field is mandatory** — Generate a new UUID (v4). PAC CLI crashes with `Expected Guid for primary key 'id'` if this is missing.
+- **`adx_serverlogic_adx_webrole`** — Array of web role GUIDs from step 5.2. By default, include all available web roles. The user can customize this.
+- **`name`** — Must match the folder name and `.js` file name (the URL-friendly name used in `/_api/serverlogics/<name>`).
+- **`display_name`** — Human-readable name (e.g., "Exchange Rate API", "Order Processor").
+- **Alphabetical field ordering** — Fields must be sorted alphabetically: `adx_serverlogic_adx_webrole`, `description`, `display_name`, `id`, `name`.
+
+To generate a UUID, use:
+
+```powershell
+node -e "const crypto = require('crypto'); console.log(crypto.randomUUID())"
+```
+
+### 5.5 Validate the Code
 
 Before saving, verify the code against these constraints:
 
@@ -473,16 +539,16 @@ Before saving, verify the code against these constraints:
 | Async only when needed | Only functions using `await` are marked `async` |
 | ECMAScript 2023 compliant | Standard JS features only (optional chaining, nullish coalescing, etc. are fine) |
 
-### 5.5 Git Commit
+### 5.6 Git Commit
 
-After creating the server logic file:
+After creating both files:
 
 ```powershell
-git add -A
+git add .powerpages-site/server-logic/<name>/
 git commit -m "Add server logic: <name>"
 ```
 
-**Output**: Server logic file created, validated, and committed
+**Output**: Server logic `.js` and `.serverlogic.yml` files created, validated, and committed
 
 ---
 
@@ -492,21 +558,9 @@ git commit -m "Add server logic: <name>"
 
 **Actions**:
 
-### 6.1 Check Deployment Prerequisite
+### 6.1 Configure Server Logic Site Settings
 
-Site settings require the `.powerpages-site` folder. If it doesn't exist:
-
-Use `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| The `.powerpages-site` folder was not found. The site needs to be deployed once before site settings can be configured. Would you like to deploy now? | Yes, deploy now (Recommended), Skip site settings for now — I'll configure them later |
-
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this phase.
-
-**If "Skip"**: Skip to Phase 7 (Client-Side Integration) with a note that site settings still need to be configured.
-
-### 6.2 Configure Server Logic Site Settings
+The `.powerpages-site` folder is guaranteed to exist at this point (verified in Phase 1.5).
 
 The following site settings control server logic behavior. Only create settings that differ from defaults or are specifically needed:
 
@@ -523,7 +577,7 @@ Use the existing site setting creation script:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
 ```
 
-### 6.3 Git Commit
+### 6.2 Git Commit
 
 If any settings were created:
 
@@ -695,7 +749,7 @@ git commit -m "Add client-side integration for server logic: <name>"
 
 ### 8.1 Final Code Validation
 
-Re-read the created server logic file and verify:
+Re-read the created `.js` file and verify:
 
 - [ ] Only allowed top-level functions (get, post, put, patch, del)
 - [ ] Every function returns a string
@@ -707,6 +761,15 @@ Re-read the created server logic file and verify:
 - [ ] Correct SDK method usage (verified against Phase 3 documentation)
 - [ ] HttpClient used only for external APIs (not Dataverse)
 - [ ] Dataverse connector used for Dataverse operations
+
+Re-read the `.serverlogic.yml` file and verify:
+
+- [ ] `id` field exists and is a valid UUID
+- [ ] `adx_serverlogic_adx_webrole` array is non-empty (at least one web role)
+- [ ] `name` matches the folder name and `.js` file name
+- [ ] `display_name` and `description` are populated
+- [ ] Fields are alphabetically sorted
+- [ ] File names match: folder name, `.js` name, `.serverlogic.yml` name, and `name` field all use the same value
 
 ### 8.2 Provide API URL
 
@@ -767,7 +830,8 @@ Present a summary of everything that was done:
 
 | Step | Status | Details |
 |------|--------|---------|
-| Server Logic File | Created | `server-logics/<name>.js` |
+| Server Logic JS | Created | `.powerpages-site/server-logic/<name>/<name>.js` |
+| Server Logic YAML | Created | `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` |
 | Functions | Implemented | get, post, put, patch, del (as needed) |
 | SDK Features Used | — | HttpClient / Dataverse / Context / User / etc. |
 | Site Settings | Created/Skipped | ServerLogic/AllowedDomains, etc. |
@@ -816,9 +880,9 @@ After deployment (or if skipped), remind the user:
 
 ### Key Decision Points (Wait for User)
 
-1. At Phase 2: Confirm requirements (purpose, name, HTTP methods)
-2. At Phase 4: Approve implementation plan before writing code
-3. At Phase 6.1: Deploy now or skip site settings (if `.powerpages-site` missing)
+1. At Phase 1.5: Deploy now or cancel (if `.powerpages-site` missing — mandatory)
+2. At Phase 2: Confirm requirements (purpose, name, HTTP methods)
+3. At Phase 4: Approve implementation plan before writing code
 4. At Phase 7.5: Create frontend integration or skip
 5. At Phase 9.3: Deploy now or deploy later
 
@@ -837,11 +901,11 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Verify site exists | Verifying site prerequisites | Locate project root, detect framework, explore existing server logics and frontend patterns, check deployment status |
+| Verify site exists | Verifying site prerequisites | Locate project root, detect framework, explore existing server logics and frontend patterns, verify .powerpages-site exists (mandatory) |
 | Understand requirements | Gathering requirements | Determine purpose, name, HTTP methods, and SDK features needed |
 | Fetch latest documentation | Fetching Microsoft Learn docs | Query Microsoft Learn for current Server Logic SDK reference and samples |
 | Review implementation plan | Reviewing plan with user | Present plan (name, functions, SDK features, external APIs) and confirm before writing code |
-| Implement server logic | Writing server logic code | Create .js file with validated SDK usage, error handling, and logging |
+| Implement server logic | Writing server logic code | Read web roles, create .js and .serverlogic.yml in .powerpages-site/server-logic/<name>/, validate code |
 | Configure site settings | Configuring site settings | Set up ServerLogic/* site settings if needed |
 | Client-side integration | Wiring frontend to server logic | Create service function, framework hook, update existing components to call server logic endpoint |
 | Verify and test guidance | Validating and providing test guidance | Final validation, API URL, CSRF token instructions, testing guide |
