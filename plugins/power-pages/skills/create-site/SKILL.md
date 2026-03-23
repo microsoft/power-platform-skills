@@ -5,15 +5,6 @@ user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js\""
-          timeout: 15
-        - type: prompt
-          prompt: "If a Power Pages code site was being created in this session (via /power-pages:create-site), verify before allowing stop: 1) All user-requested features and pages were implemented — not just the scaffold, 2) Design changes were applied to real files — distinctive typography via Google Fonts (no generic Inter/Roboto/Arial), cohesive color palette via CSS variables, motion/animations, and backgrounds, 3) Accessibility verification was performed — axe-core was run on every page, all critical and serious violations were fixed, and a re-run confirmed zero critical/serious violations, 4) The user was given the dev server URL and asked to review the site, 5) No build errors remain unresolved, 6) Git commits were made at key milestones, 7) The user was asked about deploying via /power-pages:deploy-site. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no site creation happened or everything is complete, return { \"ok\": true }."
-          timeout: 30
 ---
 
 # Create Power Pages Code Site

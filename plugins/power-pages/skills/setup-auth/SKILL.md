@@ -11,24 +11,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/scripts/validate-auth.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If authentication/authorization was being set up in this session (via /power-pages:setup-auth),
-            verify before allowing stop: 1) The site was found and framework detected, 2) An auth service
-            file was created (authService.ts/js) with login/logout functions, 3) PowerPages type declarations
-            were created (powerPages.d.ts), 4) Authorization utilities were created (authorization.ts/js)
-            with role-checking functions, 5) Auth UI component was created (AuthButton or equivalent),
-            6) All auth files were verified (exist, contain expected exports, project builds successfully),
-            7) The user was asked whether to deploy the site.
-            If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no auth setup work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Set Up Authentication & Authorization

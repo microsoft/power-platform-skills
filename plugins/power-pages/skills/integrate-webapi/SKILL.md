@@ -11,29 +11,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/integrate-webapi/scripts/validate-webapi-integration.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If Web API integration was being performed in this session (via /power-pages:integrate-webapi),
-            verify before allowing stop: 1) The site was analyzed and tables requiring Web API integration
-            were identified, 2) The webapi-integration agent was invoked to create API client, types, and
-            service files for each table, 3) All integration files were verified (types, services, and
-            framework-appropriate hooks/composables where applicable) and the project builds successfully,
-            4) Table permissions were configured (either via the table-permissions-architect agent or by
-            parsing a user-provided permissions diagram), or the session explicitly followed the documented
-            "skip permissions for now" path because `.powerpages-site` was unavailable, 5) Web API site
-            settings were configured with case-sensitive validated column names (either via the webapi-settings-architect
-            agent or by parsing a user-provided permissions diagram), or were explicitly deferred with the same
-            documented skip path, 6) The user was asked whether to deploy
-            the site.
-            If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no Web API integration work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Integrate Web API

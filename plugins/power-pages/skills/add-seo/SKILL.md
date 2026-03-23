@@ -9,15 +9,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close
 model: sonnet
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/add-seo/scripts/validate-seo.js\""
-          timeout: 15
-        - type: prompt
-          prompt: "If SEO assets were being added in this session (via /power-pages:add-seo), verify before allowing stop: 1) robots.txt was created in the public directory, 2) sitemap.xml was created in the public directory with correct site URLs, 3) Meta tags (title, description, viewport, Open Graph) were added to index.html, 4) The user reviewed and approved the SEO additions, 5) A git commit was made with the SEO changes. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no SEO work happened or everything is complete, return { \"ok\": true }."
-          timeout: 30
 ---
 
 # Add SEO

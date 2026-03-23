@@ -16,7 +16,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Dataverse-backed validation** must stay opt-in for local runs only. Do not require live Dataverse connectivity in CI workflows or default test runs; gate it behind explicit local flags such as `--validate-dataverse-relationships`.
 - **Reference docs** shared across skills live in `references/` — reference via `${CLAUDE_PLUGIN_ROOT}/references/` paths, don't duplicate.
 - **Templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
-- **Hooks** are defined per-skill in SKILL.md frontmatter (not a global hooks.json).
+- **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 
 ## Skill Development Conventions
 
@@ -41,15 +41,6 @@ user-invocable: true
 argument-hint: <optional>
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/<skill-name>/scripts/validate-<skill>.js"'
-          timeout: 30
-        - type: prompt
-          prompt: "<completeness checklist>"
-          timeout: 30
 ---
 ```
 
@@ -59,7 +50,7 @@ Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML lis
 
 - **User confirmation** — Pause with `AskUserQuestion` after gathering requirements, after presenting a plan, after implementation, and before deployment.
 - **Deployment prompt** — Skills that modify site artifacts should end by asking "Ready to deploy?" and invoke `/power-pages:deploy-site` if yes.
-- **Stop hooks** — Every file-creating skill needs a command hook (validation script) and a prompt hook (completeness checklist).
+- **Lifecycle hooks** — If a skill needs command validation or checklist enforcement, update `hooks/hooks.json` and `scripts/lib/powerpages-hook-utils.js`. Do not define hook registration in individual `SKILL.md` files.
 - **Graceful failure** — Track API call results, never auto-rollback, report failures clearly, continue with remaining items.
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.
 - **Git commits** — Commit after every significant milestone (each page/component, design foundations, phase completion).

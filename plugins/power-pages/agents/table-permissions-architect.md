@@ -247,6 +247,16 @@ Evaluate the scope based on code patterns. Check **each scope option** and pick 
 
 Search the service code for scope-relevant filter patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`).
 
+**Scope guardrails (critical):**
+
+- Do **not** replace an existing or proposed **Parent** scope permission with **Contact** or **Account** scope unless you have **direct evidence on the child table itself**:
+  - the child table has its own direct lookup to contact/account,
+  - the corresponding Dataverse relationship exists for that child table, and
+  - the business rule truly grants access based on the child record's own owner/contact/account — not inherited parent access.
+- Do **not** assume Power Pages "flattens" a Parent→Contact or Parent→Account chain onto the child table unless Microsoft documentation explicitly states it or deterministic validation proves it.
+- Relationship schema names do **not** need to match across different entities. A parent table's contact relationship name and a child table's contact relationship name may legitimately differ. Never rewrite scope just because the names differ across entities.
+- For **Contact** scope, validate the relationship against the secured table itself. For **Parent** scope, validate only the child→parent `parentrelationship` plus the parent permission chain; do not compare unrelated relationship names across entities.
+
 **D. Determine Read**
 
 Is `read: true` needed?
@@ -373,6 +383,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDe
 The output JSON contains a `data.value` array with each relationship's `SchemaName`, `ReferencedEntity`, `ReferencingEntity`, and `ReferencingAttribute`.
 
 Use the relationship `SchemaName` as the `parentrelationship` value in the child table permission.
+
+For tables that are candidates for **Contact** or **Account** scope, also verify that the table itself has the direct contact/account relationship you plan to use:
+
+```text
+EntityDefinitions(LogicalName='<child_table>')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute
+```
+
+Use this to confirm `contactrelationship` / `accountrelationship` on the secured table itself. Do **not** reuse the parent table's relationship name unless Dataverse shows that exact relationship on the child table too.
 
 ### 4.3 Query Lookup Columns (for append/appendto)
 
@@ -634,6 +652,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<
 
 The scripts handle UUID generation, alphabetical field ordering, correct YAML formatting (unquoted booleans/numbers/UUIDs, `adx_entitypermission_webrole` array format), and file naming automatically.
 
+**Before finalizing scope changes to existing permissions:** if you are running locally with Dataverse access, validate the resulting files using the shared validator with live relationship checks:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "<envUrl>"
+```
+
+If this local validation reports relationship or schema problems, stop and revise the plan instead of proceeding with file creation.
+
 ---
 
 ## Step 7: Return Summary
@@ -652,6 +678,8 @@ After creating all files, return a summary to the calling context:
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`.
 - **No manual HTML generation**: Do NOT use `Write` or `Edit` to create the `permissions-plan.html` file directly. ALWAYS use `render-permissions-plan.js` with a JSON data file as described in Step 5.3. The only files you may write directly are the temporary JSON data file for the render script.
 - **LOOKUP COLUMNS REQUIRE APPEND/APPENDTO**: When a table has `create` or `write` permissions AND has lookup columns to other tables, the source table MUST have `append: true` and each target table MUST have `appendto: true`. Missing these causes "You don't have permission to associate or disassociate" errors. Always query Dataverse for lookup columns (Step 4.3) to detect these requirements.
+- **No speculative scope rewrites**: Never convert Parent scope to Contact/Account scope (or vice versa) based only on a runtime Web API failure or a guessed internal Power Pages behavior. Require deterministic code evidence plus Dataverse relationship evidence on the exact table being secured.
+- **Do not compare relationship names across unrelated entities**: Contact/account relationship names can legitimately differ between parent and child tables. Only validate whether each relationship exists on the table where it is used.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
 - **Parent before child**: Always create parent table permissions before child permissions that reference them.

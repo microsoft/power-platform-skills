@@ -9,21 +9,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/validate-activation.js"'
-          timeout: 30
-        - type: prompt
-          prompt: >
-            If a Power Pages website was being activated in this session (via /power-pages:activate-site),
-            verify before allowing stop: 1) Prerequisites were verified (PAC CLI auth + Azure CLI login),
-            2) Site name was read from config or user input, 3) The subdomain generator script was run AND the user was asked (via AskUserQuestion) whether to use the generated subdomain or enter a custom one,
-            4) The user confirmed activation parameters, 5) The POST to the websites API was made,
-            6) Provisioning status was polled to completion, 7) A summary with the site URL was presented.
-            If incomplete, return { "ok": false, "reason": "<specific issues>" }. Otherwise return { "ok": true }.
-          timeout: 30
 ---
 
 # Activate Power Pages Site

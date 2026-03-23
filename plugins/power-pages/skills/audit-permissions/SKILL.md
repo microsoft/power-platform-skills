@@ -12,22 +12,6 @@ user-invocable: true
 argument-hint: "[optional: specific table or concern]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If a permissions audit was being performed in this session (via /power-pages:audit-permissions),
-            verify before allowing stop: 1) The site's permissions structure was analyzed (web roles,
-            table permissions, code references), 2) An HTML audit report was generated with findings
-            and inventory, 3) The report was opened in the default browser or
-            the file path was communicated, 4) A summary with finding counts was presented. If any of
-            these are incomplete, return { "ok": false, "reason": "<specific issues>" }. If no audit
-            work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Audit Permissions

@@ -6,8 +6,10 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 
 const SITE_SETTING_ALLOWED_KEYS = new Set([
   'description',
+  'envvar_schema',
   'id',
   'name',
+  'source',
   'value',
 ]);
 
@@ -65,6 +67,40 @@ function validateSiteSettings(projectRoot) {
 
     if (!setting.name || String(setting.name).trim() === '') {
       addFinding(findings, 'error', 'Site setting has an empty "name" value.', {
+        filePath: setting.filePath,
+        fileName,
+      });
+    }
+
+    const hasEnvironmentVariableSchema = Object.prototype.hasOwnProperty.call(setting, 'envvar_schema');
+    const hasSource = Object.prototype.hasOwnProperty.call(setting, 'source');
+    const hasValue = Object.prototype.hasOwnProperty.call(setting, 'value');
+
+    if (hasEnvironmentVariableSchema) {
+      if (String(setting.envvar_schema || '').trim() === '') {
+        addFinding(findings, 'error', 'Site setting has an empty "envvar_schema" value.', {
+          filePath: setting.filePath,
+          fileName,
+        });
+      }
+
+      if (!hasSource || setting.source !== 1) {
+        addFinding(findings, 'error', 'Environment-variable-backed site setting must set "source" to 1.', {
+          filePath: setting.filePath,
+          fileName,
+        });
+      }
+
+      if (hasValue) {
+        addFinding(findings, 'error', 'Environment-variable-backed site setting must not define "value".', {
+          filePath: setting.filePath,
+          fileName,
+        });
+      }
+    }
+
+    if (hasSource && !hasEnvironmentVariableSchema) {
+      addFinding(findings, 'error', 'Site setting with "source" must also define "envvar_schema".', {
         filePath: setting.filePath,
         fileName,
       });

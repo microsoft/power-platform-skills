@@ -19,6 +19,15 @@ Create and deploy Power Pages code sites using modern frontend frameworks. This 
 claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
 ```
 
+## Hook behavior
+
+The plugin centralizes Claude Code hook registration in `hooks/hooks.json`.
+
+- `PostToolUse` hooks match the `Skill` tool so validation runs when a tracked Power Pages skill completes.
+- Command validators and checklist verification are maintained centrally instead of in per-skill frontmatter.
+
+This keeps hook behavior in one place and avoids relying on skill-frontmatter hook registration.
+
 ## Prerequisites
 
 | Prerequisite | Required for | Install |

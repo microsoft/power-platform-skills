@@ -9,20 +9,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-datamodel/scripts/validate-datamodel.js"'
-          timeout: 30
-        - type: prompt
-          prompt: >
-            If a Dataverse data model was being set up in this session (via /power-pages:setup-datamodel),
-            verify before allowing stop: 1) A data model was obtained (either the data-model-architect agent
-            was invoked OR the user uploaded an existing ER diagram that was parsed), 2) The user approved
-            the proposal, 3) All approved tables were created, 4) A summary was presented.
-            If incomplete, return { "ok": false, "reason": "<specific issues>" }. Otherwise return { "ok": true }.
-          timeout: 30
 ---
 
 # Set Up Dataverse Data Model

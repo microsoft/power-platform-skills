@@ -8,7 +8,7 @@ test('validateWebRoles flags invalid booleans', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(
     projectRoot,
-    '.powerpages-site\\web-roles\\Bad.webrole.yml',
+    '.powerpages-site/web-roles/Bad.webrole.yml',
     [
       'anonymoususersrole: maybe',
       'authenticatedusersrole: false',
@@ -24,7 +24,7 @@ test('validateWebRoles flags invalid booleans', (t) => {
 
 test('validateWebRoles flags naming convention violations', (t) => {
   const projectRoot = createTempProject(t);
-  writeProjectFile(projectRoot, '.powerpages-site\\web-roles\\baz.yml', 'id: x\n');
+  writeProjectFile(projectRoot, '.powerpages-site/web-roles/baz.yml', 'id: x\n');
 
   const result = validateWebRoles(projectRoot);
   assert.ok(findingMessages(result.findings).some(message => message.includes('does not follow naming convention "*.webrole.yml"')));

@@ -8,22 +8,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/validate-webroles.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If web roles were being created in this session (via /power-pages:create-webroles),
-            verify before allowing stop: 1) The .powerpages-site/web-roles/ directory was checked
-            for existing roles, 2) New web role YAML files were created with valid UUIDs generated
-            by the generate-uuid.js script, 3) All web role files were verified (valid UUIDs, correct
-            format, no duplicate flags), 4) The user was asked to deploy the site to apply the
-            new roles. If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no web role work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Create Web Roles

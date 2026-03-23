@@ -2,14 +2,22 @@ name: power-pages-script-tests
 
 on:
     pull_request:
+        branches:
+            - main
         paths:
             - "plugins/power-pages/**"
-    workflow_dispatch:
 
 jobs:
     test-power-pages-scripts:
-        name: test-power-pages-scripts
-        runs-on: ubuntu-latest
+        name: test-power-pages-scripts (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
         steps:
             - name: checkout
               uses: actions/checkout@v4

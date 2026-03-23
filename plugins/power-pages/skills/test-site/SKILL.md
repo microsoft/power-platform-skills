@@ -10,24 +10,6 @@ user-invocable: true
 argument-hint: "<site-url>"
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close, mcp__plugin_power-pages_playwright__browser_network_requests, mcp__plugin_power-pages_playwright__browser_console_messages, mcp__plugin_power-pages_playwright__browser_wait_for, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_evaluate
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: prompt
-          prompt: >
-            If a Power Pages site was being tested in this session (via /power-pages:test-site),
-            verify before allowing stop: 1) A site URL was resolved (from user input, activation
-            status check, or .powerpages-site config), 2) The browser navigated to the site and
-            the homepage loaded successfully, 3) Authentication was handled — if the site had a
-            private site gate (identity provider redirect), the user was asked to log in; if the
-            site had site-level authentication (Sign in links), the user was asked to log in or
-            chose to skip, 4) Discoverable links were crawled and each page was tested for load
-            errors, 5) Network requests were captured and API endpoints (/_api/ or OData) were
-            analyzed for errors, 6) A test report summary was presented to the user with pass/fail
-            status for pages and API endpoints.
-            If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no site testing happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Test Power Pages Site

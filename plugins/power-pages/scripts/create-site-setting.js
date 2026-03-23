@@ -5,6 +5,7 @@
 //
 // Usage:
 //   node create-site-setting.js --projectRoot <path> --name <string> --value <string> --description <string> [--type <boolean|string>]
+//   node create-site-setting.js --projectRoot <path> --name <string> --envVarSchema <string>
 //
 // Output (JSON to stdout):
 //   { "id": "<uuid>", "filePath": "<path>" }
@@ -30,20 +31,39 @@ const settingName = getArg('name');
 const settingValue = getArg('value');
 const description = getArg('description');
 const valueType = getArg('type') || 'string';
+const envVarSchema = getArg('envVarSchema');
+const usesEnvironmentVariable = envVarSchema !== null;
 
 // --- Validation ---
 
-if (!projectRoot || !settingName || settingValue === null || settingValue === undefined || !description) {
+if (!projectRoot || !settingName) {
   console.error('Usage: node create-site-setting.js --projectRoot <path> --name <string> --value <string> --description <string> [--type <boolean|string>]');
+  console.error('   or: node create-site-setting.js --projectRoot <path> --name <string> --envVarSchema <string>');
   process.exit(1);
 }
 
-if (valueType !== 'boolean' && valueType !== 'string') {
+if (usesEnvironmentVariable && (settingValue !== null || description !== null)) {
+  console.error('Error: --envVarSchema cannot be combined with --value or --description.');
+  process.exit(1);
+}
+
+if (usesEnvironmentVariable && String(envVarSchema).trim() === '') {
+  console.error('Error: --envVarSchema must be a non-empty string.');
+  process.exit(1);
+}
+
+if (!usesEnvironmentVariable && (settingValue === null || settingValue === undefined || !description)) {
+  console.error('Usage: node create-site-setting.js --projectRoot <path> --name <string> --value <string> --description <string> [--type <boolean|string>]');
+  console.error('   or: node create-site-setting.js --projectRoot <path> --name <string> --envVarSchema <string>');
+  process.exit(1);
+}
+
+if (!usesEnvironmentVariable && valueType !== 'boolean' && valueType !== 'string') {
   console.error(`Error: --type must be "boolean" or "string", got "${valueType}"`);
   process.exit(1);
 }
 
-if (valueType === 'boolean' && settingValue !== 'true' && settingValue !== 'false') {
+if (!usesEnvironmentVariable && valueType === 'boolean' && settingValue !== 'true' && settingValue !== 'false') {
   console.error(`Error: --value must be "true" or "false" when --type is "boolean", got "${settingValue}"`);
   process.exit(1);
 }
@@ -91,12 +111,19 @@ if (existingSettingByFileName) {
   process.exit(1);
 }
 
-const fields = {
-  description: description,
-  id: uuid,
-  name: settingName,
-  value: valueType === 'boolean' ? (settingValue === 'true') : settingValue,
-};
+const fields = usesEnvironmentVariable
+  ? {
+    envvar_schema: envVarSchema,
+    id: uuid,
+    name: settingName,
+    source: 1,
+  }
+  : {
+    description: description,
+    id: uuid,
+    name: settingName,
+    value: valueType === 'boolean' ? (settingValue === 'true') : settingValue,
+  };
 
 const yamlContent = writeYaml(fields);
 

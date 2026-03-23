@@ -7,9 +7,9 @@ function createTempProject(t) {
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
 
   for (const relativeDir of [
-    '.powerpages-site\\table-permissions',
-    '.powerpages-site\\site-settings',
-    '.powerpages-site\\web-roles',
+    '.powerpages-site/table-permissions',
+    '.powerpages-site/site-settings',
+    '.powerpages-site/web-roles',
   ]) {
     fs.mkdirSync(path.join(projectRoot, relativeDir), { recursive: true });
   }
