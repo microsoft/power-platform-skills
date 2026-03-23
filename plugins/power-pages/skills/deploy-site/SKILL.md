@@ -25,6 +25,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure PAC CLI is installed and available on the system PATH
 
 **Actions**:
+
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
@@ -44,7 +45,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
         dotnet tool install --global Microsoft.PowerApps.CLI.Tool
         ```
 
-      - If `dotnet` is also not available, direct the user to https://aka.ms/PowerPlatformCLI for full installation instructions including .NET SDK setup.
+      - If `dotnet` is also not available, direct the user to <https://aka.ms/PowerPlatformCLI> for full installation instructions including .NET SDK setup.
 
    3. After installation, verify by running `pac help` again.
    4. If it still fails, stop and ask the user to resolve the installation manually.
@@ -58,6 +59,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure the user is authenticated with PAC CLI and has a valid session
 
 **Actions**:
+
 1. Run `pac auth who` to check the current authentication status.
 
    ```powershell
@@ -105,6 +107,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure the user is deploying to the correct target environment
 
 **Actions**:
+
 1. Present the current environment information to the user and ask them to confirm.
 
    Use `AskUserQuestion` with the following structure:
@@ -165,7 +168,7 @@ Use `AskUserQuestion`:
 |----------|--------|---------|
 | This site has been deployed before. Would you like to run a permissions audit to verify table permissions match your current code before deploying? | Audit | Yes, audit permissions (Recommended), Skip — permissions are up to date |
 
-**If "Yes"**: Invoke `/power-pages:audit-permissions` to run the audit. After the audit completes, resume with Step 4.3.
+**If "Yes"**: Invoke `/audit-permissions` to run the audit. After the audit completes, resume with Step 4.3.
 **If "Skip"**: Proceed to Step 4.3.
 
 If `.powerpages-site` does **not** exist (first deployment), skip this step — there are no existing permissions to audit.
@@ -192,6 +195,7 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 **If the upload succeeds**: Proceed to Phase 5 to verify the deployment.
 
 **If the upload fails**: Check the error message:
+
 - If the failure is related to **blocked JavaScript** (`.js`) attachments → proceed to **Phase 6**
 - If the failure mentions **`.html` type attachments are currently blocked** → this is a **misleading error**. See [Troubleshooting: HTML Blocked Attachment Error](#troubleshooting-html-blocked-attachment-error) below
 - For other errors → present the error to the user and help them troubleshoot
@@ -261,22 +265,22 @@ Ask the user if they want to activate the site using `AskUserQuestion`:
 |----------|--------|---------|
 | Site deployed successfully! Would you like to activate (provision) the site now so it gets a live URL? | Activate | Activate now (Recommended) — Provision the site with a subdomain and make it live, Skip for now — I'll activate later |
 
-**If "Activate now"**: Invoke the `/power-pages:activate-site` skill. After activation completes, proceed to step 5.6 to clear the site cache.
+**If "Activate now"**: Invoke the `/activate-site` skill. After activation completes, proceed to step 5.6 to clear the site cache.
 **If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
 
 ### 5.6 Clear Site Cache (Only If Activated)
 
 After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), clear the runtime cache so the deployed changes are immediately visible.
 
-**Prerequisites**: The site must be activated and you need the `websiteUrl` (from step 5.5's activation check output or from the activate-site skill) and the environment URL (from `pac auth who` in Phase 2).
+**Prerequisites**: The site must be activated and the project root must be known (from Phase 4.1).
 
-Run the cache-clearing script:
+Run the cache-clearing script, passing the project root:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --websiteUrl "<WEBSITE_URL>" --envUrl "<ENVIRONMENT_URL>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-The script gets a Dataverse-scoped token via Azure CLI and sends a DELETE request to `websiteUrl/_services/cache/config` to flush the runtime cache.
+The script reads `siteName` from `powerpages.config.json`, looks up the website via the Power Platform admin API, and restarts it to flush the runtime cache.
 
 Evaluate the result:
 
@@ -385,11 +389,12 @@ If the retry succeeds, proceed to Phase 5. If it fails with a different error, p
 ## Suggest Next Steps
 
 If the user skips activation (or after activation completes), suggest:
-- `/power-pages:activate-site` — Provision the site with a subdomain and make it live (if not already activated)
-- `/power-pages:test-site` — Test the deployed site in the browser (verify pages load, check API calls)
-- `/power-pages:audit-permissions` — Audit table permissions against current code (recommended after redeployments)
-- `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
-- `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
+
+- `/activate-site` — Provision the site with a subdomain and make it live (if not already activated)
+- `/test-site` — Test the deployed site in the browser (verify pages load, check API calls)
+- `/audit-permissions` — Audit table permissions against current code (recommended after redeployments)
+- `/setup-datamodel` — Create Dataverse tables for dynamic content
+- `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
 
 ---
 
