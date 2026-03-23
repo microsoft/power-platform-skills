@@ -15,7 +15,7 @@ model: sonnet
 
 Provision a new Power Pages website in a Power Platform environment via the Power Platform REST API.
 
-> **Prerequisite:** This skill expects an existing Power Pages code site created via `/power-pages:create-site`. Run that skill first if the site does not exist yet.
+> **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
 
 ## Core Principles
 
@@ -57,7 +57,7 @@ pac help
    dotnet tool install --global Microsoft.PowerApps.CLI.Tool
    ```
 
-2. If `dotnet` is also not available, direct the user to https://aka.ms/PowerPlatformCLI for full installation instructions.
+2. If `dotnet` is also not available, direct the user to <https://aka.ms/PowerPlatformCLI> for full installation instructions.
 3. After installation, verify by running `pac help` again.
 
 #### 1.2 Check Authentication
@@ -69,6 +69,7 @@ pac auth who
 ```
 
 **If authenticated**: Extract these values from the output:
+
 - **Environment ID** — the GUID after `Environment ID:`
 - **Organization ID** — the GUID after `Organization ID:` (this is the Dataverse org ID)
 - **Cloud** — the value after `Cloud:` (e.g., `Public`, `UsGov`, `UsGovHigh`, `UsGovDod`, `China`)
@@ -226,7 +227,7 @@ Evaluate the JSON output:
 | **`Failed`** | `400` + `SubdomainConflict` (or error message mentions subdomain) | Subdomain already taken. Loop back to Phase 2 action 2.2 for a new subdomain, then re-run the script. |
 | **`Failed`** | `401` | Token expired. Ask the user to run `az login` and retry. |
 | **`Failed`** | `403` | Insufficient permissions. Inform user they need the "Power Pages site creator" or "System Administrator" role. |
-| **`Failed`** | `409` | Website already exists. Inform user and suggest using `/power-pages:deploy-site` instead. |
+| **`Failed`** | `409` | Website already exists. Inform user and suggest using `/deploy-site` instead. |
 | **`Failed`** | `429` or `5xx` | Throttling or server error. Wait 5 seconds and re-run the script once. |
 | **`Failed`** | other | Present the error to the user and help troubleshoot. |
 | **`Running`** | — | Provisioning still in progress after 5 minutes. Inform the user it may take up to 15 minutes and suggest checking the Power Platform admin center. |
@@ -268,9 +269,10 @@ Follow the skill tracking instructions in the reference to record this skill's u
 #### 5.3 Suggest Next Steps
 
 After the summary, suggest:
-- Test the site: `/power-pages:test-site` — Verify the site loads correctly and API calls are working
-- Set up the data model: `/power-pages:setup-datamodel`
-- Add sample data: `/power-pages:add-sample-data`
+
+- Test the site: `/test-site` — Verify the site loads correctly and API calls are working
+- Set up the data model: `/setup-datamodel`
+- Add sample data: `/add-sample-data`
 - View the site in the browser at the provisioned URL (note: it may take a few minutes for DNS to propagate)
 
 ### Output
@@ -303,7 +305,7 @@ Mark each task complete with `TaskUpdate` as you finish each phase.
 - **Phase 2.2**: User may accept the generated subdomain or provide a custom one — validate custom input.
 - **Phase 3**: User must explicitly approve activation. If declined, stop the skill entirely.
 - **Phase 4.2**: On 400 (subdomain taken), loop back to Phase 2 action 2.2 and re-run the script — do not abort.
-- **Phase 4.2**: On 409 (site already exists), redirect user to `/power-pages:deploy-site` instead.
+- **Phase 4.2**: On 409 (site already exists), redirect user to `/deploy-site` instead.
 - **Phase 4.2**: On timeout (still Running after 5 minutes), do not treat as failure — advise user to check admin center.
 
 **Begin with Phase 1: Verify Prerequisites**

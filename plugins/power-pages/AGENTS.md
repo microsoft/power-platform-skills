@@ -49,7 +49,7 @@ Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML lis
 ### Key Patterns
 
 - **User confirmation** — Pause with `AskUserQuestion` after gathering requirements, after presenting a plan, after implementation, and before deployment.
-- **Deployment prompt** — Skills that modify site artifacts should end by asking "Ready to deploy?" and invoke `/power-pages:deploy-site` if yes.
+- **Deployment prompt** — Skills that modify site artifacts should end by asking "Ready to deploy?" and invoke `/deploy-site` if yes.
 - **Lifecycle hooks** — If a skill needs command validation or checklist enforcement, update `hooks/hooks.json` and `scripts/lib/powerpages-hook-utils.js`. Do not define hook registration in individual `SKILL.md` files.
 - **Graceful failure** — Track API call results, never auto-rollback, report failures clearly, continue with remaining items.
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.

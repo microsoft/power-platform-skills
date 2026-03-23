@@ -51,10 +51,11 @@ At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each t
 ## Step 1: Verify Site Deployment
 
 Use `Glob` to find:
+
 - `**/powerpages.config.json` — identifies the project root
 - `**/.powerpages-site/table-permissions/*.tablepermission.yml` — existing permissions
 
-If no `.powerpages-site` folder exists, stop and tell the user to deploy first using `/power-pages:deploy-site`.
+If no `.powerpages-site` folder exists, stop and tell the user to deploy first using `/deploy-site`.
 If no table permissions exist, note this as a critical finding (the site may have no data access configured) and continue the audit — there may still be code references that need permissions.
 
 ---
@@ -68,6 +69,7 @@ Read all files matching `**/.powerpages-site/web-roles/*.yml`. Extract `id`, `na
 ### 2.2 Read Table Permissions
 
 Read all files matching `**/.powerpages-site/table-permissions/*.tablepermission.yml`. For each permission, extract:
+
 - `entityname` (permission name)
 - `entitylogicalname` (table)
 - `scope` (numeric code)
@@ -98,6 +100,7 @@ $schemaValidation = node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-sch
 ```
 
 Parse the JSON output and carry the findings into the audit. Treat:
+
 - `error` findings as **critical**
 - `warning` findings as **warning**
 - `info` findings as **info**
@@ -135,6 +138,7 @@ $lookups = node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-ta
 ```
 
 The script returns a JSON array of `{ logicalName, targets }` for each lookup column. Use this to build the append/appendto map:
+
 - The **source table** (with the lookup) needs `append: true`
 - Each **target table** in `targets` needs `appendto: true`
 
@@ -196,6 +200,7 @@ For each table, mark its task `in_progress` and run through the following checks
 **A. Permission Existence**
 
 Does this table have a table permission?
+
 - If the table is referenced in code but has **no permission** → finding:
   - **Severity:** `critical`
   - **Title:** `Missing permission for <table>`
@@ -211,6 +216,7 @@ Does this table have a table permission?
 **B. Web Role Association**
 
 Does the permission have web role(s) assigned?
+
 - Check `adx_entitypermission_webrole` — if empty or missing → finding:
   - **Severity:** `warning`
   - **Title:** `Permission <name> has no web role association`
@@ -221,6 +227,7 @@ Does the permission have web role(s) assigned?
 **C. Scope Appropriateness**
 
 Is the scope the least-privileged option that fits?
+
 - Search the service code for scope-relevant patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`)
 - If Global scope (`756150000`) with `write` or `delete` enabled → finding:
   - **Severity:** `warning`
@@ -238,6 +245,7 @@ Is the scope the least-privileged option that fits?
 **D. Read Permission**
 
 Is `read` correctly set?
+
 - Search the service code for GET/list/get patterns for this table: API calls to `/_api/<entity_set>`, list/get functions (`list<TableName>`, `get<TableName>`)
 - If code reads this table but `read: false` → finding:
   - **Severity:** `critical`
@@ -249,6 +257,7 @@ Is `read` correctly set?
 **E. Create Permission**
 
 Is `create` correctly set?
+
 - Search the service code for POST/create patterns: POST method usage (`method: 'POST'`), create functions (`create<TableName>`)
 - If code creates records but `create: false` → finding:
   - **Severity:** `critical`
@@ -265,6 +274,7 @@ Is `create` correctly set?
 **F. Write Permission**
 
 Is `write` correctly set?
+
 - Search the service code for PATCH/update/upload patterns: PATCH method usage (`method: 'PATCH'`), update functions (`update<TableName>`), file upload patterns (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`, `upload*File`)
 - If code updates records but `write: false` → finding:
   - **Severity:** `critical`
@@ -291,6 +301,7 @@ Is `write` correctly set?
 **G. Delete Permission**
 
 Is `delete` correctly set?
+
 - Search the service code for DELETE patterns: DELETE method usage (`method: 'DELETE'`), delete functions (`delete<TableName>`)
 - If code deletes records but `delete: false` → finding:
   - **Severity:** `critical`
@@ -307,6 +318,7 @@ Is `delete` correctly set?
 **H. Append/AppendTo**
 
 Are `append` and `appendto` correctly set?
+
 - If this table has `create` or `write` enabled, search the service code for lookup column usage (`@odata.bind` patterns for this table, from Step 3.2)
 - If lookups exist and `append: false` → finding:
   - **Severity:** `critical`
@@ -323,6 +335,7 @@ Are `append` and `appendto` correctly set?
 **I. Parent Chain Integrity**
 
 If the permission has Parent scope (`756150003`):
+
 - Verify `parententitypermission` references a valid permission ID that exists
 - Verify `parentrelationship` is a valid Dataverse relationship (if API available, using Step 3.3 results)
 - If broken → finding:
@@ -335,6 +348,7 @@ If the permission has Parent scope (`756150003`):
 **J. $expand Related Table Coverage**
 
 Is this table fetched via `$expand` on another table's query?
+
 - Check the `$expand` analysis from Step 2.3 (search site source code for `$expand`, `buildExpandClause`, `ExpandOption`)
 - If this table is expanded from another table but has no table permission with `read: true` for the same web role → finding:
   - **Severity:** `critical`
@@ -459,9 +473,9 @@ Present a summary to the user:
 1. **Critical findings count** — these need immediate attention
 2. **Warning findings count** — should be addressed
 3. **Report location** — where the HTML file was saved
-5. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
+4. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
-If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/power-pages:integrate-webapi` so the permissions and Web API settings architects can produce a complete plan.
+If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/integrate-webapi` so the permissions and Web API settings architects can produce a complete plan.
 
 ---
 

@@ -31,6 +31,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 **Goal**: Understand what site needs to be built and what problem it solves
 
 **Actions**:
+
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
 2. If site purpose is clear from arguments:
    - Summarize understanding
@@ -61,6 +62,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 6. Summarize understanding and confirm with user before proceeding
 
 **Audience influences site generation:**
+
 - **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
 - **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
 
@@ -147,6 +149,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 3. **Share the dev server URL with the user** so they can preview the site in their own browser (e.g., "Your site is running at `http://localhost:5173` — open it in your browser to follow along as I build.")
 
 > **GATE: Do NOT proceed to Phase 3 until ALL of the following are true:**
+>
 > 1. Template files copied and placeholders replaced
 > 2. Git repo initialized with initial scaffold commit
 > 3. `npm install` completed successfully
@@ -165,6 +168,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 **Goal**: Determine what pages, components, and design elements the site needs — while the user previews the running scaffold
 
 **Actions**:
+
 1. Use `AskUserQuestion` to collect feature and design requirements:
 
    | Question | Header | Options |
@@ -213,6 +217,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 **Goal**: Get user approval on the implementation plan
 
 **Actions**:
+
 1. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
 2. Present the implementation plan directly to the user as a formatted message. **The plan MUST have ALL of the following sections:**
 
@@ -286,11 +291,13 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 Use high-quality photos from Unsplash wherever the site needs visual content. Do NOT use placeholder services (e.g., `placeholder.com`, `placehold.co`), broken `<img>` tags, or leave empty image slots.
 
 **How to find images:**
+
 1. Use `WebSearch` to search Unsplash for relevant photos (e.g., `site:unsplash.com modern office workspace`)
 2. Pick specific photos and use their direct URL with sizing parameters: `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop`
 3. Choose images that match the site's aesthetic and mood
 
 **Where to use images:**
+
 - **Hero sections** — Striking, high-resolution photos that set the tone for the site
 - **Feature/service cards** — Relevant photos that illustrate each feature or service
 - **About/team sections** — Professional or contextual photos matching the site's purpose
@@ -298,6 +305,7 @@ Use high-quality photos from Unsplash wherever the site needs visual content. Do
 - **Content sections** — Supporting photos that break up text and add visual interest
 
 **Guidelines:**
+
 - Pick images that feel cohesive together — consistent style, lighting, and color tone
 - Use appropriate sizing (`w=800` for cards, `w=1600` for heroes/backgrounds) to avoid slow loads
 - Add descriptive `alt` text to every `<img>` for accessibility
@@ -313,6 +321,7 @@ git commit -m "<short description of what was added/changed>"
 ```
 
 **When to commit:**
+
 - After applying design foundations (fonts, colors, motion)
 - After creating each page (e.g., "Add Home page", "Add Contact page")
 - After creating each shared component (e.g., "Add Navbar component", "Add Footer component")
@@ -386,6 +395,7 @@ For each violation found, identify the source file and apply the fix:
 | Inadequate focus indicators | Add visible `outline` styles to interactive elements |
 
 After fixing each group of related violations, commit:
+
 ```powershell
 git add -A
 git commit -m "Fix accessibility: <violation description>"
@@ -420,8 +430,10 @@ Present a summary table to the user:
 **Goal**: Ensure the site meets user expectations and all pages work correctly
 
 **Actions**:
+
 1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
 2. Present a summary of what was built:
+
    ```
    | Component Type      | Count | Details |
    |---------------------|-------|---------|
@@ -430,6 +442,7 @@ Present a summary table to the user:
    | Design Elements     | 4     | Playfair Display + Source Sans Pro, 6 CSS variables, fade-in transitions, gradient backgrounds |
    | Git Commits         | 7     | scaffold + 6 feature commits |
    ```
+
 3. Share the dev server URL with the user and list all available routes
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
@@ -446,6 +459,7 @@ Present a summary table to the user:
 > **This phase is MANDATORY. Do NOT end the session without asking about deployment.**
 
 **Actions**:
+
 1. Record skill usage:
 
    > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
@@ -454,7 +468,7 @@ Present a summary table to the user:
 
 2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
    > "Would you like to deploy your site to Power Pages now?"
-3. If the user chooses to deploy, invoke the `/power-pages:deploy-site` skill.
+3. If the user chooses to deploy, invoke the `/deploy-site` skill.
 4. Mark all todos complete
 5. Present a final summary:
    - Site name and purpose
@@ -463,9 +477,9 @@ Present a summary table to the user:
    - Key files and their purposes
    - Total file count and git commit count
 6. Suggest optional enhancement skills:
-   - `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
-   - `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
-   - `/power-pages:add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
+   - `/setup-datamodel` — Create Dataverse tables for dynamic content
+   - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
+   - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
 
@@ -510,6 +524,7 @@ Mark each task `in_progress` when starting it and `completed` when done via `Tas
 ### Quality Standards
 
 Every site must meet these standards before completion:
+
 - Distinctive typography via Google Fonts (no generic Inter/Roboto/Arial)
 - Cohesive color palette via CSS variables
 - Motion/animations (page transitions, hover states)
@@ -526,9 +541,11 @@ Every site must meet these standards before completion:
 ## Example Workflow
 
 ### User Request
+
 "Create a partner portal for our consultants"
 
 ### Phase 1: Discovery
+
 - Name: Partner Portal
 - Framework: React
 - Purpose: Company Portal
@@ -536,12 +553,14 @@ Every site must meet these standards before completion:
 - Location: New folder `partner-portal` in current directory
 
 ### Phase 2: Scaffold & Launch
+
 - React template copied, default placeholders replaced
 - Git initialized, npm installed, dev server running at `http://localhost:5173`
 - Playwright verified scaffold loads
 - URL shared with user — they can preview immediately
 
 ### Phase 3: Component Planning
+
 - Features: Consultant Directory, Project Tracker, Document Library, Announcements
 - Aesthetic: Minimal & Clean
 - Mood: Professional & Trustworthy
@@ -549,28 +568,33 @@ Every site must meet these standards before completion:
 - Design choices made: DM Sans + Space Grotesk, `#1e3a5f` primary, blue-gray palette
 
 ### Phase 4: Plan Approval
+
 - Plan presented inline with design & pages + review & deployment sections
 - User approved via AskUserQuestion
 
 ### Phase 5: Implementation
+
 - Todos created for each page, component, routing, navigation, design foundations
 - Built in order: design tokens (replace defaults with chosen palette) → shared components → pages → router → nav
 - Git commits after each major piece
 - Playwright verified each page
 
 ### Phase 6: Accessibility Verification
+
 - axe-core injected and run on all 4 pages via `browser_evaluate`
 - Found 5 violations: 2 missing alt text, 1 insufficient contrast, 1 missing lang attribute, 1 skipped heading level
 - All violations fixed in source code and committed
 - Re-run confirmed zero critical/serious violations across all pages
 
 ### Phase 7: Review
+
 - Summary table presented
 - User reviewed at `http://localhost:5173`, requested minor color adjustment
 - Adjustment applied, re-verified
 
 ### Phase 8: Deploy
-- User chose to deploy → invoked `/power-pages:deploy-site`
+
+- User chose to deploy → invoked `/deploy-site`
 - Final summary presented with next step suggestions
 
 ---

@@ -69,7 +69,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
    |----------|---------|
    | Your site needs to be deployed first so the `.powerpages-site` folder is created. Shall I deploy it now? | Yes, deploy now (Recommended), No, I'll do it later |
 
-   **If "Yes, deploy now"**: Invoke the `/power-pages:deploy-site` skill to deploy the site. Once deployment completes and `.powerpages-site` is created, resume this workflow from Phase 2.
+   **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site. Once deployment completes and `.powerpages-site` is created, resume this workflow from Phase 2.
 
    **If "No, I'll do it later"**: Stop here — the user must deploy first before web roles can be created.
 
@@ -180,6 +180,7 @@ name: <Role Name>
 ```
 
 **Rules:**
+
 - Only ONE role can have `anonymoususersrole: true`
 - Only ONE role can have `authenticatedusersrole: true`
 - If an existing role already has one of these flags set to `true`, do not set it again on a new role
@@ -229,6 +230,7 @@ name: <Role Name>
 2. Present a summary of what was created:
 
    > "I've created the following new web roles:"
+>
    > | Role Name | ID | Anonymous | Authenticated |
    > |-----------|-----|-----------|---------------|
    > | Content Editors | `a1b2c3d4-...` | false | false |
@@ -242,11 +244,11 @@ name: <Role Name>
 
 4. **If "Yes, deploy now"**: Tell the user to invoke the deploy skill:
 
-   > "Please run `/power-pages:deploy-site` to deploy your site and apply the new web roles."
+   > "Please run `/deploy-site` to deploy your site and apply the new web roles."
 
 5. **If "No, I'll deploy later"**: Acknowledge and remind them:
 
-   > "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
+   > "No problem! Remember to deploy your site using `/deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
 
 **Output**: Summary presented and deployment offered
 

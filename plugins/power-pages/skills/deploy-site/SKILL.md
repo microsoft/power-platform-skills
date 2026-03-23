@@ -270,11 +270,19 @@ Ask the user if they want to activate the site using `AskUserQuestion`:
 
 ### 5.6 Clear Site Cache (Only If Activated)
 
-After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), clear the runtime cache so the deployed changes are immediately visible.
+After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), offer to clear the runtime cache so the deployed changes are immediately visible.
 
 **Prerequisites**: The site must be activated and the project root must be known (from Phase 4.1).
 
-Run the cache-clearing script, passing the project root:
+Use `AskUserQuestion` to confirm before proceeding:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Would you like to restart the site so your latest changes are immediately visible? This may cause a brief downtime (a few seconds). | Restart | Yes, restart site (Recommended), Skip — I'll restart later |
+
+**If "Skip"**: Skip to [Suggest Next Steps](#suggest-next-steps).
+
+**If "Yes"**: Run the cache-clearing script, passing the project root:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"

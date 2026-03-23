@@ -50,6 +50,7 @@ Check that the site has been deployed at least once by looking for the `.powerpa
 ### 1.1 Locate the Project
 
 Use `Glob` to find:
+
 - `**/powerpages.config.json` — Power Pages config (identifies the project root)
 - `**/.powerpages-site` — Deployment folder
 
@@ -59,7 +60,7 @@ Use `Glob` to find:
 
 Stop and tell the user:
 
-> "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. You need to deploy your site first using `/power-pages:deploy-site` before table permissions can be configured."
+> "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. You need to deploy your site first using `/deploy-site` before table permissions can be configured."
 
 Do NOT proceed with the remaining steps.
 
@@ -165,6 +166,7 @@ If no manifest exists, analyze the source code to infer which tables need permis
 - **`$expand` usage** — Look for expanded navigation properties that reference related tables. Each expanded related table also needs its own table permission with at least `read: true`.
 
 Look for patterns like:
+
 ```text
 /_api/<table_plural_name>
 fetch.*/_api/
@@ -177,6 +179,7 @@ buildExpandClause
 Search the site source code for `$expand` usage (`$expand`, `buildExpandClause`, `ExpandOption`) to identify related tables that need read permissions.
 
 For each expanded navigation property found:
+
 - **Single-valued (lookup):** The target table needs `read: true` table permission for the same web role
 - **Collection-valued (one-to-many):** The child table needs `read: true` table permission. Prefer **Parent scope** (`756150003`) using the one-to-many relationship name so access is scoped to the parent record's children
 - **Nested expand:** Every table in the expansion chain needs `read: true` table permissions
@@ -216,6 +219,7 @@ For each table, mark its task `in_progress` and work through the following check
 **A. Determine Source — Why does this table need permissions?**
 
 Classify the table into one or more categories:
+
 - **Direct API target** — Code makes `/_api/<entity_set>` calls to this table
 - **`$expand` related** — This table is fetched via `$expand` on another table's query (from Step 3.2.1)
 - **Lookup target** — This table is referenced by a lookup column on another table (needs `appendto`)
@@ -226,6 +230,7 @@ Record the source files and patterns that reference this table.
 **B. Determine Web Role(s)**
 
 Which web role(s) need access to this table?
+
 - Search for authentication checks near the API calls (e.g., `getCurrentContactId()`, `getPortalUser()`, role checks)
 - If the table is accessed without auth checks → likely needs Anonymous Users role
 - If the table is accessed behind auth/login → needs Authenticated Users role
@@ -260,6 +265,7 @@ Search the service code for scope-relevant filter patterns: contact-scoped filte
 **D. Determine Read**
 
 Is `read: true` needed?
+
 - Search the service code for: GET requests to `/_api/<entity_set>`, list/get functions (`list<TableName>`, `get<TableName>`), `$select` patterns, `$expand` that references this table
 - If this table is only accessed via `$expand` from another table → still needs `read: true`
 - **Decision:** `true` if any read pattern found, `false` otherwise
@@ -267,12 +273,14 @@ Is `read: true` needed?
 **E. Determine Create**
 
 Is `create: true` needed?
+
 - Search the service code for: POST requests (`method: 'POST'`) to `/_api/<entity_set>`, create functions (`create<TableName>`)
 - **Decision:** `true` only if POST/create pattern found for this specific table, `false` otherwise
 
 **F. Determine Write**
 
 Is `write: true` needed?
+
 - Search the service code for: PATCH requests (`method: 'PATCH'`) to `/_api/<entity_set>`, update functions (`update<TableName>`), file upload patterns (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`, `upload*File`)
 - **Important:** File/image uploads use PATCH → require `write: true` even if no other field updates exist
 - **Decision:** `true` if PATCH/update/upload pattern found, `false` otherwise
@@ -280,12 +288,14 @@ Is `write: true` needed?
 **G. Determine Delete**
 
 Is `delete: true` needed?
+
 - Search the service code for: DELETE requests (`method: 'DELETE'`) to `/_api/<entity_set>`, delete functions (`delete<TableName>`)
 - **Decision:** `true` only if DELETE pattern found for this specific table, `false` otherwise
 
 **H. Determine Append**
 
 Is `append: true` needed?
+
 - **Required when:** This table has lookup columns that are set during create or write operations
 - Search the service code for `@odata.bind` patterns in create/update functions for this table
 - Also check Dataverse column metadata (Step 4.3) for lookup columns on this table
@@ -295,6 +305,7 @@ Is `append: true` needed?
 **I. Determine AppendTo**
 
 Is `appendto: true` needed?
+
 - **Required when:** This table is the TARGET of a lookup column on another table that has create or write permissions
 - Search the service code for `@odata.bind` references to this table's entity set (e.g., `<entity_set>(`)
 - Also check Dataverse column metadata (Step 4.3) — for each table with create/write, check if its lookup `Targets` include this table
@@ -304,6 +315,7 @@ Is `appendto: true` needed?
 **J. Determine Parent Relationship (if Parent scope)**
 
 If scope is Parent (`756150003`):
+
 - Identify the parent table and its permission (must be analyzed first)
 - Identify the Dataverse relationship name (from Step 4.2) — use `SchemaName` as `parentrelationship`
 
@@ -403,10 +415,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDe
 The output JSON contains a `data.value` array with each lookup column's `LogicalName` and `Targets` array.
 
 This returns each lookup column and its target table(s). Use this to build the append/appendto map:
+
 - The **source table** (with the lookup) needs `append: true`
 - Each **target table** in the `Targets` array needs `appendto: true`
 
 **Example output:**
+
 ```
 Lookup                      Targets
 ------                      -------
@@ -415,6 +429,7 @@ cr87b_contactid             contact
 ```
 
 This means:
+
 - `cr87b_product` needs `append: true` (it has lookup columns)
 - `cr87b_productcategory` needs `appendto: true` (it is referenced by the product lookup)
 - `contact` — system table, typically already has permissions
@@ -422,6 +437,7 @@ This means:
 ### Error Handling
 
 If any API calls fail:
+
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
 - **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
 - **OData 401/403**: The `dataverse-request.js` script handles 401 token refresh automatically; persistent 401/403 indicates insufficient privileges — note in plan
@@ -442,6 +458,7 @@ For each table permission to create, specify:
 **Permission Name Convention:** Use `<DisplayName> - <AccessType>` when multiple roles share the same CRUD+scope (e.g., `Product - Read`, `Order - Full Access`). Only include the role name `<DisplayName> - <RoleName> <AccessType>` when different roles need **different** CRUD or scope configurations for the same table (e.g., `Order - Anonymous Read` with Global/read-only vs `Order - Authenticated Access` with Contact/RCWD).
 
 For each permission, include:
+
 - Which web role(s) it is associated with (by UUID from Step 2.1, or note that a new web role needs to be created)
 - CRUD + append/appendto flags
 - Scope (Global, Contact, Account, Parent, or Self)
@@ -475,6 +492,7 @@ For Contact and Account scopes, the relationship argument is mandatory and must 
 ### 5.2 Design Rationale
 
 Prepare an array of design rationale items that explain the permissions architecture. Each item has an icon, title, and description. Include rationale for:
+
 - **Why this permissions structure** — Explain the overall security model (e.g., "The site uses a two-role model: Anonymous Users for public catalog browsing and Authenticated Users for order management.")
 - **Scope decisions** — Summarize why each scope was chosen and any alternatives considered
 - **Security trade-offs** — Note any permissions that are more permissive than ideal and why
@@ -606,6 +624,7 @@ Start-Process "<OUTPUT_PATH>"
 ### 5.4 Summary and Next Steps
 
 Prepare for the plan mode message. Include:
+
 1. **Summary table** of all table permission files to be created:
 
    | Permission Name | Table | Scope | Web Role | CRUD |
@@ -636,7 +655,7 @@ $result = node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-
 
 Capture the JSON output (`{ "id": "<uuid>", "filePath": "<path>" }`) — you need the `id` for `--webRoleIds` in table permissions.
 
-2. **Create table permissions** using `create-table-permission.js`. Process **parent permissions before child permissions** (children need the parent's UUID from JSON output).
+1. **Create table permissions** using `create-table-permission.js`. Process **parent permissions before child permissions** (children need the parent's UUID from JSON output).
 
 Run each script invocation prepared in section 5.1:
 

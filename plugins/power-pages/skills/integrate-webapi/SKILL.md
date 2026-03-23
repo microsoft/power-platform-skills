@@ -25,8 +25,9 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 
 > **Prerequisites:**
-> - An existing Power Pages code site created via `/power-pages:create-site`
-> - A Dataverse data model (tables/columns) already set up via `/power-pages:setup-datamodel` or created manually
+>
+> - An existing Power Pages code site created via `/create-site`
+> - A Dataverse data model (tables/columns) already set up via `/setup-datamodel` or created manually
 > - The site must be deployed at least once (`.powerpages-site` folder must exist) for permissions setup
 
 **Initial request:** $ARGUMENTS
@@ -41,7 +42,7 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 4. **Implement Integrations** — Use the `webapi-integration` agent for each table
 5. **Verify Integrations** — Validate all expected files exist and the project builds successfully
 6. **Setup Permissions & Settings** — Choose permissions source (upload diagram or let the architects analyze), then configure table permissions and Web API site settings with case-sensitive validated column names
-7. **Review & Deploy** — Ask the user to deploy the site and invoke `/power-pages:deploy-site` if confirmed
+7. **Review & Deploy** — Ask the user to deploy the site and invoke `/deploy-site` if confirmed
 
 ---
 
@@ -59,7 +60,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
 ```
 
-**If not found**: Tell the user to create a site first with `/power-pages:create-site`.
+**If not found**: Tell the user to create a site first with `/create-site`.
 
 ### 1.2 Read Existing Config
 
@@ -154,6 +155,7 @@ From the Explore agent's findings, compile a list of tables needing integration:
 ### 3.1 Present Findings
 
 Show the user:
+
 1. The tables that were identified for Web API integration
 2. For each table: which files reference it, what operations are needed
 3. Whether a shared API client already exists or needs to be created
@@ -186,6 +188,7 @@ For each table, use the `Task` tool to invoke the `webapi-integration` agent at 
 **Prompt template for the agent:**
 
 > "Integrate Power Pages Web API for the **[Table Display Name]** table.
+>
 > - Table logical name: `[logical_name]`
 > - Entity set name: `[entity_set_name]`
 > - Operations needed: [read/create/update/delete]
@@ -208,6 +211,7 @@ If there is only one table, this step is simply sequential.
 ### 4.3 Verify Each Integration
 
 After each agent completes (or after all parallel agents complete), verify the output:
+
 - Check that the expected files were created (types, service, hook/composable)
 - Confirm the shared API client exists after the first table is processed
 - Note any issues reported by the agent
@@ -234,11 +238,13 @@ git commit -m "Add Web API integration for [table names]"
 ### 5.1 Verify File Inventory
 
 For each integrated table, confirm the following files exist:
+
 - **Type definition** in `src/types/` (e.g., `src/types/product.ts`)
 - **Service file** in `src/shared/services/` or `src/services/` (e.g., `productService.ts`)
 - **Framework-specific hook/composable** (e.g., `src/shared/hooks/useProducts.ts` for React, `src/composables/useProducts.ts` for Vue)
 
 Also verify:
+
 - **Shared API client** at `src/shared/powerPagesApi.ts` exists
 - Each service file references `/_api/` endpoints
 - Each service file imports from the shared API client
@@ -252,6 +258,7 @@ npm run build
 ```
 
 If the build fails, fix the issues before proceeding. Common issues:
+
 - Missing imports between generated files
 - Type mismatches between service and type definitions
 - Framework-specific compilation errors
@@ -287,7 +294,7 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The `.powerpages-site` folder was not found. The site needs to be deployed once before permissions and site settings can be configured. Would you like to deploy now? | Yes, deploy now (Recommended), Skip permissions for now — I'll set them up later |
 
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then resume this phase.
+**If "Yes, deploy now"**: Invoke `/deploy-site` first, then resume this phase.
 
 **If "Skip"**: Skip to Phase 7 with a note that permissions and site settings still need to be configured.
 
@@ -349,6 +356,7 @@ Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAU
 > "Analyze this Power Pages code site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables. After I approve the plan, create the web role and table permission YAML files using the deterministic scripts."
 
 The agent will:
+
 1. Analyze the site and propose a plan (with Mermaid diagram)
 2. Present the plan via plan mode for user approval
 3. After approval, create any needed web roles using `create-web-role.js`
@@ -364,6 +372,7 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${CLAUDE
 > "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
 
 The agent will:
+
 1. Analyze the site, query Dataverse for exact column LogicalNames
 2. Cross-validate column names (case-sensitive)
 3. Present the plan via plan mode for user approval
@@ -484,11 +493,11 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The Web API integration and permissions are ready. To make everything live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke the `/power-pages:deploy-site` skill to deploy the site.
+**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 
 **If "No, I'll deploy later"**: Acknowledge and remind:
 
-> "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready. The Web API calls will not work until the site is deployed with the new permissions."
+> "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The Web API calls will not work until the site is deployed with the new permissions."
 
 ### 7.4 Post-Deploy Notes
 

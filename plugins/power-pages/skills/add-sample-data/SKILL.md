@@ -30,6 +30,7 @@ Populate Dataverse tables with sample records via OData API so users can test an
 **Goal**: Confirm PAC CLI auth, acquire an Azure CLI token, and verify API access
 
 **Actions**:
+
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
@@ -102,6 +103,7 @@ Use `AskUserQuestion` to ask how many sample records per table:
 Analyze relationships between selected tables. Parent/referenced tables must be inserted first so their IDs are available for child/referencing table lookups.
 
 Build the insertion order:
+
 1. Tables with no lookup dependencies (parent tables) -- insert first
 2. Tables that reference already-inserted tables -- insert next
 3. Continue until all tables are ordered
@@ -197,6 +199,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<ChildE
 ### 5.5 Track Progress
 
 Track each insertion attempt:
+
 - Record table name, record number, success/failure
 - On failure, log the error message but continue with remaining records
 - Do NOT attempt automated rollback on failure
@@ -245,6 +248,7 @@ Present a summary table:
 | `cr123_task` (Task) | 10 | 9 | 1 |
 
 Include:
+
 - Total records created across all tables
 - Any failures with error details
 - Lookup relationships that were established
@@ -252,9 +256,10 @@ Include:
 ### 6.4 Suggest Next Steps
 
 After the summary, suggest:
+
 - Review the data in the Power Pages maker portal or model-driven app
-- If the site is not yet built: `/power-pages:create-site`
-- If the site is ready to deploy: `/power-pages:deploy-site`
+- If the site is not yet built: `/create-site`
+- If the site is ready to deploy: `/deploy-site`
 
 **Output**: Verified record counts and summary presented to the user
 

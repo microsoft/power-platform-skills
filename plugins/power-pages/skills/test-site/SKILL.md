@@ -16,7 +16,7 @@ model: opus
 
 Test a deployed, activated Power Pages site at runtime. Navigate the site in a browser, crawl all discoverable links, verify pages load correctly, capture network traffic to test API requests, and generate a comprehensive test report.
 
-> **Prerequisite:** This skill expects a deployed and activated Power Pages site. Run `/power-pages:deploy-site` and `/power-pages:activate-site` first if the site is not yet live.
+> **Prerequisite:** This skill expects a deployed and activated Power Pages site. Run `/deploy-site` and `/activate-site` first if the site is not yet live.
 
 ## Core Principles
 
@@ -42,6 +42,7 @@ Create the full task list with all 6 phases before starting any work (see [Progr
 #### 1.2 Check User Input
 
 If the user provided a URL in `$ARGUMENTS`:
+
 1. Validate it starts with `https://`.
 2. Store it as `SITE_URL` and skip to Phase 2.
 
@@ -63,7 +64,7 @@ If no URL was provided, attempt auto-detection:
 
 3. Evaluate the JSON result:
    - **If `activated` is `true` and `websiteUrl` is present**: Use `websiteUrl` as `SITE_URL`. Inform the user: "Detected your site URL: **<websiteUrl>**"
-   - **If `activated` is `false`**: Inform the user: "Your site is not yet activated. Please run `/power-pages:activate-site` first, then re-run this skill."  Stop the skill.
+   - **If `activated` is `false`**: Inform the user: "Your site is not yet activated. Please run `/activate-site` first, then re-run this skill."  Stop the skill.
    - **If `error` is present**: Fall through to step 1.4.
 
 #### 1.4 Ask the User
@@ -72,7 +73,7 @@ If auto-detection failed or was inconclusive, use `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| What is the URL of the deployed Power Pages site you want to test? (e.g., https://contoso.powerappsportals.com) | Site URL | I'll paste the URL (description: Select "Other" below and paste your site URL), I don't know my URL (description: Run `/power-pages:activate-site` to get your site URL, or check the Power Platform admin center) |
+| What is the URL of the deployed Power Pages site you want to test? (e.g., <https://contoso.powerappsportals.com>) | Site URL | I'll paste the URL (description: Select "Other" below and paste your site URL), I don't know my URL (description: Run `/activate-site` to get your site URL, or check the Power Platform admin center) |
 
 Store the user-provided URL as `SITE_URL`.
 
@@ -141,6 +142,7 @@ Set the browser to a standard desktop viewport:
 #### 3.1 Analyze Homepage Snapshot for Private Site Gate
 
 Review the browser snapshot from Phase 2.4 and the current browser URL for signs of a **private site redirect**:
+
 - The page content shows an identity provider login form (Azure AD B2C, Azure AD, etc.)
 - The browser URL has changed to a different domain than `SITE_URL` (e.g., `login.microsoftonline.com`, `*.b2clogin.com`, or a custom identity provider domain)
 - A 401/403 response was returned before any site content loaded
@@ -155,6 +157,7 @@ If a private site gate is detected, use `AskUserQuestion`:
 | This site is **private** — it redirected to an identity provider login page before any content could load. A browser window should be open showing the login page. Please log in there using credentials that have access to this site. Once you have successfully logged in and can see the site homepage, select "I have logged in" below. | Private Site Login | I have logged in (Recommended) — I've completed the login and can see the site, Cancel testing — Stop the test |
 
 **If "I have logged in"**:
+
 1. Use `browser_snapshot` to verify the user is now on the actual site (site content visible, navigation present, URL is back on the `SITE_URL` domain).
 2. If still on the identity provider login page:
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
@@ -163,11 +166,13 @@ If a private site gate is detected, use `AskUserQuestion`:
 4. Continue to step 3.3 to check for site-level authentication.
 
 **If "Cancel testing"**:
+
 - Stop the skill and inform the user they can re-run it after resolving access.
 
 #### 3.3 Analyze for Site-Level Authentication
 
 After the homepage is loaded (either directly for public sites, or after passing the private site gate), review the snapshot for signs of **site-level authentication**:
+
 - "Sign in" / "Log in" / "Register" links or buttons in the site navigation
 - Pages that show "You must be signed in to view this page" or similar messages
 - Content that indicates some areas are restricted to authenticated users
@@ -175,6 +180,7 @@ After the homepage is loaded (either directly for public sites, or after passing
 #### 3.4 Handle Public Site (No Authentication Needed)
 
 If neither a private site gate nor site-level authentication indicators are found:
+
 - Inform the user: "Site is publicly accessible. Proceeding with page and API testing."
 - Skip to Phase 4.
 
@@ -187,16 +193,19 @@ If site-level authentication indicators are detected (login links in navigation,
 | The site has a **Sign in** option, which means some pages or API calls may require authentication. A browser window should be open — you can click "Sign in" and log in with a user account that has the appropriate web role. Once you have successfully logged in, select "I have logged in" below. | Site Authentication | I have logged in (Recommended) — I've signed in through the site's login flow, Skip authenticated pages — Only test publicly accessible pages and APIs, Cancel testing — Stop the test |
 
 **If "I have logged in"**:
+
 1. Use `browser_snapshot` to verify the user is now logged in (login link replaced with user name/profile, or authenticated content is visible).
 2. If the login form is still showing:
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 
 **If "Skip authenticated pages"**:
+
 - Note that only public pages will be tested. Some API calls may return 401/403 — these will be flagged but not treated as failures.
 - Continue to Phase 4.
 
 **If "Cancel testing"**:
+
 - Stop the skill and inform the user they can re-run it after resolving authentication.
 
 ### Output
@@ -253,6 +262,7 @@ For each discovered URL, in sequence:
 #### 4.4 Record Page Test Results
 
 Build a results list tracking:
+
 - URL tested
 - Load status (Pass / Fail)
 - Number of console errors
@@ -277,6 +287,7 @@ Build a results list tracking:
 Navigate back to pages that are likely to make API calls — pages with dynamic content such as data tables, lists, forms, or dashboards. Prioritize pages where `/_api/` requests were observed in Phase 2.6 or Phase 4.
 
 For each data-driven page:
+
 1. Use `browser_navigate` to go to the page.
 2. Use `browser_wait_for` with **time: 5** seconds to allow API calls to complete.
 
@@ -320,6 +331,7 @@ If forms are detected on any page (via `browser_snapshot` showing form elements)
 | I found forms on the site that may trigger API calls when submitted. Should I attempt to interact with these forms to test the POST/PATCH API endpoints? Note: this may create or modify data in your Dataverse environment. | Form Testing | Yes, test form submissions — I understand this may create test data, Skip form testing (Recommended) — Only test read-only API calls |
 
 **If "Yes"**:
+
 1. Use `browser_click` to interact with form submit buttons.
 2. Use `browser_wait_for` to wait for the form response.
 3. Use `browser_network_requests` to capture the resulting POST/PATCH requests.
@@ -398,10 +410,10 @@ Overall: X/Y checks passed
 
 For each failure, reiterate the specific remediation guidance from Phase 5.4. Group recommendations by category:
 
-- **Table permissions issues** → `/power-pages:create-webroles` or manually configure table permissions
+- **Table permissions issues** → `/create-webroles` or manually configure table permissions
 - **Site settings issues** → Check `Webapi/<table>/enabled` and `Webapi/<table>/fields` settings
-- **Authentication issues** → `/power-pages:setup-auth`
-- **Missing endpoints** → Verify table exists in Dataverse via `/power-pages:setup-datamodel`
+- **Authentication issues** → `/setup-auth`
+- **Missing endpoints** → Verify table exists in Dataverse via `/setup-datamodel`
 - **Server errors** → Enable `Webapi/error/innererror` site setting for diagnostics
 
 #### 6.6 Close Browser
@@ -412,10 +424,10 @@ For each failure, reiterate the specific remediation guidance from Phase 5.4. Gr
 
 Based on the test results, suggest relevant skills:
 
-- If API failures were found: `/power-pages:integrate-webapi` — Fix Web API site settings and table permissions
-- If authentication issues: `/power-pages:setup-auth` — Configure authentication providers
-- If pages had errors: Review the site code and redeploy with `/power-pages:deploy-site`
-- If all tests passed: Site is working correctly! Consider `/power-pages:add-seo` for search engine optimization
+- If API failures were found: `/integrate-webapi` — Fix Web API site settings and table permissions
+- If authentication issues: `/setup-auth` — Configure authentication providers
+- If pages had errors: Review the site code and redeploy with `/deploy-site`
+- If all tests passed: Site is working correctly! Consider `/add-seo` for search engine optimization
 
 ### Output
 
@@ -437,7 +449,7 @@ Based on the test results, suggest relevant skills:
 
 ### Key Decision Points
 
-1. **Phase 1.3**: If the site is not activated, stop and redirect to `/power-pages:activate-site`
+1. **Phase 1.3**: If the site is not activated, stop and redirect to `/activate-site`
 2. **Phase 1.4**: If no URL can be auto-detected, must ask the user
 3. **Phase 3.2**: If the site is private (redirects to identity provider), must ask the user to log in — cannot bypass
 4. **Phase 3.5**: If site-level authentication is available, must ask the user whether to log in or skip — cannot auto-login
