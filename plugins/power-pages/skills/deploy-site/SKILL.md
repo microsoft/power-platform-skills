@@ -249,7 +249,7 @@ The script reads `siteName` from `powerpages.config.json`, looks up the `website
 
 Evaluate the result:
 
-- **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
+- **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Proceed to step 5.6 to clear the site cache, then skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
 - **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
 - **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
 
@@ -261,10 +261,29 @@ Ask the user if they want to activate the site using `AskUserQuestion`:
 |----------|--------|---------|
 | Site deployed successfully! Would you like to activate (provision) the site now so it gets a live URL? | Activate | Activate now (Recommended) — Provision the site with a subdomain and make it live, Skip for now — I'll activate later |
 
-**If "Activate now"**: Invoke the `/power-pages:activate-site` skill.
+**If "Activate now"**: Invoke the `/power-pages:activate-site` skill. After activation completes, proceed to step 5.6 to clear the site cache.
 **If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
 
-**Output**: Deployment verified, changes committed, activation offered
+### 5.6 Clear Site Cache (Only If Activated)
+
+After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), clear the runtime cache so the deployed changes are immediately visible.
+
+**Prerequisites**: The site must be activated and you need the `websiteUrl` (from step 5.5's activation check output or from the activate-site skill) and the environment URL (from `pac auth who` in Phase 2).
+
+Run the cache-clearing script:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --websiteUrl "<WEBSITE_URL>" --envUrl "<ENVIRONMENT_URL>"
+```
+
+The script gets a Dataverse-scoped token via Azure CLI and sends a DELETE request to `websiteUrl/_services/cache/config` to flush the runtime cache.
+
+Evaluate the result:
+
+- **If `success` is `true`**: Inform the user: "Site cache cleared — your latest changes should now be visible at **<websiteUrl>**."
+- **If `success` is `false`**: Warn the user that cache clearing failed and show the error, but do not block the deployment flow. The deployment itself succeeded; cache will eventually refresh on its own. Suggest the user can manually clear cache from the Power Pages admin center if needed.
+
+**Output**: Deployment verified, changes committed, activation offered, cache cleared
 
 ---
 
