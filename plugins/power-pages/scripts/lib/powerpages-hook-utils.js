@@ -37,6 +37,13 @@ function detectTrackedSkill(value) {
     return trimmed;
   }
 
+  // Strip leading slash and optional plugin prefix: /create-site, /power-pages:create-site
+  const normalized = trimmed.replace(/^\/?(?:power-pages:)?/, '').toLowerCase();
+  if (TRACKED_SKILLS[normalized]) {
+    return normalized;
+  }
+
+  // Fall back to searching for power-pages:<skill> anywhere in the string
   const commandMatch = trimmed.match(/power-pages:([a-z0-9-]+)/i);
   if (!commandMatch) {
     return null;
