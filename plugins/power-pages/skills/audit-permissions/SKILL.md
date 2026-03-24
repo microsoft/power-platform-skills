@@ -512,4 +512,4 @@ If the user wants fixes applied:
 - **Deterministic API calls**: Always use the Node.js scripts (`query-table-lookups.js`, `query-table-relationships.js`) for Dataverse API queries — never use inline PowerShell `Invoke-RestMethod` calls.
 - **No questions during analysis**: Autonomously gather all data, run checks, and present findings. Only ask the user at the end about fixing issues.
 - **Security**: Never log or display auth tokens. The scripts handle token acquisition internally via `getAuthToken()`.
-- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (4.3 append/appendto validation, 4.6 relationship verification) and note in the report which checks were skipped.
+- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped.

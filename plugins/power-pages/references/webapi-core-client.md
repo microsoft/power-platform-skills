@@ -429,7 +429,7 @@ export const bindLookup = (
  * Note: $orderby and $top are NOT supported when the query contains any nested $expand.
  */
 export interface ExpandOption {
-  /** Navigation property name (case-sensitive, typically PascalCase) */
+  /** Navigation property name — must match exact Dataverse schema name (case-sensitive) */
   property: string;
   /** Columns to select from the related entity */
   select?: string[];

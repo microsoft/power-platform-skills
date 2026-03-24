@@ -74,9 +74,10 @@ const existingSkillSetting = existingSiteSettings.find(setting => setting.name =
 
 if (existingSkillSetting) {
   const currentValue = parseInt(existingSkillSetting.value, 10) || 0;
-  existingSkillSetting.value = String(currentValue + 1);
-  fs.writeFileSync(existingSkillSetting.filePath, writeYaml(existingSkillSetting), 'utf8');
-  console.log(`Updated ${skillSettingName} counter to ${existingSkillSetting.value}`);
+  const { filePath, ...yamlFields } = existingSkillSetting;
+  yamlFields.value = String(currentValue + 1);
+  fs.writeFileSync(filePath, writeYaml(yamlFields), 'utf8');
+  console.log(`Updated ${skillSettingName} counter to ${yamlFields.value}`);
 } else {
   const fields = {
     description: `Tracks usage count of the ${skillName} skill`,
