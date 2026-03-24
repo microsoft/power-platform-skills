@@ -499,6 +499,9 @@ Only create these methods if the target table actually has File or Image columns
 | Using `$select` on `/$value` URL | `400 Bad Request` | OData query options are not supported on `/$value` |
 | Missing `x-ms-file-name` header | File saved without name/extension | Include `x-ms-file-name` header with filename |
 | Using `Accept: application/json` for download | Empty or error response | Use `Accept: */*` for blob downloads |
+| Using file MIME type as upload `Content-Type` (e.g. `image/png`) | `400 "Stream was not readable"` — OData routes to JSON deserializer instead of binary handler | Always use `Content-Type: application/octet-stream` for uploads |
+| Missing `Content-Type: application/octet-stream` on download | `404` — OData pipeline can't route to binary file handler | Add `Content-Type: application/octet-stream` to download headers |
+| Explicit column list in `Webapi/<table>/fields` with file columns | `403 "Attribute * not enabled for Web Api"` on `/$value` download — the endpoint internally does `SELECT *` | Set field allowlist to `*` when the table has File or Image columns |
 
 ---
 

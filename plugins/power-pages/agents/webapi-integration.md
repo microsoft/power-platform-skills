@@ -560,8 +560,8 @@ Only create this if the site's UI shows/hides controls based on user roles.
 16. **Match existing patterns** — If the project has conventions for file locations, naming, or code style, follow them exactly.
 17. **One table per invocation** — This agent handles a single table. For multiple tables, the caller invokes it separately for each.
 18. **Upload vs download URLs** — File upload uses `/_api/table(id)/column` (PATCH, no `/$value`). File download uses `/_api/table(id)/column/$value` (GET). File delete uses `/_api/table(id)/column` (DELETE). Do not confuse the URL patterns.
-19. **File upload body is binary** — Send `ArrayBuffer` via `file.arrayBuffer()`, not JSON. Set `Content-Type` to the file's MIME type. Include `If-Match: *` and `x-ms-file-name` headers.
-20. **File download uses blob response** — Set `Accept: */*` (not `application/json`). Parse response as blob, not JSON. Return `null` on 404 instead of throwing.
+19. **File upload body is binary** — Send `ArrayBuffer` via `file.arrayBuffer()`, not JSON. Set `Content-Type` to `application/octet-stream` (NOT the file's MIME type — using e.g. `image/png` causes OData to route to the JSON deserializer, resulting in 400 "Stream was not readable"). Include `If-Match: *` and `x-ms-file-name` headers.
+20. **File download uses blob response** — Set `Accept: */*` (not `application/json`) AND `Content-Type: application/octet-stream` (required for OData to route to the binary file handler — without it, downloads return 404). Parse response as blob, not JSON. Return `null` on 404 instead of throwing.
 21. **Lookup GUID vs Navigation Property** — On GET, use `_{logicalname}_value` in `$select` for the raw GUID, and the Navigation Property in `$expand` for related data. On POST/PATCH, use `NavigationProperty@odata.bind` — never write directly to the `_value` property.
 22. **Remind about permissions** — After creating integration code, note that the `table-permissions-architect` and `webapi-settings-architect` agents must be run to configure table permissions and site settings if not already done. If the service uses `$expand`, explicitly list each expanded related table that also needs permissions and site settings configured.
 23. **Disable `innererror` in production** — `Webapi/error/innererror = true` is useful for debugging but exposes internal Dataverse error details. Must be disabled before going live.
@@ -610,8 +610,8 @@ Before confirming that work is done, verify every item below. Do not skip any ch
 - [ ] Update (PATCH) operations include the `If-Match: *` header
 - [ ] Domain mappers provide sensible defaults for every field (guards against column permissions silently omitting values)
 - [ ] OData string values in `$filter` use `escapeODataString()` to prevent injection
-- [ ] File upload sends `ArrayBuffer` body with correct `Content-Type`, `If-Match: *`, and `x-ms-file-name` headers
-- [ ] File download uses `Accept: */*` and returns `null` on 404 instead of throwing
+- [ ] File upload sends `ArrayBuffer` body with `Content-Type: application/octet-stream` (not file MIME type), `If-Match: *`, and `x-ms-file-name` headers
+- [ ] File download uses `Accept: */*`, `Content-Type: application/octet-stream`, and returns `null` on 404 instead of throwing
 
 ### Existing Code Updated
 - [ ] Searched for all components referencing the target table's data (mock arrays, hardcoded data, inline `/_api/` fetch calls, TODO/FIXME comments)

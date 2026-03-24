@@ -517,7 +517,7 @@ export const fetchFileColumnUrl = async (
 ): Promise<string | null> => {
   const headers = await buildPowerPagesHeaders(undefined, {
     accept: '*/*',
-    contentType: null,
+    contentType: 'application/octet-stream',
     prefer: null,
   });
 
@@ -548,7 +548,7 @@ export const uploadFileColumn = async (
     },
     {
       accept: 'application/json',
-      contentType: file.type || 'application/octet-stream',
+      contentType: 'application/octet-stream',
       prefer: null,
     }
   );

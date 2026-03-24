@@ -349,7 +349,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
-**CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead because Power Pages can otherwise return 403 for aggregate requests.**
+**CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the table has File or Image columns accessed via the Web API, OR the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead — the `/$value` download endpoint internally does `SELECT *`, so an explicit column list causes 403.**
 
 **CRITICAL: Lookup columns MUST include BOTH the LogicalName AND the `_<name>_value` OData format.** See Step 5.3.
 
@@ -384,7 +384,7 @@ Then include:
 
 2. **Column validation summary** — How many columns were validated, any mismatches found, any columns excluded
 3. **Lookup columns** — List which columns are lookups and confirm both forms are included
-4. **Security notes** — Confirm that no wildcard `*` is used for fields
+4. **Security notes** — Confirm that wildcard `*` is only used for tables with File/Image columns or aggregate OData scenarios; all other tables use explicit column lists
 5. **Script invocations** — The exact `create-site-setting.js` commands for each setting (from section 6.1)
 6. **Any discovery steps skipped** due to auth errors
 7. **Dataverse validation status** — Whether column names were validated against Dataverse or only inferred from code/manifest
@@ -423,7 +423,7 @@ After creating all files, return a summary to the calling context:
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
 - **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName (all lowercase). Never use SchemaName (PascalCase), DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
 - **LOOKUP COLUMNS NEED BOTH FORMS**: For every lookup column, include both the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields list. Missing either form causes 403 errors — the LogicalName is needed for writes, the `_..._value` form is needed for reads.
-- **Use `*` only for aggregate OData scenarios**: Default to specific validated column logical names in `Webapi/<table>/fields`. Switch to `*` only when the site relies on aggregate OData queries (`$apply`, `aggregate`, grouped totals) that require wildcard access to avoid 403 errors.
+- **Use `*` for tables with File/Image columns or aggregate OData scenarios**: If a table has **File** or **Image** columns that will be accessed via the Web API, the `Webapi/<table>/fields` setting **must use `*`** (wildcard). The `/$value` download endpoint internally performs `SELECT *`; an explicit column list causes `403 "Attribute * not enabled for Web Api"`. Also use `*` when the site relies on aggregate OData queries (`$apply`, `aggregate`, grouped totals). For all other tables, default to specific validated column logical names.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
