@@ -10,7 +10,7 @@ description: >-
   and suggests fixes for any issues found.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent
 model: opus
 ---
 
@@ -137,10 +137,20 @@ For each table that has permissions with `create` or `write` enabled, use the lo
 $lookups = node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-lookups.js" --envUrl "$envUrl" --table "<table_logical_name>"
 ```
 
-The script returns a JSON array of `{ logicalName, targets }` for each lookup column. Use this to build the append/appendto map:
+The script returns a JSON array of `{ logicalName, targets }` for each lookup column.
 
-- The **source table** (with the lookup) needs `append: true`
-- Each **target table** in `targets` needs `appendto: true`
+After querying **all** tables with create or write permissions, build two maps from the combined results:
+
+1. **Source map** (table → lookup columns): For each queried table, record which lookup columns it has and their targets. Used in Section H2 to check `appendto` on the source table.
+2. **Reverse target map** (target table → list of source tables): For each target table found in any lookup's `targets` array, record which source table(s) reference it. Used in Section H to check `append` on the target table.
+
+Example: querying `order_item` returns `[{ logicalName: "cr4fc_orderid", targets: ["cr4fc_order"] }]`
+- Source map: `order_item → [{ column: "cr4fc_orderid", targets: ["cr4fc_order"] }]`
+- Reverse target map: `cr4fc_order → [{ sourceTable: "order_item", column: "cr4fc_orderid" }]`
+
+Both maps are used in Sections H and H2:
+- The **source table** (with the lookup) needs `appendto: true` — it links TO other records (checked via the source map)
+- Each **target table** in `targets` needs `append: true` — other records link TO it (checked via the reverse target map)
 
 ### 3.3 Query Relationships
 
@@ -315,22 +325,36 @@ Is `delete` correctly set?
   - **Fix:** Consider disabling `delete` if not needed
 - If matched → `pass`
 
-**H. Append/AppendTo**
+**H. Append (target table check)**
 
-Are `append` and `appendto` correctly set?
+Does this table need `append: true`? Append is required on the **target** table — the table that other records link TO via lookup columns.
 
-- If this table has `create` or `write` enabled, search the service code for lookup column usage (`@odata.bind` patterns for this table, from Step 3.2)
-- If lookups exist and `append: false` → finding:
+- Check the **reverse target map** from Step 3.2: is this table referenced as a lookup target by any other table that has `create` or `write` permissions?
+- Also search the service code for `@odata.bind` references to this table's entity set (e.g., `/<entity_set>(`)
+- If this table appears in the reverse target map (i.e., another table with create/write has a lookup to this table), but `append: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing append on <table>`
-  - **Reasoning:** This table sets lookup column `<column>` during create/write, which requires append permission. Users will see "You don't have permission to associate or disassociate"
+  - **Reasoning:** Table `<source_table>` has lookup column `<column>` targeting this table and sets it during create/write. The target table needs append permission so records can be linked to it. Users will see "You don't have permission to associate or disassociate"
   - **Fix:** Enable `append: true`
-- If this table is the TARGET of a lookup from another table that has create/write, and `appendto: false` → finding:
+- If `append: true` and justified → `pass`
+- If `append: true` but this table does NOT appear in the reverse target map and no code references it as a lookup target → finding:
+  - **Severity:** `info`
+  - **Title:** `Append enabled but not needed on <table>`
+  - **Reasoning:** No other table with create/write has a lookup to this table — append may be unnecessary
+  - **Fix:** Consider disabling `append` if not needed
+
+**H2. AppendTo (source table check)**
+
+Does this table need `appendto: true`? AppendTo is required on the **source** table — the table that has lookup columns linking TO other records.
+
+- Check the **source map** from Step 3.2: does this table have lookup columns?
+- Also search the service code for `@odata.bind` patterns in create/update calls for this table
+- If this table has lookup columns (in source map or code) AND has `create` or `write` enabled, but `appendto: false` → finding:
   - **Severity:** `critical`
   - **Title:** `Missing appendto on <table>`
-  - **Reasoning:** Table `<source_table>` has a lookup to this table and sets it during create/write. The target table needs appendto permission.
+  - **Reasoning:** This table sets lookup column `<column>` targeting `<target_table>` during create/write, which requires appendto permission. Users will see "You don't have permission to associate or disassociate"
   - **Fix:** Enable `appendto: true`
-- If correctly set → `pass`
+- If `appendto: true` and justified → `pass`
 
 **I. Parent Chain Integrity**
 
@@ -365,7 +389,7 @@ After all checks, mark the table's task as `completed` via `TaskUpdate`.
 
 After all per-table audits are complete, run these cross-table checks:
 
-1. **Append/AppendTo consistency:** For every table with `append: true`, verify each lookup target has `appendto: true` and vice versa
+1. **Append/AppendTo consistency:** Using the source map and reverse target map from Step 3.2, verify: (a) every source table (with lookups and create/write) has `appendto: true`, (b) every target table in the reverse map has `append: true`, (c) no table has `appendto: true` without lookup columns in the source map, (d) no table has `append: true` without being in the reverse target map
 2. **$expand coverage:** For every `$expand` usage, verify the expanded table has `read: true`
 3. **Parent chain completeness:** For every Parent scope permission, verify the parent permission exists and is valid
 4. **Web role consistency:** If two related tables (e.g., parent and child) are accessed by the same feature, verify they share the same web role assignment
@@ -433,8 +457,8 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
   "create": false,
   "write": false,
   "delete": false,
-  "append": false,
-  "appendto": true
+  "append": true,
+  "appendto": false
 }
 ```
 
@@ -475,7 +499,10 @@ Present a summary to the user:
 3. **Report location** — where the HTML file was saved
 4. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
-If the user wants fixes applied, use the `${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js` script for new permissions or explain what manual changes are needed for existing permissions. For complex fixes, suggest running `/integrate-webapi` so the permissions and Web API settings architects can produce a complete plan.
+If the user wants fixes applied:
+
+- **For 403 / Web API access issues** (missing table permissions, missing CRUD flags, incorrect scope, missing append/appendto, missing `$expand` read coverage — any finding that would result in a 403 Forbidden response from the Power Pages Web API): Spawn the **table-permissions-architect** agent using the `Agent` tool. Pass it a prompt that includes the specific tables, the required CRUD flags, scope recommendations, and relationship details from the audit findings. The agent will analyze the site, propose a permissions plan, and create the correct table permission YAML files after user approval. Example prompt: `"Create table permissions for the following tables based on audit findings: <table1> needs Global scope with read:true; <table2> needs Parent scope under <parent_table> with read:true, create:true, append:true; <table3> needs appendto:true for lookups from <source_table>. The site project root is <PROJECT_ROOT>."`
+- **For non-permission issues** (e.g., unused permissions, scope narrowing suggestions, informational findings): explain what manual changes are needed or suggest running `/integrate-webapi` so the Web API settings architect can address site-setting-level issues.
 
 ---
 

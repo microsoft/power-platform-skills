@@ -107,7 +107,7 @@ Each table permission file has this format (code site / git format — fields al
 adx_entitypermission_webrole:
 - ce938206-701d-4902-85b2-b46b1dd169b9
 append: true
-appendto: true
+appendto: false
 create: true
 delete: false
 entitylogicalname: cra5b_order
@@ -138,6 +138,72 @@ write: false
 ```
 
 Compile a list of existing table permissions noting which tables already have permissions configured.
+
+### Understanding Multi-Level Parent Hierarchies
+
+Table permissions support **deep parent-child chains** (not just 2 levels). A common real-world pattern is a 3-level hierarchy like **incident → portal comment → annotation** (attachments):
+
+**Level 1 — Root (Contact scope):** `incident`
+
+```yaml
+adx_entitypermission_webrole:
+- 987f1600-4e7f-f011-b4cc-000d3a5a150a
+append: true
+appendto: true
+create: true
+delete: true
+entitylogicalname: incident
+entityname: Customer Service - Cases where contact is customer
+id: ee1871a4-4d7f-f011-b4cc-000d3a5a150a
+read: true
+scope: 756150001
+write: true
+```
+
+**Level 2 — Child of incident (Parent scope):** `adx_portalcomment`
+
+```yaml
+adx_entitypermission_webrole: []
+append: true
+appendto: true
+create: true
+delete: true
+entitylogicalname: adx_portalcomment
+entityname: Customer Service - Portal Comment where contact is customer
+id: f41871a4-4d7f-f011-b4cc-000d3a5a150a
+parententitypermission: ee1871a4-4d7f-f011-b4cc-000d3a5a150a
+parentrelationship: incident_adx_portalcomments
+read: true
+scope: 756150003
+write: true
+```
+
+**Level 3 — Child of portal comment (Parent scope):** `annotation`
+
+```yaml
+adx_entitypermission_webrole: []
+append: true
+appendto: true
+create: true
+delete: false
+entitylogicalname: annotation
+entityname: Portal Comment - Attachments where contact is customer
+id: 31218baa-4d7f-f011-b4cc-000d3a5a150a
+parententitypermission: f41871a4-4d7f-f011-b4cc-000d3a5a150a
+parentrelationship: adx_portalcomment_Annotations
+read: true
+scope: 756150003
+write: true
+```
+
+Key points:
+- The **root** permission uses Contact/Account/Global scope. All deeper levels use **Parent scope**.
+- Each child's `parententitypermission` references its **immediate** parent's `id` — not the root.
+- The `parentrelationship` is the **one-to-many relationship name** from the parent table to the child table.
+- Child permissions at Level 2+ can have `adx_entitypermission_webrole: []` (empty) — they inherit role association through the parent chain.
+- A table can appear as a child at **multiple points** in the hierarchy (e.g., `annotation` can be a child of both `incident` and `adx_portalcomment` with different relationship names).
+
+When designing permissions, always consider whether the data model has 3+ level chains and create the full parent chain — don't stop at 2 levels.
 
 ---
 
@@ -172,6 +238,7 @@ Look for patterns like:
 fetch.*/_api/
 $expand
 buildExpandClause
+ExpandOption
 ```
 
 ### 3.2.1 Detect `$expand` Related Tables
@@ -214,153 +281,19 @@ Use `TaskList` at any point to review progress and see which tables still need a
 
 #### 3.3.2 Per-Table Privilege Analysis
 
-For each table, mark its task `in_progress` and work through the following checklist **in order**. For every decision, note the **specific code evidence** (file path, line pattern, or API pattern) that justifies it. Do NOT guess — if no evidence exists for a privilege, leave it `false`.
+For each table, mark its task `in_progress` and work through the privilege analysis checklist (sections A through K), recording code evidence for every decision.
 
-**A. Determine Source — Why does this table need permissions?**
-
-Classify the table into one or more categories:
-
-- **Direct API target** — Code makes `/_api/<entity_set>` calls to this table
-- **`$expand` related** — This table is fetched via `$expand` on another table's query (from Step 3.2.1)
-- **Lookup target** — This table is referenced by a lookup column on another table (needs `appendto`)
-- **Data model only** — Table exists in manifest but no code references found (may not need permissions yet)
-
-Record the source files and patterns that reference this table.
-
-**B. Determine Web Role(s)**
-
-Which web role(s) need access to this table?
-
-- Search for authentication checks near the API calls (e.g., `getCurrentContactId()`, `getPortalUser()`, role checks)
-- If the table is accessed without auth checks → likely needs Anonymous Users role
-- If the table is accessed behind auth/login → needs Authenticated Users role
-- If role-specific checks exist → map to the specific custom role
-
-**If the required role does not exist** in the web roles discovered in Step 2.1, flag it as a new role to create. Record it so it can be included in the plan (Step 5) and created in Step 6 before table permissions. At minimum, every site needs `Authenticated Users` (`authenticatedusersrole: true`). If anonymous/public access is needed, also flag `Anonymous Users` (`anonymoususersrole: true`).
-
-**C. Determine Scope**
-
-Evaluate the scope based on code patterns. Check **each scope option** and pick the most restrictive one that fits:
-
-| Scope | Code Pattern to Look For | When to Use |
-|-------|-------------------------|-------------|
-| **Self** (`756150004`) | Queries filter by current contact ID for contact table itself | Only for the contact record itself |
-| **Contact** (`756150001`) | `getCurrentContactId()`, `_contactid_value eq`, filter by current user | User's own records (orders, profiles) — **default choice** |
-| **Account** (`756150002`) | Account-based filters, shared team access patterns | Organizational shared access |
-| **Parent** (`756150003`) | Table is a child accessed via parent (e.g., order lines under orders), `$expand` with one-to-many | Child tables that inherit access from parent |
-| **Global** (`756150000`) | No user/contact filter, public browsing, anonymous access | **Last resort** — only for read-only public reference data |
-
-Search the service code for scope-relevant filter patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`).
-
-**Scope guardrails (critical):**
-
-- Do **not** replace an existing or proposed **Parent** scope permission with **Contact** or **Account** scope unless you have **direct evidence on the child table itself**:
-  - the child table has its own direct lookup to contact/account,
-  - the corresponding Dataverse relationship exists for that child table, and
-  - the business rule truly grants access based on the child record's own owner/contact/account — not inherited parent access.
-- Do **not** assume Power Pages "flattens" a Parent→Contact or Parent→Account chain onto the child table unless Microsoft documentation explicitly states it or deterministic validation proves it.
-- Relationship schema names do **not** need to match across different entities. A parent table's contact relationship name and a child table's contact relationship name may legitimately differ. Never rewrite scope just because the names differ across entities.
-- For **Contact** scope, validate the relationship against the secured table itself. For **Parent** scope, validate only the child→parent `parentrelationship` plus the parent permission chain; do not compare unrelated relationship names across entities.
-
-**D. Determine Read**
-
-Is `read: true` needed?
-
-- Search the service code for: GET requests to `/_api/<entity_set>`, list/get functions (`list<TableName>`, `get<TableName>`), `$select` patterns, `$expand` that references this table
-- If this table is only accessed via `$expand` from another table → still needs `read: true`
-- **Decision:** `true` if any read pattern found, `false` otherwise
-
-**E. Determine Create**
-
-Is `create: true` needed?
-
-- Search the service code for: POST requests (`method: 'POST'`) to `/_api/<entity_set>`, create functions (`create<TableName>`)
-- **Decision:** `true` only if POST/create pattern found for this specific table, `false` otherwise
-
-**F. Determine Write**
-
-Is `write: true` needed?
-
-- Search the service code for: PATCH requests (`method: 'PATCH'`) to `/_api/<entity_set>`, update functions (`update<TableName>`), file upload patterns (`uploadFileColumn`, `uploadFile`, `upload*Photo`, `upload*Image`, `upload*File`)
-- **Important:** File/image uploads use PATCH → require `write: true` even if no other field updates exist
-- **Decision:** `true` if PATCH/update/upload pattern found, `false` otherwise
-
-**G. Determine Delete**
-
-Is `delete: true` needed?
-
-- Search the service code for: DELETE requests (`method: 'DELETE'`) to `/_api/<entity_set>`, delete functions (`delete<TableName>`)
-- **Decision:** `true` only if DELETE pattern found for this specific table, `false` otherwise
-
-**H. Determine Append**
-
-Is `append: true` needed?
-
-- **Required when:** This table has lookup columns that are set during create or write operations
-- Search the service code for `@odata.bind` patterns in create/update functions for this table
-- Also check Dataverse column metadata (Step 4.3) for lookup columns on this table
-- **Decision:** `true` if this table sets lookup columns during create/write, `false` otherwise
-- **If `true`:** Record which lookup columns trigger this (needed for rationale)
-
-**I. Determine AppendTo**
-
-Is `appendto: true` needed?
-
-- **Required when:** This table is the TARGET of a lookup column on another table that has create or write permissions
-- Search the service code for `@odata.bind` references to this table's entity set (e.g., `<entity_set>(`)
-- Also check Dataverse column metadata (Step 4.3) — for each table with create/write, check if its lookup `Targets` include this table
-- **Decision:** `true` if any other table with create/write has a lookup to this table, `false` otherwise
-- **If `true`:** Record which source table's lookup triggers this (needed for rationale)
-
-**J. Determine Parent Relationship (if Parent scope)**
-
-If scope is Parent (`756150003`):
-
-- Identify the parent table and its permission (must be analyzed first)
-- Identify the Dataverse relationship name (from Step 4.2) — use `SchemaName` as `parentrelationship`
-
-**K. Record Decision Summary**
-
-After completing all checks, record the final permission configuration for this table:
-
-```
-Table: <table_logical_name>
-Source: <Direct API target / $expand related / Lookup target>
-Web Role: <role name(s)>
-Scope: <scope name> (code evidence: <file:pattern>)
-read: <true/false> (evidence: <reason>)
-create: <true/false> (evidence: <reason>)
-write: <true/false> (evidence: <reason>)
-delete: <true/false> (evidence: <reason>)
-append: <true/false> (evidence: <reason>)
-appendto: <true/false> (evidence: <reason>)
-Parent: <parent permission + relationship if Parent scope>
-```
+> Reference: ${CLAUDE_PLUGIN_ROOT}/references/table-permission-analysis-guide.md
 
 Mark the table's task as `completed` via `TaskUpdate`.
 
-#### 3.3.3 Cross-Table Validation
+#### 3.3.3 Cross-Table Validation & Role Consolidation
 
-After all individual table analyses are complete, do a cross-table validation pass:
+After all individual table analyses are complete, perform the cross-table validation pass (append/appendto consistency, `$expand` coverage, parent chain completeness, orphaned permissions, web role coverage, and role consolidation).
 
-1. **Append/AppendTo consistency:** For every table with `append: true`, verify that each lookup target table has `appendto: true`. For every table with `appendto: true`, verify that the source table has `append: true`.
-2. **`$expand` coverage:** For every `$expand` usage found in Step 3.2.1, verify the expanded table has `read: true` in the inventory.
-3. **Parent chain completeness:** For every Parent scope permission, verify the parent permission exists in the inventory and will be created first.
-4. **No orphaned permissions:** If a table is only in the inventory because of `appendto` (lookup target) but has no direct code references, confirm that read-only + appendto is sufficient — it does not need create/write/delete.
-5. **Web role coverage:** Collect all web roles referenced across all table analyses. For each role, verify it exists in the Step 2.1 discovery. If any required role does not exist, add it to a "roles to create" list that will be included in the plan and created in Step 6 before table permissions.
-6. **Role consolidation (critical):** Group all per-table permission entries by `(table, scope, CRUD flags, append, appendto, parent, parentRelationship)`. If two or more roles produce an **identical** permission tuple for the same table, merge them into a **single** permission with multiple `webRoleIds` instead of creating separate per-role permissions. For example, if both Anonymous Users and Authenticated Users need `read-only + Global scope` on the Product table, create one permission `Product - Read` assigned to both roles — not two permissions `Product - Anonymous Read` and `Product - Authenticated Read`. This prevents count inflation and matches how Power Pages actually enforces permissions (one permission record, many role associations).
+> Reference: ${CLAUDE_PLUGIN_ROOT}/references/table-permission-analysis-guide.md — "Cross-Table Validation" section
 
 Use `TaskList` to review all completed analyses, then mark the "Compile final permissions plan" task as `in_progress`.
-
-#### 3.3.4 Scope Reference
-
-Available scopes (for use in Step 3.3.2.C):
-
-- `756150000` — **Global**: Access all records. **Avoid whenever possible** — grants unrestricted access. Only use for truly public, read-only reference data (e.g., product catalog for anonymous browsing).
-- `756150001` — **Contact**: Access records associated with the current user's contact. **Default and safest choice** for user-specific data (orders, profiles, addresses).
-- `756150002` — **Account**: Access records associated with the current user's parent account. Use when business logic requires shared access within an organization.
-- `756150003` — **Parent**: Access records through parent table permission relationship. Use for child tables (order items, line items) that inherit access from a parent table.
-- `756150004` — **Self**: Access only the user's own contact record and records directly linked to it.
 
 ---
 
@@ -406,7 +339,7 @@ Use this to confirm `contactrelationship` / `accountrelationship` on the secured
 
 ### 4.3 Query Lookup Columns (for append/appendto)
 
-For each table that has `create` or `write` permissions, query its lookup columns to determine which tables need `appendto`:
+For each table that has `create` or `write` permissions, query its lookup columns to determine append/appendto requirements:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?\$select=LogicalName,Targets"
@@ -414,12 +347,15 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDe
 
 The output JSON contains a `data.value` array with each lookup column's `LogicalName` and `Targets` array.
 
-This returns each lookup column and its target table(s). Use this to build the append/appendto map:
+This returns each lookup column and its target table(s). After querying **all** tables with create or write permissions, build two maps from the combined results:
 
-- The **source table** (with the lookup) needs `append: true`
-- Each **target table** in the `Targets` array needs `appendto: true`
+1. **Source map** (table → lookup columns): For each queried table, record which lookup columns it has and their targets. Used to determine `appendto` on the source table.
+2. **Reverse target map** (target table → list of source tables): For each target table found in any lookup's `Targets` array, record which source table(s) reference it. Used to determine `append` on the target table.
 
-**Example output:**
+- The **source table** (with the lookup) needs `appendto: true` — it links TO other records (checked via the source map)
+- Each **target table** in the `Targets` array needs `append: true` — other records link TO it (checked via the reverse target map)
+
+**Example:** Querying `cr87b_product` (which has create permissions) returns:
 
 ```
 Lookup                      Targets
@@ -428,10 +364,13 @@ cr87b_productcategoryid     cr87b_productcategory
 cr87b_contactid             contact
 ```
 
-This means:
+This produces:
+- Source map: `cr87b_product → [{ column: "cr87b_productcategoryid", targets: ["cr87b_productcategory"] }, { column: "cr87b_contactid", targets: ["contact"] }]`
+- Reverse target map: `cr87b_productcategory → [{ sourceTable: "cr87b_product", column: "cr87b_productcategoryid" }]`, `contact → [{ sourceTable: "cr87b_product", column: "cr87b_contactid" }]`
 
-- `cr87b_product` needs `append: true` (it has lookup columns)
-- `cr87b_productcategory` needs `appendto: true` (it is referenced by the product lookup)
+Result:
+- `cr87b_product` needs `appendto: true` (it is the source table with lookup columns — it links to other records)
+- `cr87b_productcategory` needs `append: true` (it is the target table — other records link to it)
 - `contact` — system table, typically already has permissions
 
 ### Error Handling
@@ -449,7 +388,7 @@ Do NOT stop the entire workflow for auth errors. Use the data model manifest and
 
 ## Step 5: Propose Table Permissions Plan via Plan Mode
 
-Once you have completed Steps 1-4, prepare the permissions proposal. Sections 5.1-5.2 describe the plan content. Section 5.3 generates an HTML plan file and opens it in the browser — do this **before** entering plan mode.
+Once you have completed Steps 1-4, prepare the permissions proposal. Section 5.1 describes the plan content. Section 5.2 generates the HTML plan file — do this **before** entering plan mode.
 
 ### 5.1 Table Permissions Plan
 
@@ -466,10 +405,10 @@ For each permission, include:
 - The table logical name
 - **Rationale** — A structured object explaining *why* this permission is configured the way it is. Include:
   - `scope`: Why this scope was chosen (e.g., "Contact scope because each user should only see their own orders, inferred from the `getCurrentContactId()` filter in the order service")
-  - One entry per **enabled** privilege explaining why it is necessary (e.g., `read`: "Products must be visible for catalog browsing", `append`: "This table has a lookup to Product Category set during create")
+  - One entry per **enabled** privilege explaining why it is necessary (e.g., `read`: "Products must be visible for catalog browsing", `append`: "Referenced by orders via a lookup column — other records link to this table")
   - Omit keys for disabled privileges — only explain what is turned on
 
-For each permission, prepare the exact `create-table-permission.js` script invocation that will be used in Step 7:
+For each permission, prepare the exact `create-table-permission.js` script invocation that will be used in Step 6:
 
 **For Global/Contact/Account/Self scope:**
 
@@ -489,139 +428,15 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<
 Note: Parent permissions must be created before child permissions — the child's `--parentPermissionId` uses the UUID from the parent's JSON output.
 For Contact and Account scopes, the relationship argument is mandatory and must use the lookup logical name from the table being secured.
 
-### 5.2 Design Rationale
-
-Prepare an array of design rationale items that explain the permissions architecture. Each item has an icon, title, and description. Include rationale for:
-
-- **Why this permissions structure** — Explain the overall security model (e.g., "The site uses a two-role model: Anonymous Users for public catalog browsing and Authenticated Users for order management.")
-- **Scope decisions** — Summarize why each scope was chosen and any alternatives considered
-- **Security trade-offs** — Note any permissions that are more permissive than ideal and why
-
-### 5.3 Generate Permissions Plan HTML
+### 5.2 Generate Permissions Plan HTML
 
 **Do this BEFORE entering plan mode.** Generate an HTML plan file from the template and open it in the browser so the user can see it while reviewing the plan.
 
-**Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-plan.js` script which mechanically reads the template and replaces placeholder tokens with your data.
+Prepare the JSON data file and run the render script following the data format reference:
 
-#### 5.3.1 Determine Output Location
+> Reference: ${CLAUDE_PLUGIN_ROOT}/references/permissions-plan-data-format.md
 
-- **If working in the context of a website** (a project root with `powerpages.config.json` exists): write the file to `<PROJECT_ROOT>/docs/permissions-plan.html`
-- **Otherwise**: write to the system temp directory (`[System.IO.Path]::GetTempPath()`)
-
-#### 5.3.2 Prepare Data
-
-Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/permissions-plan-data.json`) with these keys:
-
-```json
-{
-  "SITE_NAME": "The site name (from powerpages.config.json or folder name)",
-  "SUMMARY": "A 1-2 sentence summary of the plan",
-  "ROLES_DATA": [/* array of role objects */],
-  "PERMISSIONS_DATA": [/* array of permission objects */],
-  "RATIONALE_DATA": [/* array of rationale objects */]
-}
-```
-
-**ROLES_DATA format** — JSON array where each element is:
-
-```json
-{
-  "id": "r1",
-  "name": "Authenticated Users",
-  "desc": "Built-in role — baseline access for logged-in users",
-  "builtin": true,
-  "isNew": false,
-  "color": "#4a7ce8"
-}
-```
-
-- `id`: Short identifier (e.g., `"r1"`, `"r2"`) used to link permissions to roles
-- `builtin`: `true` **only** for `Authenticated Users` and `Anonymous Users` — these are the only built-in Power Pages roles
-- `isNew`: `true` if this role is proposed by the plan and will be newly created, `false` if it already exists in `.powerpages-site/web-roles/`
-- The HTML template shows three distinct badges based on these flags:
-  - **BUILT-IN** (gray) — `builtin: true` (only Authenticated Users / Anonymous Users)
-  - **EXISTING** (green) — `builtin: false, isNew: false` (already created, found in web-roles folder)
-  - **PROPOSED** (blue) — `builtin: false, isNew: true` (will be created by this plan)
-- `color`: A distinct hex color for visual identification. Use these defaults:
-  - `#4a7ce8` (blue) for the first custom role
-  - `#7c5edb` (purple) for the second custom role
-  - `#d4882e` (orange) for the third custom role
-  - `#e07ab8` (pink) for additional custom roles
-  - `#8890a4` (gray) for built-in roles
-
-**PERMISSIONS_DATA format** — JSON array where each element is:
-
-```json
-{
-  "id": "p1",
-  "name": "Product - Read",
-  "displayName": "Product",
-  "table": "cra5b_product",
-  "scope": "Global",
-  "read": true,
-  "create": false,
-  "write": false,
-  "delete": false,
-  "append": false,
-  "appendto": true,
-  "roles": ["r1", "r2"],
-  "parent": null,
-  "parentRelationship": null,
-  "rationale": {
-    "scope": "Global scope because the product catalog is public reference data with no user ownership.",
-    "read": "Products must be visible to anonymous visitors for catalog browsing.",
-    "appendto": "Orders reference products via a lookup column, requiring AppendTo on the target table."
-  },
-  "isNew": true
-}
-```
-
-- `name`: The permission name (used as `entityname` in the YAML file)
-- `displayName`: Human-friendly table display name shown in the UI (e.g., `"Product"`, `"Order Item"`)
-- `isNew`: `true` if this permission is proposed by the plan, `false` if it already exists in `.powerpages-site/table-permissions/`. Proposed permissions are highlighted with a blue background and `PROPOSED` badge; existing ones show an `EXISTING` badge.
-- `roles`: Array of role `id` values from ROLES_DATA
-- `parent`: The `id` of the parent permission (for Parent scope), or `null`
-- `parentRelationship`: The Dataverse relationship SchemaName (for Parent scope), or `null`
-- `rationale`: An object with per-aspect reasoning, rendered as a bulleted list under the "Reasoning" label. Include a key for `scope` plus one key for each **enabled** privilege explaining why it is necessary. Omit keys for disabled privileges. Available keys:
-  - `scope` — Why this scope was chosen (e.g., "Contact scope because each user should only see their own orders")
-  - `read` — Why read access is needed
-  - `create` — Why create access is needed
-  - `write` — Why write access is needed
-  - `delete` — Why delete access is needed
-  - `append` — Why append is needed (e.g., "This table has a lookup to Product Category set during create")
-  - `appendto` — Why appendto is needed (e.g., "Referenced by orders via a lookup column")
-
-**RATIONALE_DATA format** — JSON array where each element is:
-
-```json
-{
-  "icon": "\uD83D\uDEE1\uFE0F",
-  "title": "Least Privilege by Default",
-  "desc": "Every permission uses the narrowest scope possible. Global scope is only used for read-only public content."
-}
-```
-
-Use HTML entity references for icons if needed: `&#x1F6E1;&#xFE0F;` (shield), `&#x1F517;` (link), `&#x1F464;` (user), `&#x1F512;` (lock).
-
-#### 5.3.3 Render the HTML File
-
-Run the render script (it creates the output directory if needed):
-
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-permissions-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
-```
-
-Delete the temporary data JSON file after the script succeeds.
-
-#### 5.3.4 Open in Browser
-
-Open the generated HTML file in the user's default browser:
-
-```powershell
-Start-Process "<OUTPUT_PATH>"
-```
-
-### 5.4 Summary and Next Steps
+### 5.3 Summary and Next Steps
 
 Prepare for the plan mode message. Include:
 
@@ -637,9 +452,9 @@ Prepare for the plan mode message. Include:
 4. **HTML plan file location** — Tell the user where the detailed plan file was saved
 5. **Any discovery steps skipped** due to auth errors
 
-### 5.5 Enter Plan Mode & Exit
+### 5.4 Enter Plan Mode & Exit
 
-Use `EnterPlanMode` to present the complete proposal (sections 5.1 and 5.4) to the user along with a note that the detailed visual plan is available in the HTML file. Then use `ExitPlanMode` for user review and approval.
+Use `EnterPlanMode` to present the complete proposal (sections 5.1 and 5.3) to the user along with a note that the detailed visual plan is available in the HTML file. Then use `ExitPlanMode` for user review and approval.
 
 ---
 
@@ -694,9 +509,10 @@ After creating all files, return a summary to the calling context:
 
 ## Critical Constraints
 
+- **No Administrators permissions by default**: Do NOT create table permissions for the `Administrators` web role unless the user explicitly asks for them. Administrators already have highly privileged access, so adding CRUD table permissions for them is unnecessary and creates security noise. If the user specifically requests Administrators permissions, include them in the plan — otherwise omit them entirely.
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`.
-- **No manual HTML generation**: Do NOT use `Write` or `Edit` to create the `permissions-plan.html` file directly. ALWAYS use `render-permissions-plan.js` with a JSON data file as described in Step 5.3. The only files you may write directly are the temporary JSON data file for the render script.
-- **LOOKUP COLUMNS REQUIRE APPEND/APPENDTO**: When a table has `create` or `write` permissions AND has lookup columns to other tables, the source table MUST have `append: true` and each target table MUST have `appendto: true`. Missing these causes "You don't have permission to associate or disassociate" errors. Always query Dataverse for lookup columns (Step 4.3) to detect these requirements.
+- **No manual HTML generation**: Do NOT use `Write` or `Edit` to create the `permissions-plan.html` file directly. ALWAYS use `render-permissions-plan.js` with a JSON data file as described in Step 5.2. The only files you may write directly are the temporary JSON data file for the render script.
+- **LOOKUP COLUMNS REQUIRE APPENDTO/APPEND**: When a table has `create` or `write` permissions AND has lookup columns to other tables, the source table (with the lookup) MUST have `appendto: true` and each target table (referenced by the lookup) MUST have `append: true`. Missing these causes "You don't have permission to associate or disassociate" errors. Always query Dataverse for lookup columns (Step 4.3) to detect these requirements.
 - **No speculative scope rewrites**: Never convert Parent scope to Contact/Account scope (or vice versa) based only on a runtime Web API failure or a guessed internal Power Pages behavior. Require deterministic code evidence plus Dataverse relationship evidence on the exact table being secured.
 - **Do not compare relationship names across unrelated entities**: Contact/account relationship names can legitimately differ between parent and child tables. Only validate whether each relationship exists on the table where it is used.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.

@@ -48,6 +48,24 @@ test('validateSiteSettings accepts environment-variable-backed settings', (t) =>
   assert.equal(result.summary.error, 0);
 });
 
+test('validateSiteSettings accepts source 0 without envvar_schema', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    '.powerpages-site/site-settings/CodeSite-Enabled.sitesetting.yml',
+    [
+      'id: e7c06211-0cb1-4096-b3f8-9b7f91f3a133',
+      'name: CodeSite/Enabled',
+      'source: 0',
+      'value: true',
+      '',
+    ].join('\n')
+  );
+
+  const result = validateSiteSettings(projectRoot);
+  assert.equal(result.summary.error, 0);
+});
+
 test('validateSiteSettings rejects environment-variable-backed settings with value', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(

@@ -99,8 +99,8 @@ function validateSiteSettings(projectRoot) {
       }
     }
 
-    if (hasSource && !hasEnvironmentVariableSchema) {
-      addFinding(findings, 'error', 'Site setting with "source" must also define "envvar_schema".', {
+    if (hasSource && setting.source === 1 && !hasEnvironmentVariableSchema) {
+      addFinding(findings, 'error', 'Site setting with "source" set to 1 must also define "envvar_schema".', {
         filePath: setting.filePath,
         fileName,
       });

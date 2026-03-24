@@ -198,10 +198,16 @@ If site-level authentication indicators are detected (login links in navigation,
 2. If the login form is still showing:
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
+3. Create an additional task for testing authenticated scenarios using `TaskCreate`:
+
+   | Task subject | activeForm | Description |
+   |-------------|------------|-------------|
+   | Test authenticated pages and APIs | Testing authenticated scenarios | Re-crawl site as logged-in user, verify auth-gated pages load and authenticated API calls succeed |
 
 **If "Skip authenticated pages"**:
 
 - Note that only public pages will be tested. Some API calls may return 401/403 — these will be flagged but not treated as failures.
+- Do **not** create the authenticated testing task.
 - Continue to Phase 4.
 
 **If "Cancel testing"**:
@@ -213,6 +219,7 @@ If site-level authentication indicators are detected (login links in navigation,
 - Authentication status resolved for both layers:
   - Private site gate: passed, not needed, or cancelled
   - Site-level auth: logged in, skipped, or not needed
+- If authenticated: additional task created for authenticated testing in Phase 5.6
 
 ---
 
@@ -337,13 +344,66 @@ If forms are detected on any page (via `browser_snapshot` showing form elements)
 3. Use `browser_network_requests` to capture the resulting POST/PATCH requests.
 4. Analyze responses using the same criteria as 5.3.
 
-**If "Skip"**: Continue to Phase 6 with read-only API results only.
+**If "Skip"**: Continue to Phase 5.6 (or Phase 6 if no authenticated testing task was created).
 
 ### Output
 
 - All API endpoints discovered and tested
 - Pass/fail status with HTTP status codes recorded
 - Actionable remediation guidance provided for each failure
+
+---
+
+### 5.6 Test Authenticated Scenarios (Only If User Logged In)
+
+> Skip this step entirely if the user chose "Skip authenticated pages" in Phase 3.5, or if no site-level authentication was detected in Phase 3.3.
+
+**Goal:** Re-crawl the site as an authenticated user to discover and test pages and API calls that are only available after login.
+
+Mark the "Test authenticated pages and APIs" task as `in_progress`.
+
+#### 5.6.1 Discover Authenticated Pages
+
+After login, the site navigation may show additional links that were hidden or restricted for anonymous users (e.g., profile pages, dashboards, admin panels, account management).
+
+1. Navigate back to `SITE_URL` (homepage).
+2. Use `browser_snapshot` to capture the authenticated navigation.
+3. Use `browser_evaluate` (same link extraction script as Phase 4.1) to discover internal links.
+4. Compare against the links already tested in Phase 4. Identify any **new links** that were not visible before authentication.
+
+If new links are found, inform the user:
+> "Found **X** additional pages visible after login that were not accessible anonymously. Testing each page..."
+
+#### 5.6.2 Test Authenticated Pages
+
+For each newly discovered link, follow the same test procedure as Phase 4.2:
+
+1. Navigate, wait, snapshot, check for errors, capture console errors.
+2. Record results separately as **authenticated page tests**.
+3. Respect the same 25-page cap (counting pages already tested in Phase 4).
+
+#### 5.6.3 Test Authenticated API Calls
+
+For each authenticated page that makes `/_api/` requests:
+
+1. Use `browser_network_requests` with **includeStatic: false** to capture API calls.
+2. Compare against API calls captured in Phase 5 — identify any **new endpoints** or endpoints that previously returned 401/403 and now succeed.
+3. Analyze responses using the same criteria as Phase 5.3.
+
+#### 5.6.4 Record Results
+
+Record authenticated test results separately so Phase 6 can report them in a distinct section:
+
+- Authenticated pages discovered and tested (count, pass/fail)
+- Authenticated API calls (count, pass/fail, any endpoints that changed from fail to pass after login)
+
+Mark the "Test authenticated pages and APIs" task as `completed`.
+
+### Output
+
+- Authenticated pages crawled and tested
+- Authenticated API endpoints captured and analyzed
+- Results recorded separately for the test report
 
 ---
 
@@ -392,21 +452,54 @@ API endpoints tested: 3 | Passed: 2 | Failed: 1
 
 If no API requests were captured, note: "No API requests (`/_api/` or OData) were detected during testing. This site may not use the Web API, or API calls may require specific user interactions to trigger."
 
-#### 6.4 Present Overall Summary
+#### 6.4 Present Authenticated Test Results (If Applicable)
+
+If Phase 5.6 was executed, present results in separate tables:
+
+```
+## Authenticated Page Test Results
+
+| # | URL | Status | Console Errors | Notes |
+|---|-----|--------|----------------|-------|
+| 1 | /profile         | Pass | 0 | User profile loaded |
+| 2 | /dashboard       | Pass | 1 | Minor JS warning |
+| 3 | /admin/settings  | Fail | 0 | 403 Forbidden — insufficient web role |
+
+Authenticated pages tested: 3 | Passed: 2 | Failed: 1
+```
+
+```
+## Authenticated API Test Results
+
+| # | Endpoint | Method | Status | Notes |
+|---|----------|--------|--------|-------|
+| 1 | /_api/cr4fc_orders         | GET | 200 OK      | Previously 403 — now accessible after login |
+| 2 | /_api/cr4fc_userprofiles   | GET | 200 OK      | Only visible after auth |
+
+Authenticated API endpoints tested: 2 | Passed: 2 | Failed: 0
+```
+
+If no additional pages or APIs were discovered after login, note: "No additional pages or API endpoints were found after authentication. The authenticated user sees the same content as an anonymous visitor."
+
+#### 6.5 Present Overall Summary
 
 ```
 ## Overall Test Summary
 
-| Category        | Tested | Passed | Failed | Warnings |
-|-----------------|--------|--------|--------|----------|
-| Pages           | 4      | 3      | 1      | 0        |
-| API Endpoints   | 3      | 2      | 1      | 0        |
-| Console Errors  | —      | —      | —      | 2        |
+| Category                 | Tested | Passed | Failed | Warnings |
+|--------------------------|--------|--------|--------|----------|
+| Pages (public)           | 4      | 3      | 1      | 0        |
+| Pages (authenticated)    | 3      | 2      | 1      | 0        |
+| API Endpoints (public)   | 3      | 2      | 1      | 0        |
+| API Endpoints (auth)     | 2      | 2      | 0      | 0        |
+| Console Errors           | —      | —      | —      | 2        |
 
 Overall: X/Y checks passed
 ```
 
-#### 6.5 Present Recommendations
+If authenticated testing was skipped, omit the authenticated rows from the table.
+
+#### 6.6 Present Recommendations
 
 For each failure, reiterate the specific remediation guidance from Phase 5.4. Group recommendations by category:
 
@@ -416,11 +509,11 @@ For each failure, reiterate the specific remediation guidance from Phase 5.4. Gr
 - **Missing endpoints** → Verify table exists in Dataverse via `/setup-datamodel`
 - **Server errors** → Enable `Webapi/error/innererror` site setting for diagnostics
 
-#### 6.6 Close Browser
+#### 6.7 Close Browser
 
 - Use `browser_close` to clean up the browser session.
 
-#### 6.7 Suggest Next Steps
+#### 6.8 Suggest Next Steps
 
 Based on the test results, suggest relevant skills:
 
