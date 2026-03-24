@@ -94,15 +94,12 @@ Before gathering parameters, check whether the site is already activated by runn
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Where `<PROJECT_ROOT>` is the directory containing `powerpages.config.json` (use `Glob` with `**/powerpages.config.json` to locate it if not already known).
+Where `<PROJECT_ROOT>` is the directory containing `powerpages.config.json` or `.powerpages-site` folder.
+Evaluate the JSON result:
 
-The script reads `siteName` from `powerpages.config.json`, looks up the `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches the response against **both** the `websiteRecordId` (exact GUID match) and `name` (case-insensitive). It outputs a JSON result to stdout.
-
-Evaluate the result:
-
-- **If `activated` is `true`**: The site is already provisioned. Inform the user: "Your site **<siteName>** is already activated at **<websiteUrl>**. No further provisioning is needed." Suggest next steps (Phase 5.3) and stop — do NOT proceed to Phase 2.
+- **If `activated` is `true`**: Inform the user their site is already activated at `websiteUrl`. Suggest next steps (Phase 5.3) and stop — do NOT proceed to Phase 2.
 - **If `activated` is `false`**: Proceed to Phase 2.
-- **If `error` is present**: The check could not complete. Proceed to Phase 2 (do not block the activation flow due to a failed check).
+- **If `error` is present**: Proceed to Phase 2 (do not block the activation flow).
 
 ### Output
 

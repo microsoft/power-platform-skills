@@ -43,47 +43,17 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 **Actions**:
 
-1. Look for the `.powerpages-site/web-roles/` directory in the project root. Use `Glob` to search:
+1. Locate the project root (`**/powerpages.config.json`) and check for `.powerpages-site/web-roles/`.
 
-   ```text
-   **/.powerpages-site/web-roles
-   ```
+2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
-2. Also locate the project root by finding `powerpages.config.json`:
-
-   ```text
-   **/powerpages.config.json
-   ```
-
-3. **If `.powerpages-site` folder does NOT exist:**
-
-   The site has not been deployed yet. The `.powerpages-site` folder is created automatically when the site is deployed for the first time using `pac pages upload-code-site`.
-
-   Tell the user:
-
-   > "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. I'll deploy your site first, and then we can create web roles."
-
-   Use `AskUserQuestion` to confirm:
-
-   | Question | Options |
-   |----------|---------|
-   | Your site needs to be deployed first so the `.powerpages-site` folder is created. Shall I deploy it now? | Yes, deploy now (Recommended), No, I'll do it later |
-
-   **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site. Once deployment completes and `.powerpages-site` is created, resume this workflow from Phase 2.
-
-   **If "No, I'll do it later"**: Stop here — the user must deploy first before web roles can be created.
-
-4. **If `.powerpages-site` exists but `web-roles/` subdirectory does NOT exist:**
-
-   Create the `web-roles` directory:
+3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create it:
 
    ```powershell
    New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/web-roles" -Force
    ```
 
-   Proceed to Phase 2.
-
-5. **If both exist:** Proceed to Phase 2.
+4. **If both exist:** Proceed to Phase 2.
 
 **Output**: Confirmed `.powerpages-site/web-roles/` directory exists and is ready
 

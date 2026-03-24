@@ -212,13 +212,7 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 
 ### 5.1 Verify `.powerpages-site` Folder
 
-Confirm the `.powerpages-site` folder was created (first deploy) or still exists:
-
-```powershell
-Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -ErrorAction SilentlyContinue
-```
-
-List its contents to confirm site configuration files are present (e.g., `web-roles/`, `site-settings/`, `table-permissions/`).
+Confirm `.powerpages-site` exists and list its contents (`web-roles/`, `site-settings/`, `table-permissions/`).
 
 ### 5.2 Record Skill Usage
 
@@ -241,21 +235,17 @@ git commit -m "Deploy site to Power Pages"
 
 ### 5.5 Check Activation Status
 
-Before asking about activation, check whether the site is already activated by running the shared activation status script. This avoids prompting the user unnecessarily when the site is already live.
-
-Run the check-activation-status script, passing the project root (determined in Phase 4.1):
+Run the activation status check:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-The script reads `siteName` from `powerpages.config.json`, looks up the `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches the response against **both** the `websiteRecordId` (exact GUID match) and `name` (case-insensitive). It outputs a JSON result to stdout.
+Evaluate the JSON result:
 
-Evaluate the result:
-
-- **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Proceed to step 5.6 to clear the site cache, then skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
-- **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
-- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
+- **If `activated` is `true`**: Inform the user their site is already activated (show `websiteUrl` if present). Proceed to step 5.6, then skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
+- **If `activated` is `false`**: Proceed to step 5.5.1.
+- **If `error` is present**: Fall back to step 5.5.1. Do not block the deployment flow.
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
