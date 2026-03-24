@@ -339,13 +339,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT
 
 #### 4.5.4 Open in Browser
 
-Open the generated HTML file in the user's default browser:
-
-```powershell
-Start-Process "<OUTPUT_PATH>"
-```
-
-The file opens in the default browser so the user can interact with the tabs and ER diagram.
+Open the generated HTML file in the user's default browser so they can interact with the tabs and ER diagram.
 
 ### 4.6 Design Rationale & Recommendations
 

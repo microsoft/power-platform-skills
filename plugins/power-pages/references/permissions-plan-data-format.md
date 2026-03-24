@@ -132,8 +132,4 @@ Delete the temporary data JSON file after the script succeeds.
 
 ### Open in Browser
 
-Open the generated HTML file in the user's default browser:
-
-```powershell
-Start-Process "<OUTPUT_PATH>"
-```
+Open the generated HTML file in the user's default browser.
