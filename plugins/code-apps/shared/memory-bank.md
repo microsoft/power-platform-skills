@@ -119,7 +119,7 @@ Update after:
 
 ## Completed Steps
 
-### /create-power-app
+### /create-code-app
 - [x] Prerequisites validated (Node.js, pac CLI)
 - [x] Authenticated and selected environment
 - [x] Scaffolded from template
@@ -200,7 +200,7 @@ Update after:
 
 To continue working on this project:
 
-1. **Create App**: `/create-power-app` (scaffolds and deploys a new code app)
+1. **Create App**: `/create-code-app` (scaffolds and deploys a new code app)
 2. **Add Dataverse**: `/add-dataverse` (adds Dataverse table with generated services)
 3. **Add Azure DevOps**: `/add-azuredevops` (adds ADO connector with HttpRequest fix)
 4. **Add Teams**: `/add-teams` (adds Teams messaging)

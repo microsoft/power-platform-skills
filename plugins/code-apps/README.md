@@ -1,4 +1,4 @@
-# Power Apps Plugin
+# Code Apps Plugin
 
 Copilot plugin for building Power Apps code apps with React and Vite. Works with both Claude Code and GitHub Copilot.
 
@@ -22,14 +22,14 @@ Open Claude Code or GitHub Copilot in any folder and run the following commands:
 
 2. Install the plugin:
    ```
-   "/plugin install power-apps@power-platform-skills"
+   "/plugin install code-apps@power-platform-skills"
    ```
 
 ## Available Commands
 
 | Command             | Description                                                  |
 | ------------------- | ------------------------------------------------------------ |
-| `/create-power-app` | Scaffold, build, and deploy a new Power Apps code app        |
+| `/create-code-app` | Scaffold, build, and deploy a new Power Apps code app        |
 | `/add-dataverse`    | Add Dataverse tables with generated TypeScript services      |
 | `/add-sharepoint`   | Add SharePoint Online connector                              |
 | `/add-excel`        | Add Excel Online (Business) connector                        |
@@ -40,12 +40,12 @@ Open Claude Code or GitHub Copilot in any folder and run the following commands:
 | `/add-connector`    | Add any other Power Platform connector                       |
 | `/add-datasource`   | Ask your copilot to recommend the right data source          |
 
-Start with `/create-power-app` — it walks you through everything.
+Start with `/create-code-app` — it walks you through everything.
 
 ## Uninstall
 
 ```
-/plugin uninstall power-apps
+/plugin uninstall code-apps
 ```
 
 ## Documentation

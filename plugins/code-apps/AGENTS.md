@@ -30,7 +30,7 @@ shared/
   preferred-environment.md        <- Environment selection priority
   version-check.md                <- Version check instructions
 skills/
-  create-power-app/
+  create-code-app/
     SKILL.md                      <- Scaffold, init, build, and deploy a new code app
     references/
       prerequisites-reference.md  <- Node, pac, git requirements
@@ -67,7 +67,7 @@ skills/
 
 | Skill | Description |
 |-------|-------------|
-| `/create-power-app` | Scaffold, configure, and deploy a new Power Apps code app |
+| `/create-code-app` | Scaffold, configure, and deploy a new Power Apps code app |
 | `/deploy` | Build and deploy an existing code app |
 | `/list-connections` | List Power Platform connections to find connection IDs |
 | `/add-datasource` | Add a data source (routes to the appropriate add-* skill) |
@@ -116,6 +116,6 @@ npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 After modifying this plugin:
 
 1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/create-power-app`
+2. Test skill invocation with `/create-code-app`
 3. Verify connector-first guardrails are enforced
 4. Test Windows CLI compatibility (`pac` via `pwsh`)

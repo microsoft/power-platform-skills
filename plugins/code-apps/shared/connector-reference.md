@@ -58,7 +58,7 @@ This avoids context window bloat and is much faster than reading entire generate
 
 ## Sub-Skill Invocation
 
-When a connector skill is invoked from another skill (e.g., `/create-power-app` calls `/add-office365`):
+When a connector skill is invoked from another skill (e.g., `/create-code-app` calls `/add-office365`):
 
 - **Check `$ARGUMENTS`** -- if provided, use it as the connector name or configuration
 - **Skip redundant questions** -- don't re-ask things the caller already provided (connector name, project path, etc.)

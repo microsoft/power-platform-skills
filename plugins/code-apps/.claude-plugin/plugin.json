@@ -1,5 +1,5 @@
 {
-  "name": "power-apps",
+  "name": "code-apps",
   "version": "1.0.0",
   "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors.",
   "author": {

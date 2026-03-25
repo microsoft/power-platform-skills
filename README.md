@@ -46,7 +46,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
-    /plugin install power-apps@power-platform-skills
+    /plugin install code-apps@power-platform-skills
     ```
 
 ## Available Plugins
@@ -63,7 +63,7 @@ Build and deploy Power Apps generative pages for model-driven apps.
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI
 
-### [Power Apps](plugins/power-apps/AGENTS.md) (`plugins/power-apps`)
+### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
 
 Build and deploy Power Apps code apps connected to Power Platform via connectors.
 
@@ -79,7 +79,7 @@ To develop and test plugins locally, follow these steps:
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     ```
 
 ## Running Without Interruption
@@ -165,7 +165,7 @@ power-platform-skills/
 │       ├── skills/
 │       ├── shared/           # Shared references + samples
 │       └── github/           # GitHub Copilot instructions
-│   └── power-apps/           # Power Apps plugin
+│   └── code-apps/            # Code Apps plugin
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── agents/

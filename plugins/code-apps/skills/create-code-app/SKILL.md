@@ -1,5 +1,5 @@
 ---
-name: create-power-app
+name: create-code-app
 description: Creates Power Apps code apps using React and Vite. Use when building code apps, scaffolding projects, or deploying to Power Platform.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, Skill, EnterPlanMode, ExitPlanMode
@@ -53,7 +53,7 @@ pwsh -NoProfile -Command "pac"  # Used for auth, env selection, code commands
 
 **Skip questions the user already answered in their initial instruction.**
 
-**If the user has not described what they want to build** (i.e., `/create-power-app` was invoked with no arguments or a vague prompt), start with a single open-ended question before asking anything else:
+**If the user has not described what they want to build** (i.e., `/create-code-app` was invoked with no arguments or a vague prompt), start with a single open-ended question before asking anything else:
 
 > "What would you like to build? Describe it in your own words — what it does, who uses it, and what problem it solves."
 

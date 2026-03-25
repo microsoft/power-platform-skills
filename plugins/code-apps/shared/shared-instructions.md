@@ -19,7 +19,7 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 ### MUST (required before acting)
 
 - **Confirm before any deployment**: Before running `pac code push`, ask: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit user confirmation.
-  Exception: the baseline deploy in `create-power-app` Step 7 is pre-approved as part of the scaffold flow. The final deploy in Step 10 still requires confirmation.
+  Exception: the baseline deploy in `create-code-app` Step 7 is pre-approved as part of the scaffold flow. The final deploy in Step 10 still requires confirmation.
 - **Confirm before any global install**: Before running `npm install -g ...` or `winget install ...`, ask: _"This will install [tool] globally on your machine. OK to proceed?"_ Wait for explicit user confirmation. This applies even when the install is a documented prerequisite.
 - **Confirm before writing outside project root**: Before writing, editing, or deleting any file that is not inside the current project directory, ask the user for confirmation.
   Exception: writing `~/.claude/.power-apps-last-version-check` as part of the version check is pre-approved and does not require confirmation.
