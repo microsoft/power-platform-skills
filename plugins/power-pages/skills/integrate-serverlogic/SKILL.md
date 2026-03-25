@@ -328,7 +328,7 @@ Create the server logic folder inside `.powerpages-site/server-logic/` (note: si
 New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/server-logic/<name>" -Force
 ```
 
-### 5.2 Read Web Roles
+### 5.2 Read or Create Web Roles
 
 Read all web role YAML files to get the available web role GUIDs. These are needed for the metadata YAML in step 5.4.
 
@@ -336,7 +336,7 @@ Read all web role YAML files to get the available web role GUIDs. These are need
 Glob: <PROJECT_ROOT>/.powerpages-site/web-roles/*.webrole.yml
 ```
 
-For each file, read the `id` field. By default, assign **all available web roles** (typically Administrators, Anonymous Users, Authenticated Users) to the server logic. The user can narrow this down if needed.
+For each file, read the `id` and `name` fields. By default, assign **all available web roles** (typically Administrators, Anonymous Users, Authenticated Users) to the server logic. The user can narrow this down if needed.
 
 Example web role file content:
 ```yaml
@@ -347,7 +347,22 @@ id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 name: Authenticated Users
 ```
 
-Collect all `id` values into an array for the YAML.
+**If no web roles exist** (empty or missing `web-roles/` folder), create the default web roles using the deterministic script:
+
+```powershell
+# Create Authenticated Users role
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Authenticated Users" --authenticated
+
+# Create Anonymous Users role
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Anonymous Users" --anonymous
+
+# Create Administrators role (optional — only if the server logic needs admin-level access)
+node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Administrators"
+```
+
+Each script call outputs JSON `{ "id": "<uuid>", "filePath": "<path>" }`. Collect the UUIDs for the YAML.
+
+**If web roles already exist**, use them as-is. Collect all `id` values into an array for the YAML.
 
 ### 5.3 Create the Server Logic File
 
@@ -585,7 +600,52 @@ Extract the entity set name (first argument) from each method call. Build a mapp
 | `accounts` | Yes | — | — | — |
 | `contacts` | Yes | Yes | — | — |
 
-### 6.2 Launch Table Permissions Architect
+### 6.2 Choose Permissions Source
+
+Ask the user how they want to define the permissions using `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| The server logic accesses Dataverse tables that need table permissions. How would you like to define them? | **Upload an existing permissions diagram** — provide an image (PNG/JPG) or Mermaid diagram of your existing permissions structure, **Let the architect figure it out** (Recommended) — the Table Permissions Architect will analyze your site and propose permissions automatically |
+
+Route to the appropriate path:
+
+#### Path A: Upload Existing Permissions Diagram
+
+If the user chooses to upload an existing diagram:
+
+1. Ask the user to provide their permissions diagram (image file, Mermaid syntax, or text description).
+
+2. Parse the diagram into structured format:
+   - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
+   - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto)
+
+3. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions are new vs. already exist.
+
+4. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
+
+   | Question | Options |
+   |----------|---------|
+   | Does this permissions plan look correct? | Approve and create files (Recommended), Request changes, Cancel |
+
+5. Create the permission YAML files using the deterministic scripts. **Do NOT write YAML files manually.**
+
+   **Create web roles (if needed):**
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
+   ```
+
+   **Create table permissions (process parent permissions before child permissions):**
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+   ```
+
+   For **Parent scope** (child tables):
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
+   ```
+
+#### Path B: Let the Architect Figure It Out
 
 Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md`:
 
@@ -601,24 +661,25 @@ Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAU
 > - The web roles assigned to this server logic are: [list web role names and GUIDs from Phase 5.2]
 > - Project root: [path]
 >
-> Check for existing table permissions and web roles. Propose a plan, then after approval create the table permission YAML files using the deterministic scripts."
+> Check for existing table permissions and web roles. If new web roles are needed, create them using the create-web-role.js script. Propose a plan, then after approval create the table permission YAML files using the deterministic scripts."
 
 The agent will:
 1. Discover existing table permissions and web roles
-2. Propose a table permissions plan (with HTML visualization)
-3. Present the plan via plan mode for user approval
-4. After approval, create table permission YAML files in `.powerpages-site/table-permissions/` using `create-table-permission.js`
+2. Create any missing web roles via `create-web-role.js` if needed
+3. Propose a table permissions plan (with HTML visualization)
+4. Present the plan via plan mode for user approval
+5. After approval, create table permission YAML files in `.powerpages-site/table-permissions/` using `create-table-permission.js`
 
 ### 6.3 Git Commit
 
-After table permissions are created:
+After table permissions (and any new web roles) are created:
 
 ```powershell
-git add .powerpages-site/table-permissions/
-git commit -m "Add table permissions for server logic: <name>"
+git add .powerpages-site/table-permissions/ .powerpages-site/web-roles/
+git commit -m "Add table permissions and web roles for server logic: <name>"
 ```
 
-**Output**: Table permissions configured for all Dataverse tables accessed by the server logic
+**Output**: Table permissions (and web roles if created) configured for all Dataverse tables accessed by the server logic
 
 ---
 
@@ -954,7 +1015,7 @@ After deployment (or if skipped), remind the user:
 1. At Phase 1.5: Deploy now or cancel (if `.powerpages-site` missing — mandatory)
 2. At Phase 2: Confirm requirements (purpose, name, HTTP methods)
 3. At Phase 4: Approve implementation plan before writing code
-4. At Phase 6.2: Approve table permissions plan (if Dataverse connector is used)
+4. At Phase 6.2: Choose permissions source (upload diagram or let architect analyze) and approve plan (if Dataverse connector is used)
 5. At Phase 8.5: Create frontend integration or skip
 6. At Phase 10.3: Deploy now or deploy later
 
