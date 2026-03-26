@@ -655,7 +655,15 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The server logic work is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site. After deployment succeeds, recommend validating the deployed site with the `/test-site` skill.
+**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
+
+After deployment succeeds, use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| The site has been deployed. Would you like me to run `/test-site` to validate it now? | Yes, run `/test-site` (Recommended), No, skip testing |
+
+**If "Yes, run `/test-site`"**: Invoke the `/test-site` skill.
 
 **If "No, I'll deploy later"**: Acknowledge and remind:
 
@@ -666,7 +674,7 @@ Use `AskUserQuestion`:
 After deployment (or if skipped), remind the user:
 
 - **Test the endpoints**: Call each `/_api/serverlogics/<name>` URL with the appropriate HTTP method and CSRF token
-- **Recommended full-site validation**: After deployment, recommend running `/test-site` to validate the live site experience end to end
+- **Recommended full-site validation**: After deployment, ask whether to run `/test-site` so the live site can be validated end to end
 - **Check logs**: Use Server.Logger output in Power Pages design studio diagnostics to debug issues
 - **Table permissions**: Table permissions were configured for Dataverse tables used by this server logic. If you add new Dataverse tables later, run the table permissions setup again — without permissions, `Server.Connector.Dataverse` silently returns 0 records
 - **Timeout**: Default execution timeout is 120 seconds (configurable up to 240s via `ServerLogic/TimeoutInSeconds`)
