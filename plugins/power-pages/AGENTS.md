@@ -44,7 +44,7 @@ model: opus
 ---
 ```
 
-Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML list syntax.
+Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML list syntax. Do not add `hooks` to skill frontmatter; Power Pages skills register lifecycle hooks centrally.
 
 ### Key Patterns
 

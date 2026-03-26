@@ -1,0 +1,100 @@
+# Server Logic Plan Data Format
+
+Reference document for generating the HTML server logic plan using `render-serverlogic-plan.js`.
+
+## Determine Output Location
+
+- **If working in the context of a website** (a project root with `powerpages.config.json` exists): write the file to `<PROJECT_ROOT>/docs/serverlogic-plan.html`
+- **Otherwise**: write to the system temp directory (`[System.IO.Path]::GetTempPath()`)
+
+## Prepare Data
+
+Write a temporary JSON data file with these keys:
+
+```json
+{
+  "SITE_NAME": "The site name from powerpages.config.json or the project folder",
+  "PLAN_TITLE": "A short plan title such as 'Server Logic Plan'",
+  "SUMMARY": "A 1-2 sentence summary of what this endpoint will do and why",
+  "WEB_ROLES_DATA": [],
+  "SERVER_LOGICS_DATA": [],
+  "RATIONALE_DATA": []
+}
+```
+
+### WEB_ROLES_DATA Format
+
+```json
+[
+  {
+    "id": "role-authenticated",
+    "name": "Authenticated Users",
+    "desc": "Built-in role for signed-in users.",
+    "builtin": true,
+    "isNew": false,
+    "color": "#8890a4"
+  }
+]
+```
+
+### SERVER_LOGICS_DATA Format
+
+```json
+[
+  {
+    "id": "ticket-dashboard",
+    "name": "ticket-dashboard",
+    "displayName": "Ticket Dashboard",
+    "status": "create",
+    "apiUrl": "https://<site-url>/_api/serverlogics/ticket-dashboard",
+    "webRoles": [
+      {
+        "id": "role-authenticated",
+        "reasoning": "Authenticated users need access because the dashboard is part of the signed-in support workspace."
+      }
+    ],
+    "rationale": "Keeps Dataverse queries and shaping logic off the client while enforcing role-scoped access.",
+    "functions": [
+      {
+        "name": "get",
+        "purpose": "Return dashboard metrics",
+        "reasoning": "The dashboard is read-heavy, so GET keeps the endpoint simple and cache-friendly."
+      }
+    ]
+  }
+]
+```
+
+Use `status` values like `create`, `update`, or `reuse`.
+
+Each `webRoles` entry should explain **why that specific role is assigned to that specific server logic**.
+
+Each `functions` entry should explain **why that specific function is being implemented for that specific server logic**.
+
+### RATIONALE_DATA Format
+
+```json
+[
+  {
+    "icon": "🛡️",
+    "title": "Why this structure",
+    "desc": "Separate server logic files keep responsibilities focused and make role assignment clearer."
+  }
+]
+```
+
+The overview tab renders these rationale items in the same style as the other Power Pages plan documents.
+
+## Render the HTML File
+
+Do **not** write the HTML manually. Use the render script:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+Delete the temporary data JSON file after the script succeeds.
+
+## Open in Browser
+
+Open the generated HTML file in the user's default browser.

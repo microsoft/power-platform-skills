@@ -11,37 +11,13 @@ description: >
   site settings, and deploying. Use this skill whenever the user mentions "server logic",
   "server-side code", or wants to move logic from the browser to the server in their Power Pages site.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/scripts/validate-serverlogic.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If Server Logic work was being performed in this session (via /integrate-serverlogic),
-            verify before allowing stop: 1) The site was verified to exist with powerpages.config.json,
-            2) Microsoft Learn documentation was fetched as source of truth before writing code,
-            3) The server logic .js file was created in .powerpages-site/server-logic/<name>/ with only allowed
-            top-level functions (get, post, put, patch, del), and a .serverlogic.yml metadata file was created
-            with a valid id (UUID) and non-empty adx_serverlogic_adx_webrole array, 4) Every function returns a string
-            (JSON.stringify for objects), 5) No external dependencies or browser APIs were used,
-            6) Proper error handling (try/catch) exists in every function, 7) Server.Logger calls
-            were added for diagnostics, 8) If Server.Connector.Dataverse is used, table permissions
-            were configured for accessed Dataverse tables (without them, connector returns 0 records),
-            9) Site settings were configured if needed,
-            10) The user was given the API URL and test guidance, 11) Client-side integration
-            guidance was provided (how to call the server logic from frontend code).
-            If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no Server Logic work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Integrate Server Logic
 
-Create and manage Power Pages Server Logic — server-side JavaScript that runs securely on the Power Pages runtime, hidden from the browser and protected by web roles and table permissions. Server Logic enables secure external API integrations, Dataverse operations, and custom business logic without exposing sensitive code or credentials to the client.
+Create and manage one or more Power Pages Server Logic files — server-side JavaScript that runs securely on the Power Pages runtime, hidden from the browser and protected by web roles and table permissions. Server Logic enables secure external API integrations, Dataverse operations, and custom business logic without exposing sensitive code or credentials to the client.
 
 ## Core Principles
 
@@ -52,7 +28,7 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 
 > **Prerequisites:**
-> - An existing Power Pages code site created via `/create-site`
+> - An existing Power Pages code site created
 > - The site **must** be deployed at least once (`.powerpages-site` folder must exist) — server logic files live inside `.powerpages-site/server-logic/`, so deployment is required before any server logic can be created
 
 **Initial request:** $ARGUMENTS
@@ -62,10 +38,10 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 ## Workflow
 
 1. **Verify Site Exists** — Locate the Power Pages project, explore existing patterns, and verify prerequisites
-2. **Understand Requirements** — Determine what the server logic should do and which HTTP methods are needed
+2. **Understand Requirements** — Determine the user intent and whether the solution needs one or more server logic files
 3. **Fetch Latest Documentation** — Query Microsoft Learn for the most current Server Logic SDK reference
 4. **Review Implementation Plan** — Present the plan to the user and confirm before writing code
-5. **Implement Server Logic** — Create the .js and .serverlogic.yml files in `.powerpages-site/server-logic/<name>/`
+5. **Implement Server Logic** — Create the approved `.js` and `.serverlogic.yml` files in `.powerpages-site/server-logic/<name>/`
 6. **Configure Table Permissions** — *(Conditional: only if Server.Connector.Dataverse is used)* Set up table permissions for Dataverse tables accessed by the server logic
 7. **Configure Site Settings** — Set up ServerLogic site settings if needed
 8. **Client-Side Integration** — Help wire the server logic into the site's frontend code
@@ -80,13 +56,11 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 
 **Actions**:
 
+1. Create todo list with all 10 phases (see [Progress Tracking](#progress-tracking) table)
+
 ### 1.1 Locate Project
 
-Look for `powerpages.config.json` in the current directory or immediate subdirectories:
-
-```powershell
-Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
-```
+Look for `powerpages.config.json` in the current directory or immediate subdirectories
 
 **If not found**: Tell the user to create a site first with `/create-site`.
 
@@ -94,15 +68,11 @@ Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
 
 Read `powerpages.config.json` to get the site name and configuration:
 
-```powershell
-Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
-```
-
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 7 (client-side integration guidance). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
 
-### 1.4 Explore Existing Server Logics and Frontend Code
+### 1.4 Explore Existing Server Logic and Frontend Code
 
 Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to analyze the site for existing server logic patterns and frontend code that may call or need to call server logic endpoints.
 
@@ -111,15 +81,16 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 > "Analyze this Power Pages code site for server logic context. Check:
 > 1. Does `.powerpages-site/server-logic/` exist? If yes, list all subdirectories and their .js files. Summarize what each server logic does (which functions it implements, what SDK features it uses). Also read the corresponding .serverlogic.yml files to check web role assignments.
 > 2. Search the frontend source code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for any existing calls to `/_api/serverlogics/` — these indicate server logic endpoints already being consumed.
-> 3. Look for `shell.safeAjax` calls or CSRF token handling patterns (`__RequestVerificationToken`, `_layout/tokenhtml`) — these show how the site currently makes authenticated API calls.
+> 3. Look for CSRF token handling patterns (`__RequestVerificationToken`, `_layout/tokenhtml`) — these show how the site currently makes authenticated API calls.
 > 4. Check for any TODO/FIXME comments mentioning server logic, backend, or server-side processing.
 > 5. Look for hardcoded API URLs, mock data, or placeholder fetch calls that might need to be replaced with server logic calls.
 > 6. Check for any existing service layer or API utility files in `src/shared/`, `src/services/`, or similar directories that could be reused for server logic integration.
 > 7. Read `.powerpages-site/web-roles/*.webrole.yml` files to list available web roles and their GUIDs — these are needed when creating the server logic metadata YAML.
+> 8. For each existing server logic, assess whether it can be reused or safely extended for the requested capability instead of creating a brand-new server logic file. Call out any strong reuse candidates and explain why.
 > Report all findings so we can avoid duplicating work and match existing patterns."
 
 From the Explore agent's findings, note:
-- **Existing server logic files** — what's already implemented (avoid conflicts)
+- **Existing server logic files** — what's already implemented, and which ones are candidates for reuse or extension
 - **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 7)
 - **Existing service/utility files** — reuse these when adding client-side integration
 - **Gaps** — frontend code that references server logic endpoints that don't exist yet
@@ -128,9 +99,6 @@ From the Explore agent's findings, note:
 
 Look for the `.powerpages-site` folder:
 
-```
-Glob: **/.powerpages-site
-```
 
 **If not found**: The site **must** be deployed before server logic can be created — server logic files live inside `.powerpages-site/server-logic/`. Tell the user:
 
@@ -146,13 +114,13 @@ Use `AskUserQuestion`:
 
 **If "Cancel"**: Stop the workflow — server logic cannot be created without `.powerpages-site`.
 
-**Output**: Confirmed project root, `.powerpages-site` exists, existing server logics (if any), available web roles
+**Output**: Confirmed project root, `.powerpages-site` exists, existing server logic (if any), available web roles
 
 ---
 
 ## Phase 2: Understand Requirements
 
-**Goal**: Determine what the server logic should do and which HTTP methods are needed
+**Goal**: Determine the user intent, identify whether one or more server logic files are needed, and capture the required HTTP methods for each item
 
 **Actions**:
 
@@ -160,13 +128,22 @@ Use `AskUserQuestion`:
 
 From the user's request, determine:
 
-- **Purpose**: What should the server logic do? (e.g., "proxy an external exchange rate API", "CRUD operations on a Dataverse table", "aggregate data from multiple sources", "validate and process form submissions")
-- **Server logic name**: A descriptive, URL-friendly name for the endpoint (e.g., `exchangerate`, `order-processor`, `data-aggregator`)
-- **HTTP methods needed**: Which of the 5 functions should be implemented (get, post, put, patch, del)
+- **Intent shape**: Does the request map to a single server logic or multiple server logic?
+- **Reuse opportunities**: Can an existing server logic satisfy or be safely extended for part of the request?
+- **Server logic inventory**: For each required server logic, capture the purpose, suggested endpoint name, and whether it should be reused, extended, or created new
+- **HTTP methods needed**: Which of the 5 functions should be implemented for each server logic (`get`, `post`, `put`, `patch`, `del`)
+
+Prefer reuse or safe extension of an existing server logic when it already matches the domain, security model, and lifecycle of the requested capability. Only create a new server logic when reuse would make the existing file confusing, over-broad, or unsafe.
+
+Prefer multiple server logic files when the use case naturally separates into different responsibilities, security boundaries, or lifecycle concerns. Examples:
+
+- Separate read vs. write workflows with different web role requirements
+- Distinct integrations with different external systems or site settings
+- Independent business capabilities that would be harder to test or reason about if merged into one endpoint
 
 ### 2.2 Identify SDK Features Needed
 
-Based on the purpose, identify which Server SDK features are required:
+Based on each planned server logic item's purpose, identify which Server SDK features are required:
 
 | Feature | When to use |
 |---------|-------------|
@@ -184,12 +161,13 @@ If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 
 | Question | Context |
 |----------|---------|
-| What should this server logic endpoint do? | If the purpose is unclear |
-| Which HTTP methods do you need? | If not specified — suggest based on the use case (e.g., read-only = GET, form processing = POST) |
-| Does this need to call external APIs, Dataverse, or both? | Determines which connectors to use |
-| What's the server logic name? | Suggest a URL-friendly name based on the purpose |
+| What should this server logic solution do overall? | If the purpose is unclear |
+| Should this be one server logic or multiple server logic? | If the request could reasonably be modeled either way |
+| Which HTTP methods does each server logic need? | If not specified — suggest based on the use case (e.g., read-only = GET, form processing = POST) |
+| Does each server logic need to call external APIs, Dataverse, or both? | Determines which connectors to use |
+| What should each server logic be named? | Suggest URL-friendly names based on the responsibilities |
 
-**Output**: Clear understanding of purpose, name, HTTP methods, and SDK features needed
+**Output**: Clear understanding of the overall intent, the list of server logic items to reuse/extend/create, their HTTP methods, and SDK features needed
 
 ---
 
@@ -197,69 +175,33 @@ If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 
 **Goal**: Discover and read all current Server Logic documentation from Microsoft Learn before writing any code
 
-This step is critical because Server Logic is a preview feature and the SDK surface may change. The documentation on Microsoft Learn is the authoritative source — not cached instructions or training data. New documentation pages may be added at any time, so **never rely on a hardcoded list of URLs**. Instead, search first to discover all available pages, then fetch the relevant ones.
+This step is critical because Server Logic is a preview feature and the SDK surface may change. The documentation on Microsoft Learn is the authoritative source.
 
 **Actions**:
 
-### 3.1 Discover All Server Logic Documentation
+### 3.1 Follow the Documentation Reference
 
-Search Microsoft Learn to find every available documentation page:
+Use the reference document below as the source of truth for how to discover, classify, fetch, and reconcile Server Logic documentation:
 
-```
-mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search("Power Pages Server Logic")
-```
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/server-logic-docs.md`
 
-From the results, collect all unique page URLs that are actual documentation (under `learn.microsoft.com/.../power-pages/configure/...`). Exclude release-plan announcements, blog posts, and unrelated pages.
+Follow that reference to:
 
-### 3.2 Fetch Core Reference Pages
+- Search Microsoft Learn dynamically for all current Server Logic docs
+- Fetch the core reference pages and any relevant scenario-specific pages
+- Search for current code samples
+- Reconcile the discovered documentation with the known SDK baseline in the reference
 
-From the discovered URLs, identify and fetch the **core reference pages** — these are always required regardless of the user's use case:
+### 3.2 Extract Task-Specific Notes
 
-- The **overview** page (typically `server-logic-overview`) — feature capabilities, site settings, security model, API URL format
-- The **authoring** page (typically `author-server-logic`) — creating server logic, client-side calling patterns, CSRF token, response format
-- The **server objects / SDK reference** page (typically `server-objects`) — full SDK: Server.Logger, Server.Context, Server.Connector, Server.User, Server.Website, Server.Sitesetting
+From the fetched docs, extract and note the items that matter for the current task:
 
-Fetch these in parallel. Extract and note:
 - All SDK method signatures, parameter types, and return types
 - Current supported HTTP methods and function signatures
 - Site settings and their defaults
 - Security model (web roles, table permissions, CSRF)
 - Client-side calling patterns and response format
-- Any new methods or breaking changes vs. the known SDK reference below
-
-### 3.3 Fetch Use-Case-Specific Pages
-
-From the discovered URLs, identify and fetch pages relevant to the user's specific use case (determined in Phase 2):
-
-| User needs | Look for pages about |
-|-----------|---------------------|
-| Dataverse CRUD | Dataverse operations, table interactions |
-| External API calls | External services, HttpClient |
-| Azure Functions | Azure Function HTTP trigger |
-| Microsoft Graph / SharePoint | Graph API, SharePoint integration |
-| Any other scenario | Fetch any tutorial/how-to page that matches |
-
-If the search results contain pages you haven't seen before or that don't match the patterns above, read them anyway — they may document new capabilities.
-
-### 3.4 Search for Code Samples
-
-```
-mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search("Power Pages server logic")
-```
-
-### 3.5 Reconcile with Known SDK
-
-Compare what Microsoft Learn documents with the SDK reference below. If there are discrepancies, **Microsoft Learn wins** — update your understanding accordingly and note any changes. If Microsoft Learn documents new SDK methods, properties, or patterns not listed here, use those new capabilities when appropriate.
-
-#### Known SDK Reference (verify against docs)
-
-- **Server.Logger**: `Log(message)`, `Warn(message)`, `Error(message)`
-- **Server.Context**: `QueryParameters["key"]`, `Headers["key"]`, `Body`, `HttpMethod`, `Url`, `ActivityId`, `FunctionName`, `ServerLogicName`
-- **Server.Connector.HttpClient**: `GetAsync(url, headers?)`, `PostAsync(url, jsonBody, headers?, contentType?)`, `PatchAsync(url, jsonBody, headers?, contentType?)`, `PutAsync(url, jsonBody, headers?, contentType?)`, `DeleteAsync(url, headers?)`
-- **Server.Connector.Dataverse**: `CreateRecord(entitySetName, payload)`, `RetrieveRecord(entitySetName, id, options)`, `RetrieveMultipleRecords(entitySetName, options)`, `UpdateRecord(entitySetName, id, payload)`, `DeleteRecord(entitySetName, id)`, `InvokeCustomApi(httpMethod, url, payload)`
-- **Server.User**: `fullname`, `firstname`, `lastname`, `emailaddress1`, `contactid`, `Roles`, `Token`, and many other contact properties
-- **Server.Website**: `adx_websiteid`, `adx_name`, `adx_primarydomainname`, `adx_defaultlanguage`, etc.
-- **Server.Sitesetting**: `Get(name)`
+- Any new methods or breaking changes discovered in Microsoft Learn
 
 **Output**: Up-to-date SDK reference verified against all relevant Microsoft Learn documentation pages
 
@@ -271,40 +213,60 @@ Compare what Microsoft Learn documents with the SDK reference below. If there ar
 
 **Actions**:
 
-### 4.1 Present Plan
+### 4.1 Prepare the Plan Data
 
-Show the user a clear summary of what will be built:
+Build the server logic plan data and render the HTML plan before asking for approval.
 
-| Item | Value |
-|------|-------|
-| **Server logic name** | `<name>` |
-| **JS file** | `.powerpages-site/server-logic/<name>/<name>.js` |
-| **YAML metadata** | `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` |
-| **API URL** | `https://<site-url>/_api/serverlogics/<name>` |
-| **Functions to implement** | get, post, put, patch, del (whichever are needed) |
-| **Web roles assigned** | List web roles (from `.powerpages-site/web-roles/`) |
-| **SDK features used** | HttpClient / Dataverse / Context / User / Sitesetting / etc. |
-| **External APIs called** | List any external URLs or services (if applicable) |
-| **Dataverse tables accessed** | List any tables (if applicable) |
-| **Table permissions needed** | List tables and CRUD privileges needed (if using Server.Connector.Dataverse) — without table permissions, Dataverse connector silently returns 0 records |
-| **Site settings needed** | ServerLogic/AllowedDomains, etc. (if applicable) |
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/server-logic-plan-data-format.md`
 
-For each function, briefly describe what it will do:
+The rendered plan should summarize:
 
-| Function | Purpose |
-|----------|---------|
-| `get` | e.g., "Retrieve exchange rates from external API" |
-| `post` | e.g., "Create a new order record in Dataverse" |
+- The number of server logic items being created or reused
+- Each endpoint name, API URL, and files to be created
+- The functions that will be implemented and what each one does
+- The SDK features, external services, and Dataverse tables involved for each item
+- The web roles, security constraints, and site settings that apply to each item
+- The expected next steps after approval
 
-If the documentation fetched in Phase 3 revealed new SDK methods or patterns relevant to this task, highlight them here.
+### 4.2 Render the HTML Plan
 
-### 4.2 Confirm with User
+Generate the HTML plan file from the template and open it in the user's default browser before asking for approval.
+
+When working inside a Power Pages project, write the plan to:
+
+```text
+<PROJECT_ROOT>/docs/serverlogic-plan.html
+```
+
+Create the `docs/` folder if it does not already exist. Keep this HTML file inside the repository so it can be reviewed and committed with the rest of the server logic work.
+
+Do **not** hand-author the HTML. Use the render script:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+### 4.3 Present Plan Summary
+
+Do **not** present a second detailed plan in the CLI. The HTML file is the single detailed plan artifact.
+
+In the CLI, give only a brief summary that points the user to the HTML plan open in the browser. Keep it to:
+
+- Total server logic count
+- Whether the plan is creating, updating, or reusing items
+- Whether web roles, table permissions, or site settings are involved
+- The path to `docs/serverlogic-plan.html`
+- A note that the browser-opened HTML contains the full details
+
+Do not restate the per-server-logic breakdown, rationale, role assignments, or function details inline in the CLI unless the user explicitly asks for a text version. Tell the user where the detailed HTML plan file was saved, that it has been opened in the browser for review, and that the repo copy of the plan will be committed with the implementation artifacts unless the user asks to discard it.
+
+### 4.4 Confirm with User
 
 Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| Here's the implementation plan for server logic **<name>**. Does this look correct? | Approve and implement (Recommended), Request changes, Cancel |
+| Here's the implementation plan for this server logic work. Does it look correct? | Approve and implement (Recommended), Request changes, Cancel |
 
 **If "Request changes"**: Ask what needs to change, update the plan, and present again.
 
@@ -316,27 +278,23 @@ Use `AskUserQuestion`:
 
 ## Phase 5: Implement Server Logic
 
-**Goal**: Create the server logic .js file following all constraints verified in Phase 3
+**Goal**: Create each approved server logic `.js` file and metadata YAML following the constraints verified in Phase 3
 
 **Actions**:
 
 ### 5.1 Create Server Logic Folder
 
-Create the server logic folder inside `.powerpages-site/server-logic/` (note: singular `server-logic`, no trailing 's'):
+For each approved server logic item:
 
-```powershell
-New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/server-logic/<name>" -Force
-```
+- **If the approved plan says `reuse`**: Do not create a new folder. Reuse the existing server logic as-is and only update the surrounding integration work if needed.
+- **If the approved plan says `update` / extend**: Reuse the existing folder and update the existing `.js` / `.serverlogic.yml` files rather than creating duplicates.
+- **If the approved plan says `create`**: Create the folder inside `.powerpages-site/server-logic/` (note: singular `server-logic`, no trailing 's'). Ensure the folder name matches that endpoint name exactly.
 
 ### 5.2 Read or Create Web Roles
 
-Read all web role YAML files to get the available web role GUIDs. These are needed for the metadata YAML in step 5.4.
+Use the **Create Web Role** skill to determine which web roles are required for the approved server logic plan and to create any missing roles before writing metadata.
 
-```
-Glob: <PROJECT_ROOT>/.powerpages-site/web-roles/*.webrole.yml
-```
-
-For each file, read the `id` and `name` fields. By default, assign **all available web roles** (typically Administrators, Anonymous Users, Authenticated Users) to the server logic. The user can narrow this down if needed.
+Do **not** assume every server logic should get every available role. Instead, determine the minimum set of roles required for each server logic based on its purpose, security model, and the approved plan.
 
 Example web role file content:
 ```yaml
@@ -347,26 +305,17 @@ id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 name: Authenticated Users
 ```
 
-**If no web roles exist** (empty or missing `web-roles/` folder), create the default web roles using the deterministic script:
+In the skill workflow, explicitly invoke the **Create Web Role** skill when:
 
-```powershell
-# Create Authenticated Users role
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Authenticated Users" --authenticated
+- The site has no suitable existing web roles
+- The approved plan includes proposed roles that do not exist yet
+- The role assignments need to be refined before metadata can be created
 
-# Create Anonymous Users role
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Anonymous Users" --anonymous
-
-# Create Administrators role (optional — only if the server logic needs admin-level access)
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "Administrators"
-```
-
-Each script call outputs JSON `{ "id": "<uuid>", "filePath": "<path>" }`. Collect the UUIDs for the YAML.
-
-**If web roles already exist**, use them as-is. Collect all `id` values into an array for the YAML.
+After the Create Web Role skill completes, read the resulting web role YAML files and collect the `id` and `name` values needed for each server logic's metadata YAML.
 
 ### 5.3 Create the Server Logic File
 
-Create `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.js` with these mandatory patterns:
+Repeat this step for each approved server logic item. Create or update `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.js` according to the approved plan status (`create`, `update`, or `reuse`) and follow these mandatory patterns:
 
 #### Structure Rules
 
@@ -410,113 +359,19 @@ async function get() {
 }
 ```
 
-#### SDK Usage Patterns
+#### SDK Usage Guidance
 
-Apply the correct SDK patterns based on what the server logic needs:
-
-#### External API Calls (Server.Connector.HttpClient)
-
-HttpClient is for external APIs only — it blocks access to Dataverse URLs. All methods are async and return an `HttpResponse` with a `Body` property.
-
-```javascript
-async function get() {
-    try {
-        Server.Logger.Log("Fetching external data");
-        const response = await Server.Connector.HttpClient.GetAsync(
-            "https://api.example.com/data",
-            { "Content-Type": "application/json" }
-        );
-        return response.Body;
-    } catch (err) {
-        Server.Logger.Error("External API call failed: " + err.message);
-        return JSON.stringify({ status: "error", message: err.message });
-    }
-}
-```
-
-#### Dataverse Operations (Server.Connector.Dataverse)
-
-Use Dataverse connector for CRUD operations on Dataverse tables. These methods are synchronous (no `await` needed except for `InvokeCustomApi`).
-
-```javascript
-function get() {
-    try {
-        Server.Logger.Log("Retrieving records");
-        const id = Server.Context.QueryParameters["id"];
-
-        if (id) {
-            const record = Server.Connector.Dataverse.RetrieveRecord(
-                "accounts", id, "?$select=name,telephone1"
-            );
-            return JSON.stringify({ status: "success", data: record });
-        }
-
-        const records = Server.Connector.Dataverse.RetrieveMultipleRecords(
-            "accounts", "?$select=name,telephone1&$top=50"
-        );
-        return JSON.stringify({ status: "success", data: records });
-    } catch (err) {
-        Server.Logger.Error("Dataverse retrieval failed: " + err.message);
-        return JSON.stringify({ status: "error", message: err.message });
-    }
-}
-```
-
-#### Request Context (Server.Context)
-
-```javascript
-function post() {
-    try {
-        Server.Logger.Log("Processing POST request");
-
-        const body = Server.Context.Body;           // Request body as string
-        const method = Server.Context.HttpMethod;    // "POST"
-        const authHeader = Server.Context.Headers["Authorization"];
-        const param = Server.Context.QueryParameters["filter"];
-
-        // Parse JSON body
-        const data = JSON.parse(body);
-
-        // Process data...
-
-        return JSON.stringify({ status: "success", received: data });
-    } catch (err) {
-        Server.Logger.Error("POST processing failed: " + err.message);
-        return JSON.stringify({ status: "error", message: err.message });
-    }
-}
-```
-
-#### User Info and Role Checks (Server.User)
-
-```javascript
-function get() {
-    try {
-        const userRoles = Server.User.Roles;
-        const userName = Server.User.fullname;
-        Server.Logger.Log("Request from user: " + userName);
-
-        // Check if user has required role
-        if (!userRoles || !userRoles.includes("Administrator")) {
-            return JSON.stringify({
-                status: "error",
-                message: "Insufficient permissions"
-            });
-        }
-
-        // Proceed with authorized logic...
-
-        return JSON.stringify({ status: "success", user: userName });
-    } catch (err) {
-        Server.Logger.Error("Authorization check failed: " + err.message);
-        return JSON.stringify({ status: "error", message: err.message });
-    }
-}
-```
+Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Use the documentation fetched in Phase 3 as the source of truth for connector methods, signatures, and supported patterns, then apply only the task-specific notes that were captured in the approved plan.
 
 ### 5.4 Create the Metadata YAML
 
-Create `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` with the following structure. **Fields must be alphabetically sorted** to match PAC CLI conventions:
+For each approved server logic item, create the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
+```
+
+The generated `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file has this structure:
 
 ```yaml
 adx_serverlogic_adx_webrole:
@@ -531,17 +386,11 @@ name: <name>
 
 **Critical requirements:**
 
-- **`id` field is mandatory** — Generate a new UUID (v4). PAC CLI crashes with `Expected Guid for primary key 'id'` if this is missing.
-- **`adx_serverlogic_adx_webrole`** — Array of web role GUIDs from step 5.2. By default, include all available web roles. The user can customize this.
+- **`id` field is mandatory** — The script generates a new UUID (v4). PAC CLI crashes with `Expected Guid for primary key 'id'` if this is missing.
+- **`adx_serverlogic_adx_webrole`** — Array of web role GUIDs from step 5.2. Include only the roles required for that server logic item.
 - **`name`** — Must match the folder name and `.js` file name (the URL-friendly name used in `/_api/serverlogics/<name>`).
 - **`display_name`** — Human-readable name (e.g., "Exchange Rate API", "Order Processor").
 - **Alphabetical field ordering** — Fields must be sorted alphabetically: `adx_serverlogic_adx_webrole`, `description`, `display_name`, `id`, `name`.
-
-To generate a UUID, use:
-
-```powershell
-node -e "const crypto = require('crypto'); console.log(crypto.randomUUID())"
-```
 
 ### 5.5 Validate the Code
 
@@ -560,12 +409,9 @@ Before saving, verify the code against these constraints:
 
 ### 5.6 Git Commit
 
-After creating both files:
+After creating the approved server logic files, do a git commit for the server logic changes.
 
-```powershell
-git add .powerpages-site/server-logic/<name>/
-git commit -m "Add server logic: <name>"
-```
+If the HTML plan was generated inside the project, include `docs/serverlogic-plan.html` in the same commit.
 
 **Output**: Server logic `.js` and `.serverlogic.yml` files created, validated, and committed
 
@@ -600,65 +446,20 @@ Extract the entity set name (first argument) from each method call. Build a mapp
 | `accounts` | Yes | — | — | — |
 | `contacts` | Yes | Yes | — | — |
 
-### 6.2 Choose Permissions Source
+### 6.2 Use the Table Permissions Architect
 
-Ask the user how they want to define the permissions using `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| The server logic accesses Dataverse tables that need table permissions. How would you like to define them? | **Upload an existing permissions diagram** — provide an image (PNG/JPG) or Mermaid diagram of your existing permissions structure, **Let the architect figure it out** (Recommended) — the Table Permissions Architect will analyze your site and propose permissions automatically |
-
-Route to the appropriate path:
-
-#### Path A: Upload Existing Permissions Diagram
-
-If the user chooses to upload an existing diagram:
-
-1. Ask the user to provide their permissions diagram (image file, Mermaid syntax, or text description).
-
-2. Parse the diagram into structured format:
-   - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
-   - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto)
-
-3. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions are new vs. already exist.
-
-4. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
-
-   | Question | Options |
-   |----------|---------|
-   | Does this permissions plan look correct? | Approve and create files (Recommended), Request changes, Cancel |
-
-5. Create the permission YAML files using the deterministic scripts. **Do NOT write YAML files manually.**
-
-   **Create web roles (if needed):**
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
-   ```
-
-   **Create table permissions (process parent permissions before child permissions):**
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "<Global|Contact|Account|Self>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
-   ```
-
-   For **Parent scope** (child tables):
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
-   ```
-
-#### Path B: Let the Architect Figure It Out
-
-Use the `Task` tool to invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md`:
+When any approved server logic item uses `Server.Connector.Dataverse`, invoke the `table-permissions-architect` agent at `${CLAUDE_PLUGIN_ROOT}/agents/table-permissions-architect.md` to determine and create the required table permissions.
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and propose table permissions for Dataverse tables accessed by server logic. The following tables need permissions:
+> "Analyze this Power Pages code site and propose table permissions for Dataverse tables accessed by the approved server logic plan. The following tables need permissions:
 >
-> [list each table with required CRUD privileges from step 6.1]
+> [list each table with required CRUD privileges from step 6.1, grouped by server logic item]
 >
 > Context:
 > - These permissions are needed because the server logic uses `Server.Connector.Dataverse`, which respects table permissions — without them, the connector silently returns 0 records.
 > - The scope should typically be **Global** for server logic that fetches all records, unless the server logic filters by the current user (in which case use **Contact** scope).
-> - The web roles assigned to this server logic are: [list web role names and GUIDs from Phase 5.2]
+> - The web roles assigned to these server logic items are: [list web role names and GUIDs from Phase 5.2]
 > - Project root: [path]
 >
 > Check for existing table permissions and web roles. If new web roles are needed, create them using the create-web-role.js script. Propose a plan, then after approval create the table permission YAML files using the deterministic scripts."
@@ -672,12 +473,7 @@ The agent will:
 
 ### 6.3 Git Commit
 
-After table permissions (and any new web roles) are created:
-
-```powershell
-git add .powerpages-site/table-permissions/ .powerpages-site/web-roles/
-git commit -m "Add table permissions and web roles for server logic: <name>"
-```
+After table permissions (and any new web roles) are created, do a git commit for the table permissions changes.
 
 **Output**: Table permissions (and web roles if created) configured for all Dataverse tables accessed by the server logic
 
@@ -712,10 +508,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 If any settings were created:
 
-```powershell
-git add -A
-git commit -m "Add server logic site settings for <name>"
-```
+Do a git commit for the site settings changes.
 
 **Output**: Site settings configured and committed (or skipped if not needed/deployed)
 
@@ -723,131 +516,32 @@ git commit -m "Add server logic site settings for <name>"
 
 ## Phase 8: Client-Side Integration
 
-**Goal**: Help the user call the server logic endpoint from their site's frontend code, matching existing patterns discovered in Phase 1
+**Goal**: Help the user call the server logic endpoints from their site's frontend code, matching existing patterns discovered in Phase 1
 
-Server logic creates the backend — but without frontend code to call it, the endpoint is unused. This phase creates or updates frontend code to consume the server logic API, using the patterns and conventions already established in the codebase.
+Server logic creates the backend — but without frontend code to call it, the endpoints are unused. This phase creates or updates frontend code to consume the server logic APIs, using the patterns and conventions already established in the codebase.
 
 **Actions**:
 
-### 8.1 Determine Integration Approach
+### 8.1 Follow the Frontend Integration Reference
 
-Based on the Explore agent's findings from Phase 1.4:
+Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
-**If the site already has a service layer or API utility** (e.g., `powerPagesApi.ts`, a shared fetch wrapper, or `shell.safeAjax` usage):
-- Create a thin service function that calls the server logic endpoint using the existing utility
-- Follow the same naming conventions and file locations
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/frontend-integration-reference.md`
 
-**If the site has no existing API patterns**:
-- Create a lightweight helper function for calling the server logic with CSRF token handling
-- Place it in `src/shared/` or `src/services/` following framework conventions
+Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
-### 8.2 Create Server Logic Client Service
+### 8.2 Create or Update Frontend Integration
 
-Create a frontend service file for the server logic endpoint. The exact implementation depends on the framework and existing patterns, but the core pattern is:
+Following the reference:
 
-**For sites using `shell.safeAjax` (jQuery-based Power Pages sites):**
-
-```javascript
-// Call server logic with CSRF token handled automatically
-function callServerLogic(method, queryParams, body) {
-    return new Promise((resolve, reject) => {
-        let url = '/_api/serverlogics/<name>';
-        if (queryParams) {
-            url += '?' + new URLSearchParams(queryParams).toString();
-        }
-        shell.safeAjax({
-            type: method,
-            url: url,
-            contentType: 'application/json',
-            data: body ? JSON.stringify(body) : undefined,
-            success: function(res) { resolve(res); },
-            error: function(xhr) { reject(xhr); }
-        });
-    });
-}
-```
-
-**For SPA code sites (React/Vue/Angular/Astro) with `powerPagesApi.ts`:**
-
-```typescript
-import { powerPagesFetch } from '../shared/powerPagesApi';
-
-const SERVER_LOGIC_BASE = '/_api/serverlogics/<name>';
-
-export async function callServerLogic<T = unknown>(
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
-    params?: Record<string, string>,
-    body?: unknown
-): Promise<T> {
-    const url = params
-        ? `${SERVER_LOGIC_BASE}?${new URLSearchParams(params)}`
-        : SERVER_LOGIC_BASE;
-    return powerPagesFetch<T>(url, {
-        method,
-        body: body ? JSON.stringify(body) : undefined,
-    });
-}
-```
-
-**For SPA code sites without an existing API client:**
-
-```typescript
-async function getCSRFToken(): Promise<string> {
-    const response = await fetch('/_layout/tokenhtml');
-    const html = await response.text();
-    const match = html.match(/value="([^"]+)"/);
-    if (!match) throw new Error('Failed to get CSRF token');
-    return match[1];
-}
-
-export async function callServerLogic<T = unknown>(
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
-    params?: Record<string, string>,
-    body?: unknown
-): Promise<T> {
-    const token = await getCSRFToken();
-    let url = '/_api/serverlogics/<name>';
-    if (params) url += '?' + new URLSearchParams(params).toString();
-
-    const response = await fetch(url, {
-        method,
-        headers: {
-            'Content-Type': 'application/json',
-            '__RequestVerificationToken': token,
-        },
-        body: body ? JSON.stringify(body) : undefined,
-    });
-
-    if (!response.ok) {
-        throw new Error(`Server logic call failed: ${response.status}`);
-    }
-
-    return response.json();
-}
-```
-
-### 8.3 Create Framework-Specific Hook (Optional)
-
-If the site uses React, Vue, or Angular, create a hook/composable/service that wraps the server logic call with loading/error state:
-
-**React:**
-```typescript
-export function useServerLogic<T>(method: string, params?: Record<string, string>) {
-    const [data, setData] = useState<T | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    // ... fetch on mount, expose refetch
-}
-```
-
-Only create this if the pattern matches what the site already uses (e.g., the site has `useProducts` hooks from webapi integration).
-
-### 8.4 Update Existing Components
-
-If the Explore agent in Phase 1.4 found frontend components with TODO comments, placeholder fetch calls, or mock data that should be replaced with the server logic call:
-- Update those components to import and use the new service function
-- Replace hardcoded data or placeholder URLs with the real server logic call
-- Add loading and error states if the component lacks them
+- Reuse the existing service layer or API utility when the site already has one
+- Create a lightweight CSRF-aware helper only when the site has no established API client pattern
+- Group multiple server logic endpoints into a coherent service module when that improves maintainability
+- Add framework-specific hooks/composables/services only when the codebase already follows that pattern
+- Fully integrate the server logic into the actual UI flow — do **not** stop at creating service/helper code
+- Update the relevant pages, components, forms, buttons, or user journeys so the new backend behavior is reachable from the interface
+- Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
+- Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
 
 ### 8.5 Ask User About Integration Scope
 
@@ -855,7 +549,7 @@ Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| I've created the server logic backend. Would you like me to also create the frontend code to call it? | Yes, create frontend integration (Recommended), No, I'll handle the frontend myself |
+| I've created the server logic backend. Would you like me to also fully integrate it into the frontend UI? | Yes, fully integrate it into the UI (Recommended), No, I'll handle the frontend myself |
 
 **If "No"**: Skip to Phase 9, but provide the API URL and a code snippet the user can copy.
 
@@ -863,12 +557,9 @@ Use `AskUserQuestion`:
 
 If frontend integration code was created:
 
-```powershell
-git add -A
-git commit -m "Add client-side integration for server logic: <name>"
-```
+Do a git commit for the frontend integration changes.
 
-**Output**: Frontend service/hook created, existing components updated (if applicable), committed
+**Output**: Frontend service/hook created as needed, UI components/pages fully integrated, and changes committed
 
 ---
 
@@ -880,7 +571,7 @@ git commit -m "Add client-side integration for server logic: <name>"
 
 ### 9.1 Final Code Validation
 
-Re-read the created `.js` file and verify:
+Re-read each created `.js` file and verify:
 
 - [ ] Only allowed top-level functions (get, post, put, patch, del)
 - [ ] Every function returns a string
@@ -893,7 +584,7 @@ Re-read the created `.js` file and verify:
 - [ ] HttpClient used only for external APIs (not Dataverse)
 - [ ] Dataverse connector used for Dataverse operations
 
-Re-read the `.serverlogic.yml` file and verify:
+Re-read each `.serverlogic.yml` file and verify:
 
 - [ ] `id` field exists and is a valid UUID
 - [ ] `adx_serverlogic_adx_webrole` array is non-empty (at least one web role)
@@ -904,7 +595,7 @@ Re-read the `.serverlogic.yml` file and verify:
 
 ### 9.2 Provide API URL
 
-Tell the user the endpoint URL:
+Tell the user each endpoint URL:
 
 ```
 https://<site-url>/_api/serverlogics/<server-logic-name>
@@ -919,23 +610,7 @@ Provide testing instructions:
 3. **Authentication** — Server logic respects the site's authentication. Calls from authenticated sessions use cookie-based auth automatically. Anonymous access depends on governance settings.
 4. **Testing from browser console**:
 
-```javascript
-// Fetch CSRF token first
-const tokenResponse = await fetch('/_layout/tokenhtml');
-const tokenHtml = await tokenResponse.text();
-const token = tokenHtml.match(/value="([^"]+)"/)?.[1];
-
-// Call the server logic
-const response = await fetch('/_api/serverlogics/<name>', {
-    method: 'GET', // or POST, PUT, PATCH, DELETE
-    headers: {
-        'Content-Type': 'application/json',
-        '__RequestVerificationToken': token
-    }
-});
-const result = await response.json();
-console.log(result);
-```
+Use the frontend integration reference from Phase 8 for the exact calling pattern that matches the site's stack.
 
 5. **Check diagnostics** — Server.Logger output can be viewed in Power Pages design studio diagnostics
 
@@ -961,15 +636,16 @@ Present a summary of everything that was done:
 
 | Step | Status | Details |
 |------|--------|---------|
-| Server Logic JS | Created | `.powerpages-site/server-logic/<name>/<name>.js` |
-| Server Logic YAML | Created | `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` |
-| Functions | Implemented | get, post, put, patch, del (as needed) |
-| SDK Features Used | — | HttpClient / Dataverse / Context / User / etc. |
+| Server Logic JS | Created | List each created `.powerpages-site/server-logic/<name>/<name>.js` file |
+| Server Logic YAML | Created | List each created `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file |
+| HTML Plan | Created/Updated | `docs/serverlogic-plan.html` |
+| Functions | Implemented | Summarize methods implemented per server logic item |
+| SDK Features Used | — | Summarize features used per server logic item |
 | Table Permissions | Created/Skipped | `accounts` (Read), `contacts` (Read, Create), etc. |
 | Site Settings | Created/Skipped | ServerLogic/AllowedDomains, etc. |
-| Client-Side Service | Created/Skipped | `src/shared/services/<name>Service.ts` (or equivalent) |
-| Components Updated | X files / None | Frontend components wired to call server logic |
-| API URL | — | `/_api/serverlogics/<name>` |
+| Client-Side Service | Created/Skipped | List created or updated frontend service files |
+| UI Integration | Created/Skipped | Pages, components, forms, or actions fully wired to the server logic endpoints |
+| API URL | — | List each `/_api/serverlogics/<name>` URL |
 
 ### 10.3 Ask to Deploy
 
@@ -977,19 +653,20 @@ Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| The server logic is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
+| The server logic work is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
+**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site. After deployment succeeds, recommend validating the deployed site with the `/test-site` skill.
 
 **If "No, I'll deploy later"**: Acknowledge and remind:
 
-> "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The server logic endpoint won't be accessible until the site is deployed."
+> "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The server logic endpoints won't be accessible until the site is deployed."
 
 ### 10.4 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
-- **Test the endpoint**: Call `/_api/serverlogics/<name>` with the appropriate HTTP method and CSRF token
+- **Test the endpoints**: Call each `/_api/serverlogics/<name>` URL with the appropriate HTTP method and CSRF token
+- **Recommended full-site validation**: After deployment, recommend running `/test-site` to validate the live site experience end to end
 - **Check logs**: Use Server.Logger output in Power Pages design studio diagnostics to debug issues
 - **Table permissions**: Table permissions were configured for Dataverse tables used by this server logic. If you add new Dataverse tables later, run the table permissions setup again — without permissions, `Server.Connector.Dataverse` silently returns 0 records
 - **Timeout**: Default execution timeout is 120 seconds (configurable up to 240s via `ServerLogic/TimeoutInSeconds`)
@@ -1007,7 +684,7 @@ After deployment (or if skipped), remind the user:
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Always fetch Microsoft Learn docs** in Phase 3 before writing code — the docs are the source of truth
 - **Ask for user confirmation** at key decision points
-- **Commit at milestones** — after server logic code and after site settings
+- **Commit at milestones** — after server logic code, table permissions (if any), site settings, and frontend integration (if any)
 - **Validate thoroughly** — server logic has strict constraints and violations cause runtime errors
 
 ### Key Decision Points (Wait for User)
@@ -1015,18 +692,13 @@ After deployment (or if skipped), remind the user:
 1. At Phase 1.5: Deploy now or cancel (if `.powerpages-site` missing — mandatory)
 2. At Phase 2: Confirm requirements (purpose, name, HTTP methods)
 3. At Phase 4: Approve implementation plan before writing code
-4. At Phase 6.2: Choose permissions source (upload diagram or let architect analyze) and approve plan (if Dataverse connector is used)
+4. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
 5. At Phase 8.5: Create frontend integration or skip
 6. At Phase 10.3: Deploy now or deploy later
 
-### HttpClient vs Dataverse — Choosing the Right Connector
+### SDK Pattern Source of Truth
 
-This is a common source of confusion. The two connectors serve different purposes and are mutually exclusive for Dataverse access:
-
-- **Server.Connector.HttpClient**: For calling **external** REST APIs (non-Dataverse). It actively blocks requests to Dataverse URLs. Use this for third-party APIs, Azure Functions, or any service outside Dataverse.
-- **Server.Connector.Dataverse**: For **Dataverse** operations only. Provides typed CRUD methods (CreateRecord, RetrieveRecord, etc.) that handle authentication automatically. Use this for reading/writing Power Platform data.
-
-If the user needs both external API calls and Dataverse operations in the same server logic, use both connectors — HttpClient for external calls and Dataverse for Dataverse operations. They coexist in the same file.
+Do not treat this skill file as the canonical SDK reference. The Phase 3 Microsoft Learn fetch is the source of truth for SDK usage patterns, supported methods, signatures, and connector behavior. Keep only task-specific decisions in the plan and implementation notes.
 
 ### Progress Tracking
 
@@ -1035,17 +707,17 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, explore existing server logics and frontend patterns, verify .powerpages-site exists (mandatory) |
-| Understand requirements | Gathering requirements | Determine purpose, name, HTTP methods, and SDK features needed |
+| Understand requirements | Gathering requirements | Determine user intent, whether one or more server logic files are needed, and the methods/features for each item |
 | Fetch latest documentation | Fetching Microsoft Learn docs | Query Microsoft Learn for current Server Logic SDK reference and samples |
-| Review implementation plan | Reviewing plan with user | Present plan (name, functions, SDK features, external APIs) and confirm before writing code |
-| Implement server logic | Writing server logic code | Read web roles, create .js and .serverlogic.yml in .powerpages-site/server-logic/<name>/, validate code |
-| Configure table permissions | Setting up Dataverse table permissions | (Conditional) Parse .js for Dataverse tables, launch table-permissions-architect agent, create permission YAML files |
+| Review implementation plan | Reviewing plan with user | Present plan (server logic inventory, functions, SDK features, external APIs) and confirm before writing code |
+| Implement server logic | Writing server logic code | Determine/create required web roles, create approved `.js` and `.serverlogic.yml` files, validate code |
+| Configure table permissions | Setting up Dataverse table permissions | (Conditional) Parse `.js` files for Dataverse tables, launch `table-permissions-architect`, create permission YAML files |
 | Configure site settings | Configuring site settings | Set up ServerLogic/* site settings if needed |
-| Client-side integration | Wiring frontend to server logic | Create service function, framework hook, update existing components to call server logic endpoint |
-| Verify and test guidance | Validating and providing test guidance | Final validation, API URL, CSRF token instructions, testing guide |
+| Client-side integration | Wiring frontend to server logic | Follow the frontend integration reference, create/update service files as needed, and fully wire the UI to the server logic endpoints |
+| Verify and test guidance | Validating and providing test guidance | Final validation, API URLs, CSRF token instructions, testing guide |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`.
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. Use `TaskList` between phase transitions and before the final summary to confirm there are no incomplete work items left.
 
 ---
 

@@ -48,3 +48,50 @@ These are pages that existed when this reference was last updated. They serve as
 | Graph & SharePoint | `https://learn.microsoft.com/en-us/power-pages/configure/server-logic-graph-sharepoint` |
 
 If the search discovers pages not in this table, those are new additions — fetch and use them.
+
+## What to Extract from the Docs
+
+For the current task, capture:
+
+- All SDK method signatures, parameter types, and return types
+- Supported HTTP methods and function signatures
+- Site settings and their defaults
+- Security model details (web roles, table permissions, CSRF)
+- Client-side calling patterns and response formats
+- Any new methods, changed behaviors, or breaking changes
+
+## Use-Case Mapping
+
+When the user's requirements are known, fetch any additional pages that match the scenario:
+
+| User needs | Look for pages about |
+|-----------|---------------------|
+| Dataverse CRUD | Dataverse operations, table interactions |
+| External API calls | External services, HttpClient |
+| Azure Functions | Azure Function HTTP trigger |
+| Microsoft Graph / SharePoint | Graph API, SharePoint integration |
+| Any other scenario | Any matching tutorial or how-to page |
+
+If the search results contain unfamiliar but relevant pages, read them — they may document new capabilities.
+
+## Code Samples
+
+Also search for current samples:
+
+```
+mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search("Power Pages server logic")
+```
+
+## Known SDK Baseline
+
+Use this as a baseline only. If Microsoft Learn differs, Microsoft Learn wins.
+
+- **Server.Logger**: `Log(message)`, `Warn(message)`, `Error(message)`
+- **Server.Context**: `QueryParameters["key"]`, `Headers["key"]`, `Body`, `HttpMethod`, `Url`, `ActivityId`, `FunctionName`, `ServerLogicName`
+- **Server.Connector.HttpClient**: `GetAsync(url, headers?)`, `PostAsync(url, jsonBody, headers?, contentType?)`, `PatchAsync(url, jsonBody, headers?, contentType?)`, `PutAsync(url, jsonBody, headers?, contentType?)`, `DeleteAsync(url, headers?)`
+- **Server.Connector.Dataverse**: `CreateRecord(entitySetName, payload)`, `RetrieveRecord(entitySetName, id, options)`, `RetrieveMultipleRecords(entitySetName, options)`, `UpdateRecord(entitySetName, id, payload)`, `DeleteRecord(entitySetName, id)`, `InvokeCustomApi(httpMethod, url, payload)`
+- **Server.User**: `fullname`, `firstname`, `lastname`, `emailaddress1`, `contactid`, `Roles`, `Token`, and many other contact properties
+- **Server.Website**: `adx_websiteid`, `adx_name`, `adx_primarydomainname`, `adx_defaultlanguage`, etc.
+- **Server.Sitesetting**: `Get(name)`
+
+When new SDK members or changed patterns are discovered, use them and record the differences in the implementation plan.
