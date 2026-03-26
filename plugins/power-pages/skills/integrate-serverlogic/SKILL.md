@@ -21,7 +21,7 @@ hooks:
           timeout: 15
         - type: prompt
           prompt: >
-            If Server Logic work was being performed in this session (via /power-pages:integrate-serverlogic),
+            If Server Logic work was being performed in this session (via /integrate-serverlogic),
             verify before allowing stop: 1) The site was verified to exist with powerpages.config.json,
             2) Microsoft Learn documentation was fetched as source of truth before writing code,
             3) The server logic .js file was created in .powerpages-site/server-logic/<name>/ with only allowed
@@ -52,7 +52,7 @@ Create and manage Power Pages Server Logic — server-side JavaScript that runs 
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 
 > **Prerequisites:**
-> - An existing Power Pages code site created via `/power-pages:create-site`
+> - An existing Power Pages code site created via `/create-site`
 > - The site **must** be deployed at least once (`.powerpages-site` folder must exist) — server logic files live inside `.powerpages-site/server-logic/`, so deployment is required before any server logic can be created
 
 **Initial request:** $ARGUMENTS
@@ -88,7 +88,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
 ```
 
-**If not found**: Tell the user to create a site first with `/power-pages:create-site`.
+**If not found**: Tell the user to create a site first with `/create-site`.
 
 ### 1.2 Read Existing Config
 
@@ -142,7 +142,7 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The `.powerpages-site` folder is required for server logic. Would you like to deploy the site now? | Yes, deploy now (Required), Cancel |
 
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site` first, then continue to Phase 2.
+**If "Yes, deploy now"**: Invoke `/deploy-site` first, then continue to Phase 2.
 
 **If "Cancel"**: Stop the workflow — server logic cannot be created without `.powerpages-site`.
 
@@ -914,7 +914,7 @@ https://<site-url>/_api/serverlogics/<server-logic-name>
 
 Provide testing instructions:
 
-1. **Deploy the site first** — The server logic must be deployed via `/power-pages:deploy-site` before it can be called
+1. **Deploy the site first** — The server logic must be deployed via `/deploy-site` before it can be called
 2. **CSRF token required** — All API calls to server logic endpoints require a Cross-Site Request Forgery (CSRF) token in the request headers. Fetch the token from `/_layout/tokenhtml` and include it as `__RequestVerificationToken` header.
 3. **Authentication** — Server logic respects the site's authentication. Calls from authenticated sessions use cookie-based auth automatically. Anonymous access depends on governance settings.
 4. **Testing from browser console**:
@@ -979,11 +979,11 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The server logic is ready. To make it live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke the `/power-pages:deploy-site` skill to deploy the site.
+**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 
 **If "No, I'll deploy later"**: Acknowledge and remind:
 
-> "No problem! Remember to deploy your site using `/power-pages:deploy-site` when you're ready. The server logic endpoint won't be accessible until the site is deployed."
+> "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The server logic endpoint won't be accessible until the site is deployed."
 
 ### 10.4 Post-Deploy Notes
 
