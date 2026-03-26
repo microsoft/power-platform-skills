@@ -8,8 +8,9 @@ body:
       label: Plugin
       description: Which plugin is this feature request for?
       options:
-        - power-pages
+        - code-apps
         - model-apps
+        - power-pages
     validations:
       required: true
 
