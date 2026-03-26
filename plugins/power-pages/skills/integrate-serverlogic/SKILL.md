@@ -91,7 +91,7 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 
 From the Explore agent's findings, note:
 - **Existing server logic files** — what's already implemented, and which ones are candidates for reuse or extension
-- **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 7)
+- **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 8)
 - **Existing service/utility files** — reuse these when adding client-side integration
 - **Gaps** — frontend code that references server logic endpoints that don't exist yet
 
@@ -543,7 +543,7 @@ Following the reference:
 - Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
 - Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
 
-### 8.5 Ask User About Integration Scope
+### 8.3 Ask User About Integration Scope
 
 Use `AskUserQuestion`:
 
@@ -553,7 +553,7 @@ Use `AskUserQuestion`:
 
 **If "No"**: Skip to Phase 9, but provide the API URL and a code snippet the user can copy.
 
-### 8.6 Git Commit
+### 8.4 Git Commit
 
 If frontend integration code was created:
 

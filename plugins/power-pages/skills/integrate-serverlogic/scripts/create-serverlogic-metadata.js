@@ -35,6 +35,12 @@ if (!projectRoot || !endpointName || !displayName || !description || !webRoleIds
   process.exit(1);
 }
 
+// Validate endpointName is a safe slug (no path separators or traversal)
+if (!/^[a-zA-Z0-9_-]+$/.test(endpointName)) {
+  console.error(`Error: --name must be a safe slug (alphanumeric, hyphens, underscores only). Got: "${endpointName}"`);
+  process.exit(1);
+}
+
 const webRoleIds = webRoleIdsRaw.split(',').map(id => id.trim()).filter(Boolean);
 if (webRoleIds.length === 0) {
   console.error('Error: --webRoleIds must contain at least one UUID');
