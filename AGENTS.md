@@ -21,6 +21,11 @@ power-platform-skills/
 │       ├── commands/         # Command entry points
 │       ├── shared/           # Shared resources and documentation
 │       └── skills/           # Skill workflows (SKILL.md in subdirectories)
+├── scripts/                  # Repo-level utility scripts
+│   └── sync-shared-skills.js # Auto-generates SKILL.md wrappers in all plugins
+├── shared/                   # Cross-plugin shared resources
+│   └── skills/               # Shared skill definitions
+│       └── <skill-name>/     # SKILL.template.md + workflow .md files
 ├── AGENTS.md                 # Generic development guidelines (this file)
 └── README.md                 # Repository overview
 ```
@@ -47,6 +52,22 @@ Each plugin follows this structure:
 - `references/` — Shared reference documents used by multiple skills
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
+
+## Cross-Plugin Shared Skills
+
+Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The workflow logic is written once in a shared `.md` file, and each plugin has a thin `skills/<skill-name>/SKILL.md` that contains only the YAML frontmatter and a reference to the shared workflow file.
+
+**Pattern:**
+- `shared/skills/<skill-name>/<workflow>.md` — Full workflow (phases, instructions, field definitions)
+- `shared/skills/<skill-name>/SKILL.template.md` — Template SKILL.md (frontmatter + reference to workflow); supports `{{PLUGIN_NAME}}` placeholder
+- `shared/skills/<skill-name>/config.json` — Controls which plugins get this skill:
+  - `{ "plugins": "*" }` — all plugins (default if no config.json)
+  - `{ "plugins": ["power-pages", "code-apps"] }` — only listed plugins
+- `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Auto-generated from the template above
+
+This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/` — the per-plugin wrappers are auto-generated.
+
+**Auto-sync:** Run `node scripts/sync-shared-skills.js` locally to auto-generate missing SKILL.md wrappers in all plugins. A CI workflow runs this on PRs that touch `plugins/` or `shared/skills/` and commits any generated files back to the PR automatically.
 
 ## Code Conventions
 
