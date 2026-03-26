@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
+const { validatePowerPagesSchema } = require('../../../scripts/lib/powerpages-schema-validator');
 
 runValidation((cwd) => {
   const projectRoot = findProjectRoot(cwd);
@@ -37,6 +38,15 @@ runValidation((cwd) => {
   const typeFiles = findTypeFiles(projectRoot);
   if (typeFiles.length === 0 && serviceFiles.length > 0) {
     errors.push('No type definition files found in src/types/ — services should have corresponding type definitions');
+  }
+
+  const schemaValidation = validatePowerPagesSchema(projectRoot);
+  const schemaErrors = schemaValidation.findings
+    .filter(finding => finding.severity === 'error')
+    .map(finding => finding.filePath ? `${finding.message} (${path.basename(finding.filePath)})` : finding.message);
+
+  if (schemaErrors.length > 0) {
+    errors.push('Invalid Power Pages permissions/site-settings schema:\n  - ' + schemaErrors.join('\n  - '));
   }
 
   if (errors.length > 0) {

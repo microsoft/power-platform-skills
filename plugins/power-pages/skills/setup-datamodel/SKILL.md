@@ -9,20 +9,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-datamodel/scripts/validate-datamodel.js"'
-          timeout: 30
-        - type: prompt
-          prompt: >
-            If a Dataverse data model was being set up in this session (via /power-pages:setup-datamodel),
-            verify before allowing stop: 1) A data model was obtained (either the data-model-architect agent
-            was invoked OR the user uploaded an existing ER diagram that was parsed), 2) The user approved
-            the proposal, 3) All approved tables were created, 4) A summary was presented.
-            If incomplete, return { "ok": false, "reason": "<specific issues>" }. Otherwise return { "ok": true }.
-          timeout: 30
 ---
 
 # Set Up Dataverse Data Model
@@ -44,6 +30,7 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 **Goal**: Confirm PAC CLI authentication, acquire an Azure CLI token, and verify API access
 
 **Actions**:
+
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
 2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
@@ -56,6 +43,7 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 **Goal**: Determine whether the user will upload an existing ER diagram or let AI analyze the site
 
 **Actions**:
+
 1. Ask the user how they want to define the data model using the `AskUserQuestion` tool:
 
    **Question**: "How would you like to define the data model for your site?"
@@ -101,6 +89,7 @@ If the user chooses to let the Data Model Architect figure it out, proceed to **
 **Goal**: Spawn the data-model-architect agent to autonomously analyze the site and propose a data model
 
 **Actions**:
+
 1. Use the `Task` tool to spawn the `data-model-architect` agent. This agent autonomously:
    - Analyzes the site's source code to infer data requirements
    - Queries existing Dataverse tables via OData GET requests
@@ -338,6 +327,7 @@ Present a summary to the user:
 | `cr123_task` (Task) | Created | 4 columns | 1 relationship |
 
 Include:
+
 - Total tables created/modified/reused/failed
 - Total columns created/skipped/failed
 - Total relationships created/failed
@@ -347,11 +337,12 @@ Include:
 ### 8.6 Suggest Next Steps
 
 After the summary, suggest:
+
 - Review created tables in the Power Pages maker portal
-- Populate tables with sample data for testing: `/power-pages:add-sample-data`
-- Integrate tables with your site's frontend via Web API: `/power-pages:integrate-webapi`
-- If the site is not yet built: `/power-pages:create-site`
-- If the site is ready to deploy: `/power-pages:deploy-site`
+- Populate tables with sample data for testing: `/add-sample-data`
+- Integrate tables with your site's frontend via Web API: `/integrate-webapi`
+- If the site is not yet built: `/create-site`
+- If the site is ready to deploy: `/deploy-site`
 
 **Output**: Published customizations, verified tables, manifest written, summary presented
 

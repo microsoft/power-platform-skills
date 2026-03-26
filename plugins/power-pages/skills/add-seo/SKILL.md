@@ -5,26 +5,17 @@ description: >
   "add robots.txt", "add sitemap", "improve SEO", "search engine optimization",
   "add open graph tags", "add favicon", "make site searchable",
   or wants to add SEO essentials (robots.txt, sitemap.xml, meta tags) to their
-  Power Pages code site after creating it with /power-pages:create-site.
+  Power Pages code site after creating it with /create-site.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close
 model: sonnet
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "node \"${CLAUDE_PLUGIN_ROOT}/skills/add-seo/scripts/validate-seo.js\""
-          timeout: 15
-        - type: prompt
-          prompt: "If SEO assets were being added in this session (via /power-pages:add-seo), verify before allowing stop: 1) robots.txt was created in the public directory, 2) sitemap.xml was created in the public directory with correct site URLs, 3) Meta tags (title, description, viewport, Open Graph) were added to index.html, 4) The user reviewed and approved the SEO additions, 5) A git commit was made with the SEO changes. If any of these are incomplete, return { \"ok\": false, \"reason\": \"<specific issues>\" }. If no SEO work happened or everything is complete, return { \"ok\": true }."
-          timeout: 30
 ---
 
 # Add SEO
 
 Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`, and meta tags.
 
-> **Prerequisite:** This skill expects an existing Power Pages code site created via `/power-pages:create-site`. Run that skill first if the site does not exist yet.
+> **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
 
 ## Core Principles
 
@@ -61,7 +52,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
 ```
 
-**If not found**: Tell the user to create a site first with `/power-pages:create-site`.
+**If not found**: Tell the user to create a site first with `/create-site`.
 
 #### 1.2 Read Existing Config
 
@@ -93,14 +84,14 @@ Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
 Use `AskUserQuestion` to collect SEO preferences:
 
-#### Call 1:
+#### Call 1
 
 | Question | Header | Options |
 |----------|--------|---------|
-| What is the production URL for your site? (e.g., https://contoso.powerappsportals.com) | Site URL | *(free text — use single generic option so user types via "Other")* |
+| What is the production URL for your site? (e.g., <https://contoso.powerappsportals.com>) | Site URL | *(free text — use single generic option so user types via "Other")* |
 | Which pages should be excluded from search engine indexing? | Exclusions | None — index all pages (Recommended), Admin/auth pages only, Let me specify |
 
-#### Call 2:
+#### Call 2
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -205,6 +196,7 @@ Generate entries for each discovered route using the production URL:
 ```
 
 **Priority rules:**
+
 - Home page (`/`): `1.0`
 - Top-level pages: `0.8`
 - Sub-pages: `0.6`
@@ -297,6 +289,7 @@ For Astro sites, meta tags should be added to the base layout component (e.g., `
 #### 7.1 Verify Files Exist
 
 Confirm the following files were created/updated:
+
 - `public/robots.txt`
 - `public/sitemap.xml`
 - `public/favicon.svg` (if created)
@@ -344,8 +337,9 @@ Present a summary of what was added:
 #### 7.6 Suggest Next Steps
 
 After the summary, suggest:
-- **Deploy the site** to make SEO changes live: `/power-pages:deploy-site`
-- If data model is needed: `/power-pages:setup-datamodel`
+
+- **Deploy the site** to make SEO changes live: `/deploy-site`
+- If data model is needed: `/setup-datamodel`
 - For more advanced SEO: consider structured data (JSON-LD), performance optimization, and accessibility audit
 
 ### Output
@@ -376,7 +370,7 @@ Update each task with `TaskUpdate` as it is completed.
 
 ### Key Decision Points
 
-- **Phase 1:** If `powerpages.config.json` is not found, stop and redirect the user to `/power-pages:create-site`.
+- **Phase 1:** If `powerpages.config.json` is not found, stop and redirect the user to `/create-site`.
 - **Phase 2:** If the user specifies custom exclusions, confirm the exact paths before proceeding.
 - **Phase 3:** Do not proceed to implementation until the user explicitly approves the plan.
 - **Phase 6.4:** If the framework is Astro, meta tags go into the layout component, not `index.html`.

@@ -9,7 +9,7 @@ Create `src/utils/authorization.ts`:
 ```typescript
 // IMPORTANT: Client-side authorization is for UX only, not security.
 // Server-side table permissions enforce actual access control.
-// Always configure table permissions via /power-pages:integrate-webapi.
+// Always configure table permissions via /integrate-webapi.
 
 import { getCurrentUser, isAuthenticated as checkAuthenticated } from '../services/authService';
 
@@ -360,5 +360,5 @@ export class HasRoleDirective {
 
 - The `window.Microsoft.Dynamic365.Portal.User.userRoles` array is set by the server and cannot be modified by the client in a way that affects server-side checks.
 - However, hiding a UI element does NOT prevent a user from calling the underlying API directly.
-- **Always configure server-side table permissions** to enforce data access control. Use `/power-pages:integrate-webapi` to set up proper table permissions and site settings.
+- **Always configure server-side table permissions** to enforce data access control. Use `/integrate-webapi` to set up proper table permissions and site settings.
 - Test both: verify the UI shows/hides correctly AND verify direct API calls respect table permissions.

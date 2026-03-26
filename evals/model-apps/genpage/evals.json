@@ -69,6 +69,7 @@
         "Step 7: Code does NOT wrap content in FluentProvider",
         "Step 7: DatePicker (if used) is imported from @fluentui/react-datepicker-compat, not @fluentui/react-components",
         "Step 7: Icons use unsized variants (e.g., AddRegular not Add24Regular)",
+        "Step 7: Generated code is a single .tsx file with export default GeneratedComponent",
         "Step 8: Deployment command omits --data-sources flag (mock data page)",
         "Step 8: User is asked which app to publish to — no default assumed"
       ]
@@ -82,12 +83,13 @@
         "A workflow-log.md file is saved documenting all steps attempted",
         "Step 1: Prerequisites are validated",
         "Step 2: Authentication is confirmed and environment reported",
-        "Step 2: pac model list-languages is run",
+        "Step 2: pac model list-languages is NOT run (edit flow — existing page already has localization)",
         "Step 3: Question 1 identifies this as an edit (not new)",
         "Step 3: User is asked for the app and page to edit",
         "Step 3: pac model genpage download --app-id <id> --page-id <id> --output-directory is run to download existing code",
         "Step 3: The downloaded code is read to understand the current implementation",
         "Step 3: User is asked what changes to make (search + sort confirmed)",
+        "Step 4: A plan is presented describing the changes before modifying code",
         "Step 5: If Dataverse entities are used, RuntimeTypes.ts is generated and read to verify column names",
         "Step 6: genpage-rules-reference.md is read before modifying code",
         "Step 7: Updated code preserves existing functionality while adding search and sort",
@@ -122,6 +124,7 @@
         "Step 7: All form fields have aria-labels or aria-labelledby for accessibility",
         "Step 7: Semantic HTML is used (button, section, etc.)",
         "Step 7: async dataApi calls are wrapped in try-catch with error handling",
+        "Step 7: Generated code is a single .tsx file with export default GeneratedComponent",
         "Step 8: Upload includes --data-sources 'incident,contact'"
       ]
     },
@@ -145,7 +148,8 @@
         "Step 7: Code uses entity logical name 'task' (singular lowercase) not 'tasks'",
         "Step 7: Responsive layout uses flexbox with relative units",
         "Step 7: No 100vh or 100vw used",
-        "Step 7: All components and utilities are separate top-level functions (no nested functions)"
+        "Step 7: All components and utilities are separate top-level functions (no nested functions)",
+        "Step 7: Generated code is a single .tsx file with export default GeneratedComponent"
       ]
     },
     {
@@ -155,14 +159,21 @@
       "files": [],
       "expectations": [
         "A workflow-log.md file is saved documenting all steps attempted",
-        "Step 2: pac model list-languages is run",
+        "Step 1: node --version and pac help are run separately",
+        "Step 2: pac auth list is run and environment is confirmed",
+        "Step 2: pac model list-languages is run after confirming the environment",
+        "Step 3: Question 1 (new or edit) is asked",
+        "Step 3: Question 2 is skipped because user provided a description",
         "Step 3: Mock data usage is confirmed (no Dataverse entities)",
         "Step 4: Plan reflects minimal/clean design preference",
         "Step 5: Schema generation is skipped (mock data)",
+        "Step 6: genpage-rules-reference.md is read",
         "Step 7: Charts use D3.js exclusively — no Chart.js, Recharts, or other chart libraries",
         "Step 7: Mock data is realistic (not empty arrays or identical values)",
         "Step 7: Generated code has no unnecessary complexity matching the 'clean and minimal' request",
         "Step 7: Code uses makeStyles with Fluent UI tokens for styling",
+        "Step 7: Generated code is a single .tsx file with export default GeneratedComponent",
+        "Step 7: No placeholders, TODOs, or ellipses in the generated code",
         "Step 8: Upload omits --data-sources flag"
       ]
     }

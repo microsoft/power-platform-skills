@@ -11,7 +11,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { randomBytes } = require('crypto');
+const generateUuid = require('./generate-uuid');
+const { loadSiteSettings, SITE_SETTING_FILE_SUFFIX } = require('./lib/powerpages-config');
 
 // --- CLI arg parsing ---
 
@@ -49,26 +50,15 @@ if (!fs.existsSync(siteSettingsDir)) {
   process.exit(0);
 }
 
+let existingSiteSettings;
+try {
+  existingSiteSettings = loadSiteSettings(siteSettingsDir);
+} catch (error) {
+  console.error(`Error: Failed to read existing site settings. ${error.message}`);
+  process.exit(1);
+}
+
 // --- Helpers ---
-
-function generateUuid() {
-  const bytes = randomBytes(16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-function parseYaml(content) {
-  const fields = {};
-  for (const line of content.split('\n')) {
-    const sep = line.indexOf(': ');
-    if (sep !== -1) {
-      fields[line.slice(0, sep)] = line.slice(sep + 2);
-    }
-  }
-  return fields;
-}
 
 function writeYaml(fields) {
   const keys = Object.keys(fields).sort();
@@ -78,15 +68,16 @@ function writeYaml(fields) {
 // --- Skill counter setting ---
 
 const skillSettingName = `Site/AI/Skills/${skillName}`;
-const skillFileName = `Site-AI-Skills-${skillName}.sitesetting.yml`;
+const skillFileName = `Site-AI-Skills-${skillName}${SITE_SETTING_FILE_SUFFIX}`;
 const skillFilePath = path.join(siteSettingsDir, skillFileName);
+const existingSkillSetting = existingSiteSettings.find(setting => setting.name === skillSettingName);
 
-if (fs.existsSync(skillFilePath)) {
-  const existing = parseYaml(fs.readFileSync(skillFilePath, 'utf8'));
-  const currentValue = parseInt(existing.value, 10) || 0;
-  existing.value = String(currentValue + 1);
-  fs.writeFileSync(skillFilePath, writeYaml(existing), 'utf8');
-  console.log(`Updated ${skillSettingName} counter to ${existing.value}`);
+if (existingSkillSetting) {
+  const currentValue = parseInt(existingSkillSetting.value, 10) || 0;
+  const { filePath, ...yamlFields } = existingSkillSetting;
+  yamlFields.value = String(currentValue + 1);
+  fs.writeFileSync(filePath, writeYaml(yamlFields), 'utf8');
+  console.log(`Updated ${skillSettingName} counter to ${yamlFields.value}`);
 } else {
   const fields = {
     description: `Tracks usage count of the ${skillName} skill`,
@@ -100,10 +91,11 @@ if (fs.existsSync(skillFilePath)) {
 
 // --- Authoring tool setting ---
 
-const authoringFileName = 'Site-AI-Tools-AuthoringTool.sitesetting.yml';
+const authoringFileName = `Site-AI-Tools-AuthoringTool${SITE_SETTING_FILE_SUFFIX}`;
 const authoringFilePath = path.join(siteSettingsDir, authoringFileName);
+const existingAuthoringSetting = existingSiteSettings.find(setting => setting.name === 'Site/AI/Tools/AuthoringTool');
 
-if (!fs.existsSync(authoringFilePath)) {
+if (!existingAuthoringSetting) {
   const fields = {
     description: 'Records which AI authoring tool was used',
     id: generateUuid(),

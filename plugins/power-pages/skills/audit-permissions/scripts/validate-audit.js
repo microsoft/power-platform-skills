@@ -15,11 +15,8 @@ runValidation((cwd) => {
   const docsReport = path.join(projectRoot, 'docs', 'permissions-audit.html');
   if (fs.existsSync(docsReport)) {
     const content = fs.readFileSync(docsReport, 'utf8');
-    if (!content.includes('FINDINGS_DATA') && !content.includes('__FINDINGS_DATA__')) {
-      // File exists but still has unreplaced placeholders
-      if (content.includes('__FINDINGS_DATA__')) {
-        block('Audit report has unreplaced placeholders — data was not populated.');
-      }
+    if (content.includes('__FINDINGS_DATA__') || content.includes('__INVENTORY_DATA__')) {
+      block('Audit report has unreplaced placeholders — data was not populated.');
     }
     approve();
   }

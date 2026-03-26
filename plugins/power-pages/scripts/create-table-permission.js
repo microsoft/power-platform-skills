@@ -6,6 +6,7 @@
 // Usage:
 //   node create-table-permission.js --projectRoot <path> --permissionName <string> --tableName <string>
 //     --webRoleIds <csv> --scope <string> [--read] [--create] [--write] [--delete] [--append] [--appendto]
+//     [--contactRelationshipName <string>] [--accountRelationshipName <string>]
 //     [--parentPermissionId <uuid>] [--parentRelationshipName <string>]
 //
 // Scope accepts friendly names (Global, Contact, Account, Parent, Self) or numeric codes (756150000-756150004).
@@ -18,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const generateUuid = require('./generate-uuid');
+const { loadTablePermissions, TABLE_PERMISSION_FILE_SUFFIX } = require('./lib/powerpages-config');
 
 // --- CLI arg parsing ---
 
@@ -33,12 +35,14 @@ function hasFlag(name) {
 }
 
 const projectRoot = getArg('projectRoot');
-const permissionName = getArg('permissionName');
-const tableName = getArg('tableName');
+const permissionName = getArg('permissionName')?.trim() || null;
+const tableName = getArg('tableName')?.trim() || null;
 const webRoleIdsRaw = getArg('webRoleIds');
-const scopeRaw = getArg('scope');
-const parentPermissionId = getArg('parentPermissionId');
-const parentRelationshipName = getArg('parentRelationshipName');
+const scopeRaw = getArg('scope')?.trim() || null;
+const contactRelationshipName = getArg('contactRelationshipName')?.trim() || null;
+const accountRelationshipName = getArg('accountRelationshipName')?.trim() || null;
+const parentPermissionId = getArg('parentPermissionId')?.trim() || null;
+const parentRelationshipName = getArg('parentRelationshipName')?.trim() || null;
 
 // --- Constants ---
 
@@ -57,7 +61,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // --- Validation ---
 
 if (!projectRoot || !permissionName || !tableName || !webRoleIdsRaw || !scopeRaw) {
-  console.error('Usage: node create-table-permission.js --projectRoot <path> --permissionName <string> --tableName <string> --webRoleIds <csv> --scope <string> [--read] [--create] [--write] [--delete] [--append] [--appendto] [--parentPermissionId <uuid>] [--parentRelationshipName <string>]');
+  console.error('Usage: node create-table-permission.js --projectRoot <path> --permissionName <string> --tableName <string> --webRoleIds <csv> --scope <string> [--read] [--create] [--write] [--delete] [--append] [--appendto] [--contactRelationshipName <string>] [--accountRelationshipName <string>] [--parentPermissionId <uuid>] [--parentRelationshipName <string>]');
   process.exit(1);
 }
 
@@ -89,6 +93,35 @@ if (SCOPE_MAP[scopeLower] !== undefined) {
 }
 
 // Validate parent scope requirements
+if (scopeCode === 756150001) {
+  if (!contactRelationshipName) {
+    console.error(`Error: --contactRelationshipName is required when scope is Contact (756150001). Provide the lookup field from "${tableName}" to contact.`);
+    if (tableName.toLowerCase() === 'contact') {
+      console.error('For the contact table itself, use Self scope instead of Contact scope.');
+    }
+    process.exit(1);
+  }
+  if (tableName.toLowerCase() === 'contact') {
+    console.error('Error: Contact scope is not valid for the contact table itself. Use Self scope instead.');
+    process.exit(1);
+  }
+  if (accountRelationshipName || parentPermissionId || parentRelationshipName) {
+    console.error('Error: Contact scope only supports --contactRelationshipName. Remove account/parent relationship arguments.');
+    process.exit(1);
+  }
+}
+
+if (scopeCode === 756150002) {
+  if (!accountRelationshipName) {
+    console.error(`Error: --accountRelationshipName is required when scope is Account (756150002). Provide the lookup field from "${tableName}" to account.`);
+    process.exit(1);
+  }
+  if (contactRelationshipName || parentPermissionId || parentRelationshipName) {
+    console.error('Error: Account scope only supports --accountRelationshipName. Remove contact/parent relationship arguments.');
+    process.exit(1);
+  }
+}
+
 if (scopeCode === 756150003) {
   if (!parentPermissionId) {
     console.error('Error: --parentPermissionId is required when scope is Parent (756150003)');
@@ -102,6 +135,16 @@ if (scopeCode === 756150003) {
     console.error('Error: --parentRelationshipName is required when scope is Parent (756150003)');
     process.exit(1);
   }
+  if (contactRelationshipName || accountRelationshipName) {
+    console.error('Error: Parent scope does not support contact/account relationship arguments.');
+    process.exit(1);
+  }
+}
+
+if ((scopeCode === 756150000 || scopeCode === 756150004) &&
+    (contactRelationshipName || accountRelationshipName || parentPermissionId || parentRelationshipName)) {
+  console.error('Error: Global and Self scopes do not use relationship arguments.');
+  process.exit(1);
 }
 
 // Validate target directory
@@ -110,6 +153,40 @@ if (!fs.existsSync(tablePermissionsDir)) {
   console.error(`Error: Table permissions directory not found at ${tablePermissionsDir}`);
   console.error('The site must be deployed at least once before table permissions can be created.');
   process.exit(1);
+}
+
+let existingPermissions;
+try {
+  existingPermissions = loadTablePermissions(tablePermissionsDir);
+} catch (error) {
+  console.error(`Error: Failed to read existing table permissions. ${error.message}`);
+  process.exit(1);
+}
+
+const existingPermissionByName = existingPermissions.find(
+  permission => typeof permission.entityname === 'string' && permission.entityname.toLowerCase() === permissionName.toLowerCase()
+);
+if (existingPermissionByName) {
+  console.error(`Error: A table permission named "${permissionName}" already exists (ID: ${existingPermissionByName.id}) in ${existingPermissionByName.filePath}.`);
+  console.error('Use a unique permission name instead of overwriting an existing permission file.');
+  process.exit(1);
+}
+
+if (scopeCode === 756150003) {
+  const parentPermission = existingPermissions.find(permission => permission.id === parentPermissionId);
+  if (!parentPermission) {
+    console.error(`Error: Parent permission "${parentPermissionId}" was not found in ${tablePermissionsDir}.`);
+    process.exit(1);
+  }
+
+  const parentRoleIds = new Set(Array.isArray(parentPermission.adx_entitypermission_webrole)
+    ? parentPermission.adx_entitypermission_webrole.map(String)
+    : []);
+  const invalidRoleIds = webRoleIds.filter(roleId => !parentRoleIds.has(roleId));
+  if (invalidRoleIds.length > 0) {
+    console.error(`Error: Child permission roles must be a subset of the parent permission's roles. Invalid role IDs: ${invalidRoleIds.join(', ')}`);
+    process.exit(1);
+  }
 }
 
 // --- Build YAML ---
@@ -129,7 +206,15 @@ fields['id'] = uuid;
 
 if (scopeCode === 756150003) {
   fields['parententitypermission'] = parentPermissionId;
-  fields['parentrelationshipname'] = parentRelationshipName;
+  fields['parentrelationship'] = parentRelationshipName;
+}
+
+if (scopeCode === 756150001) {
+  fields['contactrelationship'] = contactRelationshipName;
+}
+
+if (scopeCode === 756150002) {
+  fields['accountrelationship'] = accountRelationshipName;
 }
 
 fields['read'] = hasFlag('read');
@@ -158,7 +243,7 @@ const yamlContent = writeTablePermissionYaml(fields, webRoleIds);
 
 // File name: collapse spaces and hyphens into single hyphens
 // "Product - Anonymous Read" → "Product-Anonymous-Read.tablepermission.yml"
-const fileName = `${permissionName.replace(/[\s-]+/g, '-')}.tablepermission.yml`;
+const fileName = `${permissionName.replace(/[\s-]+/g, '-')}${TABLE_PERMISSION_FILE_SUFFIX}`;
 const filePath = path.join(tablePermissionsDir, fileName);
 
 fs.writeFileSync(filePath, yamlContent, 'utf8');

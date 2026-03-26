@@ -1,0 +1,22 @@
+{
+  "name": "code-apps",
+  "version": "1.0.0",
+  "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "power-apps",
+    "code-apps",
+    "react",
+    "vite",
+    "dataverse",
+    "connectors",
+    "pac-cli",
+    "power-platform"
+  ]
+}

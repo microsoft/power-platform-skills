@@ -9,7 +9,7 @@ const { spawn } = require('child_process');
 const { detectBrowser } = require('./lib/detect-browser');
 
 const browser = detectBrowser();
-const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser], {
+const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser, '--window-size', '1024,768'], {
   stdio: 'inherit',
   shell: true,
 });

@@ -32,6 +32,23 @@
                 "genux",
                 "microsoft"
             ]
+        },
+        {
+            "name": "code-apps",
+            "source": "./plugins/code-apps",
+            "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors",
+            "category": "development",
+            "tags": [
+                "power platform",
+                "power apps",
+                "code apps",
+                "react",
+                "vite",
+                "dataverse",
+                "connectors",
+                "microsoft"
+            ]
         }
     ]
 }
+
