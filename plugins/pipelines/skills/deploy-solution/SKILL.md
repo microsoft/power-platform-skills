@@ -170,6 +170,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/check-deployment-status.js" \
   --maxWait 600
 ```
 
+If the user requests cancellation during monitoring:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/cancel-deployment.js" \
+  --envUrl "<envUrl>" \
+  --stageRunId "<stageRunId>"
+```
+
 Report progress updates to the user as the deployment progresses through:
 NotStarted → Started → Deploying → Succeeded/Failed
 
@@ -199,6 +206,12 @@ If the deployment **failed**:
 - Show the error message from the stage run.
 - Refer to `references/troubleshooting.md` for common issues.
 - Suggest checking `/pipeline-status <stageRunId>` for more details.
+- If appropriate, offer to retry the failed deployment:
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/retry-deployment.js" \
+    --envUrl "<envUrl>" \
+    --stageRunId "<stageRunId>"
+  ```
 
 **Next Steps:**
 - Use `/pipeline-status` to re-check deployment status

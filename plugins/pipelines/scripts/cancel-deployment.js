@@ -50,7 +50,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (result.statusCode >= 300) {
+  if (result.statusCode < 200 || result.statusCode >= 300) {
     let errorData;
     try { errorData = JSON.parse(result.body); } catch { errorData = result.body; }
     console.error(JSON.stringify({ error: `Cancel failed with status ${result.statusCode}`, details: errorData }));

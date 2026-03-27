@@ -69,6 +69,21 @@ async function main() {
     process.exit(1);
   }
 
+  // Validate schema
+  const parsed = JSON.parse(settingsJson);
+  if (!parsed.EnvironmentVariables && !parsed.ConnectionReferences) {
+    console.error(JSON.stringify({ error: 'Settings JSON must contain "EnvironmentVariables" and/or "ConnectionReferences" arrays' }));
+    process.exit(1);
+  }
+  if (parsed.EnvironmentVariables && !Array.isArray(parsed.EnvironmentVariables)) {
+    console.error(JSON.stringify({ error: '"EnvironmentVariables" must be an array' }));
+    process.exit(1);
+  }
+  if (parsed.ConnectionReferences && !Array.isArray(parsed.ConnectionReferences)) {
+    console.error(JSON.stringify({ error: '"ConnectionReferences" must be an array' }));
+    process.exit(1);
+  }
+
   // PATCH the stage run with deployment settings
   const result = await makeRequest({
     url: `${envUrl}/api/data/v9.0/${API_PATHS.STAGE_RUNS}(${stageRunId})`,
@@ -88,7 +103,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (result.statusCode >= 300) {
+  if (result.statusCode < 200 || result.statusCode >= 300) {
     let errorData;
     try { errorData = JSON.parse(result.body); } catch { errorData = result.body; }
     console.error(JSON.stringify({ error: `Failed to update deployment settings: status ${result.statusCode}`, details: errorData }));

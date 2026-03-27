@@ -38,8 +38,7 @@ async function main() {
 
   const apiPath = `${API_PATHS.PIPELINES}(${pipelineId})/deploymentpipeline_deploymentenvironment/$ref`;
   const body = JSON.stringify({
-    '@odata.context': `${envUrl}/api/data/${API_VERSION}/$metadata#$ref`,
-    '@odata.id': `${API_PATHS.ENVIRONMENTS}(${environmentId})`
+    '@odata.id': `${envUrl}/api/data/${API_VERSION}/${API_PATHS.ENVIRONMENTS}(${environmentId})`
   });
 
   const result = await makeRequest({

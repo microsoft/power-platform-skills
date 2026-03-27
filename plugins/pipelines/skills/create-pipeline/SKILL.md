@@ -41,6 +41,16 @@ Create a task: "Discover environments"
    - What are the **target** environment(s) (QA, Staging, Production)?
    - What should the pipeline be named?
 3. If the user is unsure, run `pac env list` to show available environments and let them pick.
+4. Check if a pipeline with the requested name already exists:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" \
+     "<envUrl>" GET \
+     "deploymentpipelines?$filter=name eq '<pipeline-name>'"
+   ```
+   If a pipeline with this name exists, inform the user and ask:
+   - Use the existing pipeline
+   - Choose a different name
+   - Delete the existing one and recreate
 
 Update task to completed.
 

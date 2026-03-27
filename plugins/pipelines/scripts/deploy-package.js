@@ -64,7 +64,7 @@ async function main() {
       body: JSON.stringify(patchBody)
     });
 
-    if (patchResult.error || (patchResult.statusCode && patchResult.statusCode >= 300)) {
+    if (patchResult.error || (patchResult.statusCode && (patchResult.statusCode < 200 || patchResult.statusCode >= 300))) {
       const errDetail = patchResult.error || `PATCH failed with status ${patchResult.statusCode}`;
       console.error(JSON.stringify({ error: `Failed to update version info: ${errDetail}` }));
       process.exit(1);

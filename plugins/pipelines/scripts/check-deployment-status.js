@@ -19,7 +19,7 @@ const STOP_STATUSES = {
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const parsed = { poll: false, interval: 15, maxWait: 300, waitFor: 'deployment' };
+  const parsed = { poll: false, interval: 15, maxWait: 900, waitFor: 'deployment' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && i + 1 < args.length) parsed.envUrl = args[++i].replace(/\/+$/, '');
     else if (args[i] === '--stageRunId' && i + 1 < args.length) parsed.stageRunId = args[++i];
