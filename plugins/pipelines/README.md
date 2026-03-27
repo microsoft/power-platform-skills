@@ -50,6 +50,23 @@ This plugin automates the end-to-end lifecycle of [Power Platform Pipelines](htt
    /pipeline-status
    ```
 
+## Installation
+
+### Via Plugin Marketplace
+```bash
+/plugin marketplace add microsoft/power-platform-skills
+/plugin install pipelines@power-platform-skills
+```
+
+### Local Development
+```bash
+claude --plugin-dir /path/to/power-platform-skills/plugins/pipelines
+```
+
+## License
+
+See [LICENSE](../../LICENSE) for license information.
+
 ## Architecture
 
 ```

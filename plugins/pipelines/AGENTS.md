@@ -5,7 +5,7 @@
 ### DRY Principle
 - Shared scripts live in `scripts/` — never duplicate logic across skills.
 - Shared reference material lives in `references/` — link, don't copy.
-- All Dataverse HTTP calls go through `scripts/dataverse-request.js` with built-in retry and auth.
+- All Dataverse HTTP calls use the shared `makeRequest` and `getAuthToken` helpers from `scripts/lib/pipeline-helpers.js`. For ad-hoc OData queries, use `scripts/dataverse-request.js` as a CLI wrapper.
 - Scripts use `scripts/lib/pipeline-helpers.js` for constants (entity names, option-set values, API paths) and shared utilities (auth, HTTP, environment discovery).
 
 ### Script Contracts

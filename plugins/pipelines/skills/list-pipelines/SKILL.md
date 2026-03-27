@@ -5,7 +5,7 @@ description: >-
   "show my pipelines", "what pipelines exist", "show deployment pipelines",
   or wants to see available Power Platform deployment pipelines.
 user-invocable: true
-allowed-tools: Read, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
 ---
 
@@ -52,9 +52,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/list-pipelines.js" \
 
 Parse the JSON output and format as a table:
 
-| # | Pipeline Name | Pipeline ID | Stages | Status |
-|---|---|---|---|---|
-| 1 | `<name>` | `<id>` | QA, Prod | Active |
+| # | Pipeline Name | Pipeline ID | Associated to Source |
+|---|---|---|---|
+| 1 | `<name>` | `<id>` | Yes / No |
+
+> **Note:** For stage details, use `/create-pipeline` or query the pipeline directly.
 
 If no pipelines are found, inform the user and suggest `/create-pipeline`.
 
@@ -64,9 +66,7 @@ Update task to completed.
 
 Present the pipelines in a clear table format. For each pipeline, show:
 - Name and ID
-- Number of stages and their names
-- Deployment type
-- Status
+- Whether the pipeline is associated to the source environment
 
 **Next Steps:**
 - Use `/deploy-solution <solution-name>` to deploy through a pipeline

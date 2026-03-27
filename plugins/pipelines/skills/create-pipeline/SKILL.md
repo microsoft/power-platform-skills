@@ -25,7 +25,7 @@ Create a task: "Verify prerequisites"
 2. Run `az account show` to verify Azure CLI authentication.
 3. Run the Dataverse access check:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" --envUrl "<envUrl>"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js"
    ```
 4. If any check fails, stop and tell the user what to fix (see `references/troubleshooting.md`).
 
@@ -89,7 +89,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/register-environment.js" \
   --name "<source-env-name>" \
   --type development
 ```
-Save the returned `environmentId` for later use.
+Save the returned `deploymentEnvironmentId` for later use.
 
 #### 4b. Register Target Environment(s)
 For **each** target environment:
@@ -100,14 +100,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/register-environment.js" \
   --name "<target-env-name>" \
   --type target
 ```
-Save each returned `environmentId`.
+Save each returned `deploymentEnvironmentId`.
 
 #### 4c. Create Pipeline
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-pipeline.js" \
   --envUrl "<hostEnvUrl>" \
   --name "<pipeline-name>" \
-  [--enableAI]
+  [--noAI]
 ```
 Save the returned `pipelineId`.
 

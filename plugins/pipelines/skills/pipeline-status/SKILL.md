@@ -6,7 +6,7 @@ description: >-
   or wants to check the status of a Power Platform deployment pipeline run.
 user-invocable: true
 argument-hint: Optional stage run ID
-allowed-tools: Read, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
 ---
 
@@ -38,7 +38,7 @@ Create a task: "Get stage run information"
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" \
      "<envUrl>" GET \
-     "deploymentstageruns?$orderby=createdon desc&$top=10&$select=deploymentstagerunid,artifactname,statuscode,createdon,modifiedon"
+     "deploymentstageruns?$orderby=createdon desc&$top=10&$select=deploymentstagerunid,artifactname,stagerunstatus,createdon,modifiedon"
    ```
 3. Present recent runs in a table and let the user identify which one to check.
 

@@ -22,15 +22,18 @@ function parseArgs(argv) {
   const apiPath = args[2];
   let body = null;
   let includeHeaders = false;
+  let tenant = null;
 
   for (let i = 3; i < args.length; i++) {
     if (args[i] === '--body' && i + 1 < args.length) {
       body = args[++i];
     } else if (args[i] === '--include-headers') {
       includeHeaders = true;
+    } else if (args[i] === '--tenant' && i + 1 < args.length) {
+      tenant = args[++i];
     }
   }
-  return { envUrl, method, apiPath, body, includeHeaders };
+  return { envUrl, method, apiPath, body, includeHeaders, tenant };
 }
 
 function getResourceUrl(envUrl) {
@@ -47,11 +50,11 @@ function sleep(ms) {
 }
 
 async function main() {
-  const { envUrl, method, apiPath, body, includeHeaders } = parseArgs(process.argv);
+  const { envUrl, method, apiPath, body, includeHeaders, tenant } = parseArgs(process.argv);
   const resourceUrl = getResourceUrl(envUrl);
   const fullUrl = `${envUrl}/api/data/${API_VERSION}/${apiPath}`;
 
-  let token = getAuthToken(resourceUrl);
+  let token = getAuthToken(resourceUrl, tenant);
   if (!token) {
     console.error(JSON.stringify({ error: `Failed to obtain auth token for ${resourceUrl}` }));
     process.exit(1);

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Register a deployment environment in the pipeline host.
 // Usage: node register-environment.js --envUrl <url> --environmentId <guid> --name <string> --type <development|target>
-// Output: { "status": "success", "environmentId": "<created-id>", "name": "<name>", "type": "<type>" }
+// Output: { "status": "success", "deploymentEnvironmentId": "<created-id>", "environmentId": "<input-id>", "name": "<name>", "type": "<type>" }
 
-const { getAuthToken, makeRequest, extractEntityId, ENV_TYPE, API_PATHS } = require('./lib/pipeline-helpers');
+const { getAuthToken, makeRequest, extractEntityId, ENV_TYPE, API_PATHS, UUID_REGEX } = require('./lib/pipeline-helpers');
 
 const API_VERSION = 'v9.2';
 
@@ -23,6 +23,10 @@ function parseArgs(argv) {
   }
   if (!['development', 'target'].includes(parsed.type)) {
     console.error(JSON.stringify({ error: '--type must be "development" or "target"' }));
+    process.exit(1);
+  }
+  if (!UUID_REGEX.test(parsed.environmentId)) {
+    console.error(JSON.stringify({ error: 'environmentId must be a valid GUID' }));
     process.exit(1);
   }
   return parsed;
@@ -76,8 +80,12 @@ async function main() {
   try { responseData = JSON.parse(result.body); } catch { /* fallback to header */ }
 
   const createdId = (responseData && responseData.deploymentenvironmentid) ||
-    extractEntityId(result.headers && (result.headers['odata-entityid'] || result.headers['OData-EntityId'])) ||
-    environmentId;
+    extractEntityId(result.headers && (result.headers['odata-entityid'] || result.headers['OData-EntityId']));
+
+  if (!createdId) {
+    console.error(JSON.stringify({ error: 'Failed to determine deploymentEnvironmentId from registration response.' }));
+    process.exit(1);
+  }
 
   console.log(JSON.stringify({
     status: 'success',

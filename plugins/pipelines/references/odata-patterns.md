@@ -128,7 +128,7 @@ Content-Type: application/json
   "artifactname": "ContosoSolution",
   "DevDeploymentEnvironment@odata.bind": "/deploymentenvironments(11111111-0000-0000-0000-000000000001)",
   "DeploymentStageId@odata.bind": "/deploymentstages(44444444-0000-0000-0000-000000000004)",
-  "SolutionId@odata.bind": "/solutions(55555555-0000-0000-0000-000000000005)"
+  "solutionid": "55555555-0000-0000-0000-000000000005"
 }
 ```
 
@@ -146,17 +146,17 @@ Accept: application/json
 {
   "deploymentstagerunid": "66666666-0000-0000-0000-000000000006",
   "artifactname": "ContosoSolution",
-  "statuscode": 200000000,
+  "stagerunstatus": 200000000,
   "createdon": "2025-01-15T10:30:00Z",
   "modifiedon": "2025-01-15T10:31:00Z"
 }
 ```
 
-Repeat until `statuscode` is a terminal value (200000001, 200000002, or 200000003).
+Repeat until `stagerunstatus` is a terminal value (200000002=Succeeded, 200000003=Failed, or 200000004=Canceled).
 
 ### 5. Verify Deployment (Optional)
 ```
-GET /api/data/v9.2/deploymentstageruns(66666666-0000-0000-0000-000000000006)?$select=statuscode,artifactname,createdon,modifiedon
+GET /api/data/v9.2/deploymentstageruns(66666666-0000-0000-0000-000000000006)?$select=stagerunstatus,artifactname,createdon,modifiedon
 Accept: application/json
 ```
 
@@ -176,7 +176,7 @@ GET /api/data/v9.2/deploymentpipelines?$filter=statecode eq 0&$select=name,deplo
 
 ### Recent Stage Runs
 ```
-GET /api/data/v9.2/deploymentstageruns?$orderby=createdon desc&$top=10&$select=deploymentstagerunid,artifactname,statuscode,createdon
+GET /api/data/v9.2/deploymentstageruns?$orderby=createdon desc&$top=10&$select=deploymentstagerunid,artifactname,stagerunstatus,createdon
 ```
 
 ### WhoAmI (Auth Verification)

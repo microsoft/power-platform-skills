@@ -88,7 +88,7 @@ Common errors and solutions for the Power Platform Pipelines plugin.
 3. Consider creating a solution layering strategy.
 
 ### Deployment Failed — Import Error
-**Error:** Stage run status = `200000002` (Failed).
+**Error:** Stage run status = `200000003` (Failed).
 **Cause:** The managed solution import failed in the target environment.
 **Solution:**
 1. Check the stage run details for the specific error message.
