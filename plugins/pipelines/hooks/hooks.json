@@ -1,0 +1,18 @@
+{
+  "description": "Centralized Power Platform Pipelines lifecycle hooks",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"Pipeline skill completed\"",
+            "timeout": 10,
+            "statusMessage": "Validating pipeline operation"
+          }
+        ]
+      }
+    ]
+  }
+}

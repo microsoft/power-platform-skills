@@ -1,0 +1,10 @@
+{
+  "name": "pipelines",
+  "version": "0.1.0",
+  "description": "Create, configure, and manage Power Platform deployment pipelines for ALM solution promotion across environments",
+  "author": { "name": "Microsoft", "url": "https://www.microsoft.com" },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": ["pipelines", "alm", "deployment", "solution-promotion", "dataverse", "power-platform", "devops", "environments", "managed-solutions", "deployment-stages"]
+}
