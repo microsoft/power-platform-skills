@@ -47,6 +47,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
     /plugin install code-apps@power-platform-skills
+    /plugin install pipelines@power-platform-skills
     ```
 
 ## Available Plugins
@@ -69,6 +70,12 @@ Build and deploy Power Apps code apps connected to Power Platform via connectors
 
 **Stack**: React + Vite + TypeScript, deployed via PAC CLI
 
+### [Pipelines](plugins/pipelines/README.md) (`plugins/pipelines`)
+
+Create, configure, and manage Power Platform deployment pipelines for ALM solution promotion across environments.
+
+**Capabilities**: Pipeline CRUD, solution deployment, stage management, deployment status monitoring
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
@@ -80,6 +87,7 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/pipelines
     ```
 
 ## Running Without Interruption
@@ -171,6 +179,13 @@ power-platform-skills/
 │       ├── agents/
 │       ├── skills/
 │       └── shared/           # Shared instructions + references
+│   └── pipelines/            # Pipelines ALM plugin
+│       ├── .claude-plugin/
+│       │   └── plugin.json
+│       ├── agents/
+│       ├── skills/
+│       ├── scripts/          # Deterministic Dataverse API helpers
+│       └── references/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
@@ -181,6 +196,7 @@ power-platform-skills/
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
 - [Power Apps Code Apps](https://learn.microsoft.com/power-apps/developer/code-apps/)
+- [Power Platform Pipelines](https://learn.microsoft.com/en-us/power-platform/alm/pipelines)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference)
 
 ## Contributing
