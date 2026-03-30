@@ -129,16 +129,21 @@ runValidation((cwd) => {
     }
 
     // Check: each function has try/catch (scan until next top-level function or end of file)
+    // Check: async functions must contain await (unnecessary async causes runtime errors with synchronous Dataverse calls)
     for (const fn of foundFunctions) {
-      const fnRegex = new RegExp(`(?:async\\s+)?function\\s+${fn}\\s*\\([^)]*\\)\\s*\\{`, 'g');
+      const fnRegex = new RegExp(`(async\\s+)?function\\s+${fn}\\s*\\([^)]*\\)\\s*\\{`, 'g');
       const match = fnRegex.exec(content);
       if (match) {
+        const isAsync = !!match[1];
         const bodyStart = match.index + match[0].length;
         const nextFnMatch = content.slice(bodyStart).match(/\n(?:async\s+)?function\s+[a-zA-Z]/);
         const bodyEnd = nextFnMatch ? bodyStart + nextFnMatch.index : content.length;
         const fnBody = content.slice(bodyStart, bodyEnd);
         if (!/\btry\s*\{/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' is missing try/catch error handling`);
+        }
+        if (isAsync && !/\bawait\b/.test(fnBody)) {
+          errors.push(`${dirName}.js: function '${fn}' is marked async but contains no await — remove async to avoid runtime errors (Dataverse calls are synchronous, only HttpClient requires async/await)`);
         }
       }
     }

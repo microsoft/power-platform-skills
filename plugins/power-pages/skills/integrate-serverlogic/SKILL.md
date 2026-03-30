@@ -325,7 +325,7 @@ Repeat this step for each approved server logic item. Create or update `<PROJECT
 4. **Each function logs**: Use `Server.Logger.Log()` at entry and `Server.Logger.Error()` in catch blocks.
 5. **No imports or requires**: No `import`, `require`, or external dependencies.
 6. **No browser APIs**: No `fetch`, `XMLHttpRequest`, `setTimeout`, `setInterval`, `console.log`, or DOM APIs.
-7. **Async when needed**: Mark functions as `async` only when they use `await` (HttpClient or Dataverse calls).
+7. **Async when needed**: Mark functions as `async` only when they use `await` (HttpClient calls). Dataverse connector methods (`Server.Connector.Dataverse.*`) are **synchronous** — do NOT use `async`/`await` with them.
 
 #### Code Template
 
@@ -334,7 +334,7 @@ Repeat this step for each approved server logic item. Create or update `<PROJECT
 // Purpose: <description>
 // API URL: https://<site-url>/_api/serverlogics/<name>
 
-async function get() {
+function get() {
     try {
         Server.Logger.Log("<name> GET called");
 
