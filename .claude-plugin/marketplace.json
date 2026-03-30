@@ -34,6 +34,21 @@
             ]
         },
         {
+            "name": "canvas-apps",
+            "source": "./plugins/canvas-apps",
+            "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server",
+            "category": "development",
+            "tags": [
+                "power platform",
+                "power apps",
+                "canvas apps",
+                "pa-yaml",
+                "msapp",
+                "connectors",
+                "microsoft"
+            ]
+        },
+        {
             "name": "code-apps",
             "source": "./plugins/code-apps",
             "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors",

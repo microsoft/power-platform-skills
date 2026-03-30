@@ -48,6 +48,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install model-apps@power-platform-skills
     /plugin install code-apps@power-platform-skills
     /plugin install pipelines@power-platform-skills
+    /plugin install canvas-apps@power-platform-skills
     ```
 
 ## Available Plugins
@@ -76,6 +77,12 @@ Create, configure, and manage Power Platform deployment pipelines for ALM soluti
 
 **Capabilities**: Pipeline CRUD, solution deployment, stage management, deployment status monitoring
 
+### [Canvas Apps](plugins/canvas-apps/AGENTS.md) (`plugins/canvas-apps`)
+
+Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
+
+**Stack**: PA YAML (`.pa.yaml`) authored via `CanvasAuthoringMcpServer`, requires .NET 10 SDK
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
@@ -88,6 +95,7 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/pipelines
+    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     ```
 
 ## Running Without Interruption
@@ -167,18 +175,23 @@ power-platform-skills/
 │   │   ├── shared/
 │   │   └── skills/
 │   ├── model-apps/           # Model Apps plugin
+│   |   ├── .claude-plugin/
+│   │   └── plugin.json
+│   |   ├── commands/
+│   |   ├── skills/
+│   |   ├── shared/           # Shared references + samples
+│   |   └── github/           # GitHub Copilot instructions
+│   ├── code-apps/            # Code Apps plugin
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── agents/
+│   │   ├── skills/
+│   │   └── shared/           # Shared instructions + references
+│   └── canvas-apps/          # Canvas Apps plugin
 │       ├── .claude-plugin/
 │       │   └── plugin.json
-│       ├── commands/
-│       ├── skills/
-│       ├── shared/           # Shared references + samples
-│       └── github/           # GitHub Copilot instructions
-│   └── code-apps/            # Code Apps plugin
-│       ├── .claude-plugin/
-│       │   └── plugin.json
-│       ├── agents/
-│       ├── skills/
-│       └── shared/           # Shared instructions + references
+│       ├── references/       # Technical + design guides
+│       └── skills/
 │   └── pipelines/            # Pipelines ALM plugin
 │       ├── .claude-plugin/
 │       │   └── plugin.json

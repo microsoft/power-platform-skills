@@ -1,0 +1,19 @@
+{
+  "name": "canvas-apps",
+  "version": "1.0.0",
+  "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "canvas-apps",
+    "power-apps",
+    "canvas",
+    "pa-yaml",
+    "msapp"
+  ]
+}
