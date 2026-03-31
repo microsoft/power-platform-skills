@@ -49,7 +49,7 @@
             ]
         },
         {
-            "name": "code-apps",
+            "name": "code-apps (preview)",
             "source": "./plugins/code-apps",
             "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors",
             "category": "development",
