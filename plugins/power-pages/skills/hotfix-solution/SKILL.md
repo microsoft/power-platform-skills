@@ -332,7 +332,7 @@ Invoke `AskUserQuestion` immediately — do NOT describe this as chat text:
 
 **Suggested next steps**:
 - Run `/power-pages:import-solution` to deploy the full base solution to a new environment
-- Run `/power-pages:generate-pipeline` to automate hotfix deployments in CI/CD
+- Run `/power-pages:setup-pipeline` to automate hotfix deployments in CI/CD
 
 ## Key Decision Points (Wait for User)
 

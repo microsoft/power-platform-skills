@@ -84,9 +84,12 @@ skills/
     scripts/validate-import.js ← Validates .last-import.json marker and checks for component failures
   diagnose-deployment/
     SKILL.md                   ← Deployment diagnostics skill definition (prompt hook only)
-  generate-pipeline/
-    SKILL.md                   ← CI/CD pipeline generation skill definition
-    scripts/validate-pipeline.js ← Validates pipeline YAML exists, has required keys, no unreplaced tokens
+  setup-pipeline/
+    SKILL.md                   ← CI/CD pipeline setup skill (Power Platform Pipelines — full implementation; GitHub/ADO coming soon)
+    scripts/validate-pipeline.js ← Validates .last-pipeline.json marker (PP Pipelines) or pipeline YAML (GitHub/ADO)
+  deploy-pipeline/
+    SKILL.md                   ← Deployment run skill — creates stage runs, validates package, deploys via PP Pipelines API
+    scripts/validate-deploy-pipeline.js ← Validates .last-deploy.json marker for required fields; blocks on Failed status
   hotfix-solution/
     SKILL.md                   ← Hotfix solution skill definition
     scripts/validate-hotfix.js ← Validates .last-hotfix.json marker for required fields and component count
@@ -119,7 +122,8 @@ User-invocable via `/power-pages:<skill-name>`:
 - `export-solution`: 7-step workflow — verify prerequisites, identify solution (from `.solution-manifest.json` or user input), confirm managed vs unmanaged export (irreversible choice), trigger `ExportSolutionAsync`, poll via `scripts/poll-async-operation.js`, download and decode solution zip via `DownloadSolutionExportData`, verify zip contains `Solution.xml`. Reuses `scripts/poll-async-operation.js` and `references/solution-api-patterns.md`.
 - `import-solution`: 7-step workflow — verify prerequisites and confirm target environment, locate and validate solution zip, configure import (staged vs direct, overwrite options), optionally stage via `StageSolution` to check missing dependencies, import via `ImportSolutionAsync` and poll, verify solution exists in target and write `.last-import.json` marker, present component results. Reuses `scripts/poll-async-operation.js`, `scripts/encode-solution-file.js`, and `references/solution-api-patterns.md`.
 - `diagnose-deployment`: 7-step workflow — verify prerequisites and locate project, collect artifacts (config, manifests, build output), surface upload errors by re-running `pac pages upload-code-site` in capture mode and parsing via `scripts/parse-deployment-errors.js`, query recent Dataverse async operation failures, pattern-match against `references/deployment-error-catalog.md`, offer auto-fixes for fixable errors with explicit per-fix user confirmation, present findings table (severity/type/status). Never auto-applies any fix without user permission.
-- `generate-pipeline`: 7-step workflow — detect project context (existing pipelines, solution manifest), choose platform (GitHub Actions or Azure DevOps), gather environment URLs and parameters, generate pipeline YAML from `references/cicd-pipeline-patterns.md` templates, generate `docs/ci-cd-setup.md` setup guide with app registration and approval gate steps, verify YAML structure and commit. Pure file generation — no API calls needed.
+- `setup-pipeline`: 7-phase workflow — detect project context (`powerpages.config.json`, `.solution-manifest.json`, `pac env who`, `pac env list`, `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')` on dev env to auto-discover host environment), select platform (Power Platform Pipelines = full; GitHub/ADO = coming soon), confirm pipeline configuration with auto-filled values (pipeline name, host env URL, target environments), run preflight checks (Pipelines installed, solution exists, no name conflict), create `deploymentenvironments` records for source + each target (poll `validationstatus` until Succeeded), create `deploymentpipelines` record + `$ref` associate source env (relative path + `@odata.context`) + create `deploymentstages` per target, verify and write `.last-pipeline.json` + `docs/pipeline-setup.md` + commit. Uses `references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns.
+- `deploy-pipeline`: 7-phase workflow — verify prerequisites (`.last-pipeline.json`, az login, host env token), select target stage (from stages in `.last-pipeline.json`; warn if last deploy failed), resolve pipeline info via `RetrieveDeploymentPipelineInfo` (v9.1) to get `SourceDeploymentEnvironmentId` and available artifacts, create `deploymentstageruns` record + call `ValidatePackageAsync` (204) + poll `operation` field until not `200000201` (surface `validationresults` issues), optionally PATCH `deploymentsettingsjson` for env var / connection reference overrides, call `DeployPackageAsync` + poll `stagerunstatus` until terminal (handle approval gates with user pause), write `.last-deploy.json` + present deployment summary.
 - `hotfix-solution`: 7-phase workflow — verify prerequisites (PAC CLI auth, Azure CLI token, `.solution-manifest.json`), discover modified components (ask time window, query `powerpagecomponents` by `modifiedon`, resolve type labels), review and confirm components (with security warning for Site Settings type 9), create timestamped hotfix solution (name: `{base}Hotfix{YYYYMMDDHHmm}`, dynamic componenttype discovery, add all components via `AddSolutionComponent`), export solution (ask managed/unmanaged, `ExportSolutionAsync`, poll, download zip), import to target environment (ask target env, `StageSolution` dependency check, `ImportSolutionAsync`, poll, full `AttachmentBlocked` remediation flow), verify and write `.last-hotfix.json`. Reuses `scripts/poll-async-operation.js`, `scripts/encode-solution-file.js`, and `references/solution-api-patterns.md`.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
@@ -141,7 +145,8 @@ Defined in each skill's SKILL.md frontmatter:
   - `export-solution`: command hook runs `validate-export.js` + prompt hook checks export completeness
   - `import-solution`: command hook runs `validate-import.js` + prompt hook checks import completeness
   - `diagnose-deployment`: prompt hook checks diagnostics completeness (no command hook — no artifacts created)
-  - `generate-pipeline`: command hook runs `validate-pipeline.js` + prompt hook checks pipeline generation completeness
+  - `setup-pipeline`: command hook runs `validate-pipeline.js` + prompt hook checks .last-pipeline.json completeness (pipelineId, hostEnvUrl, sourceDeploymentEnvironmentId, non-empty stages)
+  - `deploy-pipeline`: command hook runs `validate-deploy-pipeline.js` + prompt hook checks all 6 success conditions (pipeline read, stage selected, package validated, deployment completed, .last-deploy.json written, summary presented)
   - `hotfix-solution`: command hook runs `validate-hotfix.js` + prompt hook checks all 5 success conditions (components discovered, solution created, zip exported, import succeeded, summary displayed)
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
 
@@ -167,7 +172,7 @@ Shared reference documents live at `references/` and are referenced by multiple 
 - `skill-tracking-reference.md`: Skill usage tracking instructions — script invocation syntax, skill name mapping table, and YAML format. Referenced by all skills to record usage via `update-skill-tracking.js`.
 - `solution-api-patterns.md`: OData body templates for publisher POST, solution POST, `AddSolutionComponent`, `ExportSolutionAsync`, `DownloadSolutionExportData`, `ImportSolutionAsync`, `StageSolution`. Also documents `.solution-manifest.json` format. Used by `setup-solution`, `export-solution`, `import-solution`, and `hotfix-solution`.
 - `deployment-error-catalog.md`: Catalog of 10 known deployment failure patterns (stale manifest, blocked JS, missing websiteRecordId, auth expiry, empty build output, solution missing dependencies, solution timeout, PAC CLI not installed, environment mismatch, duplicate component). Each entry includes root cause, severity, auto-fix availability, and fix procedure. Used by `diagnose-deployment`.
-- `cicd-pipeline-patterns.md`: Full PAC CLI service principal auth syntax, complete ADO `azure-pipelines.yml` template (build + deploy-dev + deploy-staging + deploy-prod stages with approval gate comments), complete GitHub Actions `deploy.yml` template (environment-scoped jobs with protection rules), commented solution export/import blocks for both platforms, secrets/variables setup tables, and manual steps that cannot be automated. Used by `generate-pipeline`.
+- `cicd-pipeline-patterns.md`: PAC CLI service principal auth syntax; complete ADO `azure-pipelines.yml` template; complete GitHub Actions `deploy.yml` template; commented solution export/import blocks; secrets/variables setup tables; manual steps that cannot be automated; **Power Platform Pipelines API patterns** (HAR-confirmed): host env discovery via `RetrieveSetting`, `deploymentenvironments` create + `validationstatus` poll, `deploymentpipelines` create, `$ref` associate source (relative path format), `deploymentstages` create, `RetrieveDeploymentPipelineInfo`, stage run create + `ValidatePackageAsync` (204) + `operation` poll, `deploymentsettingsjson` PATCH, `DeployPackageAsync`, `stagerunstatus` terminal values, `.last-pipeline.json` and `.last-deploy.json` formats. Used by `setup-pipeline` and `deploy-pipeline`.
 
 Skill-specific reference docs (e.g., `skills/setup-datamodel/references/odata-api-patterns.md`) contain only patterns unique to that skill and point to the shared docs via `${CLAUDE_PLUGIN_ROOT}/references/` paths for common content.
 
@@ -217,9 +222,13 @@ Checks that a solution zip file was written (`*_managed.zip` or `*_unmanaged.zip
 
 Checks `.last-import.json` marker for required fields (`solutionName`, `targetEnvironment`, `importedAt`). Blocks if all components failed to import (0 success + N failures). Gracefully exits 0 when no import marker is found.
 
-### `generate-pipeline/scripts/validate-pipeline.js`
+### `setup-pipeline/scripts/validate-pipeline.js`
 
-Checks that a pipeline YAML file was generated (`azure-pipelines.yml` or `.github/workflows/deploy.yml`). Verifies required YAML keys (`trigger`/`on`, `stages`/`jobs`, `pac pages upload-code-site` step). Flags unreplaced `{TOKEN}` placeholders. Confirms `docs/ci-cd-setup.md` was created. Gracefully exits 0 when no pipeline files are found.
+Checks for `.last-pipeline.json` (Power Platform Pipelines path) — validates required fields: `pipelineId`, `hostEnvUrl`, `sourceDeploymentEnvironmentId`, non-empty `stages[]`, and each stage has `stageId` + `targetDeploymentEnvironmentId`. Also confirms `docs/pipeline-setup.md` was created. Falls back to checking `azure-pipelines.yml` or `.github/workflows/deploy.yml` for YAML keys and `docs/ci-cd-setup.md` (GitHub/ADO future path). Gracefully exits 0 when no pipeline artifacts are found.
+
+### `deploy-pipeline/scripts/validate-deploy-pipeline.js`
+
+Checks `.last-deploy.json` marker for required fields (`pipelineId`, `stageRunId`, `solutionName`, `status`, `deployedAt`). Blocks if `status === "Failed"` — a failed deployment requires investigation before retrying. Gracefully exits 0 when no deploy marker is found (not a deploy-pipeline session).
 
 ### `hotfix-solution/scripts/validate-hotfix.js`
 
@@ -384,8 +393,8 @@ The following skills are planned but require POC validation before implementatio
 
 ### Sprint 3 — Future / Complex
 
-- `setup-approvals`: Blocked by undocumented `UpdateApprovalStatus` schema (Power Platform Pipelines) and ADO environment checks requiring PAT-authenticated ADO REST API (different auth domain from all current skills).
-- Power Pipelines integration: No external API for pipeline creation currently exposed. Would reduce to documentation skill. Revisit when MCS exposes quick deploy API.
+- `setup-approvals`: Blocked by the fact that ADO environment approval gates have no create/trigger API — the approval workflow setup requires human interaction in the ADO UI. Power Platform Pipelines approval status (`UpdateApprovalStatus`) schema is undocumented.
+- `setup-pipeline` GitHub/ADO paths: Currently "coming soon" stubs. Full implementation spec is at `C:\Users\nityagi\OneDrive - Microsoft\Design Documents\Plans\ALM skills for plugin\ado-cicd-skills-guide.md`.
 
 ## Maintaining This File
 

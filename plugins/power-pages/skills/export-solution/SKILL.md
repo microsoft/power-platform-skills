@@ -142,7 +142,7 @@ Display a summary:
 
 **Suggested next steps**:
 - Run `/power-pages:import-solution` to deploy this zip to another environment
-- Run `/power-pages:generate-pipeline` to automate this process in CI/CD
+- Run `/power-pages:setup-pipeline` to automate this process in CI/CD
 
 ## Key Decision Points (Wait for User)
 

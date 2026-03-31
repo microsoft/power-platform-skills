@@ -28,7 +28,7 @@ hooks:
 
 # setup-solution
 
-Creates a Dataverse publisher and solution, then adds Power Pages site components. Writes `.solution-manifest.json` for use by `export-solution`, `import-solution`, and `generate-pipeline` skills.
+Creates a Dataverse publisher and solution, then adds Power Pages site components. Writes `.solution-manifest.json` for use by `export-solution`, `import-solution`, and `setup-pipeline` skills.
 
 ## Prerequisites
 
@@ -195,7 +195,7 @@ Display a summary table:
 
 **Suggested next steps**:
 - Run `/power-pages:export-solution` to package the solution for deployment
-- Run `/power-pages:generate-pipeline` to create a CI/CD pipeline
+- Run `/power-pages:setup-pipeline` to create a CI/CD pipeline
 
 ## Key Decision Points (Wait for User)
 

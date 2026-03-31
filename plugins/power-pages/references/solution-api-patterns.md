@@ -371,7 +371,7 @@ Poll until `statecode === 3` (terminal). Check `statuscode === 30` for success, 
 
 ## 7. Solution Manifest Format
 
-Written by `setup-solution`, read by `export-solution`, `import-solution`, and `generate-pipeline`.
+Written by `setup-solution`, read by `export-solution`, `import-solution`, and `setup-pipeline`.
 
 **File**: `.solution-manifest.json` (project root, alongside `powerpages.config.json`)
 
