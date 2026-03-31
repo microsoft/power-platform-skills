@@ -24,7 +24,25 @@ Read this file before planning any edits.
 
 Before editing any YAML files, call the `sync_canvas` MCP tool to ensure a local copy of the canvas app YAML is present and up to date. This pulls the current app state from the coauthoring session into local `.pa.yaml` files.
 
-Only proceed to edit the YAML files after `sync_canvas` completes successfully.
+Only proceed after `sync_canvas` completes successfully.
+
+## CRITICAL: Check for Meaningful App Content After Sync
+
+After `sync_canvas` completes, read the synced `.pa.yaml` files and check whether the app has meaningful content. An app is considered **empty** if:
+
+- No `.pa.yaml` files were written, or
+- The only files present contain no screens, or
+- Every screen present has no controls (i.e., only bare screen-level YAML with no children), or
+- Every screen's controls consist solely of containers (e.g., `GroupContainer`) with no leaf controls inside them
+
+If the app is empty, **do not proceed with the edit workflow**. Instead, inform the user:
+
+> **The synced app appears to be empty — no existing screens or controls were found.**
+> Switching to app generation mode to build the app from scratch.
+
+Then follow the full **generate-canvas-app** workflow (Discover → Plan → Design → Implement → Validate → Iterate → Complete), using the user's original request as the generation requirements.
+
+If the app has meaningful content, proceed with the editing workflow below.
 
 ## Editing Workflow
 
