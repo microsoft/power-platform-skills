@@ -291,3 +291,85 @@ Method: InitializeFileBlocksUpload
 6. After successful import, optionally restore the blocked types if the customer wants them re-blocked (they'll need to manage the web files differently going forward)
 
 **Note**: If the user declines, document as a manual step: Power Platform Admin Center → Environments → {env} → Settings → Product → Features → Blocked Attachments.
+
+---
+
+## Pattern 12: Site Broken After Pipeline Deploy — Missing Web API Site Settings
+
+**Error pattern** (observed in browser, not a PAC CLI error):
+```
+Web API calls return 404 or 403 in target environment
+Webapi/{table}/enabled site setting not found
+Site functions but data operations all fail silently
+```
+
+**Root cause**: The solution was packaged without `Webapi/*` site settings. By default, many ALM workflows warn against including all site settings (due to OAuth secrets) and users exclude all site settings. But `Webapi/*/enabled` and `Webapi/*/fields` are not secrets — they must be present in the target environment for Web API calls to work. Without them, Power Pages silently denies all Web API requests.
+
+**Severity**: Error
+
+**Auto-fix available**: Yes
+
+**Fix procedure**:
+1. Query the source environment for all `Webapi/*` site settings:
+   ```
+   GET {srcEnvUrl}/api/data/v9.2/mspp_sitesettings?$filter=startswith(mspp_name,'Webapi/') and _mspp_websiteid_value eq {websiteRecordId}&$select=mspp_name,mspp_value
+   ```
+2. For each missing setting in the target environment, create it:
+   ```
+   POST {targetEnvUrl}/api/data/v9.2/mspp_sitesettings
+   { "mspp_name": "Webapi/crd50_invoice/enabled", "mspp_value": "true", "mspp_websiteid@odata.bind": "/powerpagesites({websiteRecordId})" }
+   ```
+3. Alternatively, re-run `setup-solution` and include the `Webapi/*` category when asked about site settings.
+
+**Prevention**: The `setup-solution` skill should ALWAYS include `Webapi/*` site settings by default — these are required for any code site that uses the Web API.
+
+---
+
+## Pattern 13: Site Broken After Pipeline Deploy — Missing Dataverse Tables
+
+**Error pattern** (observed in browser console or Web API calls):
+```
+Resource not found for the segment '{table}'
+Entity '{logicalName}' does not exist in target environment
+404 on GET /_api/{logicalName}
+```
+
+**Root cause**: The solution was created without adding the underlying Dataverse table definitions (ComponentType=1 entities). Without them, the tables don't exist in the target environment after import. Web API calls referencing those tables return 404.
+
+**Severity**: Error
+
+**Auto-fix available**: Partial (must re-export and re-import solution with tables)
+
+**Fix procedure**:
+1. Identify missing tables: compare `EntityDefinitions` in source vs target for tables used by the site
+2. Re-run `setup-solution` on the source environment, ensuring all custom tables from `.datamodel-manifest.json` are added to the solution (ComponentType=1)
+3. Re-export and re-deploy the solution with tables included
+
+**Prevention**: The `setup-solution` skill reads `.datamodel-manifest.json` and automatically adds all custom tables as root solution components.
+
+---
+
+## Pattern 14: Web API Returns 403 — Table Permissions Not in Solution
+
+**Error pattern** (from Web API response body):
+```
+{ "error": { "code": "90040901", "message": "..." } }
+403 Forbidden on POST/PATCH /_api/{table}
+Authenticated users cannot create/read records
+```
+
+**Root cause**: Table Permissions (`adx_entitypermission` records, powerpagecomponenttype=18) were not added to the solution, so they weren't deployed to the target environment. The target site has no table permissions → all Web API calls are denied.
+
+**Severity**: Error
+
+**Auto-fix available**: Yes (if table permissions exist in source env)
+
+**Fix procedure**:
+1. Query source env for table permissions for this site:
+   ```
+   GET {srcEnvUrl}/api/data/v9.2/powerpagecomponents?$filter=_powerpagesiteid_value eq {websiteRecordId} and powerpagecomponenttype eq 18&$select=powerpagecomponentid,name
+   ```
+2. For each permission missing in target, add it to the solution and re-deploy.
+3. Or re-run `setup-solution` — table permissions (type 18) are included by default.
+
+**Prevention**: Table Permissions are standard `powerpagecomponents` and are included by default in `setup-solution` Phase 5. Verify they were not accidentally excluded when the solution was created.

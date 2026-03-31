@@ -96,9 +96,30 @@ Run this query **twice**: once for `websiteRecordId` (captures `websiteComponent
 | Type | Approximate ComponentType | Notes |
 |---|---|---|
 | Website (PowerPages site) | ~10374 | Resolve via discovery query using `websiteRecordId` |
-| All sub-components (web pages, web files, web roles, site settings, templates, etc.) | ~10373 | One shared componenttype for ALL powerpagecomponents — resolve via discovery query using any `powerpagecomponentid` |
+| All sub-components (web pages, web files, web roles, site settings, templates, table permissions, etc.) | ~10373 | One shared componenttype for ALL powerpagecomponents — resolve via discovery query using any `powerpagecomponentid` |
 
 **Add the Website component first** with `AddRequiredComponents: true`. Then add all sub-components individually using `subComponentType` — the `AddRequiredComponents: true` flag does NOT automatically cascade all 100+ sub-components; each must be added explicitly.
+
+**Adding Dataverse tables (entities) to the solution**:
+
+Tables are NOT powerpagecomponents — they use `ComponentType: 1` (fixed, not discovered). The component ID is the entity's `MetadataId`:
+
+```
+# Find entity MetadataId by logical name
+GET {envUrl}/api/data/v9.2/EntityDefinitions?$filter=LogicalName eq '{logicalName}'&$select=MetadataId,LogicalName
+
+# Add entity to solution
+POST {envUrl}/api/data/v9.2/AddSolutionComponent
+{
+  "ComponentId": "{MetadataId}",
+  "ComponentType": 1,
+  "SolutionUniqueName": "{solutionUniqueName}",
+  "AddRequiredComponents": false,
+  "DoNotIncludeSubcomponents": false
+}
+```
+
+Read table logical names from `.datamodel-manifest.json` (`tables[].logicalName`). Without the table definitions in the solution, target environments won't have the tables and all Web API calls will return 404.
 
 **Success response**: `200 OK` with empty body or component details.
 

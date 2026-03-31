@@ -145,31 +145,61 @@ GET {envUrl}/api/data/v9.2/powerpagecomponents
 
 Follow `@odata.nextLink` pagination until all pages are fetched. Group results by `powerpagecomponenttype`, count per group, and use `typeLabel[type]` for display. For any type not found in `typeLabel`, display it as `Unknown (N)`.
 
-#### Step 5.3 — User Selection: Which Categories to Include
+#### Step 5.3 — Discover Dataverse Tables to Include
 
-Present the grouped summary and ask the user which categories to include. All non-sensitive types are pre-selected (default: include). Site Settings (type 9) require explicit opt-in due to security risk.
+A working site in the target environment requires its **Dataverse tables** in the solution. Without them, the tables won't exist in the target env and all Web API calls will fail.
 
-Example output format:
+Check for a `.datamodel-manifest.json` in the project root. If it exists, read the `tables[]` array — each entry has a `logicalName`. For each logical name, query the entity metadata to get the entity component ID:
+```
+GET {envUrl}/api/data/v9.2/EntityDefinitions?$filter=LogicalName eq '{logicalName}'&$select=MetadataId,LogicalName,DisplayName
+```
+Store each `MetadataId` as the component ID for `AddSolutionComponent` with `ComponentType: 1` (Entity).
+
+If no `.datamodel-manifest.json` exists, ask the user: "Does your site use custom Dataverse tables (created by `/power-pages:setup-datamodel` or manually)? If so, list their logical names." Add any provided tables the same way.
+
+Report to user: "Will include N Dataverse table(s) in the solution: `{table1}`, `{table2}`, ..."
+
+#### Step 5.4 — User Selection: Which Site Setting Categories to Include
+
+Site Settings (powerpagecomponenttype=9) fall into distinct categories with different security profiles. **Do not treat all site settings as equally sensitive.** Split them by name pattern before presenting.
+
+After fetching all site settings for the site, categorize each by name:
+
+| Category | Name pattern | Default |
+|---|---|---|
+| Web API settings | `Webapi/*` | **Include** — required for Web API to work in target env |
+| Feature flags | `CodeSite/*`, `Search/*`, `Site/*`, `Profile/*`, `Header/*`, `Footer/*`, `ThemeFeature`, `HTTP/*`, etc. | **Include** — safe, non-secret |
+| Auth config (non-secret) | `Authentication/Registration/*`, `Authentication/OpenIdConnect/*/Caption`, `Authentication/LoginThrottling/*`, `Authentication/LoginTracking*`, `Authentication/OpenIdConnect/*/RebrandDisclaimerEnabled` | **Include** — safe |
+| OAuth secrets | Any setting whose name contains `Secret`, `AppSecret`, `ConsumerSecret`, `ClientSecret`, or `AppId`/`ConsumerKey` (social provider credentials) | **Exclude** — secrets must not travel in solution |
+
+Present the grouped summary:
 ```
 Found {N} Power Pages components across {K} categories:
-  ✓ Publishing States (2), Web Pages (10), Web Files (8), Weblink Sets (2),
-    Weblinks (2), Page Templates (4), Content Snippets (11), Web Templates (13),
-    Webpage Rules (2), Web Roles (3), Website Access (2), Site Markers (5)
-  ⚠ Site Settings (49) — may include OAuth secrets (ClientSecret, AppSecret, etc.)
-    Recommended: EXCLUDE from solution to avoid moving credentials across environments.
+  ✓ Always included: Publishing States (2), Web Pages (10), Web Files (90),
+    Page Templates (5), Content Snippets (11), Web Templates (13),
+    Webpage Rules (2), Web Roles (2), Website Access (6), Site Markers (5),
+    Table Permissions (13)
+  ✓ Site Settings — Web API settings (14): Webapi/crd50_invoice/enabled, ...
+  ✓ Site Settings — Feature flags & auth config (52): CodeSite/Enabled, ...
+  ⚠ Site Settings — OAuth secrets (12): ClientSecret, AppSecret, ConsumerSecret...
+    These will be EXCLUDED — re-enter them manually in the target environment.
+  ✓ Dataverse tables (N): crd50_invoice, crd50_supplier, ...
 ```
 
-Ask via `AskUserQuestion`: "Include Site Settings in the solution?" — Options: "Yes, include them" / "No, exclude them (Recommended)"
+Ask via `AskUserQuestion` only if there are OAuth secrets: "Confirm: exclude OAuth secret site settings from the solution?" — Options: "Yes, exclude them (Recommended)" / "No, include them (not recommended)"
 
-Default: **exclude** site settings.
+Default: **exclude OAuth secrets, include everything else**.
 
-#### Step 5.4 — Add All Selected Components
+#### Step 5.5 — Add All Selected Components
 
 1. **Website record** — call `AddSolutionComponent` with `websiteComponentType` and `AddRequiredComponents: true`
-2. **All selected sub-components** — for each `powerpagecomponenttype` group the user selected, call `AddSolutionComponent` for every component in that group using `subComponentType`
-3. Refresh token every ~20 calls to avoid expiration
-4. Track results per component: success / skipped-duplicate / failed
-5. Present running progress (e.g., "Added 45 of 98 components...")
+2. **All non-excluded powerpagecomponent groups** — for each `powerpagecomponenttype` group, call `AddSolutionComponent` for every component using `subComponentType`
+   - Table Permissions (type 18) are standard powerpagecomponents — include them with everything else
+   - Site Settings: include all except OAuth secret records identified in Step 5.4
+3. **Dataverse tables** — for each table from Step 5.3, call `AddSolutionComponent` with `ComponentType: 1` and the entity `MetadataId`
+4. Refresh token every ~20 calls to avoid expiration
+5. Track results per component: success / skipped-duplicate / failed
+6. Present running progress (e.g., "Added 45 of 110 components...")
 
 ### Phase 6 — Verify and Write Manifest
 
@@ -202,7 +232,7 @@ Display a summary table:
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
-3. **Phase 5, Step 5.3**: Whether to include Site Settings (type 9) — default is exclude due to OAuth secrets
+3. **Phase 5, Step 5.4**: Whether to exclude OAuth secret site settings — default is exclude; only ask if secrets are present
 
 ## Error Handling
 
@@ -219,6 +249,6 @@ Display a summary table:
 | Gather solution configuration | Gathering solution configuration | Collect publisher name, prefix, solution name, version from user — confirm irreversible choices |
 | Check existing publishers and solutions | Checking existing state | Query Dataverse for existing publisher and solution to avoid duplicate creation |
 | Create publisher and solution | Creating publisher and solution | POST publisher and solution to Dataverse OData API, capture IDs |
-| Add site components to solution | Adding site components | Discover all powerpagecomponents, present grouped summary, ask about site settings, call AddSolutionComponent for website record and all selected sub-components |
+| Add site components to solution | Adding site components | Discover Dataverse tables from .datamodel-manifest.json, fetch all powerpagecomponents, split site settings by category (Web API/feature flags vs OAuth secrets), call AddSolutionComponent for website record, all non-excluded sub-components, and each table (ComponentType=1) |
 | Verify and write manifest | Verifying solution and writing manifest | Confirm components in solution, write .solution-manifest.json, commit |
 | Present summary | Presenting summary | Show solution details, component count, and next steps |
