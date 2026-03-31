@@ -194,6 +194,7 @@ Display a summary table:
 | Manifest written | `.solution-manifest.json` |
 
 **Suggested next steps**:
+- Run `/power-pages:configure-env-variables` to set up environment-specific site settings (different auth config, feature flags, or secrets per environment)
 - Run `/power-pages:export-solution` to package the solution for deployment
 - Run `/power-pages:setup-pipeline` to create a CI/CD pipeline
 

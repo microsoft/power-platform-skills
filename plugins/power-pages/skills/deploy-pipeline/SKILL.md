@@ -242,7 +242,7 @@ The `deploymentsettingsjson` field must be a **JSON-serialized string** (stringi
 
 **If No** (or no issues surfaced): skip this phase.
 
-**5.2 PATCH stage run with artifact version and deployment notes** (always run, regardless of settings):
+**5.2 PATCH stage run with artifact version, deployment notes, and environment variables** (always run):
 
 First, determine the current solution version in the **source (dev) environment** — this must match exactly:
 ```
@@ -253,7 +253,14 @@ Use the returned `version` as `artifactdevcurrentversion`. Do NOT use the versio
 
 For `artifactversion`, increment the patch number of the source version (e.g., `1.0.0.2` → `1.0.0.3`). This must be strictly greater than the version already deployed in the target stage. If deploying to the same stage multiple times, check `.last-deploy.json` for the last `artifactVersion` and use a higher value.
 
-Then PATCH:
+**Read `deployment-settings.json`** (if it exists in the project root):
+```bash
+cat deployment-settings.json
+```
+
+Look up the selected stage name (e.g. `"Deploy to Staging"`) in `stages` — extract its `EnvironmentVariables` array. If the file doesn't exist or the stage has no env vars, use an empty array.
+
+Then PATCH (include `deploymentsettingsjson` only if there are env vars or connection references to set):
 
 ```
 PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
@@ -263,9 +270,21 @@ Authorization: Bearer {HOST_TOKEN}
 {
   "artifactdevcurrentversion": "{current version from source env — must match exactly}",
   "artifactversion": "{new version — must be > current version in target stage}",
-  "deploymentnotes": "{AI_DEPLOY_NOTES if available, otherwise a brief description of what is being deployed}"
+  "deploymentnotes": "{AI_DEPLOY_NOTES if available, otherwise a brief description of what is being deployed}",
+  "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: [...], ConnectionReferences: [...] })}"
 }
 ```
+
+The `deploymentsettingsjson` value must be a **JSON-encoded string** (double-serialized). Build it from `deployment-settings.json`:
+```js
+const stageSettings = deploymentSettings?.stages?.[selectedStageName] || {};
+const deploymentsettingsjson = JSON.stringify({
+  EnvironmentVariables: stageSettings.EnvironmentVariables || [],
+  ConnectionReferences: stageSettings.ConnectionReferences || [],
+});
+```
+
+If there are no env vars and no connection references, omit `deploymentsettingsjson` from the PATCH body entirely.
 
 Response is HTTP 204. If the PATCH fails with a version conflict error, check both version values and retry.
 
@@ -437,7 +456,7 @@ If **Exit**: stop and present the failure summary above.
 | Verify prerequisites | Verifying prerequisites | Read .last-pipeline.json for pipelineId/stages; read .solution-manifest.json; verify az login; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from .last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
-| Validate package | Validating package | POST deploymentstageruns (→ 201 with body); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes |
-| Configure deployment settings | Configuring deployment settings | Optionally PATCH deploymentsettingsjson on stage run with env var overrides and connection reference mappings |
+| Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
+| Configure deployment settings | Configuring deployment settings | Optionally PATCH deploymentsettingsjson on stage run with env var overrides and connection reference mappings from deployment-settings.json |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
 | Write deployment record | Writing deployment record | Write .last-deploy.json with status and IDs; present success or failure summary with troubleshooting link |
