@@ -215,6 +215,44 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
    }
    ```
 
+### Phase 6b — Set Environment Variable Values (if any)
+
+After a successful import, env var **definitions** travel in the solution but their **values do not**. The target environment will have the definition records but blank values until explicitly set.
+
+Query the target environment for any env var definitions from this solution:
+```
+GET {envUrl}/api/data/v9.2/environmentvariabledefinitions?$filter=introducedversion ne null&$select=schemaname,displayname,type,defaultvalue,environmentvariabledefinitionid
+```
+
+Filter to only those whose `schemaname` starts with the publisher prefix (from `.solution-manifest.json`), or cross-reference with `solutioncomponents` if available.
+
+For each definition found, check if a value already exists in the target:
+```
+GET {envUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{id}'&$select=value
+```
+
+**If any definitions have no existing value**, present them to the user via `AskUserQuestion`:
+
+> "The imported solution contains **{N} environment variable(s)** with no value set in this environment. Enter the target value for each (leave blank to skip and use the default):
+>
+> 1. `{schemaname}` ({displayname}) — default: `{defaultvalue ?? 'none'}`
+> 2. ..."
+
+For each value the user provides, POST an `environmentvariablevalue` record:
+```
+POST {envUrl}/api/data/v9.2/environmentvariablevalues
+{
+  "schemaname": "{schemaname}",
+  "value": "{userValue}",
+  "EnvironmentVariableDefinitionId@odata.bind": "/environmentvariabledefinitions({id})"
+}
+```
+
+> **Note on Secret type (type 100000003):** Secret values are stored encrypted. The POST behaves the same but the value will be masked in the UI. The user should provide the actual secret value for the target environment (e.g. the OAuth client secret for the production tenant's app registration — different from the dev value).
+
+If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
+`https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`
+
 ### Phase 7 — Present Summary
 
 Display a summary table:
@@ -225,6 +263,7 @@ Display a summary table:
 | Target environment | `{envUrl}` |
 | Managed | Yes / No |
 | Components imported | N success, N warning, N failure |
+| Env var values set | N of N |
 | Import job | `{importJobId}` |
 
 If Power Pages components were imported (componentType 61 found in solution):
@@ -237,6 +276,7 @@ If Power Pages components were imported (componentType 61 found in solution):
 3. **Phase 3**: Staged vs direct import; overwrite customizations
 4. **Phase 4**: Proceed despite missing dependencies
 5. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
+6. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
 
 ## Error Handling
 

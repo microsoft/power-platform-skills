@@ -206,41 +206,52 @@ Authorization: Bearer {HOST_TOKEN}
 
 Store `aigenerateddeploymentnotes` as `AI_DEPLOY_NOTES`.
 
-### Phase 5 — Configure Deployment Settings (Optional)
+### Phase 5 — Configure Deployment Settings
 
-If `validationresults` surfaced missing connection references or environment variables, or if the user requests configuration:
+**5.1 Discover env var definitions in the solution and resolve per-stage values:**
 
-Ask via `AskUserQuestion`:
-> "Do you want to configure deployment settings (environment variables, connection references) for this deployment?
-> 1. Yes — I need to configure settings
-> 2. No — use defaults"
-
-**If Yes**: Ask the user to provide values for each missing item. Then PATCH the stage run:
-
+Query the solution components in the **source environment** to find all env var definitions (componenttype 380):
 ```
-PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
-
-{
-  "deploymentsettingsjson": "{...JSON-serialized string...}"
-}
+GET {sourceEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}' and componenttype eq 380&$select=objectid
+Authorization: Bearer {SOURCE_TOKEN}
 ```
 
-The `deploymentsettingsjson` field must be a **JSON-serialized string** (stringify the settings object before sending):
-
-```json
-{
-  "EnvironmentVariables": [
-    { "SchemaName": "prefix_VarName", "Value": "target-value" }
-  ],
-  "ConnectionReferences": [
-    { "LogicalName": "prefix_ConnRefName", "ConnectionId": "target-connection-id" }
-  ]
-}
+For each `objectid`, fetch the schema name:
+```
+GET {sourceEnvUrl}/api/data/v9.2/environmentvariabledefinitions({objectid})?$select=schemaname,displayname,type,defaultvalue
 ```
 
-**If No** (or no issues surfaced): skip this phase.
+This gives you `SOLUTION_ENV_VARS` — the list of env vars that will travel to the target.
+
+**Read `deployment-settings.json`** (if it exists in the project root) and look up the selected stage name to get pre-configured values:
+```js
+const stageSettings = deploymentSettings?.stages?.[selectedStageName] || {};
+const preconfigured = stageSettings.EnvironmentVariables || []; // [{ SchemaName, Value }]
+```
+
+**Identify unconfigured env vars** — those in `SOLUTION_ENV_VARS` that have no entry in `preconfigured`:
+```js
+const unconfigured = SOLUTION_ENV_VARS.filter(v =>
+  !preconfigured.find(p => p.SchemaName === v.schemaname)
+);
+```
+
+**If there are unconfigured env vars**, present them to the user via `AskUserQuestion`:
+
+> "This solution has **{N} environment variable(s)** with no value configured for **{stageName}**. Enter the value for each (leave blank to use the default, or skip if not applicable):
+>
+> 1. `{schemaname}` ({displayname}) — default: `{defaultvalue ?? 'none'}`
+> 2. ..."
+
+Collect responses and merge with `preconfigured` to form the final `ENV_VAR_OVERRIDES` array. Offer to save the values back to `deployment-settings.json` for future runs:
+
+> "Save these values to `deployment-settings.json` for future deployments to {stageName}?
+> 1. Yes — save for next time
+> 2. No — use once only"
+
+If Yes: write/update `deployment-settings.json` with the collected values under `stages.{stageName}.EnvironmentVariables`.
+
+**If all env vars are pre-configured** (or there are none): skip the prompt, use `preconfigured` directly.
 
 **5.2 PATCH stage run with artifact version, deployment notes, and environment variables** (always run):
 
@@ -253,14 +264,7 @@ Use the returned `version` as `artifactdevcurrentversion`. Do NOT use the versio
 
 For `artifactversion`, increment the patch number of the source version (e.g., `1.0.0.2` → `1.0.0.3`). This must be strictly greater than the version already deployed in the target stage. If deploying to the same stage multiple times, check `.last-deploy.json` for the last `artifactVersion` and use a higher value.
 
-**Read `deployment-settings.json`** (if it exists in the project root):
-```bash
-cat deployment-settings.json
-```
-
-Look up the selected stage name (e.g. `"Deploy to Staging"`) in `stages` — extract its `EnvironmentVariables` array. If the file doesn't exist or the stage has no env vars, use an empty array.
-
-Then PATCH (include `deploymentsettingsjson` only if there are env vars or connection references to set):
+Then PATCH (include `deploymentsettingsjson` only if `ENV_VAR_OVERRIDES` is non-empty):
 
 ```
 PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
@@ -271,20 +275,19 @@ Authorization: Bearer {HOST_TOKEN}
   "artifactdevcurrentversion": "{current version from source env — must match exactly}",
   "artifactversion": "{new version — must be > current version in target stage}",
   "deploymentnotes": "{AI_DEPLOY_NOTES if available, otherwise a brief description of what is being deployed}",
-  "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: [...], ConnectionReferences: [...] })}"
+  "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: [] })}"
 }
 ```
 
-The `deploymentsettingsjson` value must be a **JSON-encoded string** (double-serialized). Build it from `deployment-settings.json`:
+The `deploymentsettingsjson` value must be a **JSON-encoded string** (double-serialized):
 ```js
-const stageSettings = deploymentSettings?.stages?.[selectedStageName] || {};
 const deploymentsettingsjson = JSON.stringify({
-  EnvironmentVariables: stageSettings.EnvironmentVariables || [],
+  EnvironmentVariables: ENV_VAR_OVERRIDES,
   ConnectionReferences: stageSettings.ConnectionReferences || [],
 });
 ```
 
-If there are no env vars and no connection references, omit `deploymentsettingsjson` from the PATCH body entirely.
+If `ENV_VAR_OVERRIDES` is empty and there are no connection references, omit `deploymentsettingsjson` entirely.
 
 Response is HTTP 204. If the PATCH fails with a version conflict error, check both version values and retry.
 
@@ -434,7 +437,7 @@ If **Exit**: stop and present the failure summary above.
 1. **Phase 2**: Target stage selection (which environment to deploy to)
 2. **Phase 2**: Retry confirmation if last deploy to this stage failed
 3. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-4. **Phase 5**: Configure deployment settings — yes or no
+4. **Phase 5**: Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage in `deployment-settings.json`; offer to save values for future runs
 5. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
 
 ## Error Handling
@@ -457,6 +460,6 @@ If **Exit**: stop and present the failure summary above.
 | Select target stage | Selecting target stage | Show available stages from .last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
-| Configure deployment settings | Configuring deployment settings | Optionally PATCH deploymentsettingsjson on stage run with env var overrides and connection reference mappings from deployment-settings.json |
+| Configure deployment settings | Configuring deployment settings | Query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
 | Write deployment record | Writing deployment record | Write .last-deploy.json with status and IDs; present success or failure summary with troubleshooting link |
