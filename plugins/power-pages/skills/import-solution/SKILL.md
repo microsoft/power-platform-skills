@@ -253,6 +253,36 @@ POST {envUrl}/api/data/v9.2/environmentvariablevalues
 If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
 `https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`
 
+### Phase 6c — Check Site Activation (if Power Pages solution)
+
+Only run this phase if the solution contains Power Pages website components (componentType `10374`):
+
+```
+GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}' and componenttype eq 10374&$select=objectid
+```
+
+If no componentType 10374 records found, skip this phase entirely.
+
+If found, run the shared activation status check (PAC CLI is already authenticated to the target environment):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+```
+
+Evaluate the result:
+
+- **`activated: true`**: Store `siteUrl` for the Phase 7 summary. No further action needed.
+- **`activated: false`**: Ask the user via `AskUserQuestion`:
+
+  | Question | Header | Options |
+  |---|---|---|
+  | The Power Pages site was imported but is not yet activated (provisioned) in `{envUrl}`. Activate it now to make it publicly accessible. | Activate Site | Yes, activate now (Recommended), No, I'll activate later |
+
+  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill will handle subdomain selection, confirmation, and provisioning.
+  - **If "No"**: Note in the Phase 7 summary that activation is pending and remind the user to run `/power-pages:activate-site` when ready.
+
+- **`error` present**: Skip silently — do not block the summary. Note in Phase 7 that activation status could not be determined.
+
 ### Phase 7 — Present Summary
 
 Display a summary table:
@@ -264,10 +294,8 @@ Display a summary table:
 | Managed | Yes / No |
 | Components imported | N success, N warning, N failure |
 | Env var values set | N of N |
+| Site activation | Activated at `{siteUrl}` / Pending / Not applicable |
 | Import job | `{importJobId}` |
-
-If Power Pages components were imported (componentType 61 found in solution):
-> "Power Pages components were imported. If this is a new environment, run `/power-pages:activate-site` to provision the site."
 
 ## Key Decision Points (Wait for User)
 
@@ -277,6 +305,7 @@ If Power Pages components were imported (componentType 61 found in solution):
 4. **Phase 4**: Proceed despite missing dependencies
 5. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
 6. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
+7. **Phase 6c**: Site activation — only if Power Pages website components present and site not yet activated
 
 ## Error Handling
 
@@ -296,4 +325,5 @@ If Power Pages components were imported (componentType 61 found in solution):
 | Stage solution (dependency check) | Staging solution | Run StageSolution to check for missing dependencies before committing |
 | Import solution | Importing solution | POST ImportSolutionAsync, poll until complete; if AttachmentBlocked: identify blocked types, get user consent, unblock via pac env update-settings, retry |
 | Verify import | Verifying import | Confirm solution version in target, parse component results, write .last-import.json |
-| Present summary | Presenting summary | Show component counts (success/warning/failure), suggest activate-site if applicable |
+| Check site activation | Checking site activation | If solution has componentType 10374: run check-activation-status.js; if not activated, ask user and invoke /power-pages:activate-site |
+| Present summary | Presenting summary | Show component counts (success/warning/failure), site activation status, env var values set |

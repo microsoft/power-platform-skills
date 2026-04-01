@@ -432,6 +432,45 @@ Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
 
+**7.5 Check site activation** (only if deployment **Succeeded** and solution has Power Pages components):
+
+Query the source environment to check whether the solution contains a website component (componentType `10374`):
+```
+GET {sourceEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}' and componenttype eq 10374&$select=objectid
+Authorization: Bearer {SOURCE_TOKEN}
+```
+
+If no results, skip the rest of 7.5.
+
+If found, temporarily switch PAC CLI to the target environment so `check-activation-status.js` queries the correct env:
+```bash
+pac env select --environment "{SELECTED_STAGE.targetEnvironmentUrl}"
+```
+
+Run the activation check:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+```
+
+Then switch PAC CLI back to the source (dev) environment regardless of the result:
+```bash
+pac env select --environment "{sourceEnvUrl}"
+```
+
+Evaluate the result:
+
+- **`activated: true`**: Include `siteUrl` in the Phase 7.4 summary output.
+- **`activated: false`**: Ask the user via `AskUserQuestion`:
+
+  | Question | Header | Options |
+  |---|---|---|
+  | The Power Pages site was deployed to `{SELECTED_STAGE.targetEnvironmentUrl}` but is not yet activated (provisioned). Activate it now to make it publicly accessible. | Activate Site | Yes, activate now (Recommended), No, I'll activate later |
+
+  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill will handle subdomain selection, confirmation, and provisioning.
+  - **If "No"**: Note in the summary that activation is pending and remind the user to run `/power-pages:activate-site` (after switching PAC auth to the target env) when ready.
+
+- **`error` present**: Skip silently — do not fail the deployment summary over an activation check error.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Target stage selection (which environment to deploy to)
@@ -439,6 +478,7 @@ If **Exit**: stop and present the failure summary above.
 3. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
 4. **Phase 5**: Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage in `deployment-settings.json`; offer to save values for future runs
 5. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
+6. **Phase 7.5**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target
 
 ## Error Handling
 
@@ -462,4 +502,4 @@ If **Exit**: stop and present the failure summary above.
 | Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
 | Configure deployment settings | Configuring deployment settings | Query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
-| Write deployment record | Writing deployment record | Write .last-deploy.json with status and IDs; present success or failure summary with troubleshooting link |
+| Write deployment record | Writing deployment record | Write .last-deploy.json; run skill tracking; present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned |
