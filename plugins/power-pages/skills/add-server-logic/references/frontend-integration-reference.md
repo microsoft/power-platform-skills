@@ -1,6 +1,6 @@
 # Frontend Integration Reference
 
-Use this reference in Phase 8 of `integrate-serverlogic` to decide how the site's frontend should call one or more server logic endpoints.
+Use this reference in Phase 8 of `add-server-logic` to decide how the site's frontend should call one or more server logic endpoints.
 
 ## Goal
 

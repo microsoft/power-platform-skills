@@ -37,7 +37,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 | test-site | TestSite | Site/AI/Skills/TestSite |
 | audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
-| integrate-serverlogic | IntegrateServerlogic | Site/AI/Skills/IntegrateServerlogic |
+| add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
 
 ## YAML Format
 

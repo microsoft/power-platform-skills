@@ -11,7 +11,7 @@ const VALIDATOR_PATH = path.join(
   '..',
   '..',
   'skills',
-  'integrate-serverlogic',
+  'add-server-logic',
   'scripts',
   'validate-serverlogic.js'
 );

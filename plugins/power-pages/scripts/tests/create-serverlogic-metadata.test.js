@@ -12,7 +12,7 @@ function runCreateServerlogicMetadata(args) {
     '..',
     '..',
     'skills',
-    'integrate-serverlogic',
+    'add-server-logic',
     'scripts',
     'create-serverlogic-metadata.js'
   );

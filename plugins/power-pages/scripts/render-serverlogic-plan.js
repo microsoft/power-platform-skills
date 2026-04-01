@@ -26,7 +26,7 @@ renderTemplate({
     __dirname,
     '..',
     'skills',
-    'integrate-serverlogic',
+    'add-server-logic',
     'assets',
     'serverlogic-plan.html'
   ),

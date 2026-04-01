@@ -1,5 +1,5 @@
 ---
-name: integrate-serverlogic
+name: add-server-logic
 description: >
   This skill should be used when the user asks to "create server logic", "add server-side code",
   "write server logic", "add server endpoint", "create API endpoint", "add backend logic",
@@ -183,7 +183,7 @@ This step is critical because Server Logic is a preview feature and the SDK surf
 
 Use the reference document below as the source of truth for how to discover, classify, fetch, and reconcile Server Logic documentation:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/server-logic-docs.md`
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-docs.md`
 
 Follow that reference to:
 
@@ -217,7 +217,7 @@ From the fetched docs, extract and note the items that matter for the current ta
 
 Build the server logic plan data and render the HTML plan before asking for approval.
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/server-logic-plan-data-format.md`
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/server-logic-plan-data-format.md`
 
 The rendered plan should summarize:
 
@@ -368,7 +368,7 @@ Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Us
 For each approved server logic item, create the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
 ```
 
 The generated `<PROJECT_ROOT>/.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file has this structure:
@@ -526,7 +526,7 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-serverlogic/references/frontend-integration-reference.md`
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
 
 Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
@@ -628,7 +628,7 @@ Use the frontend integration reference from Phase 8 for the exact calling patter
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
-Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "IntegrateServerlogic"`.
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddServerLogic"`.
 
 ### 10.2 Present Summary
 
