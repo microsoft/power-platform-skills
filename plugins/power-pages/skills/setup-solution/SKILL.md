@@ -125,81 +125,120 @@ GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{anyPowerpage
 ```
 Store result as `subComponentType`.
 
+For **site language records**, query using the site language ID:
+```
+GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{siteLanguageId}'&$select=componenttype&$top=1
+```
+Store result as `siteLanguageComponentType`. Site language has its own distinct componenttype (~10375) — it is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly.
+
 If the website record query returns an empty `value` array, the site has not been added to any solution yet — stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If the sub-component query returns empty, proceed anyway — you will discover all component IDs in Step 5.2.
 
-#### Step 5.2 — Fetch Component Type Labels and All Site Components
+#### Step 5.2 — Discover All Components
 
-**First**, resolve current component type labels from the environment's metadata — this ensures the label map is always up to date regardless of new types Microsoft adds:
+Run four discovery queries in parallel:
+
+**A. Component type labels** (for display names):
 ```
 GET {envUrl}/api/data/v9.2/GlobalOptionSetDefinitions(Name='powerpagecomponenttype')
 ```
-From the response, build a `typeLabel` map: `{ [Value]: Label.UserLocalizedLabel.Label }` for every entry in `Options`. If this query fails or returns an unexpected structure, fall back to the static table in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 3b.
+Build a `typeLabel` map: `{ [Value]: Label.UserLocalizedLabel.Label }`. Fall back to the static table in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 3b if this fails.
 
-**Then**, query all Power Pages sub-components for this site:
+**B. All Power Pages sub-components for this site**:
 ```
 GET {envUrl}/api/data/v9.2/powerpagecomponents
   ?$filter=_powerpagesiteid_value eq '{websiteRecordId}'
   &$select=powerpagecomponentid,name,powerpagecomponenttype
   &$orderby=powerpagecomponenttype
 ```
+Follow `@odata.nextLink` pagination. Group by `powerpagecomponenttype` using `typeLabel` for display names.
 
-Follow `@odata.nextLink` pagination until all pages are fetched. Group results by `powerpagecomponenttype`, count per group, and use `typeLabel[type]` for display. For any type not found in `typeLabel`, display it as `Unknown (N)`.
-
-#### Step 5.3 — Discover Dataverse Tables to Include
-
-A working site in the target environment requires its **Dataverse tables** in the solution. Without them, the tables won't exist in the target env and all Web API calls will fail.
-
-Check for a `.datamodel-manifest.json` in the project root. If it exists, read the `tables[]` array — each entry has a `logicalName`. For each logical name, query the entity metadata to get the entity component ID:
+**C. Site language records**:
 ```
+GET {envUrl}/api/data/v9.2/powerpagesitelanguages?$filter=_powerpagesiteid_value eq '{websiteRecordId}'&$select=powerpagesitelanguageid,languagecode,displayname
+```
+Store all language IDs.
+
+**D. Dataverse tables** (from `.datamodel-manifest.json` if present):
+```
+# For each logicalName in tables[]:
 GET {envUrl}/api/data/v9.2/EntityDefinitions?$filter=LogicalName eq '{logicalName}'&$select=MetadataId,LogicalName,DisplayName
 ```
-Store each `MetadataId` as the component ID for `AddSolutionComponent` with `ComponentType: 1` (Entity).
+If no `.datamodel-manifest.json`, ask the user: "Does your site use custom Dataverse tables? If so, list their logical names."
 
-If no `.datamodel-manifest.json` exists, ask the user: "Does your site use custom Dataverse tables (created by `/power-pages:setup-datamodel` or manually)? If so, list their logical names." Add any provided tables the same way.
+> **Important note on tables**: Dataverse solutions carry **schema only** — entity definitions, columns, relationships, forms, and views. Table **data/records** do NOT travel with the solution. If the target environment needs seed/reference data, that requires a separate data migration step.
 
-Report to user: "Will include N Dataverse table(s) in the solution: `{table1}`, `{table2}`, ..."
+#### Step 5.3 — Categorize Site Settings
 
-#### Step 5.4 — User Selection: Which Site Setting Categories to Include
-
-Site Settings (powerpagecomponenttype=9) fall into distinct categories with different security profiles. **Do not treat all site settings as equally sensitive.** Split them by name pattern before presenting.
-
-After fetching all site settings for the site, categorize each by name:
+Site Settings (powerpagecomponenttype=9) have distinct security profiles. Split them before presenting:
 
 | Category | Name pattern | Default |
 |---|---|---|
 | Web API settings | `Webapi/*` | **Include** — required for Web API to work in target env |
-| Feature flags | `CodeSite/*`, `Search/*`, `Site/*`, `Profile/*`, `Header/*`, `Footer/*`, `ThemeFeature`, `HTTP/*`, etc. | **Include** — safe, non-secret |
-| Auth config (non-secret) | `Authentication/Registration/*`, `Authentication/OpenIdConnect/*/Caption`, `Authentication/LoginThrottling/*`, `Authentication/LoginTracking*`, `Authentication/OpenIdConnect/*/RebrandDisclaimerEnabled` | **Include** — safe |
-| OAuth secrets | Any setting whose name contains `Secret`, `AppSecret`, `ConsumerSecret`, `ClientSecret`, or `AppId`/`ConsumerKey` (social provider credentials) | **Exclude** — secrets must not travel in solution |
+| Feature flags | `CodeSite/*`, `Search/*`, `Site/*`, `Profile/*`, `Header/*`, `Footer/*`, `ThemeFeature`, `HTTP/*`, `SiteCopilot/*`, `CustomerSupport/*`, `KnowledgeManagement/*`, `MultiLanguage/*`, `OnlineDomains` | **Include** — safe |
+| Auth config (non-secret) | `Authentication/Registration/*`, `Authentication/OpenIdConnect/*/Caption`, `Authentication/LoginThrottling/*`, `Authentication/LoginTrackingEnabled`, `Authentication/OpenIdConnect/*/RebrandDisclaimerEnabled` | **Include** — safe |
+| OAuth secrets | Any setting whose name contains `Secret`, `ClientSecret`, `AppSecret`, `ConsumerSecret`, `AppId`, `ConsumerKey` (social provider credentials) | **Exclude by default** |
 
-Present the grouped summary:
+#### Step 5.4 — Present Full Manifest and Get User Confirmation
+
+**This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything. Allow them to deselect categories or individual tables.
+
+Present as a structured summary:
+
 ```
-Found {N} Power Pages components across {K} categories:
-  ✓ Always included: Publishing States (2), Web Pages (10), Web Files (90),
-    Page Templates (5), Content Snippets (11), Web Templates (13),
-    Webpage Rules (2), Web Roles (2), Website Access (6), Site Markers (5),
-    Table Permissions (13)
-  ✓ Site Settings — Web API settings (14): Webapi/crd50_invoice/enabled, ...
-  ✓ Site Settings — Feature flags & auth config (52): CodeSite/Enabled, ...
-  ⚠ Site Settings — OAuth secrets (12): ClientSecret, AppSecret, ConsumerSecret...
-    These will be EXCLUDED — re-enter them manually in the target environment.
-  ✓ Dataverse tables (N): crd50_invoice, crd50_supplier, ...
+Here is everything that will be added to solution "{solutionName}":
+
+WEBSITE & LANGUAGE
+  ✓ Website record: {siteName}
+  ✓ Site language(s): English (en-US)
+
+SITE COMPONENTS ({total} components across {K} types)
+  ✓ Publishing States (2)
+  ✓ Web Pages (10)
+  ✓ Web Files (90)         — compiled JS/CSS/HTML assets
+  ✓ Page Templates (5)
+  ✓ Web Templates (13)
+  ✓ Content Snippets (11)
+  ✓ Web Roles (2)
+  ✓ Website Access (6)
+  ✓ Table Permissions (13) — required for Web API authorization in target env
+  ✓ Site Markers (5)
+  ✓ Webpage Rules (2)
+
+SITE SETTINGS (64 included, 8 excluded)
+  ✓ Web API settings (14):   Webapi/crd50_invoice/enabled, Webapi/crd50_invoice/fields, ...
+  ✓ Feature flags (32):      CodeSite/Enabled, Search/Enabled, Site/BootstrapV5Enabled, ...
+  ✓ Auth config (18):        Authentication/Registration/LocalLoginEnabled, ...
+  ✗ OAuth secrets (8):       Authentication/OpenAuth/Microsoft/ClientSecret, ... [EXCLUDED]
+
+DATAVERSE TABLES (schema only — no data)
+  ✓ crd50_invoice (Invoice)
+  ✓ crd50_supplier (Supplier)
+  ✓ crd50_purchaseorder (Purchase Order)
+
+Note: Table definitions (columns, relationships) travel with the solution.
+Table DATA does not — records in target must be created separately.
+
+Total to add: ~{N} components
 ```
 
-Ask via `AskUserQuestion` only if there are OAuth secrets: "Confirm: exclude OAuth secret site settings from the solution?" — Options: "Yes, exclude them (Recommended)" / "No, include them (not recommended)"
+Ask via `AskUserQuestion`:
+> "Does this look right? You can proceed, or tell me which categories or tables to exclude."
 
-Default: **exclude OAuth secrets, include everything else**.
+Options: "Proceed with this selection" / "I want to change something" (if they say change, ask follow-up to clarify what to remove)
 
-#### Step 5.5 — Add All Selected Components
+Wait for explicit confirmation before Step 5.5.
 
-1. **Website record** — call `AddSolutionComponent` with `websiteComponentType` and `AddRequiredComponents: true`
-2. **All non-excluded powerpagecomponent groups** — for each `powerpagecomponenttype` group, call `AddSolutionComponent` for every component using `subComponentType`
-   - Table Permissions (type 18) are standard powerpagecomponents — include them with everything else
-   - Site Settings: include all except OAuth secret records identified in Step 5.4
-3. **Dataverse tables** — for each table from Step 5.3, call `AddSolutionComponent` with `ComponentType: 1` and the entity `MetadataId`
-4. Refresh token every ~20 calls to avoid expiration
-5. Track results per component: success / skipped-duplicate / failed
-6. Present running progress (e.g., "Added 45 of 110 components...")
+#### Step 5.5 — Add All Confirmed Components
+
+1. **Website record** — `AddSolutionComponent` with `websiteComponentType`, `AddRequiredComponents: true`
+2. **Site language records** — `AddSolutionComponent` for each with `siteLanguageComponentType` (NOT auto-included by AddRequiredComponents)
+3. **All confirmed powerpagecomponent groups** — for each group, call `AddSolutionComponent` per component using `subComponentType`
+   - Table Permissions (type 18) are standard powerpagecomponents — include by default
+   - Exclude OAuth secret site settings identified in Step 5.3
+4. **Dataverse tables** — `AddSolutionComponent` with `ComponentType: 1` and entity `MetadataId` for each confirmed table
+5. Refresh token every ~20 calls
+6. Track: success / skipped-duplicate / failed
+7. Running progress: "Added 45 of 120 components..."
 
 ### Phase 6 — Verify and Write Manifest
 
@@ -232,7 +271,7 @@ Display a summary table:
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
-3. **Phase 5, Step 5.4**: Whether to exclude OAuth secret site settings — default is exclude; only ask if secrets are present
+3. **Phase 5, Step 5.4**: Full manifest review — user sees everything (website, site language, all component categories, tables) and confirms or adjusts before any components are written
 
 ## Error Handling
 
@@ -249,6 +288,6 @@ Display a summary table:
 | Gather solution configuration | Gathering solution configuration | Collect publisher name, prefix, solution name, version from user — confirm irreversible choices |
 | Check existing publishers and solutions | Checking existing state | Query Dataverse for existing publisher and solution to avoid duplicate creation |
 | Create publisher and solution | Creating publisher and solution | POST publisher and solution to Dataverse OData API, capture IDs |
-| Add site components to solution | Adding site components | Discover Dataverse tables from .datamodel-manifest.json, fetch all powerpagecomponents, split site settings by category (Web API/feature flags vs OAuth secrets), call AddSolutionComponent for website record, all non-excluded sub-components, and each table (ComponentType=1) |
+| Add site components to solution | Adding site components | Discover website/language/powerpagecomponents/tables, split site settings by category, present full manifest for user confirmation, then call AddSolutionComponent for website, site language(s), all confirmed components, and tables (ComponentType=1) |
 | Verify and write manifest | Verifying solution and writing manifest | Confirm components in solution, write .solution-manifest.json, commit |
 | Present summary | Presenting summary | Show solution details, component count, and next steps |

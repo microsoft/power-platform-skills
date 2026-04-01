@@ -97,8 +97,17 @@ Run this query **twice**: once for `websiteRecordId` (captures `websiteComponent
 |---|---|---|
 | Website (PowerPages site) | ~10374 | Resolve via discovery query using `websiteRecordId` |
 | All sub-components (web pages, web files, web roles, site settings, templates, table permissions, etc.) | ~10373 | One shared componenttype for ALL powerpagecomponents — resolve via discovery query using any `powerpagecomponentid` |
+| Site language (`powerpagesitelanguage`) | ~10375 | Separate type, NOT included by `AddRequiredComponents: true` — must be added explicitly |
 
-**Add the Website component first** with `AddRequiredComponents: true`. Then add all sub-components individually using `subComponentType` — the `AddRequiredComponents: true` flag does NOT automatically cascade all 100+ sub-components; each must be added explicitly.
+**Add the Website component first** with `AddRequiredComponents: true`. Then add site language records, then all sub-components individually using `subComponentType`. The `AddRequiredComponents: true` flag does NOT automatically cascade sub-components or site languages — each must be added explicitly.
+
+**Site language discovery**:
+```
+GET {envUrl}/api/data/v9.2/powerpagesitelanguages?$filter=_powerpagesiteid_value eq '{websiteRecordId}'&$select=powerpagesitelanguageid,languagecode,displayname
+
+# Discover its componenttype:
+GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{powerpagesitelanguageid}'&$select=componenttype&$top=1
+```
 
 **Adding Dataverse tables (entities) to the solution**:
 
