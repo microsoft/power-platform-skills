@@ -28,6 +28,8 @@ references/
 agents/
   canvas-app-planner.md        ← Plans app design; invoked by generate-canvas-app (sequential)
   canvas-screen-builder.md     ← Builds one screen; invoked by generate-canvas-app (parallel)
+  canvas-edit-planner.md       ← Plans complex edits; invoked by edit-canvas-app (sequential)
+  canvas-screen-editor.md      ← Applies edits to one screen; invoked by edit-canvas-app (parallel)
 skills/
   configure-canvas-mcp/
     SKILL.md                   ← Registers the Canvas Authoring MCP server with Claude Code
@@ -53,6 +55,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 |-------|-----------|-------------|
 | `canvas-app-planner` | `generate-canvas-app` | Discovers resources, designs the app, presents plan for approval, writes plan document |
 | `canvas-screen-builder` | `generate-canvas-app` | Implements and validates one screen; runs in parallel with other builders |
+| `canvas-edit-planner` | `edit-canvas-app` | Reads existing .pa.yaml files, plans complex edits, presents edit plan for approval, writes canvas-edit-plan.md |
+| `canvas-screen-editor` | `edit-canvas-app` | Applies targeted edits to one screen's .pa.yaml; runs in parallel with other editors |
 
 ## MCP Tools
 
