@@ -35,7 +35,7 @@ jobs:
 
                   marketplace_path = Path(".claude-plugin/marketplace.json")
                   marketplace = json.loads(marketplace_path.read_text())
-                  for index, plugin in enumerate(marketplace.get("plugins", []), start=1):
+                  for index, plugin in enumerate(marketplace.get("plugins", [])):
                       error = validate_name(plugin["name"], f"{marketplace_path} plugins[{index}].name")
                       if error:
                           errors.append(error)
