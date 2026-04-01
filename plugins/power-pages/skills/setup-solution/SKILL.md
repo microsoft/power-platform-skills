@@ -199,7 +199,20 @@ For each secret the user selects to convert:
    ```
    Use type `100000003` (Secret) so the value is stored encrypted. Schema name: take the setting name, replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_auth_openauth_microsoft_clientsecret`).
 2. Add the env var definition to the solution (`ComponentType: 380`).
-3. Record each created env var definition ID and setting name for the UI guidance step later (Phase 7).
+3. **Link the site setting to the env var via OData PATCH** (HAR-confirmed pattern — no UI step required):
+   ```
+   PATCH {envUrl}/api/data/v9.0/mspp_sitesettings({settingId})
+   Headers: if-match: *, clienthost: Browser, x-ms-app-name: mspp_PowerPageManagement
+   Body: {
+     "mspp_envvar_schema": "{schemaName}",
+     "EnvironmentValue@odata.bind": "/environmentvariabledefinitions({definitionId})",
+     "EnvironmentValue@OData.Community.Display.V1.FormattedValue": "{schemaName}",
+     "mspp_source": 1
+   }
+   ```
+   **Critical:** Must use v9.0 (not v9.2). Navigation property is `EnvironmentValue` (not `mspp_environmentvariable`). Must include `if-match: *` and `clienthost: Browser` headers — omitting them causes 400.
+4. Verify the link: GET the site setting and confirm `mspp_source === 1` and `_mspp_environmentvariable_value` matches the definition ID.
+5. Record each created env var definition ID and setting ID in the manifest.
 
 OAuth secrets the user chose NOT to convert remain excluded — they are simply not added to the solution.
 
@@ -295,26 +308,31 @@ Display a summary table:
 | Env var definitions added | N (if any OAuth secrets converted) |
 | Manifest written | `.solution-manifest.json` |
 
-**If any OAuth secrets were converted to env vars**, provide a UI linking checklist — for each converted secret, give the direct Power Pages Management URL and exact steps:
+**If any OAuth secrets were converted to env vars**, confirm that each site setting was automatically linked (source=1, envvar ID set). Show a brief confirmation:
 
 ```
-ACTION REQUIRED — Link env vars to site settings in Power Pages Management:
-
-For each secret below, open the URL, change Source → Environment Variable,
-select the env var, and save.
-
-1. Authentication/OpenAuth/Microsoft/ClientSecret
-   Env var: ids_auth_openauth_microsoft_clientsecret
-   URL: https://{devEnvHost}/main.aspx?appid={appId}&pagetype=entityrecord&etn=mspp_sitesetting&id={settingId}
-
-2. ...
+OAuth secrets linked to environment variables:
+  ✓ Authentication/OpenAuth/Microsoft/ClientSecret → ids_auth_openauth_microsoft_clientsecret
+  ✓ Authentication/OpenAuth/Twitter/ConsumerSecret → ids_auth_openauth_twitter_consumersecret
 ```
 
-**Suggested next steps**:
-- Complete the UI linking steps above (if any OAuth secrets were converted)
-- Run `/power-pages:configure-env-variables` to set up environment-specific values (auth config, feature flags) per pipeline stage
-- Run `/power-pages:export-solution` to package the solution for deployment
-- Run `/power-pages:setup-pipeline` to create a CI/CD pipeline
+Note: Secret values themselves must still be set per environment (in Power Pages Management or via `configure-env-variables`).
+
+**Ask how the user wants to deploy this solution** via `AskUserQuestion`:
+
+> "Your solution is ready. How would you like to deploy it to other environments?"
+
+Options:
+1. **"Use Power Platform Pipelines (Recommended)"** — sets up a pipeline in the PP Pipelines host environment; supports staged deployments, approval gates, and env var overrides per stage. Run `/power-pages:setup-pipeline` next.
+2. **"Export and import manually"** — exports the solution as a zip and imports it directly to a target environment. Simpler for one-off deployments. Run `/power-pages:export-solution` next.
+3. **"I'll decide later"** — shows next step suggestions and exits.
+
+If the user selects **option 1**, immediately invoke `/power-pages:setup-pipeline`.
+If the user selects **option 2**, immediately invoke `/power-pages:export-solution`.
+If the user selects **option 3**, show:
+- Run `/power-pages:setup-pipeline` for automated staged deployments (recommended)
+- Run `/power-pages:export-solution` to export a zip for manual import
+- Run `/power-pages:configure-env-variables` if environment-specific values need to be set per stage
 
 ## Key Decision Points (Wait for User)
 
@@ -322,6 +340,7 @@ select the env var, and save.
 2. **Phase 3**: Reuse vs create confirmation — before any writes
 3. **Phase 5, Step 5.4**: OAuth secrets — multi-select which (if any) to convert to env vars vs exclude entirely
 4. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions) and confirms or adjusts before any components are written
+5. **Phase 7**: Deployment path — PP Pipelines (recommended) vs export/import manually vs decide later
 
 ## Error Handling
 
