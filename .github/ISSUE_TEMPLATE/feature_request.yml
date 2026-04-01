@@ -8,6 +8,7 @@ body:
       label: Plugin
       description: Which plugin is this feature request for?
       options:
+        - canvas-apps
         - code-apps
         - model-apps
         - power-pages
