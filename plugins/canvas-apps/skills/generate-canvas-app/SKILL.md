@@ -65,7 +65,17 @@ Read both files before planning any layout or choosing any control types.
    > - **Key controls:** [4-6 controls driving the design, e.g., ModernCard, Gallery, Badge, ModernTabList]
    > - **Screens to implement:** [list screen names in order]
 
-4. **Implement** — Write the `.pa.yaml` files following conventions from `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`. Include state initialization in `OnVisible`, event handlers with guard clauses, and Power Fx formulas with the `=` prefix. Write the simplest working version of a formula, then let `compile_canvas` catch errors. Don't deliberate on formulas you can validate in under 10 seconds. Reserve reasoning for errors the compiler can't catch (logic bugs, wrong data source fields). Before writing each screen's YAML, announce progress:
+4. **Implement** — Before writing any components that need images, call `image_search` to gather stock images:
+
+   - **Fetch 8–10 images minimum** for any UI with multiple sections or cards
+   - Use **generic 2–3 word keywords**: "modern office", "team meeting", "nature landscape"
+   - Avoid domain-specific terms: use "professional tools" not "equipment checkout"
+   - Use **diverse, distinct queries** — vary the subject matter completely:
+     - Good: "sunset beach", "mountain lake", "city skyline", "forest path", "coffee shop"
+     - Bad: "beach scene", "beach view", "sandy beach" (too similar)
+   - For large UIs needing 10+ images, make multiple `image_search` calls with different themes
+
+   Write the `.pa.yaml` files following conventions from `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`. Include state initialization in `OnVisible`, event handlers with guard clauses, and Power Fx formulas with the `=` prefix. Write the simplest working version of a formula, then let `compile_canvas` catch errors. Don't deliberate on formulas you can validate in under 10 seconds. Reserve reasoning for errors the compiler can't catch (logic bugs, wrong data source fields). Before writing each screen's YAML, announce progress:
 
    > **Implementing [Screen Name] ([N] of [Total])...**
 

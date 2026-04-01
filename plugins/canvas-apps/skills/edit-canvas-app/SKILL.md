@@ -48,5 +48,13 @@ If the app has meaningful content, proceed with the editing workflow below.
 
 1. **Read** the synced `.pa.yaml` files to understand the current app structure
 2. **Plan** the changes needed to satisfy the requirements — identify which screens and controls are affected
-3. **Edit** the YAML files with the required changes, following conventions from TechnicalGuide.md
+3. **Edit** the YAML files with the required changes, following conventions from TechnicalGuide.md. If the edit adds or replaces images, call `image_search` before writing those components:
+
+   - **Fetch 8–10 images minimum** for any UI with multiple sections or cards
+   - Use **generic 2–3 word keywords**: "modern office", "team meeting", "nature landscape"
+   - Avoid domain-specific terms: use "professional tools" not "equipment checkout"
+   - Use **diverse, distinct queries** — vary the subject matter completely:
+     - Good: "sunset beach", "mountain lake", "city skyline", "forest path", "coffee shop"
+     - Bad: "beach scene", "beach view", "sandy beach" (too similar)
+   - For large UIs needing 10+ images, make multiple `image_search` calls with different themes
 4. **Validate** by calling `compile_canvas` after making changes — fix any errors before finishing
