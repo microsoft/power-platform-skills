@@ -158,12 +158,14 @@ GET {envUrl}/api/data/v9.2/powerpagesitelanguages?$filter=_powerpagesiteid_value
 ```
 Store all language IDs.
 
-**D. Dataverse tables** (from `.datamodel-manifest.json` if present):
+**D. Dataverse tables** — always discover from the environment, don't rely on a manifest file alone:
+
+1. Read `.datamodel-manifest.json` if present (for the known list of tables created by `setup-datamodel`)
+2. **Also** query the environment directly for all custom unmanaged tables, filtering by the publisher prefix:
 ```
-# For each logicalName in tables[]:
-GET {envUrl}/api/data/v9.2/EntityDefinitions?$filter=LogicalName eq '{logicalName}'&$select=MetadataId,LogicalName,DisplayName
+GET {envUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,MetadataId,IsManaged,IsCustomEntity
 ```
-If no `.datamodel-manifest.json`, ask the user: "Does your site use custom Dataverse tables? If so, list their logical names."
+Filter client-side: `IsCustomEntity === true && IsManaged === false`. Group by publisher prefix (characters before first `_`). Present only tables whose prefix matches the site publisher — or if no prefix match, present all custom unmanaged tables and let the user decide.
 
 > **Important note on tables**: Dataverse solutions carry **schema only** — entity definitions, columns, relationships, forms, and views. Table **data/records** do NOT travel with the solution. If the target environment needs seed/reference data, that requires a separate data migration step.
 
@@ -204,6 +206,11 @@ OAuth secrets the user chose NOT to convert remain excluded — they are simply 
 #### Step 5.5 — Present Full Manifest and Get User Confirmation
 
 **This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
+
+If custom tables were discovered, ask via `AskUserQuestion` with `multiSelect: true` **before** showing the final manifest:
+- First option: **"Include all N tables (Recommended)"** — pre-selected default
+- Then one option per table: `{logicalName} ({DisplayName})`
+- Last option: **"Exclude all tables"**
 
 Present as a structured summary:
 
