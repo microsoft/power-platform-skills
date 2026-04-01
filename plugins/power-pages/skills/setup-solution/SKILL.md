@@ -178,9 +178,32 @@ Site Settings (powerpagecomponenttype=9) have distinct security profiles. Split 
 | Auth config (non-secret) | `Authentication/Registration/*`, `Authentication/OpenIdConnect/*/Caption`, `Authentication/LoginThrottling/*`, `Authentication/LoginTrackingEnabled`, `Authentication/OpenIdConnect/*/RebrandDisclaimerEnabled` | **Include** — safe |
 | OAuth secrets | Any setting whose name contains `Secret`, `ClientSecret`, `AppSecret`, `ConsumerSecret`, `AppId`, `ConsumerKey` (social provider credentials) | **Exclude by default** |
 
-#### Step 5.4 — Present Full Manifest and Get User Confirmation
+#### Step 5.4 — OAuth Secrets: Convert to Environment Variables?
 
-**This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything. Allow them to deselect categories or individual tables.
+Before presenting the final manifest, handle the excluded OAuth secrets. These settings won't travel in the solution — but the user can choose to convert any or all of them to environment variables instead, so they are tracked in the solution schema and injected per environment at deploy time.
+
+**Ask via `AskUserQuestion` with `multiSelect: true`**, listing each excluded OAuth secret by name:
+
+> "These OAuth secret site settings will be excluded from the solution. Select any you'd like to convert to environment variables instead (env var definitions will be added to the solution; you'll link each one via the Power Pages Management UI after). Leave all unselected to just exclude them."
+
+- One option per secret (e.g. `Authentication/OpenAuth/Microsoft/ClientSecret`)
+- Plus options: **"Convert all of them"** and **"Exclude all (don't convert any)"**
+
+For each secret the user selects to convert:
+1. Create an `environmentvariabledefinition` via OData POST:
+   ```
+   POST {envUrl}/api/data/v9.2/environmentvariabledefinitions
+   { "schemaname": "{prefix}_{sanitizedSettingName}", "displayname": "{friendlyName}", "type": 100000003, "defaultvalue": "" }
+   ```
+   Use type `100000003` (Secret) so the value is stored encrypted. Schema name: take the setting name, replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_auth_openauth_microsoft_clientsecret`).
+2. Add the env var definition to the solution (`ComponentType: 380`).
+3. Record each created env var definition ID and setting name for the UI guidance step later (Phase 7).
+
+OAuth secrets the user chose NOT to convert remain excluded — they are simply not added to the solution.
+
+#### Step 5.5 — Present Full Manifest and Get User Confirmation
+
+**This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
 
 Present as a structured summary:
 
@@ -204,19 +227,20 @@ SITE COMPONENTS ({total} components across {K} types)
   ✓ Site Markers (5)
   ✓ Webpage Rules (2)
 
-SITE SETTINGS (64 included, 8 excluded)
-  ✓ Web API settings (14):   Webapi/crd50_invoice/enabled, Webapi/crd50_invoice/fields, ...
-  ✓ Feature flags (32):      CodeSite/Enabled, Search/Enabled, Site/BootstrapV5Enabled, ...
+SITE SETTINGS (64 included)
+  ✓ Web API settings (14):   Webapi/crd50_invoice/enabled, ...
+  ✓ Feature flags (32):      CodeSite/Enabled, Search/Enabled, ...
   ✓ Auth config (18):        Authentication/Registration/LocalLoginEnabled, ...
-  ✗ OAuth secrets (8):       Authentication/OpenAuth/Microsoft/ClientSecret, ... [EXCLUDED]
+  ~ OAuth as env vars (3):   ids_auth_openauth_microsoft_clientsecret, ... [ENV VAR]
+  ✗ OAuth excluded (5):      Authentication/OpenAuth/Facebook/AppSecret, ... [EXCLUDED]
 
 DATAVERSE TABLES (schema only — no data)
   ✓ crd50_invoice (Invoice)
-  ✓ crd50_supplier (Supplier)
-  ✓ crd50_purchaseorder (Purchase Order)
+  ...
 
-Note: Table definitions (columns, relationships) travel with the solution.
-Table DATA does not — records in target must be created separately.
+ENV VAR DEFINITIONS (componenttype 380)
+  ✓ ids_auth_openauth_microsoft_clientsecret (Secret)
+  ...
 
 Total to add: ~{N} components
 ```
@@ -224,21 +248,22 @@ Total to add: ~{N} components
 Ask via `AskUserQuestion`:
 > "Does this look right? You can proceed, or tell me which categories or tables to exclude."
 
-Options: "Proceed with this selection" / "I want to change something" (if they say change, ask follow-up to clarify what to remove)
+Options: "Proceed with this selection" / "I want to change something"
 
-Wait for explicit confirmation before Step 5.5.
+Wait for explicit confirmation before Step 5.6.
 
-#### Step 5.5 — Add All Confirmed Components
+#### Step 5.6 — Add All Confirmed Components
 
 1. **Website record** — `AddSolutionComponent` with `websiteComponentType`, `AddRequiredComponents: true`
 2. **Site language records** — `AddSolutionComponent` for each with `siteLanguageComponentType` (NOT auto-included by AddRequiredComponents)
 3. **All confirmed powerpagecomponent groups** — for each group, call `AddSolutionComponent` per component using `subComponentType`
    - Table Permissions (type 18) are standard powerpagecomponents — include by default
-   - Exclude OAuth secret site settings identified in Step 5.3
-4. **Dataverse tables** — `AddSolutionComponent` with `ComponentType: 1` and entity `MetadataId` for each confirmed table
-5. Refresh token every ~20 calls
-6. Track: success / skipped-duplicate / failed
-7. Running progress: "Added 45 of 120 components..."
+   - Exclude OAuth secret site settings that were not converted to env vars
+4. **Env var definitions** (for converted OAuth secrets) — `AddSolutionComponent` with `ComponentType: 380`
+5. **Dataverse tables** — `AddSolutionComponent` with `ComponentType: 1` and entity `MetadataId`
+6. Refresh token every ~20 calls
+7. Track: success / skipped-duplicate / failed
+8. Running progress: "Added 45 of 120 components..."
 
 ### Phase 6 — Verify and Write Manifest
 
@@ -260,10 +285,27 @@ Display a summary table:
 | Solution | `{friendlyName}` (`{uniqueName}`, v`{version}`) |
 | Solution ID | `{solutionId}` |
 | Components added | N |
+| Env var definitions added | N (if any OAuth secrets converted) |
 | Manifest written | `.solution-manifest.json` |
 
+**If any OAuth secrets were converted to env vars**, provide a UI linking checklist — for each converted secret, give the direct Power Pages Management URL and exact steps:
+
+```
+ACTION REQUIRED — Link env vars to site settings in Power Pages Management:
+
+For each secret below, open the URL, change Source → Environment Variable,
+select the env var, and save.
+
+1. Authentication/OpenAuth/Microsoft/ClientSecret
+   Env var: ids_auth_openauth_microsoft_clientsecret
+   URL: https://{devEnvHost}/main.aspx?appid={appId}&pagetype=entityrecord&etn=mspp_sitesetting&id={settingId}
+
+2. ...
+```
+
 **Suggested next steps**:
-- Run `/power-pages:configure-env-variables` to set up environment-specific site settings (different auth config, feature flags, or secrets per environment)
+- Complete the UI linking steps above (if any OAuth secrets were converted)
+- Run `/power-pages:configure-env-variables` to set up environment-specific values (auth config, feature flags) per pipeline stage
 - Run `/power-pages:export-solution` to package the solution for deployment
 - Run `/power-pages:setup-pipeline` to create a CI/CD pipeline
 
@@ -271,7 +313,8 @@ Display a summary table:
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
-3. **Phase 5, Step 5.4**: Full manifest review — user sees everything (website, site language, all component categories, tables) and confirms or adjusts before any components are written
+3. **Phase 5, Step 5.4**: OAuth secrets — multi-select which (if any) to convert to env vars vs exclude entirely
+4. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions) and confirms or adjusts before any components are written
 
 ## Error Handling
 
