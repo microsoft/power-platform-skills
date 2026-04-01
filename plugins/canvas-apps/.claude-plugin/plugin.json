@@ -1,7 +1,7 @@
 {
-  "name": "code-apps-preview",
-  "version": "1.0.0",
-  "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors.",
+  "name": "canvas-apps",
+  "version": "1.0.1",
+  "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"
@@ -10,13 +10,10 @@
   "repository": "https://github.com/microsoft/power-platform-skills/",
   "license": "MIT",
   "keywords": [
+    "canvas-apps",
     "power-apps",
-    "code-apps",
-    "react",
-    "vite",
-    "dataverse",
-    "connectors",
-    "pac-cli",
-    "power-platform"
+    "canvas",
+    "pa-yaml",
+    "msapp"
   ]
 }
