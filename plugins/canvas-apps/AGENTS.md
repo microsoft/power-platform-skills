@@ -4,7 +4,9 @@ This file provides guidance to AI Agents when working with the **canvas-apps** p
 
 ## What This Plugin Is
 
-A plugin for authoring Power Apps Canvas Apps. The Canvas Authoring MCP server (`CanvasAuthoringMcpServer`) exposes tools and prompts that Claude uses directly — no skill orchestration layer is needed. Claude calls the MCP tools in conversation to generate, validate, and compile Canvas App YAML files (`.pa.yaml`) in conjunction with a running coauthoring studio session
+A plugin for authoring Power Apps Canvas Apps. The Canvas Authoring MCP server (`CanvasAuthoringMcpServer`) exposes tools that agents use to generate, validate, and compile Canvas App YAML files (`.pa.yaml`) in conjunction with a running coauthoring studio session.
+
+Skills orchestrate specialist agents via the `Task` tool. Agents are not invoked directly by users.
 
 ## Local Development
 
@@ -23,11 +25,14 @@ CLAUDE.md                      ← Symlink → AGENTS.md
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
+agents/
+  canvas-app-planner.md        ← Plans app design; invoked by generate-canvas-app (sequential)
+  canvas-screen-builder.md     ← Builds one screen; invoked by generate-canvas-app (parallel)
 skills/
   configure-canvas-mcp/
     SKILL.md                   ← Registers the Canvas Authoring MCP server with Claude Code
   generate-canvas-app/
-    SKILL.md                   ← Generates pa.yaml source files for a described Canvas App
+    SKILL.md                   ← Orchestrates canvas-app-planner + canvas-screen-builder agents
   edit-canvas-app/
     SKILL.md                   ← Edits pa.yaml source files for an existing Canvas App
 ```
@@ -39,6 +44,15 @@ skills/
 | `/configure-canvas-mcp` | Register the Canvas Authoring MCP server with Claude Code |
 | `/generate-canvas-app` | Generate a complete Canvas App from a natural language description |
 | `/edit-canvas-app` | Edit an existing Canvas App from a natural language description of changes |
+
+## Agents
+
+Agents are invoked by skills via the `Task` tool — they are not user-invocable.
+
+| Agent | Invoked By | Description |
+|-------|-----------|-------------|
+| `canvas-app-planner` | `generate-canvas-app` | Discovers resources, designs the app, presents plan for approval, writes plan document |
+| `canvas-screen-builder` | `generate-canvas-app` | Implements and validates one screen; runs in parallel with other builders |
 
 ## MCP Tools
 

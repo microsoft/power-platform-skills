@@ -20,9 +20,20 @@ Before making any changes, you MUST read and internalize the technical reference
 
 Read this file before planning any edits.
 
+## CRITICAL: Create App Folder First
+
+Before syncing or editing, create a subfolder to contain the app's YAML files:
+
+1. Derive a short folder name from `$ARGUMENTS` — extract the app name if present, otherwise use a 2–3 word summary of what is being edited
+2. Convert to kebab-case (e.g., "Expense Tracker" → `expense-tracker`)
+3. Create the folder using `Bash`: `mkdir -p <folder-name>`
+4. Resolve its absolute path — this is the **working directory** for all subsequent steps
+
+All file reads, writes, and syncs below operate in this folder.
+
 ## CRITICAL: Sync the Canvas App First
 
-Before editing any YAML files, call the `sync_canvas` MCP tool to ensure a local copy of the canvas app YAML is present and up to date. This pulls the current app state from the coauthoring session into local `.pa.yaml` files.
+Before editing any YAML files, call the `sync_canvas` MCP tool targeting the working directory created above. This pulls the current app state from the coauthoring session into local `.pa.yaml` files.
 
 Only proceed after `sync_canvas` completes successfully.
 

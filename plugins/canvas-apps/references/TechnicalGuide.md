@@ -315,6 +315,7 @@ For flexible, responsive designs:
 2. **Enable Container Scrolling:** Set `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout Child Properties:** Children have `AlignInContainer`, `FillPortions`, `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
 4. **Pure AutoLayout:** Don't mix ManualLayout inside AutoLayout containers
+5. **FillPortions Required for Fixed-Size Children:** Every child of an AutoLayout container must set `FillPortions: =0` if it has a fixed `Width`/`Height`. Without this, the container silently overrides the fixed size you set.
 
 ## Event Handling Patterns
 
@@ -383,6 +384,7 @@ App:
 - ✅ Use pure AutoLayout for scrollable screens
 - ✅ Set `LayoutOverflowY: =LayoutOverflow.Scroll` on scrollable containers
 - ✅ Set dynamic gallery heights: `Height: =CountRows(Self.AllItems) * Self.TemplateHeight`
+- ✅ Set `AutoHeight: =true` on most Text labels so they expand with content, or if intended as one line, so they don't show scrollbars
 - ❌ Don't mix ManualLayout inside AutoLayout containers
 - ❌ Don't create nested scrollbars
 
