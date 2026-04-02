@@ -48,8 +48,8 @@ test('create-serverlogic-metadata writes sorted metadata YAML', (t) => {
 
   assert.match(parsed.filePath, /ticket-dashboard\.serverlogic\.yml$/);
   assert.match(yaml, /^adx_serverlogic_adx_webrole:\n  - 11111111-1111-1111-1111-111111111111\n  - 22222222-2222-2222-2222-222222222222$/m);
-  assert.match(yaml, /^description: Server-side dashboard aggregation$/m);
-  assert.match(yaml, /^display_name: Ticket Dashboard$/m);
+  assert.match(yaml, /^description: 'Server-side dashboard aggregation'$/m);
+  assert.match(yaml, /^display_name: 'Ticket Dashboard'$/m);
   assert.match(yaml, /^id: [0-9a-f-]{36}$/m);
   assert.match(yaml, /^name: ticket-dashboard$/m);
 });
