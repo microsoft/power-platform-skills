@@ -25,6 +25,26 @@ Look for:
 - Existing CSRF token helpers built around `/_layout/tokenhtml`
 - Existing hooks/composables/services that wrap backend calls with loading and error state
 
+## Server Logic Response Envelope
+
+Server logic endpoints return responses in a standard JSON envelope:
+
+```json
+{
+  "requestId": "<activity-guid>",
+  "success": true,
+  "serverLogicName": "<endpoint-name>",
+  "data": "<string returned by your function>",
+  "error": null
+}
+```
+
+- `data` contains the string returned by the invoked function (e.g., the `JSON.stringify(...)` result). Parse it with `JSON.parse(response.data)` when the function returns serialized JSON.
+- On failure, `success` is `false`, `data` is `null`, and `error` contains the error message.
+- `requestId` is the server-side activity GUID — useful for correlating with `Server.Logger` output in diagnostics.
+
+All frontend helpers and service wrappers should unwrap `.data` from this envelope rather than treating the entire response body as the function's return value.
+
 ## Recommended Approaches
 
 ### 1. Sites Using `shell.safeAjax`
@@ -102,17 +122,22 @@ export async function callServerLogic<T = unknown>(
     params?: Record<string, string>,
     body?: unknown
 ): Promise<T> {
-    const token = await getCsrfToken();
     const url = params
         ? `/_api/serverlogics/${endpointName}?${new URLSearchParams(params)}`
         : `/_api/serverlogics/${endpointName}`;
 
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+
+    // CSRF token is required for non-GET requests only
+    if (method !== 'GET') {
+        headers['__RequestVerificationToken'] = await getCsrfToken();
+    }
+
     const response = await fetch(url, {
         method,
-        headers: {
-            'Content-Type': 'application/json',
-            '__RequestVerificationToken': token,
-        },
+        headers,
         body: body ? JSON.stringify(body) : undefined,
     });
 

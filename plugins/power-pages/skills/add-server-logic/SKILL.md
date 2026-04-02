@@ -43,10 +43,11 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 4. **Review Implementation Plan** — Present the plan to the user and confirm before writing code
 5. **Implement Server Logic** — Create the approved `.js` and `.serverlogic.yml` files in `.powerpages-site/server-logic/<name>/`
 6. **Configure Table Permissions** — *(Conditional: only if Server.Connector.Dataverse is used)* Set up table permissions for Dataverse tables accessed by the server logic
-7. **Configure Site Settings** — Set up ServerLogic site settings if needed
-8. **Client-Side Integration** — Help wire the server logic into the site's frontend code
-9. **Verify & Test Guidance** — Validate the code and provide testing instructions
-10. **Review & Deploy** — Present summary and offer deployment
+7. **Manage Secrets & Environment Variables** — *(Conditional: only if the server logic requires secrets)* Store sensitive values securely using Azure Key Vault (recommended) or direct environment variables in Dataverse
+8. **Configure Site Settings** — Set up ServerLogic site settings if needed
+9. **Client-Side Integration** — Help wire the server logic into the site's frontend code
+10. **Verify & Test Guidance** — Validate the code and provide testing instructions
+11. **Review & Deploy** — Present summary and offer deployment
 
 ---
 
@@ -56,7 +57,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 
 **Actions**:
 
-1. Create todo list with all 10 phases (see [Progress Tracking](#progress-tracking) table)
+1. Create todo list with all 11 phases (see [Progress Tracking](#progress-tracking) table)
 
 ### 1.1 Locate Project
 
@@ -148,14 +149,34 @@ Based on each planned server logic item's purpose, identify which Server SDK fea
 | Feature | When to use |
 |---------|-------------|
 | `Server.Connector.HttpClient` | Calling external REST APIs (NOT Dataverse) |
-| `Server.Connector.Dataverse` | Reading/writing Dataverse records |
+| `Server.Connector.Dataverse` | Reading/writing Dataverse records (CRUD + `InvokeCustomApi` for Dataverse Custom APIs) |
 | `Server.Context` | Accessing request parameters, headers, body |
 | `Server.User` | User-scoped operations, role checks |
 | `Server.Logger` | Always — every function should log entry/exit and errors |
-| `Server.Sitesetting` | Reading configuration values |
+| `Server.Sitesetting` | Reading site setting configuration values |
+| `Server.EnvironmentVariable` | Reading Dataverse environment variable values directly via `Server.EnvironmentVariable.get(name)` — an alternative to `Server.Sitesetting` for non-secret config |
 | `Server.Website` | Accessing site metadata |
 
-### 2.3 Confirm with User
+### 2.3 Identify Secret Values
+
+Determine whether any server logic item requires secret or sensitive configuration values that should not be hardcoded. Common examples:
+
+| Scenario | Secret needed |
+|----------|---------------|
+| Calling an authenticated external API | API key, client secret, bearer token |
+| Connecting to a third-party service | Connection string, access token |
+| OAuth2 client credentials flow | Client ID + client secret |
+| Webhook verification | Signing secret, shared key |
+
+For each identified secret, capture:
+- **Secret name**: A descriptive name (e.g., `ExchangeRateApiKey`, `PaymentGatewaySecret`)
+- **Purpose**: Why the secret is needed
+- **Site setting name**: The name the server logic will use with `Server.Sitesetting.Get()` (e.g., `ExternalApi/ExchangeRateApiKey`)
+- **Environment variable schema name**: The Dataverse environment variable schema name (e.g., `cr5b4_ExchangeRateApiKey`)
+
+These values will be used in Phase 7 to create the environment variables and site settings.
+
+### 2.4 Confirm with User
 
 If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 
@@ -166,8 +187,9 @@ If the requirements are ambiguous, use `AskUserQuestion` to clarify:
 | Which HTTP methods does each server logic need? | If not specified — suggest based on the use case (e.g., read-only = GET, form processing = POST) |
 | Does each server logic need to call external APIs, Dataverse, or both? | Determines which connectors to use |
 | What should each server logic be named? | Suggest URL-friendly names based on the responsibilities |
+| Does the server logic need any secret or sensitive values (API keys, client secrets, tokens)? | If the server logic calls authenticated external APIs or services |
 
-**Output**: Clear understanding of the overall intent, the list of server logic items to reuse/extend/create, their HTTP methods, and SDK features needed
+**Output**: Clear understanding of the overall intent, the list of server logic items to reuse/extend/create, their HTTP methods, SDK features needed, and any secrets required
 
 ---
 
@@ -226,6 +248,7 @@ The rendered plan should summarize:
 - The functions that will be implemented and what each one does
 - The SDK features, external services, and Dataverse tables involved for each item
 - The web roles, security constraints, and site settings that apply to each item
+- Any secrets or sensitive values that will be stored as environment variables (with or without Azure Key Vault)
 - The expected next steps after approval
 
 ### 4.2 Render the HTML Plan
@@ -361,6 +384,16 @@ function get() {
 }
 ```
 
+#### Referencing Secrets in Code
+
+When the server logic needs a secret value identified in Phase 2.3, **never hardcode the value**. Instead, read it at runtime from a site setting backed by an environment variable:
+
+```javascript
+const apiKey = Server.Sitesetting.Get("ExternalApi/ExchangeRateApiKey");
+```
+
+Use the site setting name planned in Phase 2.3. The actual environment variable and site setting YAML will be created in Phase 7.
+
 #### SDK Usage Guidance
 
 Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Use the documentation fetched in Phase 3 as the source of truth for connector methods, signatures, and supported patterns, then apply only the task-specific notes that were captured in the approved plan.
@@ -481,13 +514,173 @@ After table permissions (and any new web roles) are created, do a git commit for
 
 ---
 
-## Phase 7: Configure Site Settings
+## Phase 7: Manage Secrets & Environment Variables
+
+**Goal**: Securely store any secret values (API keys, client secrets, connection strings) required by the server logic as environment variables in Dataverse, optionally backed by Azure Key Vault
+
+**This phase only runs when the server logic requires secret or sensitive configuration values** (identified in Phase 2.3). If no secrets are needed, skip this phase and proceed to Phase 8.
+
+**Actions**:
+
+### 7.1 Recommend Azure Key Vault
+
+Ask the user whether they want to use Azure Key Vault to securely store secrets. Present Key Vault as the recommended approach:
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| This server logic requires secret values (e.g., API keys, client secrets). Azure Key Vault is the recommended way to store secrets securely. Would you like to use Azure Key Vault? | Yes, use Azure Key Vault (Recommended), No, store directly as environment variable |
+
+### 7.2a Azure Key Vault Path
+
+If the user chose Azure Key Vault:
+
+**Step 1 — List available Key Vaults:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
+```
+
+The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `location`) from the user's Azure subscription.
+
+**Step 2 — Select or create a Key Vault:**
+
+If Key Vaults were found, present the list and ask which one to use:
+
+Use `AskUserQuestion`:
+
+| Question | Context |
+|----------|---------|
+| Which Azure Key Vault would you like to use for storing secrets? | Present the names from the script output |
+
+If **no Key Vaults are found**, ask the user how to proceed:
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| No Azure Key Vaults were found in your subscription. Would you like to create one, or fall back to storing secrets directly as environment variables? | Create a new Key Vault (Recommended), Store directly as environment variable |
+
+**If "Create a new Key Vault"**: Ask for a vault name, resource group, and location, then create it:
+
+Use `AskUserQuestion`:
+
+| Question | Context |
+|----------|---------|
+| What name, resource group, and Azure region would you like for the new Key Vault? | Vault names must be 3-24 characters, globally unique, start with a letter, and contain only alphanumerics and hyphens. Suggest a name based on the project/site name. |
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
+  --name "<vault-name>" \
+  --resourceGroup "<resource-group>" \
+  --location "<location>"
+```
+
+The script outputs a JSON object with `name`, `resourceGroup`, and `location`. Use the created vault for the remaining steps.
+
+**If "Store directly as environment variable"**: Skip the rest of Phase 7.2a and proceed to Phase 7.2b (direct environment variable path).
+
+**Step 3 — Provide commands for storing each secret in Key Vault:**
+
+For each secret identified in Phase 2.3, give the user the exact command to run themselves. Do **not** ask for the secret value — secret values must never pass through the conversation.
+
+Present the commands as a numbered list the user can copy and run:
+
+```
+For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
+
+1. <secret-name>:
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+     --vaultName "<selected-vault>" \
+     --secretName "<secret-name>" \
+     --secretValue "<YOUR_SECRET_VALUE>"
+```
+
+Tell the user each command outputs a JSON object with a `secretUri` and to share the output (which contains only the URI, not the secret) so the workflow can continue.
+
+**Step 4 — Create environment variable in Dataverse:**
+
+After the user shares the `secretUri` output from each command, create an environment variable definition in Dataverse that references the Key Vault secret. Use the `secret` type:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "<prefix_SecretName>" \
+  --displayName "<Secret Display Name>" \
+  --type "secret" \
+  --value "<secretUri-from-step-3>"
+```
+
+**Step 5 — Create site setting for the environment variable:**
+
+For each environment variable, create a site setting YAML that maps to it:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "<SiteSetting/Name>" \
+  --envVarSchema "<schemaName-from-step-4>"
+```
+
+This creates a site setting with `envvar_schema` and `source: 1`, which tells Power Pages to resolve the value from the Dataverse environment variable (backed by Key Vault).
+
+### 7.2b Direct Environment Variable Path
+
+If the user chose not to use Azure Key Vault:
+
+**Step 1 — Create environment variables with placeholder values:**
+
+For each secret identified in Phase 2.3, create the environment variable in Dataverse with a placeholder value:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "<prefix_SecretName>" \
+  --displayName "<Secret Display Name>" \
+  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+```
+
+**Step 2 — Create site setting for the environment variable:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "<SiteSetting/Name>" \
+  --envVarSchema "<schemaName-from-step-1>"
+```
+
+**Step 3 — Give the user steps to set the actual secret values:**
+
+Do **not** ask for secret values — they must never pass through the conversation. Instead, tell the user to update each placeholder with the real value using one of these approaches:
+
+1. **Power Platform admin center** — Go to **Environments** → select the environment → **Environment variables** → find the variable by display name → update the value
+2. **Power Apps maker portal** — Go to **Solutions** → open the relevant solution → **Environment variables** → edit the value
+3. **PAC CLI** — `pac env update-variable --name "<schemaName>" --value "<actual-value>"`
+
+Present the list of environment variables that need updating (display name and schema name for each) so the user knows exactly which ones to set.
+
+### 7.3 Verify Environment Variable Configuration
+
+After creating all environment variables and site settings:
+
+- Confirm each site setting YAML was created in `.powerpages-site/site-settings/`
+- Verify each YAML contains `envvar_schema` and `source: 1`
+- Confirm the server logic code references the correct site setting names via `Server.Sitesetting.Get("<SiteSetting/Name>")`
+
+### 7.4 Git Commit
+
+Do a git commit for the environment variable site setting changes.
+
+**Output**: Environment variables created in Dataverse (with or without Azure Key Vault backing), site settings configured, server logic referencing correct setting names
+
+---
+
+## Phase 8: Configure Site Settings
 
 **Goal**: Set up site settings for the server logic feature
 
 **Actions**:
 
-### 7.1 Configure Server Logic Site Settings
+### 8.1 Configure Server Logic Site Settings
 
 The `.powerpages-site` folder is guaranteed to exist at this point (verified in Phase 1.5).
 
@@ -497,7 +690,7 @@ The following site settings control server logic behavior. Only create settings 
 |---------|-------------|---------|-------------------|
 | `ServerLogic/Enabled` | Enable/disable server logic feature | `true` | Only if explicitly disabled and needs re-enabling |
 | `ServerLogic/AllowedDomains` | Restrict which external domains HttpClient can call | All domains | When the server logic calls external APIs and you want to restrict to specific domains for security |
-| `ServerLogic/TimeoutInSeconds` | Maximum execution time (up to 240s) | `120` | When operations need more than 2 minutes (e.g., complex aggregations, slow external APIs) |
+| `ServerLogic/TimeoutInSeconds` | Maximum execution time | `120` | The platform caps this at **120 seconds** — values above 120 are silently clamped. Only configure when you need to lower the timeout, not raise it. |
 | `ServerLogic/AllowNetworkingToAllDomains` | Allow networking across domains | `true` | Set to `false` when restricting via AllowedDomains |
 
 Use the existing site setting creation script:
@@ -506,7 +699,7 @@ Use the existing site setting creation script:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
 ```
 
-### 7.2 Git Commit
+### 8.2 Git Commit
 
 If any settings were created:
 
@@ -516,7 +709,7 @@ Do a git commit for the site settings changes.
 
 ---
 
-## Phase 8: Client-Side Integration
+## Phase 9: Client-Side Integration
 
 **Goal**: Help the user call the server logic endpoints from their site's frontend code, matching existing patterns discovered in Phase 1
 
@@ -524,7 +717,7 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 **Actions**:
 
-### 8.1 Follow the Frontend Integration Reference
+### 9.1 Follow the Frontend Integration Reference
 
 Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
@@ -532,7 +725,7 @@ Use the reference below for the frontend integration approach, examples, and fra
 
 Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
-### 8.2 Create or Update Frontend Integration
+### 9.2 Create or Update Frontend Integration
 
 Following the reference:
 
@@ -545,7 +738,7 @@ Following the reference:
 - Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
 - Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
 
-### 8.3 Ask User About Integration Scope
+### 9.3 Ask User About Integration Scope
 
 Use `AskUserQuestion`:
 
@@ -553,9 +746,9 @@ Use `AskUserQuestion`:
 |----------|---------|
 | I've created the server logic backend. Would you like me to also fully integrate it into the frontend UI? | Yes, fully integrate it into the UI (Recommended), No, I'll handle the frontend myself |
 
-**If "No"**: Skip to Phase 9, but provide the API URL and a code snippet the user can copy.
+**If "No"**: Skip to Phase 10, but provide the API URL and a code snippet the user can copy.
 
-### 8.4 Git Commit
+### 9.4 Git Commit
 
 If frontend integration code was created:
 
@@ -565,13 +758,13 @@ Do a git commit for the frontend integration changes.
 
 ---
 
-## Phase 9: Verify & Test Guidance
+## Phase 10: Verify & Test Guidance
 
 **Goal**: Validate the code and provide the user with everything needed to test the server logic
 
 **Actions**:
 
-### 9.1 Final Code Validation
+### 10.1 Final Code Validation
 
 Re-read each created `.js` file and verify:
 
@@ -595,7 +788,7 @@ Re-read each `.serverlogic.yml` file and verify:
 - [ ] Fields are alphabetically sorted
 - [ ] File names match: folder name, `.js` name, `.serverlogic.yml` name, and `name` field all use the same value
 
-### 9.2 Provide API URL
+### 10.2 Provide API URL
 
 Tell the user each endpoint URL:
 
@@ -603,16 +796,16 @@ Tell the user each endpoint URL:
 https://<site-url>/_api/serverlogics/<server-logic-name>
 ```
 
-### 9.3 Test Guidance
+### 10.3 Test Guidance
 
 Provide testing instructions:
 
 1. **Deploy the site first** — The server logic must be deployed via `/deploy-site` before it can be called
-2. **CSRF token required** — All API calls to server logic endpoints require a Cross-Site Request Forgery (CSRF) token in the request headers. Fetch the token from `/_layout/tokenhtml` and include it as `__RequestVerificationToken` header.
+2. **CSRF token required for non-GET requests** — POST, PUT, PATCH, and DELETE calls to server logic endpoints require a CSRF token. Fetch the token from `/_layout/tokenhtml` and include it as `__RequestVerificationToken` header. GET requests are **exempt** from antiforgery validation — no token is needed for read-only calls.
 3. **Authentication** — Server logic respects the site's authentication. Calls from authenticated sessions use cookie-based auth automatically. Anonymous access depends on governance settings.
 4. **Testing from browser console**:
 
-Use the frontend integration reference from Phase 8 for the exact calling pattern that matches the site's stack.
+Use the frontend integration reference from Phase 9 for the exact calling pattern that matches the site's stack.
 
 5. **Check diagnostics** — Server.Logger output can be viewed in Power Pages design studio diagnostics
 
@@ -620,19 +813,19 @@ Use the frontend integration reference from Phase 8 for the exact calling patter
 
 ---
 
-## Phase 10: Review & Deploy
+## Phase 11: Review & Deploy
 
 **Goal**: Present a summary of all work performed and offer deployment
 
 **Actions**:
 
-### 10.1 Record Skill Usage
+### 11.1 Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AddServerLogic"`.
 
-### 10.2 Present Summary
+### 11.2 Present Summary
 
 Present a summary of everything that was done:
 
@@ -644,12 +837,13 @@ Present a summary of everything that was done:
 | Functions | Implemented | Summarize methods implemented per server logic item |
 | SDK Features Used | — | Summarize features used per server logic item |
 | Table Permissions | Created/Skipped | `accounts` (Read), `contacts` (Read, Create), etc. |
+| Secrets & Env Vars | Created/Skipped | Environment variables (Key Vault-backed or direct), site settings with `envvar_schema` |
 | Site Settings | Created/Skipped | ServerLogic/AllowedDomains, etc. |
 | Client-Side Service | Created/Skipped | List created or updated frontend service files |
 | UI Integration | Created/Skipped | Pages, components, forms, or actions fully wired to the server logic endpoints |
 | API URL | — | List each `/_api/serverlogics/<name>` URL |
 
-### 10.3 Ask to Deploy
+### 11.3 Ask to Deploy
 
 Use `AskUserQuestion`:
 
@@ -671,15 +865,15 @@ After deployment succeeds, use `AskUserQuestion`:
 
 > "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The server logic endpoints won't be accessible until the site is deployed."
 
-### 10.4 Post-Deploy Notes
+### 11.4 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
-- **Test the endpoints**: Call each `/_api/serverlogics/<name>` URL with the appropriate HTTP method and CSRF token
+- **Test the endpoints**: Call each `/_api/serverlogics/<name>` URL with the appropriate HTTP method (include CSRF token for non-GET requests)
 - **Recommended full-site validation**: After deployment, ask whether to run `/test-site` so the live site can be validated end to end
 - **Check logs**: Use Server.Logger output in Power Pages design studio diagnostics to debug issues
 - **Table permissions**: Table permissions were configured for Dataverse tables used by this server logic. If you add new Dataverse tables later, run the table permissions setup again — without permissions, `Server.Connector.Dataverse` silently returns 0 records
-- **Timeout**: Default execution timeout is 120 seconds (configurable up to 240s via `ServerLogic/TimeoutInSeconds`)
+- **Timeout**: Default execution timeout is 120 seconds — this is also the platform maximum (values above 120 are silently clamped)
 - **Anonymous access**: If the site's governance control disables anonymous access, anonymous users cannot invoke server logic that integrates with external systems
 - **Preview feature**: Server Logic is currently in preview — monitor Microsoft Learn for updates
 
@@ -694,17 +888,19 @@ After deployment (or if skipped), remind the user:
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Always fetch Microsoft Learn docs** in Phase 3 before writing code — the docs are the source of truth
 - **Ask for user confirmation** at key decision points
-- **Commit at milestones** — after server logic code, table permissions (if any), site settings, and frontend integration (if any)
+- **Commit at milestones** — after server logic code, table permissions (if any), secrets/environment variables (if any), site settings, and frontend integration (if any)
 - **Validate thoroughly** — server logic has strict constraints and violations cause runtime errors
 
 ### Key Decision Points (Wait for User)
 
 1. At Phase 1.5: Deploy now or cancel (if `.powerpages-site` missing — mandatory)
-2. At Phase 2: Confirm requirements (purpose, name, HTTP methods)
+2. At Phase 2: Confirm requirements (purpose, name, HTTP methods, secrets)
 3. At Phase 4: Approve implementation plan before writing code
 4. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
-5. At Phase 8.5: Create frontend integration or skip
-6. At Phase 10.3: Deploy now or deploy later
+5. At Phase 7.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
+6. At Phase 7.2a Step 2: Create a new Key Vault or fall back to direct environment variable (if no vaults found)
+7. At Phase 9.3: Create frontend integration or skip
+8. At Phase 11.3: Deploy now or deploy later
 
 ### SDK Pattern Source of Truth
 
@@ -717,11 +913,12 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, explore existing server logics and frontend patterns, verify .powerpages-site exists (mandatory) |
-| Understand requirements | Gathering requirements | Determine user intent, whether one or more server logic files are needed, and the methods/features for each item |
+| Understand requirements | Gathering requirements | Determine user intent, whether one or more server logic files are needed, the methods/features for each item, and any secrets required |
 | Fetch latest documentation | Fetching Microsoft Learn docs | Query Microsoft Learn for current Server Logic SDK reference and samples |
-| Review implementation plan | Reviewing plan with user | Present plan (server logic inventory, functions, SDK features, external APIs) and confirm before writing code |
+| Review implementation plan | Reviewing plan with user | Present plan (server logic inventory, functions, SDK features, external APIs, secrets) and confirm before writing code |
 | Implement server logic | Writing server logic code | Determine/create required web roles, create approved `.js` and `.serverlogic.yml` files, validate code |
 | Configure table permissions | Setting up Dataverse table permissions | (Conditional) Parse `.js` files for Dataverse tables, launch `table-permissions-architect`, create permission YAML files |
+| Manage secrets and environment variables | Configuring secrets and env vars | (Conditional) Recommend Azure Key Vault, list vaults, store secrets, create environment variables in Dataverse, create site settings with envvar_schema |
 | Configure site settings | Configuring site settings | Set up ServerLogic/* site settings if needed |
 | Client-side integration | Wiring frontend to server logic | Follow the frontend integration reference, create/update service files as needed, and fully wire the UI to the server logic endpoints |
 | Verify and test guidance | Validating and providing test guidance | Final validation, API URLs, CSRF token instructions, testing guide |
