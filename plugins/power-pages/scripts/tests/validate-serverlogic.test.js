@@ -160,6 +160,25 @@ function helper() {
   assert.match(result.stderr, /found additional top-level functions: helper/);
 });
 
+test('nested helper function inside handler is not flagged as disallowed', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  const nestedHelperJs = `function get() {
+    try {
+        function buildResponse(data) { return JSON.stringify({ status: "success", data: data }); }
+        Server.Logger.Log("test-endpoint GET called");
+        return buildResponse("hello");
+    } catch (err) {
+        Server.Logger.Error("test-endpoint GET failed: " + err.message);
+        return JSON.stringify({ status: "error", message: err.message });
+    }
+}`;
+  writeServerLogic(projectRoot, 'test-endpoint', nestedHelperJs, VALID_YML);
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('yml name mismatch is flagged', (t) => {
   const projectRoot = createTempProject(t);
   setupProject(projectRoot);

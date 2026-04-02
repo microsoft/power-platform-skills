@@ -69,11 +69,16 @@ if (fs.existsSync(filePath)) {
 
 const uuid = generateUuid();
 
+// Serialize a string value safely for YAML: always single-quote, escaping internal single quotes.
+function yamlStr(val) {
+  return "'" + val.replace(/'/g, "''") + "'";
+}
+
 const yamlContent = [
   'adx_serverlogic_adx_webrole:',
   ...webRoleIds.map(id => `  - ${id}`),
-  `description: ${description}`,
-  `display_name: ${displayName}`,
+  `description: ${yamlStr(description)}`,
+  `display_name: ${yamlStr(displayName)}`,
   `id: ${uuid}`,
   `name: ${endpointName}`,
   '',

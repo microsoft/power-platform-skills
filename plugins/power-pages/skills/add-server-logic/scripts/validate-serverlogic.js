@@ -108,7 +108,7 @@ runValidation((cwd) => {
     }
 
     // Check: no disallowed top-level functions outside the allowlist
-    const topLevelFnRegex = /(?:^|\n)\s*(?:async\s+)?function\s+([a-zA-Z0-9_]+)\s*\(/g;
+    const topLevelFnRegex = /^(?:async\s+)?function\s+([a-zA-Z0-9_]+)\s*\(/gm;
     let fnMatch;
     const disallowedFunctions = new Set();
     while ((fnMatch = topLevelFnRegex.exec(content)) !== null) {
