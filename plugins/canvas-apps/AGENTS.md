@@ -54,7 +54,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
 | `canvas-app-planner` | `generate-canvas-app` | Discovers resources, designs the app, presents plan for approval, writes plan document |
-| `canvas-screen-builder` | `generate-canvas-app` | Implements and validates one screen; runs in parallel with other builders |
+| `canvas-screen-builder` | `generate-canvas-app` | Implements one screen based on the plan; runs in parallel with other builders (app is compiled/validated after all screens are generated) |
 | `canvas-edit-planner` | `edit-canvas-app` | Reads existing .pa.yaml files, plans complex edits, presents edit plan for approval, writes canvas-edit-plan.md |
 | `canvas-screen-editor` | `edit-canvas-app` | Applies targeted edits to one screen's .pa.yaml; runs in parallel with other editors |
 
