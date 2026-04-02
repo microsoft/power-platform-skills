@@ -202,7 +202,7 @@ Use this structure:
 
 Mark the "Write plan document" task complete when done.
 
-## Step 9 — Return Summary
+## Step 8 — Return Summary
 
 After writing the plan document, return a concise summary to the orchestrating skill:
 

@@ -32,7 +32,7 @@ You will be invoked by the `generate-canvas-app` skill with a prompt that includ
 
 - The user's app requirements (`$ARGUMENTS`)
 - The working directory where `.pa.yaml` files should be written
-- The paths to `TechnicalGuide.md` and `DesignGuide.md`
+- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`), from which you must read `references/TechnicalGuide.md` and `references/DesignGuide.md`
 
 ## Step 1 — Read Reference Documents
 
@@ -190,7 +190,7 @@ Use this structure:
 
 Mark the "Write plan document" task complete when done.
 
-## Step 9 — Return Summary
+## Step 8 — Return Summary
 
 After writing both files, return a concise summary to the orchestrating skill:
 
@@ -210,7 +210,7 @@ App file written: [working directory]/App.pa.yaml
 
 - **Do NOT ask questions.** The one user interaction is the plan mode approval in Step 4.
 - **Do NOT write any screen `.pa.yaml` files.** Screen builders own all screen-level files.
-- **Do NOT call `compile_canvas`.** Compilation/validation is owned by the orchestrating `generate-canvas-app` skill.
+- **Do NOT call `compile_canvas` or instruct any other agent to call it.** Compilation/validation is performed exclusively by the orchestrating `generate-canvas-app` skill after all screens have been generated.
 - **Embed full `describe_control` output** in the plan document — never summarize property names.
   Screen builders must be able to write correct YAML from the plan document alone.
 - **Embed exact RGBA values** in the aesthetic direction — not prose color descriptions.
