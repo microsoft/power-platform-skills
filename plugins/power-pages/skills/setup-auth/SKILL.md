@@ -1,10 +1,18 @@
 ---
 name: setup-auth
-description: >-
-  Sets up authentication (login/logout via Microsoft Entra ID) and role-based authorization
-  for a Power Pages code site. Configures identity providers, protected routes, and access
-  control. Use when the user wants to add login, configure Entra ID, enable authentication,
-  or add role-based access to their site.
+description: >
+  This skill should be used when the user asks to "set up authentication",
+  "add login", "add logout", "configure Entra ID", "set up Azure AD auth",
+  "add Microsoft login", "enable authentication", "set up sign in",
+  "add role-based access", "add authorization", "protect routes",
+  "add auth to my site", "configure identity provider", "set up SAML",
+  "add SAML authentication", "configure OpenID Connect", "add OIDC",
+  "set up local login", "add username password login", "add social login",
+  "configure Facebook login", "add Google sign in", "set up WS-Federation",
+  or wants to set up authentication (login/logout) and role-based
+  authorization for their Power Pages code site using any supported
+  identity provider (Microsoft Entra ID, OpenID Connect, SAML2,
+  WS-Federation, local authentication, or social OAuth providers).
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
@@ -14,7 +22,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout via Microsoft Entra ID) and role-based authorization for a Power Pages code site. This skill creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework.
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers — Microsoft Entra ID, OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -134,7 +142,31 @@ If auth files already exist, present them to the user and ask whether to overwri
 
 #### 2.1 Gather Requirements
 
-Use `AskUserQuestion` to determine the scope:
+Use `AskUserQuestion` to determine the identity provider:
+
+| Question | Options |
+|----------|---------|
+| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
+
+**If "Social OAuth"**, follow up with:
+
+| Question | Options |
+|----------|---------|
+| Which social provider(s) do you want to configure? | Microsoft Account, Facebook, Google |
+
+**If "OpenID Connect (Generic)"**, ask for the provider details:
+
+| Question | Options |
+|----------|---------|
+| What is the Authority URL (metadata endpoint) for your OpenID Connect provider? (e.g., https://login.microsoftonline.com/{tenant}/v2.0) | *(free text)* |
+
+**If "SAML2"**, ask for the provider details:
+
+| Question | Options |
+|----------|---------|
+| What is the metadata endpoint URL for your SAML2 identity provider? (e.g., https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml) | *(free text)* |
+
+Then determine the scope:
 
 | Question | Options |
 |----------|---------|
@@ -191,23 +223,29 @@ Create `src/types/powerPages.d.ts` with type definitions for the Power Pages por
 
 #### 3.2 Create Auth Service
 
-Create the auth service file based on the detected framework:
+Create the auth service file based on the detected framework and selected identity provider.
 
 **All frameworks**: Create `src/services/authService.ts` with these functions:
 
 - `getCurrentUser()` — reads from `window.Microsoft.Dynamic365.Portal.User`
 - `isAuthenticated()` — checks if user exists and has `userName`
-- `getTenantId()` — reads from portal config (`window.Microsoft.Dynamic365.Portal.tenant`)
+- `getAuthProvider()` — returns the configured provider type and identifier
 - `fetchAntiForgeryToken()` — fetches from `/_layout/tokenhtml` and parses HTML response
-- `login(returnUrl?)` — creates a form POST to `/Account/Login/ExternalLogin` with:
-  - Anti-forgery token from `/_layout/tokenhtml`
-  - Provider URL: `https://login.windows.net/{tenantId}/`
-  - Return URL (defaults to current page)
+- `login(returnUrl?)` — initiates login based on the configured provider (see below)
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
 
-**CRITICAL**: Power Pages authentication is **server-side** (session cookies). The login flow posts a form to the server which redirects to Entra ID. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
+**Login flow varies by provider type:**
+
+- **Microsoft Entra ID**: Form POST to `/Account/Login/ExternalLogin` with provider `https://login.windows.net/{tenantId}/`
+- **OpenID Connect (Generic)**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
+- **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
+- **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
+- **Local Authentication**: Form POST to `/Account/Login/Login` with `Username` (or `Email`), `Password`, and anti-forgery token. Does NOT use the ExternalLogin endpoint.
+- **Social OAuth**: Form POST to `/Account/Login/ExternalLogin` with provider set to the social provider's `AuthenticationType` (e.g., `urn:microsoft:account`, `Facebook`, `Google`)
+
+**CRITICAL**: Power Pages authentication is **server-side** (session cookies). External login flows post a form to the server which redirects to the identity provider. Local login posts credentials directly to the server. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
 
 #### 3.3 Create Framework-Specific Auth Hook/Composable
 
@@ -474,23 +512,112 @@ If the auth button is not visible or the page has rendering errors, fix the issu
 
 ### Actions
 
-#### 8.1 Create Site Setting
+#### 8.1 Create Site Settings
 
-The site needs the `Authentication/Registration/ProfileRedirectEnabled` setting set to `false` to prevent Power Pages from redirecting users to a profile page after login (which doesn't exist in code sites).
-
-Check if `.powerpages-site/site-settings/` exists. If it does, create the site setting file:
+The site needs provider-specific site settings. Check if `.powerpages-site/site-settings/` exists. Generate a UUID for each setting file:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 
-Create `.powerpages-site/site-settings/authentication-registration-profileredirectenabled.yml`:
+**Always create** — `authentication-registration-profileredirectenabled.yml`:
 
 ```yaml
-id: <UUID from generate-uuid.js>
+id: <UUID>
 name: Authentication/Registration/ProfileRedirectEnabled
 value: false
 ```
+
+**Provider-specific settings** — create additional site setting files based on the selected identity provider:
+
+**Microsoft Entra ID** (no additional settings needed — configured via Power Pages admin center).
+
+**OpenID Connect (Generic)** — create settings for the provider:
+
+```yaml
+# authentication-openidconnect-{provider}-authority.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/Authority
+value: <authority-url-from-user>
+
+# authentication-openidconnect-{provider}-clientid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/ClientId
+value: <to-be-configured>
+
+# authentication-openidconnect-{provider}-redirecturi.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/RedirectUri
+value: <site-url>/signin-{provider}
+
+# authentication-openidconnect-{provider}-externallogoutenabled.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled
+value: true
+```
+
+**SAML2** — create settings for the provider:
+
+```yaml
+# authentication-saml2-{provider}-metadataaddress.yml
+id: <UUID>
+name: Authentication/SAML2/{ProviderName}/MetadataAddress
+value: <metadata-url-from-user>
+
+# authentication-saml2-{provider}-authenticationtype.yml
+id: <UUID>
+name: Authentication/SAML2/{ProviderName}/AuthenticationType
+value: <site-url>
+
+# authentication-saml2-{provider}-serviceproviderrealm.yml
+id: <UUID>
+name: Authentication/SAML2/{ProviderName}/ServiceProviderRealm
+value: <site-url>
+```
+
+**WS-Federation** — create settings for the provider:
+
+```yaml
+# authentication-wsfederation-{provider}-metadataaddress.yml
+id: <UUID>
+name: Authentication/WsFederation/{ProviderName}/MetadataAddress
+value: <metadata-url-from-user>
+
+# authentication-wsfederation-{provider}-wtrealm.yml
+id: <UUID>
+name: Authentication/WsFederation/{ProviderName}/Wtrealm
+value: <site-url>
+```
+
+**Local Authentication**:
+
+```yaml
+# authentication-registration-localloginenabled.yml
+id: <UUID>
+name: Authentication/Registration/LocalLoginEnabled
+value: true
+
+# authentication-registration-localloginbyemail.yml
+id: <UUID>
+name: Authentication/Registration/LocalLoginByEmail
+value: true
+```
+
+**Social OAuth** — create settings for each selected social provider (e.g., Facebook):
+
+```yaml
+# authentication-openidconnect-{social-provider}-clientid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{SocialProviderName}/ClientId
+value: <to-be-configured>
+
+# authentication-openidconnect-{social-provider}-clientsecret.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{SocialProviderName}/ClientSecret
+value: <to-be-configured>
+```
+
+Remind the user to fill in placeholder values (`<to-be-configured>`) with actual credentials from their identity provider's application registration.
 
 #### 8.2 Record Skill Usage
 
@@ -528,10 +655,16 @@ Use `AskUserQuestion`:
 
 #### 8.5 Post-Deploy Notes
 
-After deployment (or if skipped), remind the user:
+After deployment (or if skipped), remind the user with provider-specific guidance:
 
 - **Test on deployed site**: Auth only works on the deployed Power Pages site, not on `localhost`
-- **Entra ID configuration**: The site's identity provider must be configured in the Power Pages admin center to use Microsoft Entra ID
+- **Identity provider configuration**: Provider-specific setup is required:
+  - **Entra ID**: Configure the identity provider in the Power Pages admin center
+  - **OpenID Connect**: Register a client application with the OIDC provider and update the `ClientId` site setting. Set the redirect URI in the provider to `{site-url}/signin-{provider}`
+  - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
+  - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
+  - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
+  - **Social OAuth**: Register an application with each social provider (e.g., Facebook Developer Console, Google Cloud Console) and update the `ClientId` and `ClientSecret` site settings
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
 - **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production

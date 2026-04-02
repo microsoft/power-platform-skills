@@ -42,6 +42,10 @@ runValidation((cwd) => {
     if (!content.includes('/_layout/tokenhtml') && !content.includes('fetchAntiForgeryToken')) {
       errors.push('Auth service missing anti-forgery token handling');
     }
+    // Verify provider configuration exists (supports all provider types)
+    if (!content.includes('AUTH_PROVIDER') && !content.includes('AuthProviderConfig') && !content.includes('provider')) {
+      errors.push('Auth service missing provider configuration (AUTH_PROVIDER or provider identifier)');
+    }
   }
 
   // Check for authorization utilities

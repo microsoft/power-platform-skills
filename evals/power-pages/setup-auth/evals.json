@@ -9,8 +9,10 @@
       "expectations": [
         "Detects the site as a React framework project",
         "Discovers existing web roles including Administrators and Authenticated Users",
+        "Asks which identity provider to use and user selects Microsoft Entra ID",
         "Creates a powerPages.d.ts type declarations file for the shell API",
-        "Creates an auth service module with login and logout functions using Microsoft Entra ID",
+        "Creates an auth service module with AUTH_PROVIDER configured for entra-id type",
+        "Auth service login function posts to /Account/Login/ExternalLogin with Entra ID provider URL",
         "Creates a React-specific hook (e.g., useAuth) for consuming auth state in components",
         "Creates mock data or local dev helpers so auth works in local development",
         "Creates authorization utility functions for checking user roles",
@@ -79,6 +81,113 @@
         "Prompts or instructs the user to create web roles in Power Pages admin center before proceeding",
         "Does not create authorization utilities or role-based components without valid web roles",
         "May still offer to set up basic login/logout authentication without role-based access"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Set up authentication for my Power Pages React site using a generic OpenID Connect provider. Our company uses Okta as our identity provider. The authority URL is https://dev-12345.okta.com/oauth2/default.",
+      "expected_output": "Auth setup for a React site using OpenID Connect with Okta. Auth service configured with OIDC provider type, Okta authority URL, and appropriate site settings for the OpenID Connect provider. AuthButton shows 'Sign in with Okta'. OIDC site settings created for authority, client ID, and redirect URI.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks which identity provider to use and user selects OpenID Connect",
+        "Accepts the Okta authority URL from the user",
+        "Creates an auth service with AUTH_PROVIDER configured for oidc type",
+        "Auth service has providerIdentifier set to the Okta-based AuthenticationType",
+        "Auth service login function posts to /Account/Login/ExternalLogin with the OIDC provider identifier",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/Authority with Okta URL",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/ClientId as placeholder",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/RedirectUri",
+        "Reminds user to fill in the ClientId from their Okta application registration",
+        "Creates a powerPages.d.ts type declarations file",
+        "Creates AuthButton component with 'Sign in with Okta' display text",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Configure SAML2 authentication for my Power Pages Vue site. We use ADFS as our identity provider. The metadata endpoint is https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml.",
+      "expected_output": "Auth setup for a Vue site using SAML2 with ADFS. Auth service configured with SAML2 provider type, ADFS metadata URL, and site settings for MetadataAddress, AuthenticationType, and ServiceProviderRealm. Vue composable and AuthButton created. SAML2-specific site settings created.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a Vue framework project",
+        "Asks which identity provider to use and user selects SAML2",
+        "Accepts the ADFS metadata endpoint URL from the user",
+        "Creates an auth service with AUTH_PROVIDER configured for saml2 type",
+        "Auth service login function posts to /Account/Login/ExternalLogin with the SAML2 provider identifier",
+        "Creates site settings for Authentication/SAML2/{provider}/MetadataAddress with the ADFS URL",
+        "Creates site settings for Authentication/SAML2/{provider}/AuthenticationType",
+        "Creates site settings for Authentication/SAML2/{provider}/ServiceProviderRealm",
+        "Creates a Vue-specific composable (e.g., useAuth) for consuming auth state",
+        "Creates AuthButton component with SAML2-appropriate display text",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I want to set up local username and password authentication for my Power Pages React site. No external identity provider needed, just simple email/password login.",
+      "expected_output": "Auth setup for a React site using local authentication. Auth service configured with local provider type that posts credentials to /Account/Login/Login instead of ExternalLogin. Includes a LocalLoginForm component with username and password fields. Site settings enable local login.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks which identity provider to use and user selects Local Authentication",
+        "Creates an auth service with AUTH_PROVIDER configured for local type",
+        "Auth service login function posts to /Account/Login/Login with username and password fields",
+        "Auth service login function does NOT use /Account/Login/ExternalLogin for local login",
+        "Creates a LocalLoginForm component with username/email and password input fields",
+        "LocalLoginForm handles form submission and error display",
+        "Creates site settings for Authentication/Registration/LocalLoginEnabled set to true",
+        "Creates site settings for Authentication/Registration/LocalLoginByEmail set to true",
+        "Creates a powerPages.d.ts type declarations file",
+        "Creates mock data or local dev helpers so auth works in local development",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Add Google and Facebook social login to my Power Pages Angular site. I want users to be able to sign in with either provider.",
+      "expected_output": "Auth setup for an Angular site with social OAuth providers (Google and Facebook). Auth service supports multiple social providers with appropriate provider identifiers. Site settings created for both Google and Facebook with placeholder client IDs and secrets. Login UI shows both provider options.",
+      "files": [],
+      "expectations": [
+        "Detects the site as an Angular framework project",
+        "Asks which identity provider to use and user selects Social OAuth",
+        "Asks which social providers to configure and user selects Google and Facebook",
+        "Creates an auth service with provider configuration supporting social type",
+        "Auth service supports login with provider identifiers for both Google and Facebook",
+        "Creates site settings for Authentication/OpenIdConnect/Google/ClientId as placeholder",
+        "Creates site settings for Authentication/OpenIdConnect/Google/ClientSecret as placeholder",
+        "Creates site settings for Authentication/OpenIdConnect/Facebook/ClientId as placeholder",
+        "Creates site settings for Authentication/OpenIdConnect/Facebook/ClientSecret as placeholder",
+        "Reminds user to register applications with Google and Facebook and fill in credentials",
+        "Creates auth UI that presents both Google and Facebook as login options",
+        "Creates a powerPages.d.ts type declarations file",
+        "Creates Angular-specific injectable service for auth state",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Set up WS-Federation authentication for my Power Pages Astro site. We use an on-premises ADFS server for federation. The metadata endpoint is https://adfs.contoso.com/federationmetadata/2007-06/federationmetadata.xml.",
+      "expected_output": "Auth setup for an Astro site using WS-Federation with ADFS. Auth service configured with WS-Federation provider type, ADFS metadata URL, and site settings for MetadataAddress, Wtrealm, and AuthenticationType. Astro uses the auth service directly without a framework wrapper. WS-Federation-specific site settings created.",
+      "files": [],
+      "expectations": [
+        "Detects the site as an Astro framework project",
+        "Asks which identity provider to use and user selects WS-Federation",
+        "Accepts the ADFS metadata endpoint URL from the user",
+        "Creates an auth service with AUTH_PROVIDER configured for ws-federation type",
+        "Auth service login function posts to /Account/Login/ExternalLogin with the WS-Federation provider identifier",
+        "Creates site settings for Authentication/WsFederation/{provider}/MetadataAddress with the ADFS URL",
+        "Creates site settings for Authentication/WsFederation/{provider}/Wtrealm with the site URL",
+        "Astro site uses authService.ts directly without a framework-specific wrapper",
+        "Creates a powerPages.d.ts type declarations file",
+        "Creates mock data or local dev helpers so auth works in local development",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
       ]
     }
   ]
