@@ -72,7 +72,6 @@ The `canvas-authoring` MCP server exposes the following tools:
 | `list_controls` | Lists all available Power Apps controls in the current authoring session |
 | `list_data_sources` | Lists all available data sources in the current authoring session |
 | `sync_canvas` | Syncs the current coauthoring session state from the server to a local directory, writing all YAML files |
-| `image_search` | Search for stock images to use in the app |
 
 ## Prerequisites
 

@@ -37,11 +37,9 @@ Locate and extract:
 - The **Aesthetic Direction** section (exact RGBA values, layout strategy, typography scale)
 - The **Named Variables and Shared State** section (variable names to use for consistency)
 - The **Control Definitions** for every control type your screen uses (full `describe_control` output embedded in the plan)
-- The **Image Library** entries relevant to your screen
 - The **TechnicalGuide Key Conventions** section (YAML syntax rules)
 
-Do not call `describe_control`, `list_controls`, `list_apis`, `list_data_sources`, or
-`image_search`. All of that information is embedded in the plan document.
+Do not call `describe_control`, `list_controls`, `list_apis`, or `list_data_sources`. All of that information is embedded in the plan document.
 
 ## Step 2 — Create a Task
 
@@ -61,8 +59,6 @@ Follow the conventions from the plan document's TechnicalGuide Key Conventions s
 - Use exact property names from the Control Definitions in the plan — never guess property names
 - Use exact RGBA values from the Aesthetic Direction — never substitute similar colors
 - Use exact variable names from the Named Variables section — consistency across screens is required
-- Select image URLs from the Image Library entries specified for your screen
-
 Write the simplest working version of each formula. The compiler will catch syntax errors —
 reserve your reasoning for logic correctness that the compiler cannot catch.
 
@@ -79,7 +75,7 @@ Status: Written
 ## Critical Constraints
 
 - **Do NOT call** `describe_control`, `list_controls`, `list_apis`, `list_data_sources`,
-  `image_search`, or `compile_canvas`. All context is in the plan document; compilation
+  or `compile_canvas`. All context is in the plan document; compilation
   is handled by the orchestrating skill after all screens are written.
 - **Do NOT modify other screens' YAML files.** You own exactly one file.
 - **Use exact values from the plan document** — RGBA values, variable names, control

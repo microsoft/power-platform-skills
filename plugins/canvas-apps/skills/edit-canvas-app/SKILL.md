@@ -4,7 +4,7 @@ version: 2.0.0
 description: Edit an existing Power Apps canvas app. USE WHEN the user wants to modify, update, change, or edit an existing Canvas App or pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__image_search
+allowed-tools: Read, Write, Edit, Bash, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas
 ---
 
 # Edit a Canvas App
@@ -104,10 +104,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md` before making changes.
 Apply the changes directly:
 
 1. **Edit** the relevant `.pa.yaml` files with the required changes, following conventions
-   from TechnicalGuide.md. If the edit adds or replaces images, call `image_search` first:
-   - Fetch 8–10 images minimum for UIs with multiple sections or cards
-   - Use generic 2–3 word keywords: "modern office", "team meeting", "nature landscape"
-   - Avoid domain-specific terms; use diverse, distinct queries
+   from TechnicalGuide.md.
 
 2. **Validate** by calling `compile_canvas` on the working directory after making changes.
    On failure, read the errors, fix with `Edit`, and re-compile. Iterate until clean.

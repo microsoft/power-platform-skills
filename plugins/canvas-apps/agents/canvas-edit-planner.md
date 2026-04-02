@@ -4,7 +4,7 @@ description: >-
   Plans edits to an existing Canvas App. Reads current .pa.yaml files to understand
   the existing app; discovers new controls or APIs only if needed; presents an edit plan
   for user approval via plan mode; gathers describe_control output for any new controls;
-  searches for images if needed; writes canvas-edit-plan.md for canvas-screen-editor agents.
+  writes canvas-edit-plan.md for canvas-screen-editor agents.
   Called by edit-canvas-app for complex edits — not invoked directly by users.
 model: opus
 color: orange
@@ -20,7 +20,6 @@ tools:
   - mcp__canvas-authoring__list_apis
   - mcp__canvas-authoring__list_data_sources
   - mcp__canvas-authoring__describe_control
-  - mcp__canvas-authoring__image_search
 ---
 
 # Canvas Edit Planner
@@ -62,7 +61,7 @@ This is essential context for planning changes that are consistent with the exis
 If the edit requirements involve **adding new controls or data sources** not currently in the
 app, call the relevant discovery tools:
 
-- `list_controls` — if new control types will be added
+- `list_controls` — if new control types will be added or for existing to-be-changed controls
 - `list_apis` — if new connectors are needed
 - `list_data_sources` — if new data sources are needed
 
@@ -73,9 +72,8 @@ Skip discovery calls for edits that only modify existing controls, properties, o
 Call `TaskCreate` once per task:
 
 1. "Analyze current app state and design edit plan"
-2. "Gather control property definitions (describe_control)" — only if new controls are needed
-3. "Search for stock images" — only if images are being added or changed
-4. "Write plan document (canvas-edit-plan.md)"
+2. "Gather control property definitions (describe_control)" — only if new controls are needed or existing controls should change
+3. "Write plan document (canvas-edit-plan.md)"
 
 ## Step 5 — Design and Present Plan for Approval
 
@@ -127,20 +125,7 @@ Collect the full output of each `describe_control` call for embedding in the pla
 
 Mark the "Gather control property definitions" task complete when done (or skip if not needed).
 
-## Step 7 — Search for Stock Images (If Needed)
-
-If the edit requirements involve adding or replacing images, call `image_search`.
-
-- Fetch 8–10 images minimum for UIs with multiple sections or cards
-- Use generic 2–3 word keywords: "modern office", "team meeting", "nature landscape"
-- Avoid domain-specific terms: use "professional tools" not "equipment checkout"
-- Use diverse, distinct queries — vary subject matter completely
-
-Collect all image URLs organized by category for embedding in the plan document.
-
-Mark the "Search for stock images" task complete when done (or skip if not needed).
-
-## Step 8 — Write canvas-edit-plan.md
+## Step 7 — Write canvas-edit-plan.md
 
 Write `canvas-edit-plan.md` to the working directory. This document is the **single source of
 truth** for all `canvas-screen-editor` agents — each editor will only `Read` this file and
@@ -187,12 +172,6 @@ Use this structure:
 ### [ControlTypeName]
 [Full describe_control output]
 
-## Image Library
-[All image_search results organized by category — omit if no images are being added/changed]
-
-### [Category Name]
-- [URL] — [brief description]
-
 ## Per-Screen Edit Specifications
 
 ### [Screen Name] (Existing)
@@ -202,7 +181,6 @@ Use this structure:
 - **Controls to Add:** [control name, type, properties — or "none"]
 - **Controls to Remove:** [control name — or "none"]
 - **Properties to Update:** [control name → property name → new value]
-- **Images:** [which image URLs from the Image Library to use, if any]
 
 ### [Screen Name] (New)
 - **File:** [Name].pa.yaml
@@ -210,7 +188,6 @@ Use this structure:
 - **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
 - **Key Controls:** [list with purpose of each]
 - **Data Binding:** [variable names, data source references, collection names]
-- **Images:** [which image URLs from the Image Library to use]
 - **Navigation:** [which screen(s) this navigates to, trigger conditions]
 - **State:** [any local variables set in OnVisible]
 

@@ -3,7 +3,7 @@ name: canvas-app-planner
 description: >-
   Plans and designs a Canvas App. Discovers available controls, APIs, and data sources;
   designs the aesthetic direction and screen plan; presents plan for user approval via plan mode;
-  calls describe_control for all controls in the design; searches for stock images; writes
+  calls describe_control for all controls in the design; writes
   App.pa.yaml and canvas-app-plan.md for canvas-screen-builder agents to consume.
   Called by generate-canvas-app — not invoked directly by users.
 model: opus
@@ -20,7 +20,6 @@ tools:
   - mcp__canvas-authoring__list_apis
   - mcp__canvas-authoring__list_data_sources
   - mcp__canvas-authoring__describe_control
-  - mcp__canvas-authoring__image_search
 ---
 
 # Canvas App Planner
@@ -64,8 +63,7 @@ Call `TaskCreate` once per task:
 
 1. "Design screen plan and aesthetic direction"
 2. "Gather control property definitions (describe_control)"
-3. "Search for stock images"
-4. "Write plan document (canvas-app-plan.md)"
+3. "Write plan document (canvas-app-plan.md)"
 
 ## Step 4 — Design and Present Plan for Approval
 
@@ -111,29 +109,13 @@ Collect the full output of each `describe_control` call for embedding in the pla
 
 Mark the "Gather control property definitions" task complete when done.
 
-## Step 6 — Search for Stock Images
-
-For any screen that uses images (backgrounds, cards, hero sections), call `image_search`.
-
-- Fetch 8–10 images minimum for UIs with multiple sections or cards
-- Use generic 2–3 word keywords: "modern office", "team meeting", "nature landscape"
-- Avoid domain-specific terms: use "professional tools" not "equipment checkout"
-- Use diverse, distinct queries — vary subject matter completely:
-  - Good: "sunset beach", "mountain lake", "city skyline", "forest path", "coffee shop"
-  - Bad: "beach scene", "beach view", "sandy beach" (too similar)
-- For large UIs needing 10+ images, make multiple calls with different themes
-
-Collect all image URLs organized by category for embedding in the plan document.
-
-Mark the "Search for stock images" task complete when done.
-
-## Step 7 — Write App.pa.yaml
+## Step 6 — Write App.pa.yaml
 
 Write the app-level YAML file (`App.pa.yaml`) to the working directory. This file is shared
 across all screens — do not write screen-level content here. Follow TechnicalGuide.md
 conventions for app-level properties.
 
-## Step 8 — Write canvas-app-plan.md
+## Step 7 — Write canvas-app-plan.md
 
 Write `canvas-app-plan.md` to the working directory. This document is the **single source of
 truth** for all `canvas-screen-builder` agents — each builder will only `Read` this file and
@@ -183,13 +165,6 @@ Use this structure:
 ### [ControlTypeName]
 [Full describe_control output]
 
-## Image Library
-[All image_search results organized by category]
-
-### [Category Name]
-- [URL] — [brief description]
-- [URL] — [brief description]
-
 ## Per-Screen Specifications
 
 ### [Screen Name]
@@ -198,7 +173,6 @@ Use this structure:
 - **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
 - **Key Controls:** [list with purpose of each]
 - **Data Binding:** [variable names, data source references, collection names]
-- **Images:** [which image URLs from the Image Library to use]
 - **Navigation:** [which screen(s) this navigates to, trigger conditions]
 - **State:** [any local variables set in OnVisible]
 
