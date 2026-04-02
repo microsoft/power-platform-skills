@@ -18,6 +18,7 @@ test('detectTrackedSkill recognizes slash command aliases without plugin prefix'
   assert.equal(detectTrackedSkill('/create-site'), 'create-site');
   assert.equal(detectTrackedSkill('/setup-auth'), 'setup-auth');
   assert.equal(detectTrackedSkill('/add-server-logic'), 'add-server-logic');
+  assert.equal(detectTrackedSkill('/add-cloud-flow'), 'add-cloud-flow');
   assert.equal(detectTrackedSkill('/integrate-webapi'), 'integrate-webapi');
   assert.equal(detectTrackedSkill('/audit-permissions'), 'audit-permissions');
   assert.equal(detectTrackedSkill('/deploy-site'), null);

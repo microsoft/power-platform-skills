@@ -38,6 +38,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | test-site | TestSite | Site/AI/Skills/TestSite |
 | audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
 | add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
+| add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 
 ## YAML Format
 

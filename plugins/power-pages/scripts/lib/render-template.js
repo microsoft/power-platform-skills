@@ -12,25 +12,30 @@ const path = require('path');
 
 /**
  * @param {Object} options
- * @param {string} options.templatePath - Absolute path to the HTML template
- * @param {string} options.outputPath   - Absolute path for the rendered output
- * @param {string} options.dataPath     - Absolute path to the JSON data file
- * @param {string[]} options.requiredKeys - Keys that must be present in the data file
+ * @param {string} options.templatePath  - Absolute path to the HTML template
+ * @param {string} options.outputPath    - Absolute path for the rendered output
+ * @param {string} [options.dataPath]    - Absolute path to a JSON data file (mutually exclusive with dataObject)
+ * @param {Object} [options.dataObject]  - Data object passed directly (mutually exclusive with dataPath)
+ * @param {string[]} options.requiredKeys - Keys that must be present in the data
  */
-function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
     process.exit(1);
   }
-  if (!fs.existsSync(dataPath)) {
+  if (!dataObject && !dataPath) {
+    console.error('Either dataPath or dataObject must be provided');
+    process.exit(1);
+  }
+  if (dataPath && !fs.existsSync(dataPath)) {
     console.error(`Data file not found: ${dataPath}`);
     process.exit(1);
   }
 
   // Read template and data
   const template = fs.readFileSync(templatePath, 'utf8');
-  const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  const data = dataObject ?? JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
   // Validate required keys
   const missing = requiredKeys.filter((k) => !(k in data));
