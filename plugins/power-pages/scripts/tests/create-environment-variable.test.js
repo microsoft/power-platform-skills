@@ -6,10 +6,11 @@ const { spawnSync } = require('child_process');
 const cliPath = path.join(__dirname, '..', 'create-environment-variable.js');
 const FAKE_ENV_URL = 'https://org123.crm.dynamics.com';
 
-function runCreateEnvVar(args) {
+function runCreateEnvVar(args, opts = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
     timeout: 10000,
+    ...opts,
   });
 }
 
@@ -111,8 +112,8 @@ test('create-environment-variable accepts valid string type args (fails at auth)
     '--schemaName', 'cr5b4_ApiSecret',
     '--displayName', 'API Secret',
     '--value', 'my-secret-value',
-  ]);
-  // Passes validation but fails when getting auth token
+  ], { env: { ...process.env, PATH: '' } });
+  // Passes validation but fails when getting auth token (az CLI unavailable)
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stderr, /Usage:/);
   assert.doesNotMatch(result.stderr, /--type must be/);
@@ -126,7 +127,7 @@ test('create-environment-variable accepts valid secret type args (fails at auth)
     '--displayName', 'Vault Secret',
     '--value', 'https://myvault.vault.azure.net/secrets/mysecret/abc123',
     '--type', 'secret',
-  ]);
+  ], { env: { ...process.env, PATH: '' } });
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stderr, /Usage:/);
   assert.doesNotMatch(result.stderr, /--type must be/);
