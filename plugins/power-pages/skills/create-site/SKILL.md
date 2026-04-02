@@ -279,7 +279,7 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step.
 2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure.
 3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use
-4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely
+4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`.
 5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
 6. **Navigation** — Add links to the new Layout/Header component
 7. **Entry HTML** — Update `index.html` (or `Layout.astro` for Astro) to load the chosen Google Fonts instead of the scaffold's DM Sans + Outfit
