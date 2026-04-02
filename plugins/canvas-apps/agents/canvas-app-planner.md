@@ -6,7 +6,6 @@ description: >-
   calls describe_control for all controls in the design; writes
   App.pa.yaml and canvas-app-plan.md for canvas-screen-builder agents to consume.
   Called by generate-canvas-app — not invoked directly by users.
-model: opus
 color: cyan
 tools:
   - Read

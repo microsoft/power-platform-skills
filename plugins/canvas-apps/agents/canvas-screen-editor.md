@@ -6,7 +6,6 @@ description: >-
   For new screens, writes from scratch. Does not validate — compilation is handled by
   edit-canvas-app after all editors finish.
   Called by edit-canvas-app in parallel — not invoked directly by users.
-model: sonnet
 color: yellow
 tools:
   - Read

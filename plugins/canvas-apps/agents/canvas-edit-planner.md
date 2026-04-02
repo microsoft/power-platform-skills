@@ -6,7 +6,6 @@ description: >-
   for user approval via plan mode; gathers describe_control output for any new controls;
   writes canvas-edit-plan.md for canvas-screen-editor agents.
   Called by edit-canvas-app for complex edits — not invoked directly by users.
-model: opus
 color: orange
 tools:
   - Read

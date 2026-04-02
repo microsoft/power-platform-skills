@@ -5,7 +5,6 @@ description: >-
   for all context and writes the screen's .pa.yaml file. Does not validate — compilation
   is handled by generate-canvas-app after all screens are written.
   Called by generate-canvas-app in parallel — not invoked directly by users.
-model: sonnet
 color: green
 tools:
   - Read
