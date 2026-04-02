@@ -33,7 +33,7 @@ You will be invoked by the `generate-canvas-app` skill with a prompt that includ
 
 - The user's app requirements (`$ARGUMENTS`)
 - The working directory where `.pa.yaml` files should be written
-- The paths to `TechnicalGuide.md` and `DesignGuide.md`
+- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`), from which you must read `references/TechnicalGuide.md` and `references/DesignGuide.md`
 
 ## Step 1 — Read Reference Documents
 
