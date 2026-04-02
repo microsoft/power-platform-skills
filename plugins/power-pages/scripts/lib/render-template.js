@@ -65,6 +65,15 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
+  // Never overwrite an existing file — the caller must choose a unique name
+  if (fs.existsSync(outputPath)) {
+    console.error(
+      `Error: Output file already exists: ${outputPath}\n` +
+      'Choose a different filename to avoid overwriting the previous plan.'
+    );
+    process.exit(1);
+  }
+
   fs.writeFileSync(outputPath, result, 'utf8');
   console.log(JSON.stringify({ status: 'ok', output: outputPath }));
 }

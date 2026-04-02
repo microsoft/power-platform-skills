@@ -470,11 +470,13 @@ Run the render script (it creates the output directory if needed):
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`.
+
 Delete the temporary data JSON file after the script succeeds.
 
 ### 5.4 Open in Browser
 
-Open the generated HTML file in the user's default browser.
+Open the actual output path in the user's default browser.
 
 ---
 

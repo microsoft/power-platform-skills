@@ -246,6 +246,8 @@ Do **not** hand-author the HTML. Use the render script:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/serverlogic-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `serverlogic-plan-exchange-rate.html`, `serverlogic-plan-apr-2026.html`. Pass the chosen name via `--output`.
+
 ### 4.3 Present Plan Summary
 
 Do **not** present a second detailed plan in the CLI. The HTML file is the single detailed plan artifact.
@@ -255,7 +257,7 @@ In the CLI, give only a brief summary that points the user to the HTML plan open
 - Total server logic count
 - Whether the plan is creating, updating, or reusing items
 - Whether web roles, table permissions, or site settings are involved
-- The path to `docs/serverlogic-plan.html`
+- The actual output path returned by the render script
 - A note that the browser-opened HTML contains the full details
 
 Do not restate the per-server-logic breakdown, rationale, role assignments, or function details inline in the CLI unless the user explicitly asks for a text version. Tell the user where the detailed HTML plan file was saved, that it has been opened in the browser for review, and that the repo copy of the plan will be committed with the implementation artifacts unless the user asks to discard it.
@@ -411,7 +413,7 @@ Before saving, verify the code against these constraints:
 
 After creating the approved server logic files, do a git commit for the server logic changes.
 
-If the HTML plan was generated inside the project, include `docs/serverlogic-plan.html` in the same commit.
+If the HTML plan was generated inside the project, include it in the same commit (use the actual output path from the render script's JSON response).
 
 **Output**: Server logic `.js` and `.serverlogic.yml` files created, validated, and committed
 
@@ -638,7 +640,7 @@ Present a summary of everything that was done:
 |------|--------|---------|
 | Server Logic JS | Created | List each created `.powerpages-site/server-logic/<name>/<name>.js` file |
 | Server Logic YAML | Created | List each created `.powerpages-site/server-logic/<name>/<name>.serverlogic.yml` file |
-| HTML Plan | Created/Updated | `docs/serverlogic-plan.html` |
+| HTML Plan | Created/Updated | Actual path from render script output |
 | Functions | Implemented | Summarize methods implemented per server logic item |
 | SDK Features Used | — | Summarize features used per server logic item |
 | Table Permissions | Created/Skipped | `accounts` (Read), `contacts` (Read, Create), etc. |

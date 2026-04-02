@@ -338,7 +338,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/render-cloudflow-plan.js" \
   --data-inline '<json>'
 ```
 
-Open in the default browser (`open` on macOS, `start` on Windows, `xdg-open` on Linux).
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/cloud-flow-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `cloud-flow-plan-contact-form.html`, `cloud-flow-plan-apr-2026.html`. Pass the chosen name via `--output`.
+
+Open the rendered file in the default browser (`open` on macOS, `start` on Windows, `xdg-open` on Linux).
 
 ### 5.3 Confirm with User
 
@@ -409,7 +411,7 @@ The generated YAML (PAC CLI code-site git format):
 
 ### 6.5 Git Commit
 
-After all YAML files (and any new web roles) are created, do a single git commit. Include `docs/cloud-flow-plan.html`.
+After all YAML files (and any new web roles) are created, do a single git commit. Include the HTML plan file (use the actual output path from the render script's JSON response).
 
 **Output**: One `.cloudflowconsumer.yml` per `new` flow, committed (skipped for `integration-only` flows)
 
@@ -580,7 +582,7 @@ Use `--skillName "AddCloudFlow"`.
 | Metadata files | Created/Skipped | List each `.cloudflowconsumer.yml` path (skipped for integration-only) |
 | Client service | Created/Updated | Path to service file |
 | UI integration | Done | Components/pages updated (new call sites for all flows) |
-| HTML Plan | Created | `docs/cloud-flow-plan.html` |
+| HTML Plan | Created | Actual path from render script output |
 
 ### 8.4 Ask to Deploy
 
