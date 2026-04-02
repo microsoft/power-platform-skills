@@ -50,6 +50,9 @@ If the tracking script creates or updates site setting YAML files, include those
 | setup-pipeline | SetupPipeline | Site/AI/Skills/SetupPipeline |
 | deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
 | ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
+| git-connect | GitConnect | Site/AI/Skills/GitConnect |
+| git-commit | GitCommit | Site/AI/Skills/GitCommit |
+| git-pull | GitPull | Site/AI/Skills/GitPull |
 
 ## YAML Format
 
