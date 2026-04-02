@@ -15,7 +15,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-# Integrate Server Logic
+# Add Server Logic
 
 Create and manage one or more Power Pages Server Logic files — server-side JavaScript that runs securely on the Power Pages runtime, hidden from the browser and protected by web roles and table permissions. Server Logic enables secure external API integrations, Dataverse operations, and custom business logic without exposing sensitive code or credentials to the client.
 
@@ -652,9 +652,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 Do **not** ask for secret values — they must never pass through the conversation. Instead, tell the user to update each placeholder with the real value using one of these approaches:
 
-1. **Power Platform admin center** — Go to **Environments** → select the environment → **Environment variables** → find the variable by display name → update the value
-2. **Power Apps maker portal** — Go to **Solutions** → open the relevant solution → **Environment variables** → edit the value
-3. **PAC CLI** — `pac env update-variable --name "<schemaName>" --value "<actual-value>"`
+1. **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) — Go to **Solutions** → **Default Solution** → **Environment variables** → find the variable by display name → update the value
 
 Present the list of environment variables that need updating (display name and schema name for each) so the user knows exactly which ones to set.
 
@@ -876,6 +874,9 @@ After deployment (or if skipped), remind the user:
 - **Timeout**: Default execution timeout is 120 seconds — this is also the platform maximum (values above 120 are silently clamped)
 - **Anonymous access**: If the site's governance control disables anonymous access, anonymous users cannot invoke server logic that integrates with external systems
 - **Preview feature**: Server Logic is currently in preview — monitor Microsoft Learn for updates
+- **Environment variables with placeholder values**: If Phase 7 created environment variables with placeholder values, remind the user to update them with the actual secret values before testing. They can do this via:
+  1. **Power Platform admin center** — **Environments** → select environment → **Environment variables** → find by display name → update value
+  2. **Power Apps maker portal** — **Solutions** → open solution → **Environment variables** → edit value
 
 **Output**: Summary presented, deployment completed or deferred, post-deploy guidance provided
 

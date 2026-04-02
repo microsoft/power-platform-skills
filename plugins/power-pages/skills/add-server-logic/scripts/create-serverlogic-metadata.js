@@ -61,6 +61,13 @@ if (!fs.existsSync(serverLogicDir)) {
   process.exit(1);
 }
 
+const serverLogicScriptPath = path.join(serverLogicDir, `${endpointName}.js`);
+if (!fs.existsSync(serverLogicScriptPath)) {
+  console.error(`Error: Server logic JavaScript file not found at ${serverLogicScriptPath}`);
+  console.error('Create the server logic JavaScript file before generating metadata.');
+  process.exit(1);
+}
+
 const filePath = path.join(serverLogicDir, `${endpointName}.serverlogic.yml`);
 if (fs.existsSync(filePath)) {
   console.error(`Error: Server logic metadata file already exists at ${filePath}`);

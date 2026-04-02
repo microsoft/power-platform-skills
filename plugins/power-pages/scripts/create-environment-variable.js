@@ -25,8 +25,14 @@ const generateUuid = require('./generate-uuid');
 
 const cliArgs = process.argv.slice(2);
 
-// First positional arg is the environment URL
-const envUrl = cliArgs[0] && !cliArgs[0].startsWith('--') ? cliArgs[0].replace(/\/+$/, '') : null;
+// First positional arg is the environment URL — validate as HTTPS URL to prevent shell injection
+// (envUrl flows into getAuthToken which may use execSync)
+const rawEnvUrl = cliArgs[0] && !cliArgs[0].startsWith('--') ? cliArgs[0].replace(/\/+$/, '') : null;
+const envUrl = rawEnvUrl && /^https:\/\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]*)*$/.test(rawEnvUrl) ? rawEnvUrl : null;
+if (rawEnvUrl && !envUrl) {
+  process.stderr.write('Error: envUrl must be a valid HTTPS URL (e.g., https://org123.crm.dynamics.com).\n');
+  process.exit(1);
+}
 
 function getArg(name) {
   const idx = cliArgs.indexOf(`--${name}`);
@@ -98,28 +104,23 @@ async function main() {
   const definitionId = generateUuid();
   const valueId = generateUuid();
 
-  // Step 1: Create the environment variable definition
-  const defResult = await apiPost(envUrl, token, 'environmentvariabledefinitions', {
+  // Deep insert: create definition + value in a single atomic API call.
+  // If it fails, neither record is created — no orphaned definitions.
+  const result = await apiPost(envUrl, token, 'environmentvariabledefinitions', {
     schemaname: schemaName,
     displayname: displayName,
     type: ENV_VAR_TYPES[type],
     environmentvariabledefinitionid: definitionId,
+    environmentvariabledefinition_environmentvariablevalue: [
+      {
+        value: value,
+        environmentvariablevalueid: valueId,
+      },
+    ],
   });
 
-  if (!defResult.ok) {
-    process.stderr.write(`Failed to create environment variable definition: ${defResult.message}\n`);
-    process.exit(1);
-  }
-
-  // Step 2: Create the environment variable value
-  const valResult = await apiPost(envUrl, token, 'environmentvariablevalues', {
-    value: value,
-    environmentvariablevalueid: valueId,
-    'EnvironmentVariableDefinitionId@odata.bind': `/environmentvariabledefinitions(${definitionId})`,
-  });
-
-  if (!valResult.ok) {
-    process.stderr.write(`Failed to create environment variable value: ${valResult.message}\n`);
+  if (!result.ok) {
+    process.stderr.write(`Failed to create environment variable: ${result.message}\n`);
     process.exit(1);
   }
 

@@ -1,0 +1,371 @@
+---
+name: integrate-backend
+description: >
+  Use this skill when the user asks to "add backend integration", "connect to data",
+  "set up backend", "integrate backend", "how should I access data", "add data access",
+  "add an API", "server-side processing", "cloud flow or web api or server logic",
+  "which backend approach", "integrate with an external service", "add business logic",
+  "backend for my site", or wants help deciding between Web API, Server Logic, and
+  Cloud Flows for their Power Pages site. This skill analyzes the user's business
+  problem, identifies the right backend integration approach (or combination), and
+  routes to the appropriate skill. Use this instead of jumping directly to a specific
+  backend skill when the user's request doesn't clearly map to one approach.
+user-invocable: true
+argument-hint: describe what your backend needs to do
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
+model: opus
+---
+
+# Backend Integration
+
+Analyze the user's business problem and recommend the right backend integration approach — **Web API**, **Server Logic**, **Cloud Flows**, or a combination — then route to the appropriate skill(s) to implement the solution.
+
+## Core Principles
+
+- **Understand the problem first**: Never jump to a technology choice. Analyze the user's intent, data flow, security needs, and performance requirements before recommending.
+- **Recommend the simplest approach that works**: Web API for straightforward Dataverse CRUD, Server Logic when server-side processing is needed, Cloud Flows for async background work. Don't over-engineer.
+- **Combinations are normal**: Many real scenarios need more than one approach. Recommend combinations when justified, but explain why each piece is needed.
+- **Route, don't implement**: This skill recommends and invokes the right skill(s). It does not create backend files itself.
+
+**Initial request:** $ARGUMENTS
+
+---
+
+## Workflow
+
+1. **Verify Site Exists** — Locate the Power Pages project and check prerequisites
+2. **Understand the Business Problem** — Analyze what the user needs and why
+3. **Recommend Integration Approach** — Present the recommendation with reasoning
+4. **Route to Skill(s)** — Invoke the appropriate backend skill(s) to implement
+
+---
+
+## Phase 1: Verify Site Exists
+
+**Goal**: Locate the Power Pages project root and confirm prerequisites
+
+**Actions**:
+
+1. Create todo list with all 4 phases (see [Progress Tracking](#progress-tracking) table)
+
+### 1.1 Locate Project
+
+Look for `powerpages.config.json` in the current directory or immediate subdirectories.
+
+**If not found**: Tell the user to create a site first with `/create-site`.
+
+### 1.2 Explore Current State
+
+Use the **Explore agent** to quickly scan the site for existing backend integrations:
+
+> "Analyze this Power Pages code site for existing backend integrations:
+> 1. Check `.powerpages-site/server-logic/` — list any existing server logic endpoints
+> 2. Check `.powerpages-site/cloud-flow-consumers/` — list any registered cloud flows
+> 3. Search frontend code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for calls to `/_api/` (Web API) and `/_api/serverlogics/` (Server Logic) and `/_api/cloudflows/` (Cloud Flows)
+> 4. Check for existing service layers or API utilities in `src/services/`, `src/shared/`, or similar
+> 5. List available web roles from `.powerpages-site/web-roles/*.webrole.yml`
+> Report what backend integrations already exist so we can build on them."
+
+**Output**: Project root confirmed, existing backend integrations identified
+
+---
+
+## Phase 2: Understand the Business Problem
+
+**Goal**: Analyze the user's request to understand the underlying business problem, not just the technical ask
+
+**Actions**:
+
+### 2.1 Analyze the Request
+
+From the user's request and the existing site state, determine:
+
+- **What is the user trying to accomplish?** (business outcome, not technology)
+- **What data is involved?** (Dataverse tables, external systems, user input)
+- **Who triggers the operation?** (user action, form submit, page load, scheduled)
+- **Does the user need an immediate response?** (real-time UI update vs. background processing)
+- **Are external services involved?** (payment gateways, email, Graph, SharePoint, third-party APIs)
+- **Are credentials or secrets involved?** (API keys, client secrets, tokens)
+- **Must logic be hidden from the browser?** (pricing rules, validation algorithms, business rules)
+- **Is this a simple data operation or complex business logic?** (CRUD vs. multi-step processing)
+
+### 2.2 Clarify if Ambiguous
+
+If the request could map to multiple approaches and the right choice isn't clear, use `AskUserQuestion` to clarify:
+
+| Question | When to ask |
+|----------|-------------|
+| Does the user need to see the result immediately, or can it happen in the background? | When the request involves processing that could be sync or async |
+| Are external APIs or services involved (e.g., Stripe, SendGrid, SharePoint)? | When the request mentions "integration" without specifics |
+| Does this involve sensitive credentials that shouldn't be in the browser? | When external service integration is mentioned |
+| Is this a one-time action or a multi-step workflow? | When the request could be a simple call or an orchestration |
+
+**Output**: Clear understanding of the business problem and technical requirements
+
+---
+
+## Phase 3: Recommend Integration Approach
+
+**Goal**: Present a recommendation with clear reasoning
+
+**Actions**:
+
+### 3.1 Apply the Decision Framework
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-backend/references/decision-framework.md`
+
+Use the decision matrix and intent mapping from the reference to determine the right approach. Consider:
+
+1. **Can Web API alone handle this?** If it's straightforward Dataverse CRUD with no external calls, no secrets, and no server-side logic — recommend Web API. It's the simplest option.
+
+2. **Does it need Server Logic?** If any of these apply, Server Logic is needed:
+   - External API calls (HttpClient)
+   - Credentials/secrets must stay on the server
+   - Business logic must be hidden from the browser
+   - Multiple Dataverse queries should be batched into one endpoint
+   - Server-side validation that can't be bypassed
+   - Wrapping a Dataverse Custom API for portal consumption
+
+3. **Does it need Cloud Flows?** If any of these apply, Cloud Flows are the right fit:
+   - The operation is async — the user doesn't need an immediate result
+   - Background processing: sending emails, notifications, processing orders
+   - Multi-step workflows across systems with Power Automate connectors
+   - Long-running processes that exceed the 120-second server logic timeout
+   - Non-developers should be able to modify the workflow
+
+4. **Does it need a combination?** Common combinations:
+   - Web API + Cloud Flow: UI reads/writes Dataverse, some actions trigger background flows
+   - Server Logic + Cloud Flow: Real-time endpoint handles the request, async flow does follow-up
+   - Web API + Server Logic: Direct data access for most operations, server logic for complex ones
+
+### 3.2 Render the HTML Plan
+
+Build the plan data and render an HTML plan before asking for approval. The plan visualizes:
+
+- **Overview** — Stats per approach (Web API / Server Logic / Cloud Flow), approach chips, design rationale
+- **Data Flow** — Visual flow diagrams showing how data moves for each user action, with steps color-coded by approach
+- **Integration Items** — Each item with its approach, reasoning, and implementation details
+
+Prepare a JSON object with these keys:
+
+| Key | Description |
+|-----|-------------|
+| `SITE_NAME` | Site name from `powerpages.config.json` |
+| `PLAN_TITLE` | Short title (e.g., "Backend Integration Plan") |
+| `SUMMARY` | 1-3 sentence summary of the integration strategy |
+| `ITEMS_DATA` | Array of integration items (see format below) |
+| `DATA_FLOWS_DATA` | Array of data flow diagrams (see format below) |
+| `RATIONALE_DATA` | Array of design rationale entries (`icon`, `title`, `desc`) |
+
+**ITEMS_DATA format:**
+```json
+{
+  "name": "Create PayPal Order",
+  "approach": "webapi|serverlogic|cloudflow",
+  "description": "What this item does",
+  "reasoning": "Why this approach was chosen",
+  "details": [
+    { "label": "Endpoint", "value": "/_api/serverlogics/create-paypal-order" },
+    { "label": "Secrets", "value": "PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET" }
+  ]
+}
+```
+
+**DATA_FLOWS_DATA format:**
+```json
+{
+  "trigger": "User registers and pays",
+  "description": "User fills the form, pays via PayPal, receives confirmation",
+  "steps": [
+    { "approach": "serverlogic", "name": "Validate Seats", "detail": "Check availability" },
+    { "approach": "serverlogic", "name": "Create Order", "detail": "Server calls PayPal" },
+    { "approach": "cloudflow", "name": "Send Email", "detail": "Async confirmation" }
+  ]
+}
+```
+
+Write the plan to `<PROJECT_ROOT>/docs/backend-plan.html` (create `docs/` if needed). Use the render script:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-backend-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+```
+
+The render script refuses to overwrite existing files. If the default path exists, choose a new descriptive filename (e.g., `backend-plan-payments.html`).
+
+### 3.3 Present Plan Summary
+
+Do **not** restate the full plan in the CLI. The HTML file is the single detailed plan artifact.
+
+In the CLI, give only a brief summary:
+- Total items and how many per approach
+- Whether the plan uses one approach or a combination
+- The actual output path
+- A note that the browser-opened HTML contains the full details including data flow diagrams
+
+### 3.4 Confirm with User
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| Here's the integration plan. The HTML plan is open in your browser with data flow diagrams and per-item reasoning. Does this approach look right? | Yes, proceed (Recommended), Change approach, Cancel |
+
+**If "Change approach"**: Ask what they'd prefer and why, update the plan, and present again.
+
+**If "Cancel"**: Stop the workflow.
+
+**Output**: User-approved integration approach
+
+---
+
+## Phase 4: Route to Skill(s)
+
+**Goal**: Invoke the appropriate skill(s) to implement the approved approach
+
+**Actions**:
+
+### 4.1 Invoke the Skill(s)
+
+Based on the approved recommendation, invoke the appropriate skill using the `Skill` tool. Pass the user's original request along with the context gathered in Phase 2.
+
+| Approach | Skill to invoke | What to pass |
+|----------|----------------|--------------|
+| Web API | `/integrate-webapi` | The user's request + tables identified + existing patterns |
+| Server Logic | `/add-server-logic` | The user's request + SDK features needed + secrets identified |
+| Cloud Flow | `/add-cloud-flow` | The user's request + async operations identified |
+
+**For combinations**, invoke skills sequentially in the most logical order:
+
+1. **Web API first** (if included) — Sets up the data access layer
+2. **Server Logic second** (if included) — Builds on existing frontend patterns
+3. **Cloud Flow last** (if included) — Wires async triggers into the UI
+
+When invoking each skill, include context from the previous skill's output so the next skill can build on it (e.g., "The Web API integration created `orderService.ts` — the server logic frontend code should follow the same patterns").
+
+### 4.2 Summary
+
+After all skills complete, present a brief summary of everything that was created across all approaches:
+
+| Approach | What was created |
+|----------|-----------------|
+| Web API | [files created, tables integrated] |
+| Server Logic | [endpoints created, SDK features used] |
+| Cloud Flow | [flows registered, triggers wired] |
+
+Remind the user to deploy with `/deploy-site` if they haven't already.
+
+**Output**: All recommended backend integrations implemented
+
+---
+
+## Important Notes
+
+### When NOT to Use This Skill
+
+If the user's request clearly and unambiguously maps to a single approach, **skip this skill and go directly to the implementation skill**:
+
+- "Create a server logic endpoint for..." → `/add-server-logic`
+- "Integrate Web API for the contacts table" → `/integrate-webapi`
+- "Add a cloud flow for sending emails" → `/add-cloud-flow`
+
+This skill is for **ambiguous requests** where the user describes a business problem and needs help choosing the right approach.
+
+### Examples: What Routing Looks Like
+
+**Example 1: Simple Dataverse CRUD → Web API**
+```
+User: I need to show a list of products on the homepage and let users
+      filter by category.
+
+Recommendation: Web API
+Reason: This is straightforward Dataverse read operations with filtering.
+        No external APIs, no secrets, no server-side logic needed.
+Skill: /integrate-webapi
+```
+
+**Example 2: External API with credentials → Server Logic**
+```
+User: Add payment processing through Stripe. The API key must stay
+      on the server.
+
+Recommendation: Server Logic
+Reason: Calls an external API (Stripe) with credentials that must be
+        protected. Server logic hides the code and credentials from
+        the browser.
+Skill: /add-server-logic
+```
+
+**Example 3: Background email → Cloud Flow**
+```
+User: When a user submits the contact form, send them a confirmation
+      email and notify the support team on Teams.
+
+Recommendation: Cloud Flow
+Reason: Email and Teams notifications are async — the user doesn't
+        need to wait for them. Cloud Flows have built-in connectors
+        for Outlook and Teams.
+Skill: /add-cloud-flow
+```
+
+**Example 4: Server-side validation → Server Logic**
+```
+User: Add validation that rejects orders when quantity exceeds
+      inventory. Check the actual Dataverse data, not just the form.
+
+Recommendation: Server Logic
+Reason: Server-side validation that can't be bypassed from the browser.
+        Reads Dataverse data and returns a computed validation result.
+Skill: /add-server-logic
+```
+
+**Example 5: Dashboard performance → Server Logic**
+```
+User: The dashboard makes 3 separate API calls to load contacts,
+      orders, and products. It's slow.
+
+Recommendation: Server Logic
+Reason: Batching multiple Dataverse queries into a single server
+        endpoint reduces round-trips and improves load time.
+Skill: /add-server-logic
+```
+
+**Example 6: CRUD + background processing → Web API + Cloud Flow**
+```
+User: Let users submit support tickets from the portal. After
+      submission, assign it to the right team and send an email.
+
+Recommendation: Web API + Cloud Flow
+Reason: The ticket creation is a Dataverse write (Web API). The
+        assignment and email happen in the background after the
+        user submits (Cloud Flow).
+Skills: /integrate-webapi then /add-cloud-flow
+```
+
+**Example 7: Validate + process + notify → Server Logic + Cloud Flow**
+```
+User: When a user places an order, validate inventory, process the
+      payment through Stripe, and send a confirmation email.
+
+Recommendation: Server Logic + Cloud Flow
+Reason: Inventory validation and Stripe payment need real-time
+        server-side processing with credentials (Server Logic).
+        The confirmation email is async (Cloud Flow).
+Skills: /add-server-logic then /add-cloud-flow
+```
+
+### Progress Tracking
+
+Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Verify site exists | Verifying site prerequisites | Locate project root, scan for existing backend integrations |
+| Understand business problem | Analyzing requirements | Determine what the user needs, clarify ambiguities |
+| Recommend integration approach | Evaluating approaches | Apply decision framework, present recommendation |
+| Route to implementation skill(s) | Implementing backend integration | Invoke the approved skill(s) and summarize results |
+
+Mark each task `in_progress` when starting and `completed` when done via `TaskUpdate`.
+
+---
+
+**Begin with Phase 1: Verify Site Exists**

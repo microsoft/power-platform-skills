@@ -29,6 +29,28 @@ test('create-environment-variable fails with missing envUrl', () => {
   assert.match(result.stderr, /Usage:/);
 });
 
+test('create-environment-variable rejects malicious envUrl (shell injection)', () => {
+  const result = runCreateEnvVar([
+    'https://evil.com; rm -rf /',
+    '--schemaName', 'cr5b4_ApiSecret',
+    '--displayName', 'API Secret',
+    '--value', 'my-secret-value',
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /valid HTTPS URL/);
+});
+
+test('create-environment-variable rejects non-HTTPS envUrl', () => {
+  const result = runCreateEnvVar([
+    'http://org123.crm.dynamics.com',
+    '--schemaName', 'cr5b4_ApiSecret',
+    '--displayName', 'API Secret',
+    '--value', 'my-secret-value',
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /valid HTTPS URL/);
+});
+
 test('create-environment-variable fails with missing --displayName', () => {
   const result = runCreateEnvVar([
     FAKE_ENV_URL,

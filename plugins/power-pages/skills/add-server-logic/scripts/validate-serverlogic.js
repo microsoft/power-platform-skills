@@ -148,14 +148,22 @@ runValidation((cwd) => {
       }
     }
 
-    // Check: functions return strings
-    if (!/return\s/.test(content)) {
-      errors.push(`${dirName}.js: no return statements found — every function must return a string`);
-    }
-
-    // Check: Server.Logger is used
-    if (!content.includes('Server.Logger')) {
-      errors.push(`${dirName}.js: missing Server.Logger calls — every function should log for diagnostics`);
+    // Check: each function returns a string and uses Server.Logger
+    for (const fn of foundFunctions) {
+      const fnRegex = new RegExp(`(?:async\\s+)?function\\s+${fn}\\s*\\([^)]*\\)\\s*\\{`, 'g');
+      const match = fnRegex.exec(content);
+      if (match) {
+        const bodyStart = match.index + match[0].length;
+        const nextFnMatch = content.slice(bodyStart).match(/\n(?:async\s+)?function\s+[a-zA-Z]/);
+        const bodyEnd = nextFnMatch ? bodyStart + nextFnMatch.index : content.length;
+        const fnBody = content.slice(bodyStart, bodyEnd);
+        if (!/\breturn\s/.test(fnBody)) {
+          errors.push(`${dirName}.js: function '${fn}' has no return statement — every function must return a string`);
+        }
+        if (!/Server\.Logger/.test(fnBody)) {
+          errors.push(`${dirName}.js: function '${fn}' is missing Server.Logger calls — every function should log for diagnostics`);
+        }
+      }
     }
 
     // Check: no require/import statements
