@@ -211,7 +211,7 @@ App file written: [working directory]/App.pa.yaml
 
 - **Do NOT ask questions.** The one user interaction is the plan mode approval in Step 4.
 - **Do NOT write any screen `.pa.yaml` files.** Screen builders own all screen-level files.
-- **Do NOT call `compile_canvas`.** That is the screen builder's responsibility.
+- **Do NOT call `compile_canvas`.** Compilation/validation is owned by the orchestrating `generate-canvas-app` skill.
 - **Embed full `describe_control` output** in the plan document — never summarize property names.
   Screen builders must be able to write correct YAML from the plan document alone.
 - **Embed exact RGBA values** in the aesthetic direction — not prose color descriptions.
