@@ -155,7 +155,7 @@ Parse the JSON response to extract organization names and IDs. Present via `AskU
 #### 3.2 List Projects
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitprojects?$filter=gitorganizationid eq '<selectedOrgId>'"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitprojects?$filter=organizationname eq '<selectedOrgName>'"
 ```
 
 Present via `AskUserQuestion`.
@@ -163,7 +163,7 @@ Present via `AskUserQuestion`.
 #### 3.3 List Repositories
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitrepositories?$filter=gitprojectid eq '<selectedProjectId>'"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitrepositories?$filter=organizationname eq '<selectedOrgName>' and projectname eq '<selectedProjectName>'"
 ```
 
 Present via `AskUserQuestion`.
@@ -171,7 +171,7 @@ Present via `AskUserQuestion`.
 #### 3.4 List or Create Branch
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitbranches?$filter=gitrepositoryid eq '<selectedRepoId>'"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET "gitbranches?$filter=organizationname eq '<selectedOrgName>' and projectname eq '<selectedProjectName>' and repositoryname eq '<selectedRepoName>'"
 ```
 
 Present via `AskUserQuestion`:
@@ -219,8 +219,18 @@ Present all parameters to the user via `AskUserQuestion`:
 #### 4.2 Execute ConnectToGit
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "ConnectToGit" --body '{"SolutionUniqueName":"<uniqueName>","GitOrganizationId":"<orgId>","GitProjectId":"<projectId>","GitRepositoryId":"<repoId>","GitBranchName":"<branchName>","GitFolderPath":"<folderPath>"}'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "ConnectToGit" --body '{"SolutionUniqueName":"<uniqueName>","Organization":"<orgName>","Project":"<projectName>","Repository":"<repoName>","Branch":"<branchName>","GitFolder":"<folderPath>","GitProvider":0,"ConnectionType":0}'
 ```
+
+> **Parameter reference** (from OData metadata):
+> - `Organization` (string) — ADO org name (e.g., "dynamicscrm")
+> - `Project` (string) — ADO project name (e.g., "OneCRM")
+> - `Repository` (string) — Repo name (e.g., "CDS")
+> - `Branch` (string, required) — Branch name (e.g., "main")
+> - `GitFolder` (string, required) — Folder path in repo (e.g., "/")
+> - `SolutionUniqueName` (string) — Solution to connect
+> - `GitProvider` (int) — 0 = Azure DevOps, 1 = GitHub
+> - `ConnectionType` (int) — 0 = standard
 
 > **Note:** This may take up to 2 minutes. The initial sync starts automatically after connection. Use a Bash timeout of at least 180 seconds.
 
