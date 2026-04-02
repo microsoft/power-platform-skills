@@ -47,7 +47,7 @@ Invoke the `canvas-app-planner` agent using the `Task` tool.
 Pass a prompt that includes:
 
 - The user's requirements: `$ARGUMENTS`
-- The working directory (current directory where `.pa.yaml` files should be written)
+- The working directory (the absolute path resolved in Phase 0)
 - The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
 
 Example prompt:
@@ -56,7 +56,7 @@ Example prompt:
 >
 > [paste $ARGUMENTS here]
 >
-> Working directory: [current working directory]
+> Working directory: [absolute path from Phase 0]
 > Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Write canvas-app-plan.md and App.pa.yaml to
@@ -91,7 +91,7 @@ Example prompt per screen:
 >
 > - Target file: [ScreenName].pa.yaml
 > - Plan document: [absolute path to canvas-app-plan.md]
-> - Working directory: [current working directory]
+> - Working directory: [absolute path from Phase 0]
 >
 > Follow the instructions in your agent file. Write [ScreenName].pa.yaml and return your
 > result when done. Do not call compile_canvas — validation is handled by the skill.
