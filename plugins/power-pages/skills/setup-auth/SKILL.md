@@ -9,10 +9,12 @@ description: >
   "add SAML authentication", "configure OpenID Connect", "add OIDC",
   "set up local login", "add username password login", "add social login",
   "configure Facebook login", "add Google sign in", "set up WS-Federation",
+  "configure Azure AD B2C", "set up B2C auth", "add B2C login",
+  "enable two-factor authentication", "add 2FA", "set up invitation login",
   or wants to set up authentication (login/logout) and role-based
   authorization for their Power Pages code site using any supported
-  identity provider (Microsoft Entra ID, OpenID Connect, SAML2,
-  WS-Federation, local authentication, or social OAuth providers).
+  identity provider (Microsoft Entra ID, Azure AD B2C, OpenID Connect,
+  SAML2, WS-Federation, local authentication, or social OAuth providers).
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
@@ -22,7 +24,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers — Microsoft Entra ID, OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Azure AD B2C (with user flow policies), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -146,7 +148,7 @@ Use `AskUserQuestion` to determine the identity provider:
 
 | Question | Options |
 |----------|---------|
-| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
+| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Azure AD B2C — Azure AD B2C with user flow policies (sign-up/sign-in, password reset, profile edit), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
 
 **If "Social OAuth"**, follow up with:
 
@@ -239,13 +241,16 @@ Create the auth service file based on the detected framework and selected identi
 **Login flow varies by provider type:**
 
 - **Microsoft Entra ID**: Form POST to `/Account/Login/ExternalLogin` with provider `https://login.windows.net/{tenantId}/`
+- **Azure AD B2C**: Form POST to `/Account/Login/ExternalLogin` with provider set to the B2C `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`). B2C requires additional `PasswordResetPolicyId`, `ProfileEditPolicyId`, and `DefaultPolicyId` settings. The server handles B2C error codes `AADB2C90118` (password reset redirect) and `AADB2C90091` (user cancellation) automatically.
 - **OpenID Connect (Generic)**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
 - **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
 - **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
-- **Local Authentication**: Form POST to `/Account/Login/Login` with `Username` (or `Email`), `Password`, and anti-forgery token. Does NOT use the ExternalLogin endpoint.
+- **Local Authentication**: Form POST to `/Account/Login/Login` with credentials, `Password`, anti-forgery token, and optionally `RememberMe`. When the `Authentication/Registration/LocalLoginByEmail` site setting is `true`, send the `Email` field; otherwise send the `Username` field. Does NOT use the ExternalLogin endpoint.
 - **Social OAuth**: Form POST to `/Account/Login/ExternalLogin` with provider set to the social provider's `AuthenticationType` (e.g., `urn:microsoft:account`, `Facebook`, `Google`)
 
 **CRITICAL**: Power Pages authentication is **server-side** (session cookies). External login flows post a form to the server which redirects to the identity provider. Local login posts credentials directly to the server. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
+
+**SECRET MANAGEMENT**: Never include `ClientSecret`, `AppSecret`, or any credential values in the auth service code or any file committed to source control. The `providerIdentifier` field is a public identifier (URL or name), not a secret. Actual secrets must be configured through the Power Pages admin center.
 
 #### 3.3 Create Framework-Specific Auth Hook/Composable
 
@@ -545,6 +550,11 @@ id: <UUID>
 name: Authentication/OpenIdConnect/{ProviderName}/ClientId
 value: <to-be-configured>
 
+# authentication-openidconnect-{provider}-authenticationtype.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/AuthenticationType
+value: <authority-url-from-user>
+
 # authentication-openidconnect-{provider}-redirecturi.yml
 id: <UUID>
 name: Authentication/OpenIdConnect/{ProviderName}/RedirectUri
@@ -555,6 +565,63 @@ id: <UUID>
 name: Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled
 value: true
 ```
+
+> **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. If not set, it defaults to the `Authority` URL. This value must match what `resolveProviderIdentifier()` returns in the auth service.
+
+> **Security Warning:** Never commit `ClientSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values.
+
+**Azure AD B2C** — create settings for the B2C provider (uses OpenID Connect path with additional policy settings):
+
+```yaml
+# authentication-openidconnect-{provider}-authority.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/Authority
+value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/
+
+# authentication-openidconnect-{provider}-clientid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/ClientId
+value: <to-be-configured>
+
+# authentication-openidconnect-{provider}-authenticationtype.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/AuthenticationType
+value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/
+
+# authentication-openidconnect-{provider}-metadataaddress.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/MetadataAddress
+value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/.well-known/openid-configuration?p={sign-up-sign-in-policy}
+
+# authentication-openidconnect-{provider}-defaultpolicyid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/DefaultPolicyId
+value: B2C_1_signupsignin
+
+# authentication-openidconnect-{provider}-passwordresetpolicyid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/PasswordResetPolicyId
+value: B2C_1_passwordreset
+
+# authentication-openidconnect-{provider}-profileeditpolicyid.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/ProfileEditPolicyId
+value: B2C_1_profileedit
+
+# authentication-openidconnect-{provider}-redirecturi.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/RedirectUri
+value: <site-url>/signin-{provider}
+
+# authentication-openidconnect-{provider}-externallogoutenabled.yml
+id: <UUID>
+name: Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled
+value: true
+```
+
+> **Note:** B2C error codes `AADB2C90118` (password reset) and `AADB2C90091` (user cancellation) are handled automatically by the Power Pages server middleware. No client-side error handling is needed.
+
+> **Security Warning:** Never commit `ClientSecret` values to source control. Configure secrets in the Power Pages admin center.
 
 **SAML2** — create settings for the provider:
 
@@ -603,19 +670,51 @@ name: Authentication/Registration/LocalLoginByEmail
 value: true
 ```
 
-**Social OAuth** — create settings for each selected social provider (e.g., Facebook):
+**Social OAuth** — create settings for each selected social provider. Note: Facebook uses `AppId`/`AppSecret` while other providers use `ClientId`/`ClientSecret`:
+
+**Facebook:**
 
 ```yaml
-# authentication-openidconnect-{social-provider}-clientid.yml
+# authentication-openauth-facebook-appid.yml
 id: <UUID>
-name: Authentication/OpenIdConnect/{SocialProviderName}/ClientId
+name: Authentication/OpenAuth/Facebook/AppId
 value: <to-be-configured>
 
-# authentication-openidconnect-{social-provider}-clientsecret.yml
+# authentication-openauth-facebook-appsecret.yml
 id: <UUID>
-name: Authentication/OpenIdConnect/{SocialProviderName}/ClientSecret
+name: Authentication/OpenAuth/Facebook/AppSecret
 value: <to-be-configured>
 ```
+
+**Google:**
+
+```yaml
+# authentication-openauth-google-clientid.yml
+id: <UUID>
+name: Authentication/OpenAuth/Google/ClientId
+value: <to-be-configured>
+
+# authentication-openauth-google-clientsecret.yml
+id: <UUID>
+name: Authentication/OpenAuth/Google/ClientSecret
+value: <to-be-configured>
+```
+
+**Microsoft Account:**
+
+```yaml
+# authentication-openauth-microsoftaccount-clientid.yml
+id: <UUID>
+name: Authentication/OpenAuth/MicrosoftAccount/ClientId
+value: <to-be-configured>
+
+# authentication-openauth-microsoftaccount-clientsecret.yml
+id: <UUID>
+name: Authentication/OpenAuth/MicrosoftAccount/ClientSecret
+value: <to-be-configured>
+```
+
+> **Security Warning:** Never commit `ClientSecret` or `AppSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values.
 
 Remind the user to fill in placeholder values (`<to-be-configured>`) with actual credentials from their identity provider's application registration.
 
@@ -664,7 +763,10 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
-  - **Social OAuth**: Register an application with each social provider (e.g., Facebook Developer Console, Google Cloud Console) and update the `ClientId` and `ClientSecret` site settings
+  - **Social OAuth**: Register an application with each social provider (e.g., Facebook Developer Console, Google Cloud Console) and update the credential site settings. Facebook uses `AppId`/`AppSecret`; Google and Microsoft Account use `ClientId`/`ClientSecret`. Configure these values in the Power Pages admin center -- do not commit secrets to source control
+  - **Azure AD B2C**: Configure user flow policies (sign-up/sign-in, password reset, profile edit) in the Azure AD B2C tenant. Register the application and update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The server automatically handles B2C error codes for password reset (`AADB2C90118`) and user cancellation (`AADB2C90091`)
+- **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
+- **Invitation-based registration**: If invitations are enabled (`Authentication/Registration/InvitationEnabled = true`), share invitation links in the format `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl=/`. The invitation code is threaded through the entire auth flow including 2FA
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
 - **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production
