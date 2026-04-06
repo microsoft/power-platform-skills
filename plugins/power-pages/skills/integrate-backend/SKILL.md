@@ -142,8 +142,10 @@ Use the decision matrix and intent mapping from the reference to determine the r
 
 Build the plan data and render an HTML plan before asking for approval. The plan visualizes:
 
-- **Overview** — Stats per approach (Web API / Server Logic / Cloud Flow), approach chips, design rationale
+- **Key Concepts** — Educational overview of Web API, Server Logic, and Cloud Flows (hardcoded in template)
+- **Overview** — Stats per approach, approach chips, design rationale
 - **Data Flow** — Visual flow diagrams showing how data moves for each user action, with steps color-coded by approach
+- **Implementation Order** — Phase-grouped items with dependencies, complexity badges, and implementation commands
 - **Integration Items** — Each item with its approach, reasoning, and implementation details
 
 Prepare a JSON object with these keys:
@@ -164,12 +166,26 @@ Prepare a JSON object with these keys:
   "approach": "webapi|serverlogic|cloudflow",
   "description": "What this item does",
   "reasoning": "Why this approach was chosen",
+  "phase": 1,
+  "status": "new|existing|extends",
+  "complexity": "low|medium|high",
+  "depends": "Name of item this depends on (if any)",
   "details": [
     { "label": "Endpoint", "value": "/_api/serverlogics/create-paypal-order" },
     { "label": "Secrets", "value": "PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET" }
+  ],
+  "docs": [
+    { "label": "Server Logic Overview", "url": "https://learn.microsoft.com/..." }
   ]
 }
 ```
+
+**Phase assignment rules** — assign a `phase` number to each item based on dependencies:
+
+1. Items with no dependencies go in the earliest phase appropriate for their approach
+2. Items that depend on other items go in a later phase than their dependency
+3. Items in the **same phase have no dependencies on each other** and can be built in parallel
+4. Recommended default ordering: Server Logic foundations first (validation, batch queries), then Web API CRUD (uses server-side validation), then advanced Server Logic (multi-table transactions), then Cloud Flows (async follow-ups)
 
 **DATA_FLOWS_DATA format:**
 ```json
@@ -220,37 +236,53 @@ Use `AskUserQuestion`:
 
 ## Phase 4: Route to Skill(s)
 
-**Goal**: Invoke the appropriate skill(s) to implement the approved approach
+**Goal**: Invoke the appropriate skill(s) to implement the approved approach, respecting phase ordering and building in parallel within each phase
 
 **Actions**:
 
-### 4.1 Invoke the Skill(s)
+### 4.1 Build the Phase Execution Plan
 
-Based on the approved recommendation, invoke the appropriate skill using the `Skill` tool. Pass the user's original request along with the context gathered in Phase 2.
+Group the approved items by their `phase` number from the plan. Each phase is a batch of independent items — items within a phase have no dependencies on each other and can be built in parallel.
 
 | Approach | Skill to invoke | What to pass |
 |----------|----------------|--------------|
-| Web API | `/integrate-webapi` | The user's request + tables identified + existing patterns |
-| Server Logic | `/add-server-logic` | The user's request + SDK features needed + secrets identified |
-| Cloud Flow | `/add-cloud-flow` | The user's request + async operations identified |
+| Web API | `/integrate-webapi` | The user's request + tables for this phase + existing patterns |
+| Server Logic | `/add-server-logic` | The user's request + endpoints for this phase + SDK features needed + secrets identified |
+| Cloud Flow | `/add-cloud-flow` | The user's request + async operations for this phase |
 
-**For combinations**, invoke skills sequentially in the most logical order:
+### 4.2 Execute Phase by Phase
 
-1. **Web API first** (if included) — Sets up the data access layer
-2. **Server Logic second** (if included) — Builds on existing frontend patterns
-3. **Cloud Flow last** (if included) — Wires async triggers into the UI
+Process phases in order (Phase 1, then Phase 2, etc.). **Complete all items in a phase before moving to the next** — later phases depend on earlier phases.
 
-When invoking each skill, include context from the previous skill's output so the next skill can build on it (e.g., "The Web API integration created `orderService.ts` — the server logic frontend code should follow the same patterns").
+**Within each phase**, maximize parallelism:
 
-### 4.2 Summary
+- **Single approach in the phase**: Invoke the skill once with all items for that phase. Tell the skill: *"These N items are independent — implement them in parallel where possible."*
+- **Multiple approaches in the same phase**: Invoke each skill for its items. Since items in the same phase have no cross-dependencies, the order of skill invocation within a phase does not matter. When invoking the second skill, pass context from the first so it can follow the same frontend patterns (e.g., naming conventions, file organization).
 
-After all skills complete, present a brief summary of everything that was created across all approaches:
+**Example** — a plan with 4 phases:
 
-| Approach | What was created |
-|----------|-----------------|
-| Web API | [files created, tables integrated] |
-| Server Logic | [endpoints created, SDK features used] |
-| Cloud Flow | [flows registered, triggers wired] |
+| Phase | Items | Skill(s) | Parallelism |
+|-------|-------|----------|-------------|
+| 1 | Validate Transition (serverlogic), Dashboard Metrics (serverlogic) | `/add-server-logic` | Both items passed together — skill builds them in parallel |
+| 2 | Supplier Updates (webapi), Bid CRUD (webapi), PR Creation (webapi) | `/integrate-webapi` | All 3 items passed together — skill builds them in parallel |
+| 3 | Award Bid (serverlogic) | `/add-server-logic` | Single item — sequential |
+| 4 | Approval Notification (cloudflow), Expiry Alerts (cloudflow) | `/add-cloud-flow` | Both items passed together — skill builds them in parallel |
+
+When invoking each skill, include:
+1. **Which items to implement** — list the specific item names from the plan for this phase
+2. **Parallelism guidance** — *"These items are in the same phase and have no dependencies on each other. Implement them in parallel where possible."*
+3. **Context from previous phases** — what was created so far (files, patterns, services) so the skill can build on it
+
+### 4.3 Summary
+
+After all phases complete, present a brief summary of everything that was created:
+
+| Phase | Approach | What was created |
+|-------|----------|-----------------|
+| 1 | Server Logic | [endpoints created, SDK features used] |
+| 2 | Web API | [files created, tables integrated] |
+| 3 | Server Logic | [endpoints created] |
+| 4 | Cloud Flow | [flows registered, triggers wired] |
 
 Remind the user to deploy with `/deploy-site` if they haven't already.
 
@@ -338,7 +370,8 @@ Recommendation: Web API + Cloud Flow
 Reason: The ticket creation is a Dataverse write (Web API). The
         assignment and email happen in the background after the
         user submits (Cloud Flow).
-Skills: /integrate-webapi then /add-cloud-flow
+Phases: Phase 1 → /integrate-webapi (ticket CRUD)
+        Phase 2 → /add-cloud-flow (assignment + email, depends on ticket creation)
 ```
 
 **Example 7: Validate + process + notify → Server Logic + Cloud Flow**
@@ -350,7 +383,8 @@ Recommendation: Server Logic + Cloud Flow
 Reason: Inventory validation and Stripe payment need real-time
         server-side processing with credentials (Server Logic).
         The confirmation email is async (Cloud Flow).
-Skills: /add-server-logic then /add-cloud-flow
+Phases: Phase 1 → /add-server-logic (validate inventory + process payment — parallel)
+        Phase 2 → /add-cloud-flow (confirmation email, depends on payment)
 ```
 
 ### Progress Tracking
