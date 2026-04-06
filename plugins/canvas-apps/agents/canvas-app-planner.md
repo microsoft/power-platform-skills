@@ -114,6 +114,15 @@ Write the app-level YAML file (`App.pa.yaml`) to the working directory. This fil
 across all screens — do not write screen-level content here. Follow TechnicalGuide.md
 conventions for app-level properties.
 
+Set `App.StartScreen` to the intended initial landing screen of the app so it opens on the
+correct screen when launched. For example:
+
+```yaml
+App:
+  Properties:
+    StartScreen: =HomeScreen
+```
+
 ## Step 7 — Write canvas-app-plan.md
 
 Write `canvas-app-plan.md` to the working directory. This document is the **single source of

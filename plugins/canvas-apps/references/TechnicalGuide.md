@@ -39,6 +39,14 @@ Screens:
                 ...
 ```
 
+> **Note:** Always set `App.StartScreen` in `App.pa.yaml` to the screen that should be shown when the app launches. Without it, the app may open on an unexpected screen.
+>
+> ```yaml
+> App:
+>   Properties:
+>     StartScreen: =HomeScreen
+> ```
+
 ## YAML Syntax Rules
 
 ### Multi-line formulas — use `|-`
@@ -367,6 +375,9 @@ App:
 **Benefits:** Maintainability, readability, consistency, performance
 
 ## Best Practices
+
+### App Configuration
+- ✅ Set `App.StartScreen` to the initial landing screen so the app always opens on the intended screen
 
 ### State Management
 - ✅ Initialize all variables in `OnVisible`
