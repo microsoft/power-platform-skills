@@ -62,10 +62,16 @@ if (!projectRoot || !fileSlug || !flowName || !flowId || !webRoleIdsRaw) {
   process.exit(1);
 }
 
-// Validate fileSlug is a safe slug (no path separators or traversal)
-if (!/^[a-zA-Z0-9_-]+$/.test(fileSlug)) {
+// Validate fileSlug: lowercase, hyphenated, max 50 chars (per SKILL.md contract)
+if (!/^[a-z0-9][a-z0-9-]*$/.test(fileSlug)) {
   process.stderr.write(
-    `Error: --fileSlug must be a safe slug (alphanumeric, hyphens, underscores only). Got: "${fileSlug}"\n`
+    `Error: --fileSlug must be lowercase alphanumeric with hyphens only (no leading hyphen). Got: "${fileSlug}"\n`
+  );
+  process.exit(1);
+}
+if (fileSlug.length > 50) {
+  process.stderr.write(
+    `Error: --fileSlug must be at most 50 characters. Got ${fileSlug.length} characters.\n`
   );
   process.exit(1);
 }

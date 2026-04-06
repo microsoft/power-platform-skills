@@ -130,7 +130,7 @@ test('rejects invalid web role UUID', (t) => {
   assert.match(result.stderr, /Invalid UUID in --webRoleIds/);
 });
 
-test('rejects unsafe file slug', (t) => {
+test('rejects unsafe file slug (path traversal)', (t) => {
   const projectRoot = createTempProject(t);
 
   const result = runCreateCloudFlowMetadata([
@@ -142,7 +142,52 @@ test('rejects unsafe file slug', (t) => {
   ]);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /safe slug/);
+  assert.match(result.stderr, /lowercase alphanumeric with hyphens/);
+});
+
+test('rejects uppercase file slug', (t) => {
+  const projectRoot = createTempProject(t);
+
+  const result = runCreateCloudFlowMetadata([
+    '--projectRoot', projectRoot,
+    '--fileSlug',    'My-Flow',
+    '--flowName',    'My Flow',
+    '--flowId',      VALID_FLOW_ID,
+    '--webRoleIds',  VALID_ROLE_ID_1,
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /lowercase alphanumeric with hyphens/);
+});
+
+test('rejects file slug with underscores', (t) => {
+  const projectRoot = createTempProject(t);
+
+  const result = runCreateCloudFlowMetadata([
+    '--projectRoot', projectRoot,
+    '--fileSlug',    'my_flow',
+    '--flowName',    'My Flow',
+    '--flowId',      VALID_FLOW_ID,
+    '--webRoleIds',  VALID_ROLE_ID_1,
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /lowercase alphanumeric with hyphens/);
+});
+
+test('rejects file slug exceeding 50 characters', (t) => {
+  const projectRoot = createTempProject(t);
+
+  const result = runCreateCloudFlowMetadata([
+    '--projectRoot', projectRoot,
+    '--fileSlug',    'a'.repeat(51),
+    '--flowName',    'Long Flow',
+    '--flowId',      VALID_FLOW_ID,
+    '--webRoleIds',  VALID_ROLE_ID_1,
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /at most 50 characters/);
 });
 
 test('errors when file already exists', (t) => {
