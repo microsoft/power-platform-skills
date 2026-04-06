@@ -16,8 +16,9 @@ Comprehensive rules for generating generative page code. Read this file during c
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
 9. **Icons**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`)
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
-11. **No FluentProvider**: Already provided at root; don't add in components
+11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
+13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > GenUX Page Navigation**.
 
 ---
 
@@ -110,7 +111,7 @@ export default GeneratedComponent;
 ```
 
 ### Navigation
-- Multiple screens: Use Fluent UI V9 Tabs/Breadcrumbs
+- Multiple screens within a page: Use Fluent UI V9 Tabs/Breadcrumbs
 - Provide back/forward navigation for wizard flows
 - No React Router or hash/history API routing
 
@@ -317,25 +318,37 @@ export interface PageInput {
 - `entityName` is an entity's logical name, not display name.
 - The `data` object values are primitives of unknown type — never assume the type, always cast robustly.
 
+### Rendering Pattern for Pages with pageInput
+
+`pageInput` is available synchronously on the first render when opened via `Xrm.Navigation.navigateTo`. To avoid double-render flicker:
+
+- **Derive values synchronously from props** — use `const recordId = pageInput?.recordId` (not `useState`). State initialization triggers re-renders; prop derivation doesn't.
+- **Use early returns** — if `recordId` is missing, return immediately. Don't wrap the body in conditional blocks inside a wrapper div.
+- **No artificial delays** — never use `setTimeout` or a `pageInputReady` flag. A 500ms delay causes the platform to show the previous page as a fallback.
+- **Initialize `loading` as `true`** when `recordId` is present — so a spinner shows on frame 0, not a blank page that flips to a spinner after a delay.
+
 ### Usage Examples
 
 **Using `dataApi` with `pageInput.entityName` and `pageInput.recordId`:**
 
 ```typescript
 const { dataApi, pageInput } = props;
+const recordId = pageInput?.recordId;
+const entityName = pageInput?.entityName;
+
 const [selectedRowData, setSelectedRowData] = useState(undefined);
 
 useEffect(() => {
-    if (pageInput && pageInput.entityName === "table2" && pageInput.recordId && dataApi) {
+    if (entityName === "table2" && recordId && dataApi) {
         (async () => {
             const row = await dataApi.retrieveRow("table2", {
-                id: pageInput.recordId,
+                id: recordId,
                 select: ["status", "name", "_mainContact_value"],
             });
             setSelectedRowData(row);
         })();
     }
-}, [dataApi, pageInput]);
+}, [dataApi, entityName, recordId]);
 ```
 
 **Using `pageInput.data` with safe type casting:**
@@ -360,6 +373,31 @@ const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.lo
 ---
 
 ## Special Patterns
+
+### GenUX Page Navigation
+
+Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction (`window.location`, query strings) breaks the hosting context and must not be used — not even as a fallback.
+
+```typescript
+const xrm = (window as any).Xrm;
+
+// Entity record
+xrm.Navigation.navigateTo({ pageType: "entityrecord", entityName: "account", entityId: recordId });
+
+// Another genux page (data arrives as props.pageInput.data on the target)
+xrm.Navigation.navigateTo({ pageType: "genux", id: pageId, data: { entityName, recordId } });
+```
+
+### Dark Mode Toggle
+
+Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use `themeToVars` to apply theme tokens synchronously as CSS custom properties:
+
+```typescript
+import { webDarkTheme, webLightTheme, themeToVars } from "@fluentui/react-components";
+
+// Wrap content in a plain div — all Fluent descendants inherit the theme via CSS variables
+<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
+```
 
 ### Charts and Visualization
 - Use D3.js for all charts
@@ -417,6 +455,16 @@ return (
 8. **Preserve API signatures** - Don't rename dataApi methods/parameters
 9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
 10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
+11. **Lookup display-name fields cannot be in $select** - Any `*name` or `*yominame` property on a lookup (e.g., `regardingobjectidname`) is an OData annotation, not a selectable column. Select the FK column (`_regardingobjectid_value`) and read the display name from `@OData.Community.Display.V1.FormattedValue`:
+
+```typescript
+// WRONG — causes runtime error
+select: ["subject", "regardingobjectidname"]
+
+// CORRECT — select FK column, read display name from annotation
+select: ["subject", "_regardingobjectid_value"]
+const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedValue"];
+```
 
 ### DataGrid Requirements
 - Import `createTableColumn` from Fluent UI V9
