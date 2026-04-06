@@ -39,14 +39,6 @@ Screens:
                 ...
 ```
 
-> **Note:** Always set `App.StartScreen` in `App.pa.yaml` to the screen that should be shown when the app launches. Without it, the app may open on an unexpected screen.
->
-> ```yaml
-> App:
->   Properties:
->     StartScreen: =HomeScreen
-> ```
-
 ## YAML Syntax Rules
 
 ### Multi-line formulas — use `|-`
