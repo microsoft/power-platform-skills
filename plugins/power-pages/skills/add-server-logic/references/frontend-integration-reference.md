@@ -1,6 +1,6 @@
 # Frontend Integration Reference
 
-Use this reference in Phase 8 of `add-server-logic` to decide how the site's frontend should call one or more server logic endpoints.
+Use this reference in Phase 9 of `add-server-logic` to decide how the site's frontend should call one or more server logic endpoints.
 
 ## Goal
 
@@ -92,10 +92,16 @@ export async function callServerLogic<T = unknown>(
         ? `/_api/serverlogics/${endpointName}?${new URLSearchParams(params)}`
         : `/_api/serverlogics/${endpointName}`;
 
-    return powerPagesFetch<T>(url, {
+    const envelope = await powerPagesFetch<{ data: string; success: boolean; error: string | null }>(url, {
         method,
         body: body ? JSON.stringify(body) : undefined,
     });
+
+    if (!envelope.success) {
+        throw new Error(envelope.error ?? 'Server logic call failed');
+    }
+
+    return JSON.parse(envelope.data) as T;
 }
 ```
 
@@ -188,7 +194,7 @@ When integrating the new endpoints into existing UI:
 
 ## Output Expectations
 
-Phase 8 should leave behind:
+Phase 9 should leave behind:
 
 - The frontend helper or service files needed to call the server logic endpoints
 - Any framework-specific wrappers that match the site's existing architecture

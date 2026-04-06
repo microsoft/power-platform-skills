@@ -179,6 +179,45 @@ test('nested helper function inside handler is not flagged as disallowed', (t) =
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('module.exports usage is flagged', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  const exportsJs = `function get() {
+    try {
+        Server.Logger.Log("test-endpoint GET called");
+        return JSON.stringify({ status: "success" });
+    } catch (err) {
+        Server.Logger.Error("test-endpoint GET failed: " + err.message);
+        return JSON.stringify({ status: "error", message: err.message });
+    }
+}
+
+module.exports.get = get;`;
+  writeServerLogic(projectRoot, 'test-endpoint', exportsJs, VALID_YML);
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /module\.exports\/exports assignments are not allowed/);
+});
+
+test('try without catch is flagged', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  const tryFinallyJs = `function get() {
+    try {
+        Server.Logger.Log("test-endpoint GET called");
+        return JSON.stringify({ status: "success" });
+    } finally {
+        Server.Logger.Log("cleanup");
+    }
+}`;
+  writeServerLogic(projectRoot, 'test-endpoint', tryFinallyJs, VALID_YML);
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /missing a catch block/);
+});
+
 test('yml name mismatch is flagged', (t) => {
   const projectRoot = createTempProject(t);
   setupProject(projectRoot);

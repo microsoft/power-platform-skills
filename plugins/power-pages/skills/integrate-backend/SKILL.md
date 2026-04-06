@@ -60,8 +60,8 @@ Use the **Explore agent** to quickly scan the site for existing backend integrat
 
 > "Analyze this Power Pages code site for existing backend integrations:
 > 1. Check `.powerpages-site/server-logic/` — list any existing server logic endpoints
-> 2. Check `.powerpages-site/cloud-flow-consumers/` — list any registered cloud flows
-> 3. Search frontend code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for calls to `/_api/` (Web API) and `/_api/serverlogics/` (Server Logic) and `/_api/cloudflows/` (Cloud Flows)
+> 2. Check `.powerpages-site/cloud-flow-consumer/` — list any registered cloud flows
+> 3. Search frontend code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for calls to `/_api/` (Web API) and `/_api/serverlogics/` (Server Logic) and `/_api/cloudflow/` (Cloud Flows)
 > 4. Check for existing service layers or API utilities in `src/services/`, `src/shared/`, or similar
 > 5. List available web roles from `.powerpages-site/web-roles/*.webrole.yml`
 > Report what backend integrations already exist so we can build on them."
@@ -208,6 +208,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/render-backend-plan.js" --output "<OUTPUT_PA
 
 The render script refuses to overwrite existing files. If the default path exists, choose a new descriptive filename (e.g., `backend-plan-payments.html`).
 
+After rendering, open the HTML plan in the user's default browser:
+
+```bash
+open "<OUTPUT_PATH>"  # macOS
+# start "<OUTPUT_PATH>"  # Windows
+# xdg-open "<OUTPUT_PATH>"  # Linux
+```
+
 ### 3.3 Present Plan Summary
 
 Do **not** restate the full plan in the CLI. The HTML file is the single detailed plan artifact.
@@ -285,6 +293,12 @@ After all phases complete, present a brief summary of everything that was create
 | 4 | Cloud Flow | [flows registered, triggers wired] |
 
 Remind the user to deploy with `/deploy-site` if they haven't already.
+
+### 4.4 Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "IntegrateBackend"`.
 
 **Output**: All recommended backend integrations implemented
 

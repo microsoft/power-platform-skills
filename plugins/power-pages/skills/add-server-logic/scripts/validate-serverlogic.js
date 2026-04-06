@@ -2,7 +2,7 @@
 
 // Validates that Server Logic files were created correctly for a Power Pages code site.
 // Checks both the .js code file and the .serverlogic.yml metadata file.
-// Runs as a Stop hook to verify the skill produced valid output.
+// Runs via the centralized PostToolUse hook to verify the skill produced valid output.
 
 const fs = require('fs');
 const path = require('path');
@@ -96,14 +96,20 @@ runValidation((cwd) => {
     // Validate .js file contents
     const content = fs.readFileSync(jsFile, 'utf8');
 
-    // Check: file has at least one allowed top-level function
+    // Check: file has at least one allowed top-level function (anchored to start of line)
     const foundFunctions = ALLOWED_FUNCTIONS.filter(fn => {
-      const regex = new RegExp(`(?:async\\s+)?function\\s+${fn}\\s*\\(`, 'm');
+      const regex = new RegExp(`^(?:async\\s+)?function\\s+${fn}\\s*\\(`, 'm');
       return regex.test(content);
     });
 
     if (foundFunctions.length === 0) {
       errors.push(`${dirName}.js: no allowed top-level functions found (expected: get, post, put, patch, or del)`);
+      continue;
+    }
+
+    // Check: CommonJS exports are not allowed (runtime forbids module.exports/exports usage)
+    if (/(?:^|\n)\s*(?:module\.exports|exports)\.[a-zA-Z0-9_]+\s*=/m.test(content)) {
+      errors.push(`${dirName}.js: module.exports/exports assignments are not allowed; define top-level get/post/put/patch/del functions instead`);
       continue;
     }
 
@@ -114,13 +120,6 @@ runValidation((cwd) => {
     while ((fnMatch = topLevelFnRegex.exec(content)) !== null) {
       if (!ALLOWED_FUNCTIONS.includes(fnMatch[1])) {
         disallowedFunctions.add(fnMatch[1]);
-      }
-    }
-    const exportRegex = /(?:^|\n)\s*(?:module\.exports|exports)\.([a-zA-Z0-9_]+)\s*=/g;
-    let exportMatch;
-    while ((exportMatch = exportRegex.exec(content)) !== null) {
-      if (!ALLOWED_FUNCTIONS.includes(exportMatch[1])) {
-        disallowedFunctions.add(exportMatch[1]);
       }
     }
     if (disallowedFunctions.size > 0) {
@@ -141,6 +140,8 @@ runValidation((cwd) => {
         const fnBody = content.slice(bodyStart, bodyEnd);
         if (!/\btry\s*\{/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' is missing try/catch error handling`);
+        } else if (!/\bcatch\s*\(/.test(fnBody)) {
+          errors.push(`${dirName}.js: function '${fn}' has try but is missing a catch block`);
         }
         if (isAsync && !/\bawait\b/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' is marked async but contains no await — remove async to avoid runtime errors (Dataverse calls are synchronous, only HttpClient requires async/await)`);

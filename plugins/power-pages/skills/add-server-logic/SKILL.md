@@ -92,7 +92,7 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 
 From the Explore agent's findings, note:
 - **Existing server logic files** — what's already implemented, and which ones are candidates for reuse or extension
-- **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 8)
+- **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 9)
 - **Existing service/utility files** — reuse these when adding client-side integration
 - **Gaps** — frontend code that references server logic endpoints that don't exist yet
 
@@ -400,7 +400,7 @@ Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Us
 
 ### 5.4 Create the Metadata YAML
 
-For each approved server logic item, create the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON:
+For each approved server logic item where the plan status is `create`, generate the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON. **Skip this step for `update` / `reuse` items** — the YAML already exists and should be updated manually if needed.
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
@@ -715,7 +715,17 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 **Actions**:
 
-### 9.1 Follow the Frontend Integration Reference
+### 9.1 Ask User About Integration Scope
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| I've created the server logic backend. Would you like me to also fully integrate it into the frontend UI? | Yes, fully integrate it into the UI (Recommended), No, I'll handle the frontend myself |
+
+**If "No"**: Skip to Phase 10, but provide the API URL and a code snippet the user can copy.
+
+### 9.2 Follow the Frontend Integration Reference
 
 Use the reference below for the frontend integration approach, examples, and framework-specific patterns:
 
@@ -723,7 +733,7 @@ Use the reference below for the frontend integration approach, examples, and fra
 
 Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
-### 9.2 Create or Update Frontend Integration
+### 9.3 Create or Update Frontend Integration
 
 Following the reference:
 
@@ -735,16 +745,6 @@ Following the reference:
 - Update the relevant pages, components, forms, buttons, or user journeys so the new backend behavior is reachable from the interface
 - Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
 - Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
-
-### 9.3 Ask User About Integration Scope
-
-Use `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| I've created the server logic backend. Would you like me to also fully integrate it into the frontend UI? | Yes, fully integrate it into the UI (Recommended), No, I'll handle the frontend myself |
-
-**If "No"**: Skip to Phase 10, but provide the API URL and a code snippet the user can copy.
 
 ### 9.4 Git Commit
 
@@ -900,7 +900,7 @@ After deployment (or if skipped), remind the user:
 4. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
 5. At Phase 7.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
 6. At Phase 7.2a Step 2: Create a new Key Vault or fall back to direct environment variable (if no vaults found)
-7. At Phase 9.3: Create frontend integration or skip
+7. At Phase 9.1: Create frontend integration or skip
 8. At Phase 11.3: Deploy now or deploy later
 
 ### SDK Pattern Source of Truth

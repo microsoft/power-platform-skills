@@ -14,8 +14,8 @@ const path = require('path');
  * @param {Object} options
  * @param {string} options.templatePath  - Absolute path to the HTML template
  * @param {string} options.outputPath    - Absolute path for the rendered output
- * @param {string} [options.dataPath]    - Absolute path to a JSON data file (mutually exclusive with dataObject)
- * @param {Object} [options.dataObject]  - Data object passed directly (mutually exclusive with dataPath)
+ * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
+ * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
  */
 function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {

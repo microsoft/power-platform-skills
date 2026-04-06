@@ -409,11 +409,14 @@ document.getElementById('topbarCount').textContent =
   ITEMS.length + ' integration item' + (ITEMS.length !== 1 ? 's' : '');
 
 const summaryEl = document.getElementById('approachesSummary');
-summaryEl.innerHTML = ITEMS.map(i =>
-  `<span class="approach-chip approach-${APPROACH_META[i.approach]?.cls || 'webapi'}">
-    <span class="dot"></span>${i.name}
-  </span>`
-).join('');
+const usedApproaches = [...new Set(ITEMS.map(i => i.approach))];
+summaryEl.innerHTML = usedApproaches.map(approach => {
+  const meta = APPROACH_META[approach] || APPROACH_META.webapi;
+  const count = ITEMS.filter(i => i.approach === approach).length;
+  return `<span class="approach-chip approach-${meta.cls}">
+    <span class="dot"></span>${meta.label} (${count})
+  </span>`;
+}).join('');
 
 document.getElementById('rationaleContainer').innerHTML = RATIONALE.map(r => `
   <div class="principle">

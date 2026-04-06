@@ -444,7 +444,7 @@ For **`integration-only`** flows, the Explore agent's findings in point 4 are cr
 >
 > If the site has a centralized API client (e.g. `powerPagesFetch`) that targets the Dataverse Web API, do not use it here. Cloud flow trigger URLs (`/_api/cloudflow/v1.0/trigger/...`) are a different endpoint that does not accept OData-specific request headers. Using an OData wrapper will cause the request to fail.
 >
-> Always use raw `fetch` for cloud flow calls. You may reuse the site's existing CSRF token helper if one is exported — but call `fetch` directly.
+> Use direct `fetch` or an equivalent low-level HTTP client (for example, Angular's `HttpClient`) for cloud flow calls. Do not use any OData-specific wrappers or helpers that automatically add Dataverse Web API headers. You may reuse the site's existing CSRF token helper if one is exported — but perform the HTTP request via `fetch` or the chosen low-level client directly.
 
 Based on the framework and existing patterns:
 
@@ -509,7 +509,7 @@ export async function <camelCaseFunctionName>(payload: Record<string, unknown> =
 |-----------|-----------|--------|
 | React | Custom hook `useCloudFlow<Name>()` wrapping the service function with loading/error state | `src/hooks/useCloudFlow.ts` |
 | Vue | Composable `useCloudFlow<Name>()` with `ref` for loading/error | `src/composables/useCloudFlow.ts` |
-| Angular | Injectable `CloudFlowService` with `HttpClient` | `src/app/services/cloud-flow.service.ts` |
+| Angular | Injectable `CloudFlowService` that wraps the same raw `fetch` trigger function shown above (do not switch to `HttpClient` unless you preserve the exact headers and `eventData` payload shape) | `src/app/services/cloud-flow.service.ts` |
 | Astro | Plain async utility functions (no framework wrapper needed) | `src/utils/cloudFlow.ts` |
 
 Group all flow functions together in one file. Do not create a separate file per flow.
