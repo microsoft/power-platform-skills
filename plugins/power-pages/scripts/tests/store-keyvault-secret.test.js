@@ -5,10 +5,11 @@ const { spawnSync } = require('child_process');
 
 const cliPath = path.join(__dirname, '..', 'store-keyvault-secret.js');
 
-function runStoreKeyvaultSecret(args) {
+function runStoreKeyvaultSecret(args, opts = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
     timeout: 10000,
+    ...opts,
   });
 }
 
@@ -71,8 +72,8 @@ test('store-keyvault-secret accepts valid arguments (fails at az CLI)', () => {
     '--vaultName', 'my-vault',
     '--secretName', 'my-secret',
     '--secretValue', 'super-secret',
-  ]);
-  // Passes validation but fails when calling az CLI (not logged in / not installed in CI)
+  ], { env: { ...process.env, PATH: '' } });
+  // Passes validation but fails when calling az CLI (az unavailable with empty PATH)
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stderr, /Usage:/);
   assert.doesNotMatch(result.stderr, /--vaultName must be/);
