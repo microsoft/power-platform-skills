@@ -2,9 +2,10 @@
 name: canvas-edit-planner
 description: >-
   Plans edits to an existing Canvas App. Reads current .pa.yaml files to understand
-  the existing app; discovers new controls or APIs only if needed; presents an edit plan
-  for user approval via plan mode; gathers describe_control output for any new controls;
-  writes canvas-edit-plan.md for canvas-screen-editor agents.
+  the existing app; discovers new controls or APIs only if needed; calls describe_api
+  for any connectors involved and get_data_source_schema for any data sources involved;
+  presents an edit plan for user approval via plan mode; gathers describe_control output
+  for any new controls; writes canvas-edit-plan.md for canvas-screen-editor agents.
   Called by edit-canvas-app for complex edits — not invoked directly by users.
 color: orange
 tools:
@@ -19,6 +20,8 @@ tools:
   - mcp__canvas-authoring__list_apis
   - mcp__canvas-authoring__list_data_sources
   - mcp__canvas-authoring__describe_control
+  - mcp__canvas-authoring__describe_api
+  - mcp__canvas-authoring__get_data_source_schema
 ---
 
 # Canvas Edit Planner
@@ -64,7 +67,15 @@ app, call the relevant discovery tools:
 - `list_apis` — if new connectors are needed
 - `list_data_sources` — if new data sources are needed
 
-Skip discovery calls for edits that only modify existing controls, properties, or formulas.
+Skip list discovery calls for edits that only modify existing controls, properties, or formulas.
+
+Regardless of whether list discovery is needed, call the detail tools for any APIs or data
+sources that are involved in the edit (whether existing or new):
+
+- `describe_api` — call for each connector referenced by the edit, to get its operations and parameters
+- `get_data_source_schema` — call for each data source referenced by the edit, to get its columns and Power Fx types
+
+These calls can be made in parallel with any list discovery calls.
 
 ## Step 4 — Create Task Tracking
 
@@ -162,6 +173,22 @@ Use this structure:
 |--------|------|---------|
 | [Name] | [Name].pa.yaml | [description] |
 (omit this section if no new screens)
+
+## Data Source Schemas
+[For each data source involved in the edit, embed the FULL output of get_data_source_schema]
+[Editors will reference column names and Power Fx types from here]
+[Omit entirely if no data sources are involved]
+
+### [DataSourceName]
+[Full get_data_source_schema output]
+
+## API Details
+[For each connector involved in the edit, embed the FULL output of describe_api]
+[Editors will reference operation names and parameters from here]
+[Omit entirely if no connectors are involved]
+
+### [ApiName]
+[Full describe_api output]
 
 ## Control Definitions
 [For each NEW control type not already in the existing app, embed the FULL output of describe_control]

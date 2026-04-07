@@ -2,6 +2,7 @@
 name: canvas-app-planner
 description: >-
   Plans and designs a Canvas App. Discovers available controls, APIs, and data sources;
+  calls describe_api for relevant connectors and get_data_source_schema for connected data sources;
   designs the aesthetic direction and screen plan; presents plan for user approval via plan mode;
   calls describe_control for all controls in the design; writes
   App.pa.yaml and canvas-app-plan.md for canvas-screen-builder agents to consume.
@@ -19,6 +20,8 @@ tools:
   - mcp__canvas-authoring__list_apis
   - mcp__canvas-authoring__list_data_sources
   - mcp__canvas-authoring__describe_control
+  - mcp__canvas-authoring__describe_api
+  - mcp__canvas-authoring__get_data_source_schema
 ---
 
 # Canvas App Planner
@@ -55,6 +58,13 @@ After all three complete, summarize findings:
 - How many controls, connectors, and data sources are available
 - Which controls are most relevant to the user's app requirements
 - Which data sources (if any) should drive the app's data layer
+
+Then, based on the user's requirements, call the detail tools for resources that will be used:
+
+- `describe_api` — call for each connector that the app will use, to get its operations and parameters
+- `get_data_source_schema` — call for each data source that the app will use, to get its columns and Power Fx types
+
+These calls can be made in parallel. Collect the full output of each for embedding in the plan document.
 
 ## Step 3 — Create Task Tracking
 
@@ -135,6 +145,22 @@ Use this structure:
 - Controls available: [N] — notable: [list of most relevant]
 - Data sources: [names or "none connected"]
 - Connectors: [names or "none connected"]
+
+## Data Source Schemas
+[For each data source used in the app, embed the FULL output of get_data_source_schema]
+[Screen builders will reference column names and Power Fx types from here]
+[Omit entirely if no data sources are used]
+
+### [DataSourceName]
+[Full get_data_source_schema output]
+
+## API Details
+[For each connector used in the app, embed the FULL output of describe_api]
+[Screen builders will reference operation names and parameters from here]
+[Omit entirely if no connectors are used]
+
+### [ApiName]
+[Full describe_api output]
 
 ## Screens
 | Screen | File | Purpose | Key Controls |
