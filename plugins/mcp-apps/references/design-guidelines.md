@@ -67,6 +67,11 @@ Use theme tokens so light/dark mode works automatically. Do NOT use hardcoded co
 
 Do NOT use made-up variable names like `--neutral-layer-2` or `--error`.
 
+**Contrast rules:**
+- Text on `var(--colorBrandBackground)` (brand/accent surfaces): use `var(--colorNeutralForegroundOnBrand)` (white), NOT `var(--colorNeutralForeground1)` (dark)
+- Text on `var(--colorNeutralBackground1)` (default surface): use `var(--colorNeutralForeground1)` (dark)
+- Always verify text is readable against its background. Dark text on blue = unreadable.
+
 ## Interactions
 
 - Subtle CSS transitions on interactive elements: `transition: all 0.2s ease`
