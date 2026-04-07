@@ -1,6 +1,6 @@
 # MCP Apps Widget Generator
 
-Generate interactive MCP App widgets for MCP tools using Claude Code or GitHub Copilot CLI.
+Generate interactive MCP App widgets for MCP tools using Claude Code or Visual Studio Code.
 
 ## What it does
 
@@ -41,7 +41,8 @@ A single HTML file that:
 skills/generate-mcp-app/SKILL.md    - Main skill
 references/mcp-apps-reference.md    - MCP Apps API, Fluent UI components, CDN patterns
 references/design-guidelines.md     - Visual design defaults, theme tokens
-samples/flight-status-widget.html   - Example generated widget
+samples/flight-status-widget.html   - Example widget (read-only)
+samples/weather-refresh-widget.html - Example widget with callServerTool (interactive)
 ```
 
 ## Evals

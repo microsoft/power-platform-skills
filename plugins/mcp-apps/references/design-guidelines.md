@@ -26,7 +26,7 @@ Disable action buttons while a tool call is in flight to prevent double-submissi
 
 - Use 2-3 font sizes max. Example: 1rem (headings, semibold 600), 0.875rem (body), 0.75rem (captions/metadata).
 - Create hierarchy through font-weight (600 vs 400) and color (primary vs secondary text), not big size jumps.
-- No custom fonts or Google Fonts imports. The template font stack handles it.
+- No custom fonts or external font imports. The template font stack handles it.
 
 ## Spacing
 
