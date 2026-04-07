@@ -12,18 +12,16 @@ Adapt imports and style to match the project's existing TypeScript conventions (
 
 // ── Anti-Forgery Token ────────────────────────────────────────────────────────
 // Power Pages Web API requires a __RequestVerificationToken header on every
-// mutating request. The token is fetched from /_layout/tokenhtml and cached.
+// mutating request. The token is fetched once from /_layout/tokenhtml and
+// reused for all subsequent requests. It is only re-fetched when a 403 response
+// with the anti-forgery error code (90040107) indicates the token has expired.
 // No Authorization/Bearer header is needed — authenticated users get cookie-based
 // session auth automatically.
 
-const TOKEN_TTL_MS = 8 * 60 * 1000; // 8 min cache
-
 let cachedAntiForgeryToken: string | null = null;
-let cachedAntiForgeryTimestamp = 0;
 
 const fetchAntiForgeryToken = async (): Promise<string> => {
-  const now = Date.now();
-  if (cachedAntiForgeryToken && now - cachedAntiForgeryTimestamp < TOKEN_TTL_MS) {
+  if (cachedAntiForgeryToken) {
     return cachedAntiForgeryToken;
   }
 
@@ -48,12 +46,16 @@ const fetchAntiForgeryToken = async (): Promise<string> => {
     );
 
     cachedAntiForgeryToken = token || '';
-    cachedAntiForgeryTimestamp = now;
     return cachedAntiForgeryToken;
   } catch (error) {
     console.warn('Failed to fetch anti-forgery token:', error);
     return '';
   }
+};
+
+/** Invalidate the cached token so the next request re-fetches it. */
+const invalidateAntiForgeryToken = (): void => {
+  cachedAntiForgeryToken = null;
 };
 
 // ── Header Builder ────────────────────────────────────────────────────────────
@@ -151,10 +153,14 @@ export async function powerPagesFetch<T>(
       throw new Error('Session expired. Please sign in again.');
     }
 
-    // On 403, the anti-forgery token may have expired — refresh and retry
+    // On 403, check if it's an anti-forgery token error — only retry for that
     if (response.status === 403 && attempt < MAX_RETRIES) {
-      cachedAntiForgeryToken = null;
-      continue;
+      const errorCode = await extractErrorCode(response.clone());
+      if (errorCode === WebApiErrorCode.AntiForgeryTokenInvalid) {
+        invalidateAntiForgeryToken();
+        continue;
+      }
+      // Not a token error — this is a real permission denial, don't retry
     }
 
     if (isTransientError(response.status) && attempt < MAX_RETRIES) {
@@ -196,10 +202,14 @@ export async function powerPagesFetchResponse(
       throw new Error('Session expired. Please sign in again.');
     }
 
-    // On 403, the anti-forgery token may have expired — refresh and retry
+    // On 403, check if it's an anti-forgery token error — only retry for that
     if (response.status === 403 && attempt < MAX_RETRIES) {
-      cachedAntiForgeryToken = null;
-      continue;
+      const errorCode = await extractErrorCode(response.clone());
+      if (errorCode === WebApiErrorCode.AntiForgeryTokenInvalid) {
+        invalidateAntiForgeryToken();
+        continue;
+      }
+      // Not a token error — this is a real permission denial, don't retry
     }
 
     if (isTransientError(response.status) && attempt < MAX_RETRIES) {
@@ -240,13 +250,28 @@ export const WebApiErrorCode = {
 } as const;
 
 /**
- * Parse the error code from a Web API error response.
+ * Extract the error code from a Web API Response object.
+ * Reads the JSON body: { error: { code: "90040120", message: "..." } }
+ * Returns the hex code string (e.g., '90040120') or undefined.
+ * Use response.clone() before passing if you need to read the body again.
+ */
+const extractErrorCode = async (response: Response): Promise<string | undefined> => {
+  try {
+    const payload = await response.json();
+    const code = payload?.error?.code;
+    return typeof code === 'string' ? code.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Parse the error code from a caught Error object.
  * Returns the hex code string (e.g., '90040120') or undefined.
  */
 export const parseErrorCode = (error: unknown): string | undefined => {
   if (error && typeof error === 'object' && 'message' in error) {
     const msg = (error as Error).message;
-    // The error code appears in the JSON: { error: { code: "90040120", message: "..." } }
     const match = msg.match(/[0-9a-f]{8}/i);
     return match?.[0]?.toLowerCase();
   }
@@ -303,6 +328,35 @@ export interface PaginatedResult<T> {
   totalCount: number;
   nextLink?: string;
 }
+
+/**
+ * Response shape for expanded collection-valued navigation properties.
+ * Each expanded collection includes an @odata.nextLink for paging through
+ * additional related records when the query uses nested $expand.
+ */
+export interface ExpandedCollection<T> {
+  items: T[];
+  nextLink?: string;
+}
+
+/**
+ * Parse an expanded collection-valued navigation property from a raw OData entity.
+ * Extracts both the array of related records and the @odata.nextLink for paging.
+ *
+ * @param entity - The parent entity object from the OData response
+ * @param property - The navigation property name (e.g., 'cr4fc_order_lines')
+ * @returns The related records array and optional nextLink for further paging
+ */
+export const parseExpandedCollection = <T>(
+  entity: Record<string, unknown>,
+  property: string
+): ExpandedCollection<T> => {
+  const raw = entity[property];
+  return {
+    items: Array.isArray(raw) ? (raw as T[]) : [],
+    nextLink: entity[`${property}@odata.nextLink`] as string | undefined,
+  };
+};
 
 // ── Formatted Value Helper ────────────────────────────────────────────────────
 
@@ -366,6 +420,90 @@ export const bindLookup = (
   }
 };
 
+// ── Expand Builder ────────────────────────────────────────────────────────────
+
+/**
+ * Options for expanding a navigation property.
+ * Single-valued (lookup) navigation properties support: $select, $expand (nested).
+ * Collection-valued (one-to-many) navigation properties support: $select, $filter, $orderby, $top.
+ * Note: $orderby and $top are NOT supported when the query contains any nested $expand.
+ */
+export interface ExpandOption {
+  /** Navigation property name — must match exact Dataverse schema name (case-sensitive) */
+  property: string;
+  /** Columns to select from the related entity */
+  select?: string[];
+  /** Filter expression for collection-valued navigation properties */
+  filter?: string;
+  /** Order expression for collection-valued navigation properties (not supported with nested $expand) */
+  orderBy?: string;
+  /** Max records for collection-valued navigation properties (not supported with nested $expand) */
+  top?: number;
+  /** Nested expand options for single-valued navigation properties */
+  expand?: ExpandOption[];
+}
+
+/**
+ * Build an OData $expand clause from structured options.
+ * Handles nested expand for single-valued navigation properties and
+ * query options ($select, $filter, $orderby, $top) for collection-valued navigation properties.
+ *
+ * @example Single-valued with nested expand (lookup → lookup → lookup):
+ * buildExpandClause([{
+ *   property: 'cr4fc_Contact',
+ *   select: ['fullname'],
+ *   expand: [{
+ *     property: 'parentcustomerid_account',
+ *     select: ['name'],
+ *     expand: [{ property: 'createdby', select: ['fullname'] }]
+ *   }]
+ * }])
+ * // → "cr4fc_Contact($select=fullname;$expand=parentcustomerid_account($select=name;$expand=createdby($select=fullname)))"
+ *
+ * @example Collection-valued with filter and ordering:
+ * buildExpandClause([{
+ *   property: 'cr4fc_order_lines',
+ *   select: ['cr4fc_quantity', 'cr4fc_unitprice'],
+ *   filter: 'cr4fc_quantity gt 0',
+ *   orderBy: 'cr4fc_unitprice desc',
+ *   top: 10,
+ * }])
+ * // → "cr4fc_order_lines($select=cr4fc_quantity,cr4fc_unitprice;$filter=cr4fc_quantity gt 0;$orderby=cr4fc_unitprice desc;$top=10)"
+ *
+ * @example Multiple expands (single + collection):
+ * buildExpandClause([
+ *   { property: 'cr4fc_Category', select: ['cr4fc_categoryid', 'cr4fc_name'] },
+ *   { property: 'cr4fc_product_reviews', select: ['cr4fc_rating', 'cr4fc_comment'], top: 5 },
+ * ])
+ * // → "cr4fc_Category($select=cr4fc_categoryid,cr4fc_name),cr4fc_product_reviews($select=cr4fc_rating,cr4fc_comment;$top=5)"
+ */
+export const buildExpandClause = (options: ExpandOption[]): string =>
+  options.map(formatExpandOption).join(',');
+
+const formatExpandOption = (opt: ExpandOption): string => {
+  const parts: string[] = [];
+
+  if (opt.select?.length) {
+    parts.push(`$select=${opt.select.join(',')}`);
+  }
+  if (opt.filter) {
+    parts.push(`$filter=${opt.filter}`);
+  }
+  if (opt.orderBy) {
+    parts.push(`$orderby=${opt.orderBy}`);
+  }
+  if (opt.top !== undefined) {
+    parts.push(`$top=${opt.top}`);
+  }
+  if (opt.expand?.length) {
+    parts.push(`$expand=${buildExpandClause(opt.expand)}`);
+  }
+
+  return parts.length > 0
+    ? `${opt.property}(${parts.join(';')})`
+    : opt.property;
+};
+
 // ── File Column Helpers ───────────────────────────────────────────────────────
 
 /**
@@ -379,7 +517,7 @@ export const fetchFileColumnUrl = async (
 ): Promise<string | null> => {
   const headers = await buildPowerPagesHeaders(undefined, {
     accept: '*/*',
-    contentType: null,
+    contentType: 'application/octet-stream',
     prefer: null,
   });
 
@@ -410,7 +548,7 @@ export const uploadFileColumn = async (
     },
     {
       accept: 'application/json',
-      contentType: file.type || 'application/octet-stream',
+      contentType: 'application/octet-stream',
       prefer: null,
     }
   );

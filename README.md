@@ -46,6 +46,8 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
+    /plugin install code-apps@power-platform-skills
+    /plugin install canvas-apps@power-platform-skills
     ```
 
 ## Available Plugins
@@ -62,6 +64,18 @@ Build and deploy Power Apps generative pages for model-driven apps.
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI
 
+### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
+
+Build and deploy Power Apps code apps connected to Power Platform via connectors.
+
+**Stack**: React + Vite + TypeScript, deployed via PAC CLI
+
+### [Canvas Apps](plugins/canvas-apps/AGENTS.md) (`plugins/canvas-apps`)
+
+Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
+
+**Stack**: PA YAML (`.pa.yaml`) authored via `CanvasAuthoringMcpServer`, requires .NET 10 SDK
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
@@ -72,6 +86,8 @@ To develop and test plugins locally, follow these steps:
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     ```
 
 ## Running Without Interruption
@@ -150,13 +166,24 @@ power-platform-skills/
 │   │   ├── commands/
 │   │   ├── shared/
 │   │   └── skills/
-│   └── model-apps/           # Model Apps plugin
+│   ├── model-apps/           # Model Apps plugin
+│   |   ├── .claude-plugin/
+│   │   └── plugin.json
+│   |   ├── commands/
+│   |   ├── skills/
+│   |   ├── shared/           # Shared references + samples
+│   |   └── github/           # GitHub Copilot instructions
+│   ├── code-apps/            # Code Apps plugin
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── agents/
+│   │   ├── skills/
+│   │   └── shared/           # Shared instructions + references
+│   └── canvas-apps/          # Canvas Apps plugin
 │       ├── .claude-plugin/
 │       │   └── plugin.json
-│       ├── commands/
-│       ├── skills/
-│       ├── shared/           # Shared references + samples
-│       └── github/           # GitHub Copilot instructions
+│       ├── references/       # Technical + design guides
+│       └── skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
@@ -166,6 +193,7 @@ power-platform-skills/
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
+- [Power Apps Code Apps](https://learn.microsoft.com/power-apps/developer/code-apps/)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference)
 
 ## Contributing

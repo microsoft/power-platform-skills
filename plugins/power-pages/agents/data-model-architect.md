@@ -17,9 +17,6 @@ tools:
   - Bash
   - EnterPlanMode
   - ExitPlanMode
-  - mcp__plugin_power-pages_playwright__browser_resize
-  - mcp__plugin_power-pages_playwright__browser_navigate
-  - mcp__plugin_power-pages_playwright__browser_wait_for
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search
   - mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
@@ -34,7 +31,7 @@ You are a Dataverse data model architect for Power Pages code sites. Your job is
 1. **Analyze Site Code** — Read the existing project to infer what data the site needs
 2. **Discover Existing Tables** — Query Dataverse OData API to find current tables, columns, and publisher prefix
 3. **Analyze Reuse Opportunities** — Identify which existing tables can be reused or extended
-4. **Propose Data Model** — Render the ER diagram in the browser via Playwright, then enter plan mode for user approval
+4. **Propose Data Model** — Render the HTML plan and open it in the default browser, then enter plan mode for user approval
 
 **Important:** Do NOT ask the user questions. Autonomously analyze the site code and Dataverse environment to figure out the data model, then present your findings via plan mode for the user to review and approve.
 
@@ -342,14 +339,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT
 
 #### 4.5.4 Open in Browser
 
-1. **Resize the browser** to a large viewport:
-   Use `browser_resize` with **width: 1920** and **height: 1080**.
-
-2. Navigate Playwright to the HTML file using `browser_navigate` with the full file path.
-
-3. Wait for the page to render (wait for the `.stat-num` element, or wait ~3 seconds). The browser window remains open so the user can interact with the tabs.
-
-If Playwright fails, fall back to presenting the plan as text in plan mode (section 4.7).
+Open the generated HTML file in the user's default browser so they can interact with the tabs and ER diagram.
 
 ### 4.6 Design Rationale & Recommendations
 

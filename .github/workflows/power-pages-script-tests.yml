@@ -1,0 +1,33 @@
+name: power-pages-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/power-pages/**"
+
+jobs:
+    test-power-pages-scripts:
+        name: test-power-pages-scripts (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: run-power-pages-script-tests
+              shell: bash
+              working-directory: plugins/power-pages/scripts/tests
+              run: node --test

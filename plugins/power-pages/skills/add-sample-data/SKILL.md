@@ -9,18 +9,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: sonnet
-hooks:
-  Stop:
-    - hooks:
-        - type: prompt
-          prompt: >
-            If sample data was being added in this session (via /power-pages:add-sample-data),
-            verify before allowing stop: 1) Tables were discovered (from .datamodel-manifest.json or OData API),
-            2) The user selected which tables to populate,
-            3) All records were inserted via OData API, 4) A verification summary was presented
-            showing record counts per table. If incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            Otherwise return { "ok": true }.
-          timeout: 30
 ---
 
 # Add Sample Data
@@ -42,6 +30,7 @@ Populate Dataverse tables with sample records via OData API so users can test an
 **Goal**: Confirm PAC CLI auth, acquire an Azure CLI token, and verify API access
 
 **Actions**:
+
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
@@ -114,6 +103,7 @@ Use `AskUserQuestion` to ask how many sample records per table:
 Analyze relationships between selected tables. Parent/referenced tables must be inserted first so their IDs are available for child/referencing table lookups.
 
 Build the insertion order:
+
 1. Tables with no lookup dependencies (parent tables) -- insert first
 2. Tables that reference already-inserted tables -- insert next
 3. Continue until all tables are ordered
@@ -209,6 +199,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST "<ChildE
 ### 5.5 Track Progress
 
 Track each insertion attempt:
+
 - Record table name, record number, success/failure
 - On failure, log the error message but continue with remaining records
 - Do NOT attempt automated rollback on failure
@@ -257,6 +248,7 @@ Present a summary table:
 | `cr123_task` (Task) | 10 | 9 | 1 |
 
 Include:
+
 - Total records created across all tables
 - Any failures with error details
 - Lookup relationships that were established
@@ -264,9 +256,10 @@ Include:
 ### 6.4 Suggest Next Steps
 
 After the summary, suggest:
+
 - Review the data in the Power Pages maker portal or model-driven app
-- If the site is not yet built: `/power-pages:create-site`
-- If the site is ready to deploy: `/power-pages:deploy-site`
+- If the site is not yet built: `/create-site`
+- If the site is ready to deploy: `/deploy-site`
 
 **Output**: Verified record counts and summary presented to the user
 

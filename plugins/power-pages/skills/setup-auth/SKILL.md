@@ -11,24 +11,6 @@ description: >
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/scripts/validate-auth.js"'
-          timeout: 15
-        - type: prompt
-          prompt: >
-            If authentication/authorization was being set up in this session (via /power-pages:setup-auth),
-            verify before allowing stop: 1) The site was found and framework detected, 2) An auth service
-            file was created (authService.ts/js) with login/logout functions, 3) PowerPages type declarations
-            were created (powerPages.d.ts), 4) Authorization utilities were created (authorization.ts/js)
-            with role-checking functions, 5) Auth UI component was created (AuthButton or equivalent),
-            6) All auth files were verified (exist, contain expected exports, project builds successfully),
-            7) The user was asked whether to deploy the site.
-            If any of these are incomplete, return { "ok": false, "reason": "<specific issues>" }.
-            If no auth setup work happened or everything is complete, return { "ok": true }.
-          timeout: 30
 ---
 
 # Set Up Authentication & Authorization
@@ -44,9 +26,10 @@ Configure authentication (login/logout via Microsoft Entra ID) and role-based au
 **Initial request:** $ARGUMENTS
 
 > **Prerequisites:**
-> - An existing Power Pages code site created via `/power-pages:create-site`
+>
+> - An existing Power Pages code site created via `/create-site`
 > - The site must be deployed at least once (`.powerpages-site` folder must exist)
-> - Web roles must be created via `/power-pages:create-webroles`
+> - Web roles must be created via `/create-webroles`
 
 ## Workflow
 
@@ -75,7 +58,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 **/powerpages.config.json
 ```
 
-**If not found**: Tell the user to create a site first with `/power-pages:create-site`.
+**If not found**: Tell the user to create a site first with `/create-site`.
 
 #### 1.2 Detect Framework
 
@@ -99,7 +82,7 @@ Use `AskUserQuestion`:
 |----------|---------|
 | Your site needs to be deployed first. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll do it later |
 
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site`, then resume.
+**If "Yes, deploy now"**: Invoke `/deploy-site`, then resume.
 
 **If "No"**: Stop — the site must be deployed first.
 
@@ -119,7 +102,7 @@ Read each file and compile a list of existing web roles (name, id, flags).
 |----------|---------|
 | No web roles were found. Web roles are required for role-based authorization. Would you like to create them now? | Yes, create web roles first (Recommended), Skip — I'll add roles later |
 
-**If "Yes"**: Invoke `/power-pages:create-webroles`, then resume.
+**If "Yes"**: Invoke `/create-webroles`, then resume.
 
 **If "Skip"**: Continue — auth service and login/logout will still work, but role-based authorization will need roles created later.
 
@@ -281,19 +264,23 @@ Create `src/utils/authorization.ts` with:
 Based on the detected framework:
 
 **React:**
+
 - `src/components/RequireAuth.tsx` — renders children only for authenticated users, optional login prompt fallback
 - `src/components/RequireRole.tsx` — renders children only for users with specified roles, supports `requireAll` mode
 - `src/hooks/useAuthorization.ts` — hook returning `{ roles, hasRole, hasAnyRole, hasAllRoles, isAuthenticated, isAdmin }`
 
 **Vue:**
+
 - `src/composables/useAuthorization.ts` — composable with computed roles and role-checking functions
 - `src/directives/vRole.ts` — `v-role` directive for declarative role-based visibility
 
 **Angular:**
+
 - `src/app/guards/auth.guard.ts` — `CanActivateFn` with route data for required roles
 - `src/app/directives/has-role.directive.ts` — structural directive `*appHasRole="'RoleName'"`
 
 **Astro:**
+
 - `src/utils/authorization.ts` only (use directly in component scripts)
 
 #### 4.3 Security Reminder
@@ -303,7 +290,7 @@ Add a comment at the top of the authorization utilities:
 ```typescript
 // IMPORTANT: Client-side authorization is for UX only, not security.
 // Server-side table permissions enforce actual access control.
-// Always configure table permissions via /power-pages:integrate-webapi.
+// Always configure table permissions via /integrate-webapi.
 ```
 
 ### Output
@@ -330,6 +317,7 @@ Based on the detected framework, create a login/logout button component:
 - **Astro**: `src/components/AuthButton.astro`
 
 The component should:
+
 - Show a "Sign In" button when the user is not authenticated
 - Show the user's display name, avatar (initials-based), and a "Sign Out" button when authenticated
 - Include a loading state while checking auth status
@@ -383,6 +371,7 @@ Present findings to the user and confirm which areas to protect.
 Based on the user's choices, wrap the appropriate components:
 
 **React example:**
+
 ```tsx
 <RequireAuth fallback={<p>Please sign in to view this content.</p>}>
   <Dashboard />
@@ -394,6 +383,7 @@ Based on the user's choices, wrap the appropriate components:
 ```
 
 **Vue example:**
+
 ```vue
 <div v-role="'Administrators'">
   <AdminPanel />
@@ -401,6 +391,7 @@ Based on the user's choices, wrap the appropriate components:
 ```
 
 **Angular example:**
+
 ```typescript
 { path: 'admin', component: AdminComponent, canActivate: [authGuard, roleGuard], data: { roles: ['Administrators'] } }
 ```
@@ -431,6 +422,7 @@ git commit -m "Add role-based access control to site components"
 #### 7.1 Verify File Inventory
 
 Confirm the following files were created:
+
 - `src/types/powerPages.d.ts` — Power Pages type declarations
 - `src/services/authService.ts` — Auth service with login/logout functions
 - Framework-specific auth hook/composable (e.g., `src/hooks/useAuth.ts` for React)
@@ -439,6 +431,7 @@ Confirm the following files were created:
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
 
 Read each file and verify it contains the expected exports and functions:
+
 - Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
 
@@ -461,6 +454,7 @@ npm run dev
 ```
 
 Use Playwright to navigate to the site and take a snapshot to confirm the auth button is visible:
+
 - Navigate to `http://localhost:<port>`
 - Take a browser snapshot
 - Verify the auth button (Sign In / mock user) appears in the navigation area
@@ -527,11 +521,11 @@ Use `AskUserQuestion`:
 |----------|---------|
 | Authentication and authorization are configured. To make login work, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke `/power-pages:deploy-site`.
+**If "Yes, deploy now"**: Invoke `/deploy-site`.
 
 **If "No"**: Remind the user:
 
-> "Remember to deploy your site using `/power-pages:deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
+> "Remember to deploy your site using `/deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
 
 #### 8.5 Post-Deploy Notes
 
@@ -540,7 +534,7 @@ After deployment (or if skipped), remind the user:
 - **Test on deployed site**: Auth only works on the deployed Power Pages site, not on `localhost`
 - **Entra ID configuration**: The site's identity provider must be configured in the Power Pages admin center to use Microsoft Entra ID
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
-- **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/power-pages:integrate-webapi` for actual data security
+- **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production
 
 ### Output

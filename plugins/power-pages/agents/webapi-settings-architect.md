@@ -31,6 +31,7 @@ You are a Web API site settings architect for Power Pages code sites. Your job i
 The Power Pages Web API `Webapi/<table>/fields` site setting performs **case-sensitive** matching against Dataverse column LogicalNames. If the fields list contains a column name with incorrect casing (e.g., `Cr4fc_Name` instead of `cr4fc_name`), the Web API returns a **403 Forbidden** error for any request involving that column. This is the most common cause of unexplained 403 errors after configuring Web API access.
 
 Dataverse stores two forms of every column name:
+
 - **LogicalName**: Always all-lowercase (e.g., `cr4fc_productname`) — **this is what the Web API fields setting requires**
 - **SchemaName**: PascalCase with publisher prefix (e.g., `Cr4fc_ProductName`) — used in some tools but **NOT valid** in the fields setting
 
@@ -57,6 +58,7 @@ Check that the site has been deployed at least once by looking for the `.powerpa
 ### 1.1 Locate the Project
 
 Use `Glob` to find:
+
 - `**/powerpages.config.json` — Power Pages config (identifies the project root)
 - `**/.powerpages-site` — Deployment folder
 
@@ -64,11 +66,11 @@ Use `Glob` to find:
 
 **If `.powerpages-site` folder does NOT exist:**
 
-Enter plan mode and state:
+Stop and tell the user:
 
-> "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. You need to deploy your site first using `/power-pages:deploy-site` before Web API site settings can be configured."
+> "The `.powerpages-site` folder was not found. This folder is created when the site is first deployed to Power Pages. You need to deploy your site first using `/deploy-site` before Web API site settings can be configured."
 
-Exit plan mode and stop. Do NOT proceed with the remaining steps.
+Do NOT proceed with the remaining steps.
 
 **If `.powerpages-site` exists:** Proceed to Step 2.
 
@@ -85,6 +87,7 @@ Read all Web API-related site settings in `.powerpages-site/site-settings/`:
 Each site setting has this format:
 
 **Enabled setting:**
+
 ```yaml
 description: Enable Web API access for cra5b_product table
 id: a1b2c3d4-2111-4111-8111-111111111111
@@ -92,7 +95,8 @@ name: Webapi/cra5b_product/enabled
 value: true
 ```
 
-**Fields setting (lists specific columns — NEVER uses `*`):**
+**Fields setting (lists specific columns by default; use `*` only for aggregate OData scenarios):**
+
 ```yaml
 description: Allowed fields for cra5b_product Web API access
 id: a1b2c3d4-2112-4111-8111-111111111112
@@ -128,6 +132,7 @@ If no manifest exists, analyze the source code to infer which tables need Web AP
 - **Component data bindings** — What data each component displays or modifies
 
 Look for patterns like:
+
 ```text
 /_api/<table_plural_name>
 fetch.*/_api/
@@ -138,38 +143,45 @@ fetch.*/_api/
 For each table that needs Web API access, collect **every column name** referenced in the integration code. Search for:
 
 1. **`$select` statements** — Column select arrays in service files:
+
    ```text
    Grep: "\$select|_SELECT" in src/**/*.ts
    ```
 
 2. **POST/PATCH request bodies** — Columns written in create/update operations:
+
    ```text
    Grep: "cr[a-z0-9]+_\w+" in src/shared/services/*.ts or src/services/*.ts
    ```
 
 3. **Type definitions** — TypeScript entity interfaces for column names:
+
    ```text
    Grep: "cr[a-z0-9]+_\w+" in src/types/*.ts
    ```
 
 4. **`$filter` and `$orderby` clauses** — Columns used in queries:
+
    ```text
    Grep: "\$filter|\$orderby" in src/**/*.ts
    ```
 
 5. **File/image upload code** — Columns used in file operations:
+
    ```text
    Grep: "uploadFileColumn|uploadFile|upload\w+Photo|upload\w+Image|upload\w+File" in src/**/*.ts
    ```
 
 For each table, compile the complete set of column names found in code. These will be cross-validated against Dataverse in Step 5.
 
-6. **Lookup column references** — OData uses `_<logicalname>_value` format to read lookup GUIDs:
+1. **Lookup column references** — OData uses `_<logicalname>_value` format to read lookup GUIDs:
+
    ```text
    Grep: "_cr[a-z0-9]+_\w+_value" in src/**/*.ts
    ```
 
 **Common columns to check for:**
+
 - Primary key column (e.g., `cr4fc_productid`) — always needed for CRUD
 - **Lookup columns** (e.g., `cr4fc_categoryid`) — these have TWO forms that both need to be in the fields list:
   - `cr4fc_categoryid` — the Dataverse LogicalName (used for write operations / setting the lookup)
@@ -214,6 +226,7 @@ The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Eac
 **Important:** The query returns both `LogicalName` (all-lowercase, authoritative) and `SchemaName` (PascalCase). Always use `LogicalName` for the site settings fields list.
 
 Store the results as a lookup map for each table:
+
 ```
 { LogicalName → { SchemaName, DisplayName, AttributeType, IsPrimaryId } }
 ```
@@ -223,6 +236,7 @@ Store the results as a lookup map for each table:
 ### Error Handling
 
 If any API calls fail:
+
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
 - **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
 - **OData 401/403**: Token expired or insufficient privileges — note in plan
@@ -277,10 +291,12 @@ Lookup columns have **two attribute names** in OData, and the Power Pages Web AP
 **Rule:** For every lookup column (AttributeType = `Lookup`, `Customer`, or `Owner`) that is referenced in the code — whether the code uses `cr87b_productcategoryid` or `_cr87b_productcategoryid_value` — **always include BOTH forms** in the fields list.
 
 Example: If the code references `_cr87b_productcategoryid_value` in a `$select`:
+
 - Include `cr87b_productcategoryid` (the LogicalName)
 - Include `_cr87b_productcategoryid_value` (the OData read format)
 
 The fields value becomes:
+
 ```
 _cr87b_productcategoryid_value,cr87b_description,cr87b_name,cr87b_price,cr87b_productcategoryid,cr87b_productid
 ```
@@ -333,11 +349,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
-**CRITICAL: The `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use `*` (wildcard). NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5.**
+**CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the table has File or Image columns accessed via the Web API, OR the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead — the `/$value` download endpoint internally does `SELECT *`, so an explicit column list causes 403.**
 
 **CRITICAL: Lookup columns MUST include BOTH the LogicalName AND the `_<name>_value` OData format.** See Step 5.3.
 
 Example (with lookup column `cra5b_productcategoryid`):
+
 ```powershell
 --value "_cra5b_productcategoryid_value,cra5b_description,cra5b_name,cra5b_price,cra5b_productcategoryid,cra5b_productid"
 ```
@@ -351,11 +368,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 ### 6.2 Rationale, Summary, and Next Steps
 
 Start with an explanation of the reasoning behind the proposed settings:
+
 - **Why these tables need Web API access** — For each table, explain what site functionality requires API access (e.g., "The `cr87b_product` table needs Web API access because the product listing page fetches products via `/_api/cr87b_products` and the admin panel creates/updates products through the service layer.")
 - **Column inclusion rationale** — Explain why specific columns are included and any that were deliberately excluded (e.g., "The `cr87b_internalnotes` column exists in Dataverse but is excluded from the fields list because no frontend code references it, following the principle of least privilege.")
 - **Lookup column decisions** — For lookup columns, explain which relationships they support (e.g., "Both `cr87b_productcategoryid` and `_cr87b_productcategoryid_value` are included because the product service reads the category GUID via `$select` and writes it via `@odata.bind` during product creation.")
 
 Then include:
+
 1. **Summary table** of all site settings to be created:
 
    | Setting Name | Value | Type |
@@ -365,10 +384,10 @@ Then include:
 
 2. **Column validation summary** — How many columns were validated, any mismatches found, any columns excluded
 3. **Lookup columns** — List which columns are lookups and confirm both forms are included
-3. **Security notes** — Confirm that no wildcard `*` is used for fields
-4. **Script invocations** — The exact `create-site-setting.js` commands for each setting (from section 6.1)
-5. **Any discovery steps skipped** due to auth errors
-6. **Dataverse validation status** — Whether column names were validated against Dataverse or only inferred from code/manifest
+4. **Security notes** — Confirm that wildcard `*` is only used for tables with File/Image columns or aggregate OData scenarios; all other tables use explicit column lists
+5. **Script invocations** — The exact `create-site-setting.js` commands for each setting (from section 6.1)
+6. **Any discovery steps skipped** due to auth errors
+7. **Dataverse validation status** — Whether column names were validated against Dataverse or only inferred from code/manifest
 
 ### 6.3 Enter Plan Mode & Exit
 
@@ -404,7 +423,7 @@ After creating all files, return a summary to the calling context:
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
 - **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName (all lowercase). Never use SchemaName (PascalCase), DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
 - **LOOKUP COLUMNS NEED BOTH FORMS**: For every lookup column, include both the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields list. Missing either form causes 403 errors — the LogicalName is needed for writes, the `_..._value` form is needed for reads.
-- **NEVER use `*` for fields**: Always list specific column logical names in `Webapi/<table>/fields` settings. Using `*` is a security risk.
+- **Use `*` for tables with File/Image columns or aggregate OData scenarios**: If a table has **File** or **Image** columns that will be accessed via the Web API, the `Webapi/<table>/fields` setting **must use `*`** (wildcard). The `/$value` download endpoint internally performs `SELECT *`; an explicit column list causes `403 "Attribute * not enabled for Web Api"`. Also use `*` when the site relies on aggregate OData queries (`$apply`, `aggregate`, grouped totals). For all other tables, default to specific validated column logical names.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.

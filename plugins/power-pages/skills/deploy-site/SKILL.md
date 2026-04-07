@@ -25,6 +25,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure PAC CLI is installed and available on the system PATH
 
 **Actions**:
+
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
@@ -44,7 +45,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
         dotnet tool install --global Microsoft.PowerApps.CLI.Tool
         ```
 
-      - If `dotnet` is also not available, direct the user to https://aka.ms/PowerPlatformCLI for full installation instructions including .NET SDK setup.
+      - If `dotnet` is also not available, direct the user to <https://aka.ms/PowerPlatformCLI> for full installation instructions including .NET SDK setup.
 
    3. After installation, verify by running `pac help` again.
    4. If it still fails, stop and ask the user to resolve the installation manually.
@@ -58,6 +59,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure the user is authenticated with PAC CLI and has a valid session
 
 **Actions**:
+
 1. Run `pac auth who` to check the current authentication status.
 
    ```powershell
@@ -105,6 +107,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 **Goal**: Ensure the user is deploying to the correct target environment
 
 **Actions**:
+
 1. Present the current environment information to the user and ask them to confirm.
 
    Use `AskUserQuestion` with the following structure:
@@ -155,7 +158,22 @@ If found in the current working directory or a subdirectory, use that directory 
 
 If not found, ask the user to provide the path to the project root.
 
-### 4.2 Build the Site
+### 4.2 Offer Permissions Audit (Redeployments Only)
+
+If `.powerpages-site` already exists (i.e., this is not the first deployment), table permissions and site settings may have drifted from the code since the last deployment. Offer to audit before deploying.
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| This site has been deployed before. Would you like to run a permissions audit to verify table permissions match your current code before deploying? | Audit | Yes, audit permissions (Recommended), Skip — permissions are up to date |
+
+**If "Yes"**: Invoke `/audit-permissions` to run the audit. After the audit completes, resume with Step 4.3.
+**If "Skip"**: Proceed to Step 4.3.
+
+If `.powerpages-site` does **not** exist (first deployment), skip this step — there are no existing permissions to audit.
+
+### 4.3 Build the Site
 
 Before uploading, ensure the site is built:
 
@@ -166,7 +184,7 @@ npm run build
 
 If the build fails, stop and help the user fix the build errors before retrying.
 
-### 4.3 Upload to Power Pages
+### 4.4 Upload to Power Pages
 
 Run the upload command:
 
@@ -177,6 +195,7 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 **If the upload succeeds**: Proceed to Phase 5 to verify the deployment.
 
 **If the upload fails**: Check the error message:
+
 - If the failure is related to **blocked JavaScript** (`.js`) attachments → proceed to **Phase 6**
 - If the failure mentions **`.html` type attachments are currently blocked** → this is a **misleading error**. See [Troubleshooting: HTML Blocked Attachment Error](#troubleshooting-html-blocked-attachment-error) below
 - For other errors → present the error to the user and help them troubleshoot
@@ -193,13 +212,7 @@ pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 
 ### 5.1 Verify `.powerpages-site` Folder
 
-Confirm the `.powerpages-site` folder was created (first deploy) or still exists:
-
-```powershell
-Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -ErrorAction SilentlyContinue
-```
-
-List its contents to confirm site configuration files are present (e.g., `web-roles/`, `site-settings/`, `table-permissions/`).
+Confirm `.powerpages-site` exists and list its contents (`web-roles/`, `site-settings/`, `table-permissions/`).
 
 ### 5.2 Record Skill Usage
 
@@ -222,21 +235,17 @@ git commit -m "Deploy site to Power Pages"
 
 ### 5.5 Check Activation Status
 
-Before asking about activation, check whether the site is already activated by running the shared activation status script. This avoids prompting the user unnecessarily when the site is already live.
-
-Run the check-activation-status script, passing the project root (determined in Phase 4.1):
+Run the activation status check:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-The script reads `siteName` from `powerpages.config.json`, looks up the `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches the response against **both** the `websiteRecordId` (exact GUID match) and `name` (case-insensitive). It outputs a JSON result to stdout.
+Evaluate the JSON result:
 
-Evaluate the result:
-
-- **If `activated` is `true`**: This site is already activated. Inform the user: "Your site **<siteName>** is already activated — no further provisioning needed." If the result includes a `websiteUrl`, show it to the user. Skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
-- **If `activated` is `false`**: This site is not yet activated. Proceed to step 5.5.1.
-- **If `error` is present**: The check could not complete (e.g., Azure CLI not installed, PAC CLI not authenticated, config not found). Fall back to step 5.5.1. Do not block the deployment flow due to a failed activation check.
+- **If `activated` is `true`**: Inform the user their site is already activated (show `websiteUrl` if present). Proceed to step 5.6, then skip to [Suggest Next Steps](#suggest-next-steps). Do NOT ask about activation.
+- **If `activated` is `false`**: Proceed to step 5.5.1.
+- **If `error` is present**: Fall back to step 5.5.1. Do not block the deployment flow.
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
@@ -246,10 +255,37 @@ Ask the user if they want to activate the site using `AskUserQuestion`:
 |----------|--------|---------|
 | Site deployed successfully! Would you like to activate (provision) the site now so it gets a live URL? | Activate | Activate now (Recommended) — Provision the site with a subdomain and make it live, Skip for now — I'll activate later |
 
-**If "Activate now"**: Invoke the `/power-pages:activate-site` skill.
+**If "Activate now"**: Invoke the `/activate-site` skill. After activation completes, proceed to step 5.6 to clear the site cache.
 **If "Skip for now"**: Suggest next steps (see [Suggest Next Steps](#suggest-next-steps)).
 
-**Output**: Deployment verified, changes committed, activation offered
+### 5.6 Clear Site Cache (Only If Activated)
+
+After confirming the site is activated (either it was already activated in step 5.5, or the user just activated it in step 5.5.1), offer to clear the runtime cache so the deployed changes are immediately visible.
+
+**Prerequisites**: The site must be activated and the project root must be known (from Phase 4.1).
+
+Use `AskUserQuestion` to confirm before proceeding:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Would you like to restart the site so your latest changes are immediately visible? This may cause a brief downtime (a few seconds). | Restart | Yes, restart site (Recommended), Skip — I'll restart later |
+
+**If "Skip"**: Skip to [Suggest Next Steps](#suggest-next-steps).
+
+**If "Yes"**: Run the cache-clearing script, passing the project root:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+The script reads `siteName` from `powerpages.config.json`, looks up the website via the Power Platform admin API, and restarts it to flush the runtime cache.
+
+Evaluate the result:
+
+- **If `success` is `true`**: Inform the user: "Site cache cleared — your latest changes should now be visible at **<websiteUrl>**."
+- **If `success` is `false`**: Warn the user that cache clearing failed and show the error, but do not block the deployment flow. The deployment itself succeeded; cache will eventually refresh on its own. Suggest the user can manually clear cache from the Power Pages admin center if needed.
+
+**Output**: Deployment verified, changes committed, activation offered, cache cleared
 
 ---
 
@@ -351,14 +387,20 @@ If the retry succeeds, proceed to Phase 5. If it fails with a different error, p
 ## Suggest Next Steps
 
 If the user skips activation (or after activation completes), suggest:
-- `/power-pages:activate-site` — Provision the site with a subdomain and make it live (if not already activated)
-- `/power-pages:test-site` — Test the deployed site in the browser (verify pages load, check API calls)
-- `/power-pages:setup-datamodel` — Create Dataverse tables for dynamic content
-- `/power-pages:add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
+
+- `/activate-site` — Provision the site with a subdomain and make it live (if not already activated)
+- `/test-site` — Test the deployed site in the browser (verify pages load, check API calls)
+- `/audit-permissions` — Audit table permissions against current code (recommended after redeployments)
+- `/setup-datamodel` — Create Dataverse tables for dynamic content
+- `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
 
 ---
 
 ## Important Notes
+
+### NEVER Use `pac pages upload`
+
+Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt code site metadata if used on a code site project. This applies to every upload step in this skill (Phase 4.4, Phase 6.4, and troubleshooting retries).
 
 ### Throughout All Phases
 
@@ -370,9 +412,10 @@ If the user skips activation (or after activation completes), suggest:
 
 1. After Phase 2: If not authenticated, get environment URL from user
 2. At Phase 3: Confirm or switch the target environment
-3. At Phase 4: If multiple `powerpages.config.json` found, ask which project to deploy
-4. At Phase 5: Activate site now or later
-5. At Phase 6: Get permission before modifying blocked attachments setting
+3. At Phase 4.1: If multiple `powerpages.config.json` found, ask which project to deploy
+4. At Phase 4.2: Audit permissions now or skip (redeployments only)
+5. At Phase 5.5: Activate site now or later
+6. At Phase 6: Get permission before modifying blocked attachments setting
 
 ### Progress Tracking
 
