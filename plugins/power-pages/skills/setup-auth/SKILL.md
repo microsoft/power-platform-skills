@@ -650,11 +650,18 @@ id: <UUID>
 name: Authentication/WsFederation/{ProviderName}/MetadataAddress
 value: <metadata-url-from-user>
 
+# authentication-wsfederation-{provider}-authenticationtype.yml
+id: <UUID>
+name: Authentication/WsFederation/{ProviderName}/AuthenticationType
+value: <provider-realm-or-identifier>
+
 # authentication-wsfederation-{provider}-wtrealm.yml
 id: <UUID>
 name: Authentication/WsFederation/{ProviderName}/Wtrealm
 value: <site-url>
 ```
+
+> **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. This value must match what `resolveProviderIdentifier()` returns in the auth service.
 
 **Local Authentication**:
 
@@ -715,6 +722,41 @@ value: <to-be-configured>
 ```
 
 > **Security Warning:** Never commit `ClientSecret` or `AppSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values.
+
+**Invitation-Based Registration** — when invitation-based registration is requested, create these additional settings:
+
+```yaml
+# authentication-registration-invitationenabled.yml
+id: <UUID>
+name: Authentication/Registration/InvitationEnabled
+value: true
+
+# authentication-registration-requireinvitationcode.yml
+id: <UUID>
+name: Authentication/Registration/RequireInvitationCode
+value: true
+
+# authentication-registration-openregistrationenabled.yml
+id: <UUID>
+name: Authentication/Registration/OpenRegistrationEnabled
+value: false
+```
+
+> **Note:** Setting `RequireInvitationCode` to `true` and `OpenRegistrationEnabled` to `false` enforces invitation-only registration — users without a valid invitation code cannot register.
+
+**Two-Factor Authentication** — when 2FA is requested, create these additional settings:
+
+```yaml
+# authentication-registration-twofactorenabled.yml
+id: <UUID>
+name: Authentication/Registration/TwoFactorEnabled
+value: true
+
+# authentication-registration-remembermebrowserenabled.yml
+id: <UUID>
+name: Authentication/Registration/RememberBrowserEnabled
+value: true
+```
 
 Remind the user to fill in placeholder values (`<to-be-configured>`) with actual credentials from their identity provider's application registration.
 

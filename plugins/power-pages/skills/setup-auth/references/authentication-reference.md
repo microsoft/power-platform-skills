@@ -190,6 +190,12 @@ export function getTenantId(): string | undefined {
  */
 export async function fetchAntiForgeryToken(): Promise<string> {
   const response = await fetch('/_layout/tokenhtml');
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch anti-forgery token: ${response.status} ${response.statusText}. ` +
+      'Ensure the site is deployed and accessible.'
+    );
+  }
   const html = await response.text();
   const match = html.match(/value="([^"]+)"/);
   if (!match) {
@@ -210,6 +216,12 @@ function resolveProviderIdentifier(): string {
   switch (AUTH_PROVIDER.type) {
     case 'entra-id': {
       const tenantId = getTenantId();
+      if (!tenantId) {
+        throw new Error(
+          'Tenant ID not found in portal configuration. ' +
+          'Ensure the site is properly deployed and window.Microsoft.Dynamic365.Portal.tenant is set.'
+        );
+      }
       return `https://login.windows.net/${tenantId}/`;
     }
     case 'azure-ad-b2c':
@@ -234,11 +246,13 @@ function resolveProviderIdentifier(): string {
  *   Requires username/email and password parameters.
  *
  * @param returnUrl - URL to return to after successful login (defaults to current page)
- * @param credentials - For local login only: { username, password }
+ * @param credentials - For local login only: { username, password, rememberMe }
+ * @param invitationCode - Optional invitation code for invitation-based registration
  */
 export async function login(
   returnUrl?: string,
-  credentials?: { username: string; password: string; rememberMe?: boolean }
+  credentials?: { username: string; password: string; rememberMe?: boolean },
+  invitationCode?: string
 ): Promise<void> {
   if (isDevelopment) {
     console.warn('[Auth] Login is not available in local development. Using mock user.');
@@ -274,6 +288,11 @@ export async function login(
       fields.RememberMe = 'true';
     }
 
+    // Include invitation code if present (for invitation-based registration)
+    if (invitationCode) {
+      fields.InvitationCode = invitationCode;
+    }
+
     for (const [name, value] of Object.entries(fields)) {
       const input = document.createElement('input');
       input.type = 'hidden';
@@ -292,7 +311,10 @@ export async function login(
 
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = '/Account/Login/ExternalLogin';
+  // Append invitation code as query parameter for external login if present
+  form.action = invitationCode
+    ? `/Account/Login/ExternalLogin?InvitationCode=${encodeURIComponent(invitationCode)}`
+    : '/Account/Login/ExternalLogin';
 
   const fields: Record<string, string> = {
     __RequestVerificationToken: token,
@@ -381,10 +403,12 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 ```typescript
 const AUTH_PROVIDER: AuthProviderConfig = {
   type: 'saml2',
-  providerIdentifier: 'https://contoso.powerappsportals.com/', // Must match AuthenticationType site setting
+  providerIdentifier: 'https://contoso.powerappsportals.com/', // Must match AuthenticationType site setting EXACTLY
   displayName: 'Sign in with ADFS',
 };
 ```
+
+> **IMPORTANT:** The `providerIdentifier` value MUST be character-for-character identical to the `Authentication/SAML2/{name}/AuthenticationType` site setting value, including the protocol (`https://` vs `http://`), trailing slashes, and casing. A mismatch causes the ExternalLogin POST to silently fail because the server cannot match the provider.
 
 ### WS-Federation
 
@@ -406,7 +430,7 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 };
 ```
 
-### Social OAuth Providers
+### Social OAuth Providers (Single Provider)
 
 ```typescript
 // Microsoft Account
@@ -429,6 +453,117 @@ const AUTH_PROVIDER: AuthProviderConfig = {
   providerIdentifier: 'Google',
   displayName: 'Sign in with Google',
 };
+```
+
+### Social OAuth Providers (Multiple Providers)
+
+When the user selects multiple social providers (e.g., Google AND Facebook), use the `AUTH_PROVIDERS` array pattern instead of the single `AUTH_PROVIDER` constant:
+
+```typescript
+export interface SocialProviderConfig {
+  providerIdentifier: string;
+  displayName: string;
+  icon?: string;
+}
+
+/**
+ * Multiple social providers configuration.
+ * Each entry maps to a separate ExternalLogin form POST with the given provider identifier.
+ */
+export const AUTH_PROVIDERS: SocialProviderConfig[] = [
+  { providerIdentifier: 'Google', displayName: 'Sign in with Google', icon: 'google' },
+  { providerIdentifier: 'Facebook', displayName: 'Sign in with Facebook', icon: 'facebook' },
+];
+
+// Keep AUTH_PROVIDER for backward compatibility — defaults to first provider
+const AUTH_PROVIDER: AuthProviderConfig = {
+  type: 'social',
+  providerIdentifier: AUTH_PROVIDERS[0].providerIdentifier,
+  displayName: AUTH_PROVIDERS[0].displayName,
+};
+
+/**
+ * Initiates login with a specific social provider.
+ * Use this instead of login() when multiple social providers are configured.
+ */
+export async function loginWithProvider(
+  providerIdentifier: string,
+  returnUrl?: string,
+  invitationCode?: string
+): Promise<void> {
+  if (isDevelopment) {
+    console.warn('[Auth] Login is not available in local development. Using mock user.');
+    window.location.reload();
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = invitationCode
+    ? `/Account/Login/ExternalLogin?InvitationCode=${encodeURIComponent(invitationCode)}`
+    : '/Account/Login/ExternalLogin';
+
+  const fields: Record<string, string> = {
+    __RequestVerificationToken: token,
+    provider: providerIdentifier,
+    returnUrl: returnUrl || window.location.pathname,
+  };
+
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
+  document.body.appendChild(form);
+  form.submit();
+}
+```
+
+**Multi-Provider AuthButton Component (React):**
+
+```tsx
+import { AUTH_PROVIDERS, loginWithProvider } from '../services/authService';
+import { useAuth } from '../hooks/useAuth';
+import './AuthButton.css';
+
+export function AuthButton() {
+  const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth();
+
+  if (isLoading) {
+    return <div className="auth-button auth-loading"><span className="auth-spinner" /></div>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="auth-button auth-providers">
+        {AUTH_PROVIDERS.map((provider) => (
+          <button
+            key={provider.providerIdentifier}
+            className="auth-sign-in auth-social-btn"
+            onClick={() => loginWithProvider(provider.providerIdentifier)}
+          >
+            {provider.displayName}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="auth-button auth-signed-in">
+      <span className="auth-avatar">{initials}</span>
+      <span className="auth-name">{displayName}</span>
+      <button className="auth-sign-out" onClick={() => logout()}>
+        Sign Out
+      </button>
+    </div>
+  );
+}
 ```
 
 ### Azure AD B2C
@@ -470,7 +605,7 @@ interface UseAuthReturn {
   initials: string;
   providerType: string;
   providerDisplayName: string;
-  login: (returnUrl?: string, credentials?: { username: string; password: string; rememberMe?: boolean }) => Promise<void>;
+  login: (returnUrl?: string, credentials?: { username: string; password: string; rememberMe?: boolean }, invitationCode?: string) => Promise<void>;
   logout: (returnUrl?: string) => void;
   refresh: () => void;
 }
@@ -790,8 +925,8 @@ export class AuthService {
     return getAuthProvider();
   }
 
-  login(returnUrl?: string, credentials?: { username: string; password: string }): Promise<void> {
-    return authLogin(returnUrl, credentials);
+  login(returnUrl?: string, credentials?: { username: string; password: string; rememberMe?: boolean }, invitationCode?: string): Promise<void> {
+    return authLogin(returnUrl, credentials, invitationCode);
   }
 
   logout(returnUrl?: string): void {
@@ -1079,30 +1214,22 @@ The invitation code is threaded through all authentication endpoints as a query 
 
 ### Invitation Client-Side Support
 
-To support invitation codes in the client-side auth service, the `login()` function should accept and pass through the invitation code:
+The canonical `login()` function in the auth service already supports invitation codes as the third parameter. When an `invitationCode` is provided:
+
+- **Local login**: The invitation code is included as a hidden `InvitationCode` field in the form POST to `/Account/Login/Login`
+- **External login**: The invitation code is appended as a query parameter to `/Account/Login/ExternalLogin?InvitationCode={code}`
+
+To pass an invitation code from a URL (e.g., `?invitationCode=abc123`):
 
 ```typescript
-export async function login(
-  returnUrl?: string,
-  credentials?: { username: string; password: string; rememberMe?: boolean },
-  invitationCode?: string
-): Promise<void> {
-  // ... (fetch anti-forgery token)
+const params = new URLSearchParams(window.location.search);
+const invitationCode = params.get('invitationCode') || undefined;
 
-  if (AUTH_PROVIDER.type === 'local') {
-    // Include invitationCode in the form fields if present
-    if (invitationCode) {
-      fields.InvitationCode = invitationCode;
-    }
-    // ... (submit form to /Account/Login/Login)
-  }
+// For external login with invitation
+await login('/dashboard', undefined, invitationCode);
 
-  // For external login, append invitationCode as a query parameter
-  if (invitationCode) {
-    form.action = `/Account/Login/ExternalLogin?InvitationCode=${encodeURIComponent(invitationCode)}`;
-  }
-  // ... (submit form)
-}
+// For local login with invitation
+await login('/dashboard', { username: email, password, rememberMe: true }, invitationCode);
 ```
 
 ---
