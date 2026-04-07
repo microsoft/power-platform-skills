@@ -43,3 +43,7 @@ references/mcp-apps-reference.md    - MCP Apps API, Fluent UI components, CDN pa
 references/design-guidelines.md     - Visual design defaults, theme tokens
 samples/flight-status-widget.html   - Example generated widget
 ```
+
+## Evals
+
+53 eval test cases covering different widget types (maps, charts, dashboards, tables, cards, etc.) plus type-mismatch stress tests. See [`evals/mcp-apps/generate-mcp-app/`](../../evals/mcp-apps/generate-mcp-app/) for the eval definitions and [eval-runbook.md](../../evals/mcp-apps/generate-mcp-app/eval-runbook.md) for how to run them.
