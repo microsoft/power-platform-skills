@@ -155,6 +155,8 @@ const SERVER_LOGICS = __SERVER_LOGICS_DATA__;
 const RATIONALE = __RATIONALE_DATA__;
 const SECRETS = __SECRETS_DATA__;
 
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
 // Key Vault banner rendering
 const kvBanner = document.getElementById('keyvaultBanner');
 if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length > 0) {
@@ -163,7 +165,7 @@ if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length 
       <div class="kv-icon">&#128273;</div>
       <div style="flex:1;">
         <div class="kv-title">Azure Key Vault</div>
-        <div class="kv-desc">Secrets for this implementation will be stored in Azure Key Vault${SECRETS.vaultName ? ' (<span class="mono">' + SECRETS.vaultName + '</span>)' : ''}, keeping sensitive values out of source code and Dataverse environment variables.</div>
+        <div class="kv-desc">Secrets for this implementation will be stored in Azure Key Vault${SECRETS.vaultName ? ' (<span class="mono">' + esc(SECRETS.vaultName) + '</span>)' : ''}, keeping sensitive values out of source code and Dataverse environment variables.</div>
         <div class="keyvault-banner kv-benefits" style="border:none;padding:0;margin-top:12px;background:none;">
           <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Secrets never stored in code or config files</div>
           <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Centralized access control via Azure RBAC</div>
@@ -173,7 +175,7 @@ if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length 
         <div style="margin-top:12px;">
           <div class="field-label">Secrets (${SECRETS.secrets.length})</div>
           <div class="chip-row" style="margin-top:4px;">
-            ${SECRETS.secrets.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + s.name + '</span>').join('')}
+            ${SECRETS.secrets.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + esc(s.name) + '</span>').join('')}
           </div>
         </div>
       </div>
@@ -185,7 +187,7 @@ function getSecretsMarkup(serverLogicId) {
   const matched = SECRETS.secrets.filter(s => s.serverLogicId === serverLogicId);
   if (matched.length === 0) return '';
   return '<div class="secrets-section"><div class="field-label">Secrets (Azure Key Vault)</div><div class="chip-row" style="margin-top:4px;">' +
-    matched.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + s.name + ' &mdash; ' + (s.purpose || '') + '</span>').join('') +
+    matched.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + esc(s.name) + ' &mdash; ' + esc(s.purpose || '') + '</span>').join('') +
     '</div></div>';
 }
 

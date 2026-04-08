@@ -113,15 +113,9 @@ runValidation((cwd) => {
       continue;
     }
 
-    // Check: no disallowed top-level functions outside the allowlist
-    const topLevelFnRegex = /^(?:async\s+)?function\s+([a-zA-Z0-9_]+)\s*\(/gm;
-    let fnMatch;
-    const disallowedFunctions = new Set();
-    while ((fnMatch = topLevelFnRegex.exec(content)) !== null) {
-      if (!ALLOWED_FUNCTIONS.includes(fnMatch[1])) {
-        disallowedFunctions.add(fnMatch[1]);
-      }
-    }
+    // Check: no disallowed top-level functions outside the allowlist (uses brace-depth scan to ignore nested functions)
+    const allTopLevel = findTopLevelFunctions(content);
+    const disallowedFunctions = new Set(allTopLevel.filter(name => !ALLOWED_FUNCTIONS.includes(name)));
     if (disallowedFunctions.size > 0) {
       errors.push(`${dirName}.js: only get, post, put, patch, and del functions are allowed; found additional top-level functions: ${Array.from(disallowedFunctions).join(', ')}`);
       continue;
@@ -149,7 +143,7 @@ runValidation((cwd) => {
       }
     }
 
-    // Check: each function returns a string and uses Server.Logger
+    // Check: each function returns a string-compatible value and uses Server.Logger
     for (const fn of foundFunctions) {
       const fnRegex = new RegExp(`(?:async\\s+)?function\\s+${fn}\\s*\\([^)]*\\)\\s*\\{`, 'g');
       const match = fnRegex.exec(content);
@@ -158,8 +152,23 @@ runValidation((cwd) => {
         const nextFnMatch = content.slice(bodyStart).match(/\n(?:async\s+)?function\s+[a-zA-Z]/);
         const bodyEnd = nextFnMatch ? bodyStart + nextFnMatch.index : content.length;
         const fnBody = content.slice(bodyStart, bodyEnd);
-        if (!/\breturn\s/.test(fnBody)) {
+        if (!/\breturn\b/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' has no return statement — every function must return a string`);
+        } else {
+          // Verify at least one return is string-compatible (string literal, JSON.stringify, String(), or template literal)
+          const returnRegex = /\breturn\s+([^;]+)/g;
+          let returnMatch;
+          let hasStringReturn = false;
+          while ((returnMatch = returnRegex.exec(fnBody)) !== null) {
+            const expr = (returnMatch[1] || '').trim();
+            if (/^['"`]/.test(expr) || /^JSON\.stringify\s*\(/.test(expr) || /^String\s*\(/.test(expr)) {
+              hasStringReturn = true;
+              break;
+            }
+          }
+          if (!hasStringReturn) {
+            errors.push(`${dirName}.js: function '${fn}' must return a string (use a string literal, JSON.stringify(...), or String(...))`);
+          }
         }
         if (!/Server\.Logger/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' is missing Server.Logger calls — every function should log for diagnostics`);
@@ -210,4 +219,53 @@ function findServerLogicDirs(dir) {
     throw new Error(`Failed to read server logic directory '${dir}': ${err.message}`);
   }
   return dirs;
+}
+
+/**
+ * Find all top-level function names using brace-depth tracking.
+ * Skips string literals and comments so nested functions are not reported.
+ */
+function findTopLevelFunctions(content) {
+  const names = [];
+  let depth = 0;
+  let i = 0;
+  while (i < content.length) {
+    const ch = content[i];
+    // Skip line comments
+    if (ch === '/' && content[i + 1] === '/') {
+      while (i < content.length && content[i] !== '\n') i++;
+      continue;
+    }
+    // Skip block comments
+    if (ch === '/' && content[i + 1] === '*') {
+      i += 2;
+      while (i < content.length - 1 && !(content[i] === '*' && content[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    // Skip string literals
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      i++;
+      while (i < content.length && content[i] !== ch) {
+        if (content[i] === '\\') i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '{') { depth++; i++; continue; }
+    if (ch === '}') { depth--; i++; continue; }
+    // At depth 0, check for function declarations
+    if (depth === 0) {
+      const rest = content.slice(i);
+      const m = rest.match(/^(?:async\s+)?function\s+([a-zA-Z0-9_]+)\s*\(/);
+      if (m) {
+        names.push(m[1]);
+        i += m[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+  return names;
 }

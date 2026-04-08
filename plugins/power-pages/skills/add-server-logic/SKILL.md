@@ -1001,7 +1001,7 @@ After deployment (or if skipped), remind the user:
 2. At Phase 2: Confirm requirements (purpose, name, HTTP methods, secrets)
 3. At Phase 4: Approve implementation plan before writing code
 4. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
-5. At Phase 7.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
+5. At Phase 2.3.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
 6. At Phase 7.2a Step 2: Create a new Key Vault or fall back to direct environment variable (if no vaults found)
 7. At Phase 9.1: Create frontend integration or skip
 8. At Phase 11.3: Deploy now or deploy later
