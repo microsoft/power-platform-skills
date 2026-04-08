@@ -244,10 +244,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 </div>
 
 <script>
-const SITE_NAME = "__SITE_NAME__";
 const ITEMS = __ITEMS_DATA__;
 const RATIONALE = __RATIONALE_DATA__;
 const DATA_FLOWS = __DATA_FLOWS_DATA__;
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
 const CONCEPTS = [
   {

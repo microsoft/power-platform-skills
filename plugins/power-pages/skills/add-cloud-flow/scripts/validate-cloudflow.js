@@ -62,14 +62,26 @@ runValidation((cwd) => {
       errors.push(`${fileName}: missing or empty 'name' field`);
     }
 
-    // flowapiurl — must be present
-    if (!/^flowapiurl:/m.test(content)) {
+    // flowapiurl — must be present with a non-empty URL value
+    const flowApiMatch = content.match(/^flowapiurl:\s*(.*)$/m);
+    if (!flowApiMatch) {
       errors.push(`${fileName}: missing 'flowapiurl' field`);
+    } else {
+      const val = flowApiMatch[1].trim().replace(/^['"]|['"]$/g, '');
+      if (!val) {
+        errors.push(`${fileName}: 'flowapiurl' is empty — it must contain the cloud flow API endpoint URL`);
+      }
     }
 
-    // flowtriggerurl — must be present
-    if (!/^flowtriggerurl:/m.test(content)) {
+    // flowtriggerurl — must be present with a non-empty URL value
+    const flowTriggerMatch = content.match(/^flowtriggerurl:\s*(.*)$/m);
+    if (!flowTriggerMatch) {
       errors.push(`${fileName}: missing 'flowtriggerurl' field`);
+    } else {
+      const val = flowTriggerMatch[1].trim().replace(/^['"]|['"]$/g, '');
+      if (!val) {
+        errors.push(`${fileName}: 'flowtriggerurl' is empty — it must contain the cloud flow trigger URL`);
+      }
     }
 
     // adx_CloudFlowConsumer_adx_webrole — must have at least one valid UUID
