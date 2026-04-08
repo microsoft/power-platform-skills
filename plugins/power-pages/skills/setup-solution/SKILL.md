@@ -399,19 +399,22 @@ OAuth secrets linked to environment variables:
 
 Note: Secret values themselves must still be set per environment (in Power Pages Management or via `configure-env-variables`).
 
-**Ask how the user wants to deploy this solution** via `AskUserQuestion`:
+**Ask what the user wants to do next** via `AskUserQuestion`:
 
-> "Your solution is ready. How would you like to deploy it to other environments?"
+> "Your solution is ready. What would you like to do next?"
 
 Options:
-1. **"Use Power Platform Pipelines (Recommended)"** — sets up a pipeline in the PP Pipelines host environment; supports staged deployments, approval gates, and env var overrides per stage. Run `/power-pages:setup-pipeline` next.
-2. **"Export and import manually"** — exports the solution as a zip and imports it directly to a target environment. Simpler for one-off deployments. Run `/power-pages:export-solution` next.
-3. **"I'll decide later"** — shows next step suggestions and exits.
+1. **"Plan my full ALM strategy (Recommended)"** — generates an HTML ALM plan, asks about PP Pipelines vs manual export/import, then executes the chosen path end-to-end.
+2. **"Set up Power Platform Pipelines directly"** — sets up a pipeline in the PP Pipelines host environment; supports staged deployments, approval gates, and env var overrides per stage.
+3. **"Export solution manually"** — exports the solution as a zip and imports it directly to a target environment. Simpler for one-off deployments.
+4. **"I'll handle deployment later"** — shows next step suggestions and exits.
 
-If the user selects **option 1**, immediately invoke `/power-pages:setup-pipeline`.
-If the user selects **option 2**, immediately invoke `/power-pages:export-solution`.
-If the user selects **option 3**, show:
-- Run `/power-pages:setup-pipeline` for automated staged deployments (recommended)
+If the user selects **option 1**, immediately invoke `/power-pages:plan-alm`.
+If the user selects **option 2**, immediately invoke `/power-pages:setup-pipeline`.
+If the user selects **option 3**, immediately invoke `/power-pages:export-solution`.
+If the user selects **option 4**, show:
+- Run `/power-pages:plan-alm` to plan and execute your full deployment strategy (recommended)
+- Run `/power-pages:setup-pipeline` for automated staged deployments
 - Run `/power-pages:export-solution` to export a zip for manual import
 - Run `/power-pages:configure-env-variables` if environment-specific values need to be set per stage
 
@@ -421,7 +424,7 @@ If the user selects **option 3**, show:
 2. **Phase 3**: Reuse vs create confirmation — before any writes
 3. **Phase 5, Step 5.4**: OAuth secrets — multi-select which (if any) to convert to env vars vs exclude entirely
 4. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions) and confirms or adjusts before any components are written
-5. **Phase 7**: Deployment path — PP Pipelines (recommended) vs export/import manually vs decide later
+5. **Phase 7**: Next step — plan full ALM strategy (recommended) vs PP Pipelines directly vs export manually vs decide later
 
 ## Error Handling
 

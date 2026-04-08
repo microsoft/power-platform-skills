@@ -268,6 +268,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 After the summary, suggest:
 
 - Test the site: `/test-site` — Verify the site loads correctly and API calls are working
+- Set up ALM: `/power-pages:plan-alm` — Set up ALM to promote this site to staging or production (creates a solution, configures a deployment pipeline or export/import strategy)
 - Set up the data model: `/setup-datamodel`
 - Add sample data: `/add-sample-data`
 - View the site in the browser at the provisioned URL (note: it may take a few minutes for DNS to propagate)

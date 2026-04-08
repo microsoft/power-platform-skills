@@ -388,6 +388,7 @@ If the retry succeeds, proceed to Phase 5. If it fails with a different error, p
 
 If the user skips activation (or after activation completes), suggest:
 
+- `/power-pages:plan-alm` — Set up ALM to deploy this site to staging or production environments (creates a Dataverse solution, sets up a pipeline or export/import strategy, and deploys)
 - `/activate-site` — Provision the site with a subdomain and make it live (if not already activated)
 - `/test-site` — Test the deployed site in the browser (verify pages load, check API calls)
 - `/audit-permissions` — Audit table permissions against current code (recommended after redeployments)

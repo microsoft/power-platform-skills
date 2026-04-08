@@ -479,6 +479,7 @@ Present a summary table to the user:
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
+   - `/power-pages:plan-alm` — When ready to promote to staging or production: sets up a Dataverse solution, configures a deployment pipeline or export/import strategy, and deploys
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
