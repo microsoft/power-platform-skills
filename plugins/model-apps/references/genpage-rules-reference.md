@@ -16,7 +16,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
 9. **Icons**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`)
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
-11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` pattern in **Special Patterns > Dark Mode Toggle**.
+11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 
@@ -397,14 +397,113 @@ xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entity
 
 ### Dark Mode Toggle
 
-Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use `themeToVars` to apply theme tokens synchronously as CSS custom properties:
+Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use a local `themeToVars` helper to apply theme tokens synchronously as CSS custom properties.
+
+**Implement `themeToVars` locally** — do not import it from `@fluentui/react-components`:
 
 ```typescript
-import { webDarkTheme, webLightTheme, themeToVars } from "@fluentui/react-components";
-
-// Wrap content in a plain div — all Fluent descendants inherit the theme via CSS variables
-<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
+function themeToVars(theme: Record<string, string>): React.CSSProperties {
+    const vars: Record<string, string> = {};
+    Object.entries(theme).forEach(([k, v]) => { vars[`--${k}`] = v; });
+    return vars as React.CSSProperties;
+}
 ```
+
+**Use a two-div wrapper.** Applying both `style={themeToVars(...)}` and `className={styles.root}` to the same div causes a CSS variable self-reference flicker because `makeStyles` reads the same CSS custom properties that `themeToVars` is writing. Separate them: outer div sets the vars, inner div reads them via the class:
+
+```typescript
+import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
+
+// WRONG — style and className on the same div causes CSS variable self-reference flicker
+<div style={themeToVars(theme)} className={styles.root}>
+
+// CORRECT — outer div sets CSS vars only, inner div reads them via className
+<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
+    <div className={styles.root}>
+        {/* all Fluent descendants inherit the theme via CSS variables */}
+    </div>
+</div>
+```
+
+### Data Caching Across Navigations
+
+The genpage platform **re-evaluates the module script on every navigation** — including when the user navigates back to a page they've already visited. This means module-level variables (e.g., `let _cache = null`) are reset on each visit, causing the component to re-fetch data and show a loading spinner even on return visits.
+
+**Fix: initialize module-level variables from `window`, and write back to `window` on fetch.** The `window` object persists for the lifetime of the browser session regardless of module re-evaluation.
+
+Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions with other scripts.
+
+**Always use a single batched state object** (`{ records, loading, error }`) — multiple separate `setState` calls in an async function produce separate renders in React 17, each potentially showing an intermediate state.
+
+**List/explorer page — array cache:**
+
+```typescript
+// Reads from window on module eval; survives navigation even if module is re-evaluated
+let _recordsCache: MyRow[] | null = (window as any).__ppMyEntityCache ?? null;
+
+const [{ records, loading, error }, setData] = useState<{
+    records: MyRow[];
+    loading: boolean;
+    error: string | null;
+}>({ records: _recordsCache ?? [], loading: _recordsCache === null, error: null });
+
+useEffect(() => {
+    if (!dataApi) { setData(prev => ({ ...prev, loading: false })); return; }
+    if (_recordsCache !== null) return; // already cached — skip fetch, no spinner
+    (async () => {
+        try {
+            const result = await dataApi.queryTable("myentity", { select: [...] });
+            _recordsCache = result.rows;
+            (window as any).__ppMyEntityCache = result.rows; // persist through navigation
+            setData({ records: result.rows, loading: false, error: null });
+        } catch (err) {
+            if (_recordsCache === null) {
+                setData({ records: [], loading: false, error: "Unable to load records." });
+            }
+        }
+    })();
+}, [dataApi]);
+```
+
+**Detail page — per-record Map cache:**
+
+```typescript
+// IIFE re-attaches to the window Map on module re-eval rather than creating a new one
+const _detailCache: Map<string, MyRow> = (() => {
+    if (!(window as any).__ppMyEntityDetailCache) {
+        (window as any).__ppMyEntityDetailCache = new Map<string, MyRow>();
+    }
+    return (window as any).__ppMyEntityDetailCache;
+})();
+
+const recordId = pageInput?.recordId;
+const cachedRecord = recordId ? (_detailCache.get(recordId) ?? null) : null;
+
+const [{ record, loading, error }, setData] = useState<{
+    record: MyRow | null;
+    loading: boolean;
+    error: string | null;
+}>({ record: cachedRecord, loading: !!recordId && cachedRecord === null, error: null });
+
+useEffect(() => {
+    if (!dataApi || !recordId) { setData(prev => ({ ...prev, loading: false })); return; }
+    if (_detailCache.has(recordId)) return; // already cached — skip fetch, no spinner
+    setData({ record: null, loading: true, error: null });
+    (async () => {
+        try {
+            const row = await dataApi.retrieveRow("myentity", { id: recordId, select: [...] });
+            _detailCache.set(recordId, row);
+            setData({ record: row, loading: false, error: null });
+        } catch (err) {
+            if (!_detailCache.has(recordId)) {
+                setData({ record: null, loading: false, error: "Unable to load record." });
+            }
+        }
+    })();
+}, [dataApi, recordId]);
+```
+
+**When to apply this pattern:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit still shows a spinner (expected); all return visits render instantly.
 
 ### Charts and Visualization
 - Use D3.js for all charts
