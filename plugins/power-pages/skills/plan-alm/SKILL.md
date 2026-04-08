@@ -87,9 +87,34 @@ Steps:
 
 ## Phase 2 — Gather ALM Strategy
 
-Ask questions in sequence. Branch after Q1 based on promotion strategy selection.
+Ask questions in sequence. **Solution is always Q1** — it is the prerequisite for all other steps. Branch after Q2 based on promotion strategy selection.
 
-### Q1 — Strategy Selection (always asked)
+### Q1 — Solution Setup (always asked first)
+
+**If `SOLUTION_DONE = true`** (manifest found in Phase 1):
+
+Ask via `AskUserQuestion`:
+> "A Dataverse solution is already configured for this site: **{SOLUTION_UNIQUE_NAME}**. Use this existing solution?"
+
+Options:
+1. **Yes, use the existing solution** — `setup-solution` will be skipped in the plan
+2. **No, create a new solution** — set `SOLUTION_DONE = false`; `setup-solution` will run
+
+**If `SOLUTION_DONE = false`** (no manifest found):
+
+Tell the user (not via `AskUserQuestion` — informational only):
+> "No Dataverse solution is set up for this site yet. **`setup-solution` will be the first step in your plan.** The publisher prefix you choose during setup is irreversible — choose carefully."
+
+Ask via `AskUserQuestion`:
+> "Ready to include solution setup in the plan?"
+
+Options:
+1. **Yes, include solution setup** — continue
+2. **I already have a solution (enter name)** — accept free-text solution unique name, set `SOLUTION_DONE = true`, `SOLUTION_UNIQUE_NAME = user input`
+
+---
+
+### Q2 — Strategy Selection (always asked)
 
 Ask via `AskUserQuestion`:
 
@@ -104,15 +129,15 @@ Options:
 **If option 4 selected:** Explain:
 > "Power Platform Pipelines is recommended for teams and multiple environments — it provides automated promotion, approval gates, and deployment history in one place. Manual export/import is simpler for one-off migrations or when you only need to deploy once. For ongoing CI/CD, choose Power Platform Pipelines."
 
-Then re-ask Q1 with only options 1–3.
+Then re-ask Q2 with only options 1–3.
 
-**If option 3 selected:** Read `.last-pipeline.json`, confirm pipeline name and stages, then skip to Phase 3 (generate plan) with `strategy = pp-pipelines`, `SOLUTION_DONE = true`, `PIPELINE_DONE = true`.
+**If option 3 selected:** Read `.last-pipeline.json`, confirm pipeline name and stages, then skip to Phase 3 (generate plan) with `strategy = pp-pipelines`, `PIPELINE_DONE = true`.
 
 ---
 
-### PP Pipelines Path — Q2 through Q7
+### PP Pipelines Path — Q3 through Q8
 
-**Q2:** Ask via `AskUserQuestion`:
+**Q3:** Ask via `AskUserQuestion`:
 > "How many deployment stages do you need?"
 
 Options:
@@ -125,23 +150,23 @@ If option 4: accept free-text description and build a stage list from the respon
 
 Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the source.
 
-**Q3 (conditional — detect host environment):**
+**Q4 (auto-detect + confirm — host environment):**
 
-Call `RetrieveSetting` on the dev env to find the Pipelines host:
+Run silently using `discover-pipelines-host.js`:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
+  --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}"
 ```
-GET {devEnvUrl}/api/data/v9.2/RetrieveSetting(SettingName='DefaultCustomPipelinesHostEnvForTenant')
-Authorization: Bearer {DEV_TOKEN}
-```
-
-Cross-reference result with `ENV_LIST` to find the host environment URL. Store as `HOST_ENV_URL`.
 
 - **If auto-detected:** Ask via `AskUserQuestion`:
-  > "Use detected host environment `{HOST_ENV_URL}`?"
+  > "Use detected Pipelines host environment `{HOST_ENV_URL}`?"
   Options: 1. Yes, use this / 2. Enter a different URL
 
 - **If not detected:** Ask for free-text input. Pre-fill from `.last-pipeline.json` if present.
 
-**Q4:** Ask via `AskUserQuestion`:
+Store as `HOST_ENV_URL`.
+
+**Q5:** Ask via `AskUserQuestion`:
 > "Should deployments require approval before each stage?"
 
 Options:
@@ -151,7 +176,7 @@ Options:
 
 Store as `PP_APPROVAL_MODE`.
 
-**Q5:** Ask via `AskUserQuestion`:
+**Q6:** Ask via `AskUserQuestion`:
 > "How should the solution be exported for production?"
 
 Options:
@@ -160,9 +185,9 @@ Options:
 
 Store as `EXPORT_TYPE` (`managed` or `unmanaged`).
 
-**Q6 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values.
+**Q7 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values.
 
-**Q7:** Ask via `AskUserQuestion`:
+**Q8:** Ask via `AskUserQuestion`:
 > "Do you use Git source control for this site?" (informational only — no automation)
 
 Options:
@@ -174,9 +199,9 @@ Store as `GIT_STATUS`.
 
 ---
 
-### Manual Path — Q2 through Q7
+### Manual Path — Q3 through Q8
 
-**Q2:** Ask via `AskUserQuestion`:
+**Q3:** Ask via `AskUserQuestion`:
 > "How many target environments do you need to deploy to?"
 
 Options:
@@ -186,9 +211,9 @@ Options:
 
 Store as `MANUAL_TARGET_COUNT`.
 
-If option 3: set `MANUAL_TARGET_COUNT = 0`. Proceed to Q4.
+If option 3: set `MANUAL_TARGET_COUNT = 0`. Proceed to Q5.
 
-**Q3 (one per stage):** For each target environment needed, ask via `AskUserQuestion`:
+**Q4 (one per stage):** For each target environment needed, ask via `AskUserQuestion`:
 
 > "What is the URL for target environment {N}?"
 
@@ -196,7 +221,7 @@ Pre-fill from `ENV_LIST`: show up to 3 known environment URLs from `pac env list
 
 Store target URLs as `MANUAL_TARGETS` (array).
 
-**Q4:** Ask via `AskUserQuestion`:
+**Q5:** Ask via `AskUserQuestion`:
 > "How should the solution be exported?"
 
 Options:
@@ -205,7 +230,7 @@ Options:
 
 Store as `EXPORT_TYPE`.
 
-**Q5:** Ask via `AskUserQuestion`:
+**Q6:** Ask via `AskUserQuestion`:
 > "Do you want a checkpoint pause between export and import for review?"
 
 Options:
@@ -214,9 +239,9 @@ Options:
 
 Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 
-**Q6 (auto-detect, no question):** Same as PP Pipelines Q6 — check for env var definitions.
+**Q7 (auto-detect, no question):** Same as PP Pipelines Q7 — check for env var definitions.
 
-**Q7:** Same as PP Pipelines Q7.
+**Q8:** Same as PP Pipelines Q8 — Git source control status.
 
 ---
 
@@ -506,11 +531,12 @@ Mark the "Finalize" task as `completed`.
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 2, Q1**: Promotion strategy — PP Pipelines, Manual, or already set up
-2. **Phase 2, Q2–Q7**: Stage count, target environments, approval gates, export type, checkpoint pause
-3. **Phase 4**: Plan approval — execute, defer, or revise
-4. **Phase 6, Manual**: Checkpoint pause after export (if Q5 = Yes)
-5. **Phase 7 (delegated)**: Each invoked skill has its own approval gates
+1. **Phase 2, Q1**: Solution setup — confirm existing or include `setup-solution` in plan
+2. **Phase 2, Q2**: Promotion strategy — PP Pipelines, Manual, or already set up
+3. **Phase 2, Q3–Q8**: Stage count, target environments, host env, approval gates, export type, checkpoint pause, Git status
+4. **Phase 4**: Plan approval — execute, defer, or revise
+5. **Phase 6, Manual**: Checkpoint pause after export (if Q6 = Yes)
+6. **Phase 7 (delegated)**: Each invoked skill has its own approval gates
 
 ## Error Handling
 
