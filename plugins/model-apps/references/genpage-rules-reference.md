@@ -339,11 +339,12 @@ const entityName = pageInput?.entityName;
 const [selectedRowData, setSelectedRowData] = useState(undefined);
 
 useEffect(() => {
-    if (entityName === "table2" && recordId && dataApi) {
+    // Replace these example logical names with the exact verified names from your RuntimeTypes/TableRegistrations.
+    if (entityName === "account" && recordId && dataApi) {
         (async () => {
-            const row = await dataApi.retrieveRow("table2", {
+            const row = await dataApi.retrieveRow("account", {
                 id: recordId,
-                select: ["status", "name", "_mainContact_value"],
+                select: ["statuscode", "name", "_primarycontactid_value"],
             });
             setSelectedRowData(row);
         })();
