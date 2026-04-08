@@ -16,27 +16,39 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: generate app token
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
               id: app-token
               uses: actions/create-github-app-token@v1
               with:
                   app-id: 3189942
                   private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
 
-            - name: checkout
+            - name: checkout (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
               uses: actions/checkout@v4
               with:
                   ref: ${{ github.head_ref }}
                   token: ${{ steps.app-token.outputs.token }}
+
+            - name: checkout (fork)
+              if: ${{ github.event.pull_request.head.repo.fork == true }}
+              uses: actions/checkout@v4
 
             - name: setup-node
               uses: actions/setup-node@v4
               with:
                   node-version: 20
 
-            - name: add missing version checks
+            - name: check-only (fork)
+              if: ${{ github.event.pull_request.head.repo.fork == true }}
+              run: node scripts/ensure-skill-version-check.js --check
+
+            - name: add missing version checks (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
               run: node scripts/ensure-skill-version-check.js
 
-            - name: commit and push if changed
+            - name: commit and push if changed (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
               run: |
                   git diff --quiet && exit 0
                   git config user.name "github-actions[bot]"

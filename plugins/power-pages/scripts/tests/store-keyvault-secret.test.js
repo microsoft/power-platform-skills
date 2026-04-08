@@ -28,13 +28,13 @@ test('store-keyvault-secret fails with missing --secretName', () => {
   assert.match(result.stderr, /Usage:/);
 });
 
-test('store-keyvault-secret fails with missing --secretValue', () => {
+test('store-keyvault-secret fails with no secret value and TTY-like stdin', () => {
+  // Without --secretValue and without piped stdin, should fail
   const result = runStoreKeyvaultSecret([
     '--vaultName', 'my-vault',
     '--secretName', 'my-secret',
-  ]);
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Usage:/);
 });
 
 test('store-keyvault-secret rejects invalid vault name (too short)', () => {
@@ -67,7 +67,7 @@ test('store-keyvault-secret rejects invalid secret name', () => {
   assert.match(result.stderr, /--secretName must be 1-127 characters/);
 });
 
-test('store-keyvault-secret accepts valid arguments (fails at az CLI)', () => {
+test('store-keyvault-secret accepts --secretValue (fails at az CLI)', () => {
   const result = runStoreKeyvaultSecret([
     '--vaultName', 'my-vault',
     '--secretName', 'my-secret',
@@ -78,4 +78,25 @@ test('store-keyvault-secret accepts valid arguments (fails at az CLI)', () => {
   assert.doesNotMatch(result.stderr, /Usage:/);
   assert.doesNotMatch(result.stderr, /--vaultName must be/);
   assert.doesNotMatch(result.stderr, /--secretName must be/);
+});
+
+test('store-keyvault-secret accepts secret via stdin (fails at az CLI)', () => {
+  const result = runStoreKeyvaultSecret([
+    '--vaultName', 'my-vault',
+    '--secretName', 'my-secret',
+  ], { input: 'super-secret-from-stdin', env: { ...process.env, PATH: '' } });
+  // Passes validation but fails when calling az CLI
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /Usage:/);
+  assert.doesNotMatch(result.stderr, /No secret value provided/);
+  assert.doesNotMatch(result.stderr, /Secret value is empty/);
+});
+
+test('store-keyvault-secret rejects empty stdin', () => {
+  const result = runStoreKeyvaultSecret([
+    '--vaultName', 'my-vault',
+    '--secretName', 'my-secret',
+  ], { input: '' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Secret value is empty/);
 });

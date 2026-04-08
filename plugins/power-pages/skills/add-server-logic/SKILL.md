@@ -687,16 +687,15 @@ The script outputs a JSON object with `name`, `resourceGroup`, and `location`. U
 
 For each secret identified in Phase 2.3, give the user the exact command to run themselves. Do **not** ask for the secret value — secret values must never pass through the conversation.
 
-Present the commands as a numbered list the user can copy and run:
+Present the commands as a numbered list the user can copy and run. Use the stdin form so the secret value does not appear in process listings:
 
 ```
 For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
 
 1. <secret-name>:
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+   printf '%s' '<YOUR_SECRET_VALUE>' | node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
      --vaultName "<selected-vault>" \
-     --secretName "<secret-name>" \
-     --secretValue "<YOUR_SECRET_VALUE>"
+     --secretName "<secret-name>"
 ```
 
 Tell the user each command outputs a JSON object with a `secretUri` and to share the output (which contains only the URI, not the secret) so the workflow can continue.
