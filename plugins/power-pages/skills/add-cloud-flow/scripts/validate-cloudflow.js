@@ -73,15 +73,9 @@ runValidation((cwd) => {
       }
     }
 
-    // flowtriggerurl — must be present with a non-empty URL value
-    const flowTriggerMatch = content.match(/^flowtriggerurl:\s*(.*)$/m);
-    if (!flowTriggerMatch) {
+    // flowtriggerurl — must be present (value is always empty in Power Pages cloud flow consumer YAML)
+    if (!/^flowtriggerurl:/m.test(content)) {
       errors.push(`${fileName}: missing 'flowtriggerurl' field`);
-    } else {
-      const val = flowTriggerMatch[1].trim().replace(/^['"]|['"]$/g, '');
-      if (!val) {
-        errors.push(`${fileName}: 'flowtriggerurl' is empty — it must contain the cloud flow trigger URL`);
-      }
     }
 
     // adx_CloudFlowConsumer_adx_webrole — must have at least one valid UUID

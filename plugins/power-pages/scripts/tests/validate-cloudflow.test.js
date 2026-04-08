@@ -33,7 +33,7 @@ function writeFlowFile(projectRoot, slug, content) {
 const VALID_YML = `adx_CloudFlowConsumer_adx_webrole:
   - aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 flowapiurl: /_api/cloudflow/v1.0/trigger/11111111-2222-3333-4444-555555555555
-flowtriggerurl: https://prod-00.westus.logic.azure.com/workflows/abc123/triggers/manual/paths/invoke
+flowtriggerurl: ''
 id: 66666666-7777-8888-9999-aaaaaaaaaaaa
 metadata: Send email notification
 name: PowerPages -> Send an email notification (V3)
@@ -146,14 +146,13 @@ test('empty flowapiurl is flagged', (t) => {
   assert.match(result.stderr, /'flowapiurl' is empty/);
 });
 
-test('empty flowtriggerurl is flagged', (t) => {
+test('empty flowtriggerurl passes (always empty in Power Pages)', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
-  writeFlowFile(projectRoot, 'send-email', VALID_YML.replace(/^flowtriggerurl: .+$/m, "flowtriggerurl: ''"));
+  writeFlowFile(projectRoot, 'send-email', VALID_YML);
 
   const result = runValidator(projectRoot);
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /'flowtriggerurl' is empty/);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('missing web role section is flagged', (t) => {
