@@ -95,6 +95,11 @@ skills/
   hotfix-solution/
     SKILL.md                   ← Hotfix solution skill definition
     scripts/validate-hotfix.js ← Validates .last-hotfix.json marker for required fields and component count
+  plan-alm/
+    SKILL.md                   ← ALM orchestrator skill definition (8-phase: detect, gather, plan, approve, execute skills in sequence)
+    assets/alm-plan-template.html ← HTML template with __PLACEHOLDER__ tokens for the ALM plan document
+    scripts/render-alm-plan.js ← Renders alm-plan-template.html from planData JSON (stages diagram, checklist, risks)
+    scripts/validate-plan-alm.js ← Validates docs/alm-plan.html exists and is > 500 bytes; gracefully exits 0 if not a plan-alm session
 ```
 
 ## Plugin Components
@@ -127,6 +132,7 @@ User-invocable via `/power-pages:<skill-name>`:
 - `setup-pipeline`: 7-phase workflow — detect project context (`powerpages.config.json`, `.solution-manifest.json`, `pac env who`, `pac env list`, `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')` on dev env to auto-discover host environment), select platform (Power Platform Pipelines = full; GitHub/ADO = coming soon), confirm pipeline configuration with auto-filled values (pipeline name, host env URL, target environments), run preflight checks (Pipelines installed, solution exists, no name conflict), create `deploymentenvironments` records for source + each target (poll `validationstatus` until Succeeded), create `deploymentpipelines` record + `$ref` associate source env (relative path + `@odata.context`) + create `deploymentstages` per target, verify and write `.last-pipeline.json` + `docs/pipeline-setup.md` + commit. Uses `references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns.
 - `deploy-pipeline`: 7-phase workflow — verify prerequisites (`.last-pipeline.json`, az login, host env token), select target stage (from stages in `.last-pipeline.json`; warn if last deploy failed), resolve pipeline info via `RetrieveDeploymentPipelineInfo` (v9.1) to get `SourceDeploymentEnvironmentId` and available artifacts, create `deploymentstageruns` record + call `ValidatePackageAsync` (204) + poll `operation` field until not `200000201` (surface `validationresults` issues), optionally PATCH `deploymentsettingsjson` for env var / connection reference overrides, call `DeployPackageAsync` + poll `stagerunstatus` until terminal (handle approval gates with user pause), write `.last-deploy.json` + present deployment summary.
 - `hotfix-solution`: 7-phase workflow — verify prerequisites (PAC CLI auth, Azure CLI token, `.solution-manifest.json`), discover modified components (ask time window, query `powerpagecomponents` by `modifiedon`, resolve type labels), review and confirm components (with security warning for Site Settings type 9), create timestamped hotfix solution (name: `{base}Hotfix{YYYYMMDDHHmm}`, dynamic componenttype discovery, add all components via `AddSolutionComponent`), export solution (ask managed/unmanaged, `ExportSolutionAsync`, poll, download zip), import to target environment (ask target env, `StageSolution` dependency check, `ImportSolutionAsync`, poll, full `AttachmentBlocked` remediation flow), verify and write `.last-hotfix.json`. Reuses `scripts/poll-async-operation.js`, `scripts/encode-solution-file.js`, and `references/solution-api-patterns.md`.
+- `plan-alm`: 8-phase orchestrator workflow — detect project state (powerpages.config.json, existing manifests, pac env who), gather ALM strategy via branched question flow (PP Pipelines or Manual export/import path), generate HTML ALM plan (docs/alm-plan.html with pipeline diagram and execution checklist), get user approval, then execute: setup-solution (conditional), setup-pipeline or export-solution (path-dependent), deploy-pipeline or import-solution per stage, finalize with HTML status update and git commit.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
 
@@ -150,6 +156,7 @@ Defined in each skill's SKILL.md frontmatter:
   - `setup-pipeline`: command hook runs `validate-pipeline.js` + prompt hook checks .last-pipeline.json completeness (pipelineId, hostEnvUrl, sourceDeploymentEnvironmentId, non-empty stages)
   - `deploy-pipeline`: command hook runs `validate-deploy-pipeline.js` + prompt hook checks all 6 success conditions (pipeline read, stage selected, package validated, deployment completed, .last-deploy.json written, summary presented)
   - `hotfix-solution`: command hook runs `validate-hotfix.js` + prompt hook checks all 5 success conditions (components discovered, solution created, zip exported, import succeeded, summary displayed)
+  - `plan-alm`: command hook runs `validate-plan-alm.js` + prompt hook checks all 5 success conditions (strategy gathered, docs/alm-plan.html written, plan approved or deferred, skills invoked in sequence, HTML status updated)
 - Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
 
 ### Shared Scripts
@@ -162,6 +169,36 @@ Shared utility scripts live at `scripts/` and are referenced by multiple skills 
 - `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--token` (optional, refreshed via Azure CLI if omitted), `--intervalMs` (default 5000), `--maxAttempts` (default 60). Outputs JSON status. Used by `export-solution`, `import-solution`, and `hotfix-solution`.
 - `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution` and `hotfix-solution`.
 - `parse-deployment-errors.js`: Parses PAC CLI stderr output or OData error JSON into structured findings array. Each finding has `{ patternId, type, severity, message, rawMatch, autoFixAvailable, suggestedFix }`. Reads from `--input`, `--file`, or stdin. Used by `diagnose-deployment`.
+
+Shared lib modules live at `scripts/lib/` and are imported by other scripts via `require('./validation-helpers')` or sibling requires. Never inline their logic in skill scripts — always require from `scripts/lib/`.
+
+#### ALM Prerequisites & Context
+
+- `scripts/lib/verify-alm-prerequisites.js`: Verifies all prerequisites for ALM skills — PAC CLI installed + authenticated (`pac env who`), Azure CLI installed + logged in, Dataverse API reachable (`WhoAmI`). Args: `--envUrl` (opt, overrides env from PAC CLI), `--require-manifest` (fails if `.solution-manifest.json` not found). Output: `{ envUrl, token, userId, organizationId, tenantId }`. Exit 0 on success, exit 1 on any failure. Used by `setup-solution`, `export-solution`, `import-solution`, `setup-pipeline`, `deploy-pipeline`, `hotfix-solution`, `plan-alm`.
+- `scripts/lib/detect-project-context.js`: Reads Power Pages project context files from the project root — `powerpages.config.json`, `.solution-manifest.json`, and `.datamodel-manifest.json`. Args: `--projectRoot` (opt, auto-discovered from cwd if omitted). Output: `{ projectRoot, siteName, websiteRecordId, environmentUrl, solutionManifest, datamodelManifest }`. Exit 0 on success, exit 1 if `powerpages.config.json` not found.
+
+#### Solution Management
+
+- `scripts/lib/verify-solution-exists.js`: Checks whether a Dataverse solution exists by unique name via OData `solutions?$filter=uniquename eq '...'`. Args: `--envUrl`, `--uniqueName`, `--token` (opt). Output: found → `{ found: true, solutionId, uniqueName, version, isManaged }`, not found → `{ found: false, uniqueName }`. Exit 0 regardless of found/not-found; exit 1 on API error.
+- `scripts/lib/create-solution.js`: Creates a Dataverse solution via OData POST to `/solutions`. Handles 409 (already exists) by re-querying and returning the existing record's ID. Args: `--envUrl`, `--token`, `--uniqueName`, `--friendlyName`, `--version`, `--publisherId`, `--description` (opt). Output: `{ solutionId, uniqueName, created }` where `created: false` means it already existed.
+- `scripts/lib/discover-component-types.js`: Resolves Dataverse solution component type integers at runtime by querying `solutioncomponents` for known object IDs — never hardcodes component types. Args: `--envUrl`, `--token`, `--websiteRecordId`, `--powerpageComponentId` (opt), `--siteLanguageId` (opt), `--objectIds` (opt, comma-separated for generic lookup). Output: `{ websiteComponentType, subComponentType, siteLanguageComponentType, resolved[] }`.
+- `scripts/lib/add-components-to-solution.js`: Bulk-adds solution components via `AddSolutionComponent` OData action. Refreshes the Azure CLI token every `--batchSize` calls (default 20). Treats "already in solution" as success (idempotent). Args: `--envUrl`, `--componentsFile` (path to JSON array of `{ componentId, componentType, addRequired?, description? }`), `--solutionUniqueName`, `--batchSize` (opt), `--token` (opt). Output: `{ total, success, skipped, failed, failures[] }`. Progress goes to stderr; exits 0 always (caller inspects `failures`); exits 1 on fatal setup errors.
+- `scripts/lib/create-env-var-definition.js`: Creates an `environmentvariabledefinition` record in Dataverse. Handles 409 (duplicate) by returning the existing definition's ID. Args: `--envUrl`, `--token`, `--schemaName`, `--displayName`, `--type` (opt, default String — 100000000=String, 100000001=Number, 100000002=Boolean, 100000003=Secret), `--defaultValue` (opt). Output: `{ definitionId, schemaName, created }`.
+- `scripts/lib/link-site-setting-to-env-var.js`: Links an `mspp_sitesetting` record to an `environmentvariabledefinition` via OData PATCH on the v9.0 API (not v9.2). HAR-confirmed: navigation property is `EnvironmentValue@odata.bind`; headers `if-match: *` and `clienthost: Browser` are required (omitting causes 400). Args: `--envUrl`, `--token`, `--siteSettingId`, `--definitionId`, `--schemaName`. Output: `{ ok, verified, siteSettingId, definitionId }`.
+
+#### PP Pipelines
+
+- `scripts/lib/discover-pipelines-host.js`: Discovers the tenant-level default Power Platform Pipelines host environment URL by calling `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')` on the dev/source environment. Args: `--envUrl`, `--token`, `--userId`. Output: `{ found, hostEnvUrl }`. Exit 0 (including when not found); exit 1 on error.
+- `scripts/lib/create-deployment-environment.js`: Creates a `deploymentenvironments` record in the Pipelines host environment, then polls `validationstatus` until Succeeded (192350001) or fails (192350002). Args: `--hostEnvUrl`, `--token`, `--name`, `--environmentUrl`. Output: `{ deploymentEnvironmentId, name, environmentUrl, validationStatus }`.
+- `scripts/lib/create-deployment-pipeline.js`: Creates a `deploymentpipelines` record, associates the source environment via `$ref` (relative path + `@odata.context`), and creates `deploymentstages` records for each target environment. Args: `--hostEnvUrl`, `--token`, `--pipelineName`, `--description`, `--sourceDeploymentEnvironmentId`, `--stagesJson` (JSON array of `{ name, targetDeploymentEnvironmentId, order }`). Output: `{ pipelineId, pipelineName, stages[] }`.
+- `scripts/lib/create-stage-run.js`: Creates a `deploymentstageruns` record to initiate a pipeline deployment stage. Args: `--hostEnvUrl`, `--token`, `--pipelineId`, `--stageId`, `--sourceDeploymentEnvironmentId`, `--artifactTrackingId`. Output: `{ stageRunId }`.
+- `scripts/lib/poll-validation-status.js`: Polls the `operation` field on a `deploymentstageruns` record until it leaves the validating state (200000201). Args: `--hostEnvUrl`, `--token`, `--stageRunId`, `--intervalMs` (opt, default 5000), `--maxAttempts` (opt, default 36). Output: `{ stageRunId, validationResults, stageRunStatus }`.
+- `scripts/lib/poll-deployment-status.js`: Polls `stagerunstatus` on a `deploymentstageruns` record until a terminal state. Returns `{ status: 'Awaiting' }` (exit 0, non-throwing) for approval gate (200000005) — caller must pause for user. Args: `--hostEnvUrl`, `--token`, `--stageRunId`, `--intervalMs` (opt, default 8000), `--maxAttempts` (opt, default 75). Output: `{ stageRunId, status, deploymentResults, errorDetails }`.
+
+#### Solution Export
+
+- `scripts/lib/export-solution-async.js`: Triggers async Dataverse solution export via `ExportSolutionAsync` and polls `asyncoperations` until complete (statecode 3 = Succeeded). Args: `--envUrl`, `--solutionName`, `--managed` (`true`/`false`), `--token` (opt). Output: `{ asyncOperationId, solutionName, managed }`.
+- `scripts/lib/download-export-data.js`: Downloads the solution zip after a successful async export via `DownloadSolutionExportData`. Decodes the base64 response and writes the zip file to disk. Args: `--envUrl`, `--asyncOperationId`, `--outputPath`, `--token` (opt). Output: `{ zipPath, fileSizeBytes }`.
 
 ### Shared References
 

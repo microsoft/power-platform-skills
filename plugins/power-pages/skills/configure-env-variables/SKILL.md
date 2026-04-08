@@ -22,7 +22,7 @@ hooks:
           prompt: |
             Check whether the configure-env-variables skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
             1. At least one environment variable definition was created or confirmed in Dataverse
-            2. The user confirmed they linked the site setting to the env var via Power Pages Management UI
+            2. Each selected site setting was linked to its env var definition via link-site-setting-to-env-var.js (verified: ok and verified both true)
             3. The env var was added to the solution via AddSolutionComponent
             4. deployment-settings.json was written with at least one stage's EnvironmentVariables entry
             5. A completion summary was presented
@@ -40,7 +40,7 @@ Power Pages site settings can be backed by environment variables (GA March 2025,
 - The runtime reads the env var value for the current environment instead of the static `mspp_value`
 - During pipeline deployment, target-environment values are injected via `deploymentsettingsjson`
 
-**Important API constraint**: The site setting → env var link (`mspp_environmentvariable` lookup) is NOT directly writable via OData API — the Power Pages server intentionally restricts this. This one step must be done via the Power Pages Management app UI. All other steps are fully automated.
+**API note**: The site setting → env var link is set via a HAR-confirmed OData PATCH pattern (v9.0, `EnvironmentValue` nav property, `if-match: *` and `clienthost: Browser` headers required). This is handled by `scripts/lib/link-site-setting-to-env-var.js`. All steps are fully automated.
 
 ## Prerequisites
 
@@ -48,7 +48,6 @@ Power Pages site settings can be backed by environment variables (GA March 2025,
 - Azure CLI token available: `az account get-access-token`
 - `.solution-manifest.json` exists in the project root (run `setup-solution` first)
 - Power Pages site deployed to dev environment (`.powerpages-site/` folder exists)
-- Power Pages Management app accessible (make.powerapps.com → your dev environment → Apps → Power Pages Management)
 
 ## Phase 1 — Discover Existing State
 
@@ -61,11 +60,13 @@ cat .last-pipeline.json              # get hostEnvUrl, stages[].name
 ls .powerpages-site/site-settings/   # list all site setting YAML files
 ```
 
-**1.2 Acquire token for dev environment:**
+**1.2 Acquire token and verify prerequisites:**
 ```bash
-DEV_ENV_URL=$(cat .solution-manifest.json | node -e "const d=require('fs').readFileSync('/dev/stdin','utf8');console.log(JSON.parse(d).environmentUrl)")
-TOKEN=$(az account get-access-token --resource "$DEV_ENV_URL" --query accessToken -o tsv)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" \
+  --envUrl "{devEnvUrl}" \
+  --require-manifest
 ```
+Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `TOKEN`).
 
 **1.3 Query existing env vars in the environment:**
 ```
@@ -133,30 +134,22 @@ Setting: Authentication/Registration/LocalLoginEnabled
 
 For each planned env var:
 
-**3.1 Check if it already exists:**
-```
-GET {devEnvUrl}/api/data/v9.2/environmentvariabledefinitions?$filter=schemaname eq '{schemaName}'&$select=schemaname,environmentvariabledefinitionid
-```
-
-**3.2 Create if it doesn't exist:**
-```
-POST {devEnvUrl}/api/data/v9.2/environmentvariabledefinitions
-Content-Type: application/json
-
-{
-  "schemaname": "ids_LocalLoginEnabled",
-  "displayname": "IdeaSphere Local Login Enabled",
-  "description": "Controls whether local login is enabled. true in dev, false in staging/prod.",
-  "type": 100000000,
-  "defaultvalue": "true"
-}
+**3.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+  --envUrl "{devEnvUrl}" \
+  --token "{TOKEN}" \
+  --schemaName "{schemaName}" \
+  --displayName "{displayName}" \
+  --type {typeCode} \
+  --defaultValue "{devValue}"
 ```
 
-Type values:
+Type codes:
 - `100000000` = String (use for all site settings — runtime resolves as string)
 - `100000005` = Secret (for credentials — value stored in Azure Key Vault or encrypted)
 
-Response: **HTTP 204** — extract GUID from `OData-EntityId` header.
+Capture output as JSON; extract `.definitionId` (store as `envVarDefId`) and check `.created` (true = newly created, false = already existed). If already existed, confirm the existing definition matches expectations before proceeding.
 
 **3.3 Create the current-environment value** (the live dev value, separate from defaultvalue):
 ```
@@ -173,40 +166,24 @@ Response: **HTTP 204**.
 
 Track created env var IDs: `{ schemaName, envVarDefId, siteSettingName, devValue, stageValues: { stageName: value } }`.
 
-## Phase 4 — Guide UI Linking Step
+## Phase 4 — Link Site Settings to Env Vars
 
-> **This step requires the Power Pages Management app.** The site setting → env var link cannot be set via OData API — it is handled by Power Pages' internal form save logic.
-
-For each site setting to link, display step-by-step instructions:
-
----
-**Action required in Power Pages Management:**
-
-1. Open [Power Pages Management](https://make.powerapps.com) → select your **dev environment** → **Apps** → **Power Pages Management**
-2. In the left nav, click **Site Settings**
-3. Search for: `Authentication/Registration/LocalLoginEnabled`
-4. Click on the record to open it
-5. Change the **Source** field from `Static Value` to `Environment Variable`
-6. In the **Environment Variable** lookup, type `ids_Local` and select **IdeaSphere Local Login Enabled**
-7. Click **Save & Close**
-8. Repeat for any other settings listed above
-
----
-
-Ask via `AskUserQuestion`:
-> "Have you completed the UI linking in Power Pages Management for all site settings listed above?
-> 1. Yes — I've linked all settings, continue
-> 2. I need more time — show the instructions again
-> 3. Skip this setting — keep it as static"
-
-**After user confirms:** Verify via OData that the link was applied:
+For each site setting to link, run `link-site-setting-to-env-var.js` (HAR-confirmed PATCH via v9.0 API — no UI step required):
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
+  --envUrl "{devEnvUrl}" \
+  --token "{TOKEN}" \
+  --siteSettingId "{siteSettingId}" \
+  --definitionId "{envVarDefId}" \
+  --schemaName "{schemaName}"
 ```
-GET {devEnvUrl}/api/data/v9.2/mspp_sitesettings?$filter=mspp_name eq 'Authentication/Registration/LocalLoginEnabled' and _mspp_websiteid_value eq {WEBSITE_ID}&$select=mspp_name,mspp_source,_mspp_environmentvariable_value
-```
+Capture output as JSON; check `.ok` and `.verified` are both `true`. The script applies the PATCH with the required `if-match: *` and `clienthost: Browser` headers and then verifies `mspp_source === 1` and `_mspp_environmentvariable_value` matches the definition ID.
 
-Expected: `mspp_source = 1` and `_mspp_environmentvariable_value = {envVarDefId}`.
-
-If verification fails (source still 0), show the error and ask the user to retry.
+If `.ok` is `false` or `.verified` is `false`, report the error and ask the user:
+> "Linking `{settingName}` to env var `{schemaName}` failed. How would you like to proceed?
+> 1. Retry
+> 2. Skip this setting — keep it as static
+> 3. Cancel"
 
 ## Phase 5 — Add Env Vars to Solution
 
@@ -309,7 +286,7 @@ Next steps:
 |---|---|---|
 | Phase 2 | Which site settings to back with env vars | Select from list |
 | Phase 2 | Env var schema names, types, per-stage values | Enter for each |
-| Phase 4 | Confirm UI linking completed | Yes / Need more time / Skip |
+| Phase 4 | Retry / skip / cancel on link failure | Retry / Skip / Cancel |
 | Phase 7 | Review commit and next steps | Proceed / Adjust |
 
 ## Task Progress Table
@@ -319,7 +296,7 @@ Next steps:
 | Discover existing state | Discovering existing state | Read manifests, query Dataverse for existing env vars and already-linked site settings, list candidates |
 | Plan environment variables | Planning environment variables | Ask user which site settings to back, collect schema names, types, dev and per-stage values |
 | Create env var definitions | Creating env var definitions | POST environmentvariabledefinitions + environmentvariablevalues for each planned env var |
-| Guide UI linking | Guiding UI linking step | Display Power Pages Management instructions; verify link via OData after user confirms |
+| Link site settings to env vars | Linking site settings | Run link-site-setting-to-env-var.js for each setting; verify .ok and .verified from output |
 | Add env vars to solution | Adding env vars to solution | AddSolutionComponent (type 380) for each env var definition |
 | Generate deployment-settings.json | Generating deployment settings | Write deployment-settings.json with per-stage env var values |
 | Verify and commit | Verifying and committing | Sync YAML, verify solution components, commit, present summary |

@@ -52,13 +52,14 @@ Tasks to create:
 7. "Present summary"
 
 Steps:
-1. Run `pac env who` — extract `environmentUrl`, `organizationId`
-2. Run `az account get-access-token --resource "{environmentUrl}" --query accessToken -o tsv` — capture token
-3. Verify API access: `GET {environmentUrl}/api/data/v9.2/WhoAmI` — confirm 200 response
-4. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
-5. Confirm `.powerpages-site/` folder exists (required to find component records)
-
-If any check fails, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+1. Run `pac env who` — extract `environmentUrl`, `organizationId` (shown to user for confirmation)
+2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{environmentUrl}"
+   ```
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
+4. Confirm `.powerpages-site/` folder exists (required to find component records)
 
 ### Phase 2 — Gather Solution Configuration
 
@@ -80,7 +81,15 @@ Present a confirmation summary of all values and wait for user approval before p
 Before creating anything, check if publisher and solution already exist:
 
 1. Query publisher: `GET {envUrl}/api/data/v9.2/publishers?$filter=uniquename eq '{publisherUniqueName}'&$select=publisherid,uniquename,customizationprefix`
-2. Query solution: `GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{solutionUniqueName}'&$select=solutionid,uniquename,version,ismanaged`
+   (No dedicated script for publishers — query the OData endpoint directly.)
+2. Check solution existence using `verify-solution-exists.js`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
+     --envUrl "{envUrl}" \
+     --uniqueName "{solutionUniqueName}" \
+     --token "{token}"
+   ```
+   Capture output as JSON; check `.found` (boolean). If `found`, also read `.solutionId`, `.version`, and `.isManaged` for display.
 
 Report findings to user:
 - If publisher exists: "Found existing publisher `{name}` (prefix: `{prefix}`). Will reuse it."
@@ -98,10 +107,18 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
    - Extract `publisherId` from `OData-EntityId` response header
    - On failure: report error, stop (do not proceed to solution creation)
 
-2. **Create solution** (if not existing):
-   - `POST {envUrl}/api/data/v9.2/solutions` with solution body linking to publisher
-   - Extract `solutionId` from `OData-EntityId` response header
-   - On failure: report error, stop
+2. **Create solution** (if not existing) using `create-solution.js`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-solution.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --uniqueName "{solutionUniqueName}" \
+     --friendlyName "{solutionFriendlyName}" \
+     --version "{version}" \
+     --publisherId "{publisherId}" \
+     --description "Power Pages solution for {siteName}"
+   ```
+   Capture output as JSON; extract `.solutionId` (store as `solutionId`). On failure (non-zero exit or `created: false`): report error, stop.
 
 3. Report: "Publisher `{name}` and solution `{name}` are ready."
 
@@ -111,31 +128,24 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSol
 
 #### Step 5.1 — Discover Component Types Dynamically
 
-**Do not hardcode component type numbers.** Component type codes are environment-specific metadata and vary across tenants. Always resolve them at runtime by querying `solutioncomponents` for a known objectId and reading back the `componenttype` field.
+**Do not hardcode component type numbers.** Component type codes are environment-specific metadata and vary across tenants. Always resolve them at runtime using `discover-component-types.js`.
 
-For the **website record**, query:
+Run `discover-component-types.js` with the website record ID plus one sample powerpagecomponent ID and one site language ID (obtained from the preliminary discovery queries in Step 5.2 below — run those first if not yet available):
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+  --envUrl "{envUrl}" \
+  --token "{token}" \
+  --websiteRecordId "{websiteRecordId}" \
+  --powerpageComponentId "{anyPowerpageComponentId}" \
+  --siteLanguageId "{siteLanguageId}"
 ```
-GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{websiteRecordId}'&$select=componenttype&$top=1
-```
-Store result as `websiteComponentType`.
+Capture output as JSON; extract `.websiteComponentType` (store as `websiteComponentType`), `.subComponentType` (store as `subComponentType`), and `.siteLanguageComponentType` (store as `siteLanguageComponentType`). Site language has its own distinct componenttype (~10375) — it is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly.
 
-For **all sub-components** (web pages, web files, web roles, site settings, templates, etc.), query using any one `powerpagecomponentid` from the site:
-```
-GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{anyPowerpageComponentId}'&$select=componenttype&$top=1
-```
-Store result as `subComponentType`.
-
-For **site language records**, query using the site language ID:
-```
-GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{siteLanguageId}'&$select=componenttype&$top=1
-```
-Store result as `siteLanguageComponentType`. Site language has its own distinct componenttype (~10375) — it is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly.
-
-If the website record query returns an empty `value` array, the site has not been added to any solution yet — stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If the sub-component query returns empty, proceed anyway — you will discover all component IDs in Step 5.2.
+If the script reports the website record is not yet in any solution, stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If `subComponentType` is absent (no sub-components indexed yet), proceed anyway — you will discover all component IDs in Step 5.2.
 
 #### Step 5.2 — Discover All Components
 
-Run four discovery queries in parallel:
+Run six discovery queries in parallel:
 
 **A. Component type labels** (for display names):
 ```
@@ -169,6 +179,39 @@ Filter client-side: `IsCustomEntity === true && IsManaged === false`. Group by p
 
 > **Important note on tables**: Dataverse solutions carry **schema only** — entity definitions, columns, relationships, forms, and views. Table **data/records** do NOT travel with the solution. If the target environment needs seed/reference data, that requires a separate data migration step.
 
+**E. Cloud Flow link components (powerpagecomponenttype 33) — runtime field introspection:**
+
+Query the `powerpagecomponent` records that link this site to Cloud Flows:
+```
+GET {envUrl}/api/data/v9.2/powerpagecomponents
+  ?$filter=_powerpagesiteid_value eq '{websiteRecordId}' and powerpagecomponenttype eq 33
+  &$select=powerpagecomponentid,name
+```
+
+If results are returned, fetch the first record **without** a `$select` to discover the workflow lookup field:
+```
+GET {envUrl}/api/data/v9.2/powerpagecomponents({firstComponentId})
+```
+Scan the response JSON for `_*_value` keys with non-null GUIDs that do not equal `websiteRecordId`. The remaining key is the workflow lookup field (e.g., `_adx_workflow_value`). Re-query all type-33 components with that field in `$select` to collect all backing `workflowId` GUIDs. Then resolve each workflow name and status:
+```
+GET {envUrl}/api/data/v9.2/workflows({workflowId})?$select=name,workflowid,statecode
+```
+Also discover the workflow's component type (for `AddSolutionComponent`):
+```
+GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{workflowId}'&$select=componenttype&$top=1
+```
+Store as `workflowComponentType`. If the query returns empty (flow not yet in any solution), note it — the backing flow record still exists and can be added.
+
+If type-33 query returns no records, store `cloudFlows = []` and skip.
+
+**F. Bot Consumer link components (powerpagecomponenttype 27) — runtime field introspection:**
+
+Same pattern as Query E. Query type-27 `powerpagecomponent` records, discover the bot lookup field via introspection on the first record, collect bot GUIDs, resolve bot names via:
+```
+GET {envUrl}/api/data/v9.2/bots({botId})?$select=name,botid,statecode
+```
+And discover bot component type via `solutioncomponents`. Store as `botComponents`. If no type-27 records exist, store `botComponents = []` and skip.
+
 #### Step 5.3 — Categorize Site Settings
 
 Site Settings (powerpagecomponenttype=9) have distinct security profiles. Split them before presenting:
@@ -192,27 +235,28 @@ Before presenting the final manifest, handle the excluded OAuth secrets. These s
 - Plus options: **"Convert all of them"** and **"Exclude all (don't convert any)"**
 
 For each secret the user selects to convert:
-1. Create an `environmentvariabledefinition` via OData POST:
+1. Create an `environmentvariabledefinition` using `create-env-var-definition.js`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --schemaName "{prefix}_{sanitizedSettingName}" \
+     --displayName "{friendlyName}" \
+     --type 100000003
    ```
-   POST {envUrl}/api/data/v9.2/environmentvariabledefinitions
-   { "schemaname": "{prefix}_{sanitizedSettingName}", "displayname": "{friendlyName}", "type": 100000003, "defaultvalue": "" }
+   Use type `100000003` (Secret) so the value is stored encrypted. Schema name: take the setting name, replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_auth_openauth_microsoft_clientsecret`). Capture output as JSON; extract `.definitionId` and `.schemaName`.
+2. Add the env var definition to the solution (`ComponentType: 380`). (This is done in bulk in Step 5.6 — record the `definitionId` for inclusion in the components list.)
+3. **Link the site setting to the env var** using `link-site-setting-to-env-var.js` (HAR-confirmed pattern — no UI step required):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --siteSettingId "{settingId}" \
+     --definitionId "{definitionId}" \
+     --schemaName "{schemaName}"
    ```
-   Use type `100000003` (Secret) so the value is stored encrypted. Schema name: take the setting name, replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_auth_openauth_microsoft_clientsecret`).
-2. Add the env var definition to the solution (`ComponentType: 380`).
-3. **Link the site setting to the env var via OData PATCH** (HAR-confirmed pattern — no UI step required):
-   ```
-   PATCH {envUrl}/api/data/v9.0/mspp_sitesettings({settingId})
-   Headers: if-match: *, clienthost: Browser, x-ms-app-name: mspp_PowerPageManagement
-   Body: {
-     "mspp_envvar_schema": "{schemaName}",
-     "EnvironmentValue@odata.bind": "/environmentvariabledefinitions({definitionId})",
-     "EnvironmentValue@OData.Community.Display.V1.FormattedValue": "{schemaName}",
-     "mspp_source": 1
-   }
-   ```
-   **Critical:** Must use v9.0 (not v9.2). Navigation property is `EnvironmentValue` (not `mspp_environmentvariable`). Must include `if-match: *` and `clienthost: Browser` headers — omitting them causes 400.
-4. Verify the link: GET the site setting and confirm `mspp_source === 1` and `_mspp_environmentvariable_value` matches the definition ID.
-5. Record each created env var definition ID and setting ID in the manifest.
+   Capture output as JSON; check `.ok` and `.verified` are both `true`. The script uses v9.0 (not v9.2), the `EnvironmentValue` nav property, and the required `if-match: *` and `clienthost: Browser` headers internally.
+4. Record each created env var definition ID and setting ID in the manifest.
 
 OAuth secrets the user chose NOT to convert remain excluded — they are simply not added to the solution.
 
@@ -254,6 +298,13 @@ SITE SETTINGS (64 included)
   ~ OAuth as env vars (3):   ids_auth_openauth_microsoft_clientsecret, ... [ENV VAR]
   ✗ OAuth excluded (5):      Authentication/OpenAuth/Facebook/AppSecret, ... [EXCLUDED]
 
+CLOUD FLOWS ({N} linked via powerpagecomponent type 33)
+  ✓ Invoice Approval Flow   (workflowId: {guid}, Active)
+  ~ Draft Flow              (workflowId: {guid}, Inactive — excluded by default)
+
+BOT CONSUMERS ({N} linked via powerpagecomponent type 27)
+  ✓ Support Bot             (botId: {guid}, Active)
+
 DATAVERSE TABLES (schema only — no data)
   ✓ crd50_invoice (Invoice)
   ...
@@ -265,6 +316,20 @@ ENV VAR DEFINITIONS (componenttype 380)
 Total to add: ~{N} components
 ```
 
+If `cloudFlows` is non-empty, use `AskUserQuestion` with `multiSelect: true`:
+- Option: "Include all N active cloud flows (Recommended)"
+- One option per flow: `{name} ({workflowId})`
+- Option: "Exclude all cloud flows"
+
+Default: include active flows, exclude inactive ones. **If a flow is already in a different solution**, warn the user: *"This flow is in solution X — adding it here will move it."*
+
+If `botComponents` is non-empty, use `AskUserQuestion` with `multiSelect: true` (same pattern).
+
+If both are empty, skip and display `(None discovered)`.
+
+After presenting the manifest summary, add a free-text escape hatch:
+> "If you know of cloud flows or bots that should be in this solution but are not shown above, paste their GUIDs here (comma-separated). Leave blank to continue."
+
 Ask via `AskUserQuestion`:
 > "Does this look right? You can proceed, or tell me which categories or tables to exclude."
 
@@ -274,16 +339,29 @@ Wait for explicit confirmation before Step 5.6.
 
 #### Step 5.6 — Add All Confirmed Components
 
-1. **Website record** — `AddSolutionComponent` with `websiteComponentType`, `AddRequiredComponents: true`
-2. **Site language records** — `AddSolutionComponent` for each with `siteLanguageComponentType` (NOT auto-included by AddRequiredComponents)
-3. **All confirmed powerpagecomponent groups** — for each group, call `AddSolutionComponent` per component using `subComponentType`
+Build a JSON array of all components to add, then call `scripts/lib/add-components-to-solution.js` to perform the bulk operation with token refresh and idempotency handling built in.
+
+The components array should be built in this order:
+
+1. **Website record** — `{ componentId: websiteRecordId, componentType: websiteComponentType, addRequired: true, description: "Website: {siteName}" }`
+2. **Site language records** — one entry per language with `siteLanguageComponentType` (NOT auto-included by `AddRequiredComponents`)
+3. **All confirmed powerpagecomponent groups** — one entry per component using `subComponentType`
    - Table Permissions (type 18) are standard powerpagecomponents — include by default
    - Exclude OAuth secret site settings that were not converted to env vars
-4. **Env var definitions** (for converted OAuth secrets) — `AddSolutionComponent` with `ComponentType: 380`
-5. **Dataverse tables** — `AddSolutionComponent` with `ComponentType: 1` and entity `MetadataId`
-6. Refresh token every ~20 calls
-7. Track: success / skipped-duplicate / failed
-8. Running progress: "Added 45 of 120 components..."
+4. **Env var definitions** (for converted OAuth secrets) — `{ componentType: 380 }`
+5. **Dataverse tables** — `{ componentType: 1, componentId: MetadataId }`
+6. **Confirmed cloud flows** (from Step 5.5) — `{ componentId: workflowId, componentType: workflowComponentType }` (uses runtime-discovered type)
+7. **Confirmed bot components** — `{ componentId: botId, componentType: botComponentType }` (uses runtime-discovered type)
+
+Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
+  --envUrl "{envUrl}" \
+  --componentsFile "C:/Users/{user}/AppData/Local/Temp/components-to-add.json" \
+  --solutionUniqueName "{solutionUniqueName}"
+```
+
+The script handles token refresh every 20 calls, treats "already in solution" as success, and outputs a JSON summary `{ total, success, skipped, failed, failures }`. Delete the temp file after completion.
 
 ### Phase 6 — Verify and Write Manifest
 
@@ -292,6 +370,9 @@ Wait for explicit confirmation before Step 5.6.
 
 3. Write `.solution-manifest.json` to project root (alongside `powerpages.config.json`):
    - See manifest format in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
+   - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`
+   - If bot components were confirmed, include a `botComponents` array: `[{ "botId": "...", "name": "..." }]`
+   - Omit these arrays entirely if no flows/bots were discovered or confirmed (absence = not tracked; `[]` = tracked but none selected)
 
 4. Commit: `git add .solution-manifest.json && git commit -m "Add solution manifest for ALM"`
 
@@ -357,6 +438,6 @@ If the user selects **option 3**, show:
 | Gather solution configuration | Gathering solution configuration | Collect publisher name, prefix, solution name, version from user — confirm irreversible choices |
 | Check existing publishers and solutions | Checking existing state | Query Dataverse for existing publisher and solution to avoid duplicate creation |
 | Create publisher and solution | Creating publisher and solution | POST publisher and solution to Dataverse OData API, capture IDs |
-| Add site components to solution | Adding site components | Discover website/language/powerpagecomponents/tables, split site settings by category, present full manifest for user confirmation, then call AddSolutionComponent for website, site language(s), all confirmed components, and tables (ComponentType=1) |
+| Add site components to solution | Adding site components | Discover website/language/powerpagecomponents/tables/cloud flows (type 33)/bot consumers (type 27) via runtime field introspection; split site settings by category; present full manifest including CLOUD FLOWS and BOT CONSUMERS sections with active/inactive status; get user confirmation; call add-components-to-solution.js for website, site language(s), all confirmed components, tables (ComponentType=1), confirmed cloud flows, and confirmed bot components |
 | Verify and write manifest | Verifying solution and writing manifest | Confirm components in solution, write .solution-manifest.json, commit |
 | Present summary | Presenting summary | Show solution details, component count, and next steps |

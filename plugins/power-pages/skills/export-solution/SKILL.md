@@ -53,11 +53,11 @@ Tasks to create:
 7. "Present summary"
 
 Steps:
-1. Run `pac env who` — extract `environmentUrl`
-2. Run `az account get-access-token --resource "{environmentUrl}" --query accessToken -o tsv` — capture token
-3. Verify API access: `GET {environmentUrl}/api/data/v9.2/WhoAmI`
-
-If any check fails, stop and explain (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+1. Run `verify-alm-prerequisites.js` with `--require-manifest` to confirm PAC CLI auth, acquire a token, verify API access, and validate that `.solution-manifest.json` exists:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   ```
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 2 — Identify Solution
 
@@ -86,39 +86,44 @@ Also ask (separate `AskUserQuestion`):
 
 ### Phase 4 — Trigger Async Export
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 4a.
+Run `scripts/lib/export-solution-async.js` to POST `ExportSolutionAsync`, poll until terminal state, and return the `AsyncOperationId`:
 
-1. `POST {envUrl}/api/data/v9.2/ExportSolutionAsync` with solution name and managed flag
-2. Parse response to extract `AsyncOperationId` and `ExportJobId`
-3. Report: "Export job started: `{AsyncOperationId}`. Polling for completion..."
-
-Run `scripts/poll-async-operation.js`:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/poll-async-operation.js" \
-  --asyncJobId "{AsyncOperationId}" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
-  --intervalMs 5000 \
-  --maxAttempts 60
+  --solutionName "{solutionUniqueName}" \
+  --managed {true|false}
 ```
 
-Handle poll result:
-- `Succeeded`: proceed to Phase 5
-- `Failed`: report the error message, stop
-- `Timeout`: inform user the export is still running, advise checking admin center
+Capture stdout as JSON; extract `.asyncOperationId` (store as `asyncOperationId`).
+
+Report: "Export job started. Polling for completion..."
+
+Handle script exit code:
+- Exit 0: job succeeded — proceed to Phase 5 with `asyncOperationId`
+- Exit 1: stderr contains the failure message — report it and stop
+- Timeout / polling exhausted: inform user the export is still running, advise checking admin center
 
 ### Phase 5 — Download Solution Zip
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 4b.
+Run `scripts/lib/download-export-data.js` to POST `DownloadSolutionExportData`, decode the base64 zip, and write it to disk:
 
-1. `POST {envUrl}/api/data/v9.2/DownloadSolutionExportData` with `ExportJobId`
-2. Parse response to extract `ExportSolutionFile` (base64-encoded zip)
-3. Decode base64 and write to disk:
-   - File name: `{SolutionUniqueName}_{managed|unmanaged}.zip`
-   - Location: output directory configured in Phase 3
-4. Report: "Downloading solution zip..."
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
+  --envUrl "{envUrl}" \
+  --token "{token}" \
+  --asyncOperationId "{asyncOperationId}" \
+  --outputPath "{outputDir}/{SolutionUniqueName}_{managed|unmanaged}.zip"
+```
 
-> **Note**: For very large solutions, the base64 string may be large. Use Node.js `Buffer.from(encoded, 'base64')` to decode, then `fs.writeFileSync` to write.
+Capture stdout as JSON; extract `.zipPath` (store as `zipPath`) and `.fileSizeBytes`.
+
+Report: "Downloading solution zip..."
+
+Handle script exit code:
+- Exit 0: zip written — proceed to Phase 6 with `zipPath` and `fileSizeBytes`
+- Exit 1: stderr contains the failure message — report it and stop
 
 ### Phase 6 — Verify Export
 

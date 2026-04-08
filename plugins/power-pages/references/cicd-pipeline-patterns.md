@@ -2,6 +2,16 @@
 
 Reference patterns for generating CI/CD pipelines for Power Pages deployments. Used by the `setup-pipeline` skill.
 
+## Implementation Status
+
+| Platform | Skill Status | Reference Patterns |
+|---|---|---|
+| Power Platform Pipelines | ✅ Fully implemented | Section 4 below |
+| Azure DevOps | 🚧 Coming soon | Section 2 below |
+| GitHub Actions | 🚧 Coming soon | Section 3 below |
+
+> **Full ADO/GitHub implementation spec:** `C:\Users\nityagi\OneDrive - Microsoft\Design Documents\Plans\ALM skills for plugin\ado-cicd-skills-guide.md`
+
 ---
 
 ## Service Principal Authentication (PAC CLI)
@@ -44,6 +54,8 @@ This command uploads the compiled site from the `compiledPath` defined in `power
 ---
 
 ## Azure DevOps Pipeline (azure-pipelines.yml)
+
+> ⚠️ **Coming Soon** — The `setup-pipeline` GitHub/ADO path is not yet implemented.
 
 ### Full ADO Pipeline Template
 
@@ -262,6 +274,8 @@ Set these as secret pipeline variables in ADO (Pipelines → Library → Variabl
 ---
 
 ## GitHub Actions Workflow (.github/workflows/deploy.yml)
+
+> ⚠️ **Coming Soon** — The `setup-pipeline` GitHub/ADO path is not yet implemented.
 
 ### Full GitHub Actions Template
 

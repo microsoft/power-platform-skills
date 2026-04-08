@@ -63,40 +63,42 @@ Tasks to create:
 
 Steps:
 
-1. Locate `powerpages.config.json` — read `siteName` and `compiledPath`. If not found, stop and advise running `/power-pages:create-site` first.
+1. Read project context using `detect-project-context.js`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   ```
+   Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). If `siteName` is absent (no `powerpages.config.json`), stop and advise running `/power-pages:create-site` first. If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first. Read `solutionManifest.solution.uniqueName` and `solutionManifest.solution.solutionId` from the returned object.
 
-2. Locate `.solution-manifest.json` — read `solution.uniqueName`, `solution.solutionId`, and `devEnvironmentUrl`. If not found, stop and advise running `/power-pages:setup-solution` first.
+2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{devEnvUrl}"
+   ```
+   Capture output as JSON; extract `.envUrl` (use to confirm `devEnvUrl`) and `.token` (store as `DEV_TOKEN`).
 
 3. Run silently:
    ```bash
-   pac env who --output json 2>/dev/null
    pac env list --output json 2>/dev/null
    ```
-   Store `devEnvUrl` from `pac env who` (or use `devEnvironmentUrl` from `.solution-manifest.json`). Store `pac env list` output as `ENV_LIST`.
+   Store output as `ENV_LIST`.
 
-4. Acquire a token for the dev environment silently:
+4. Run `discover-pipelines-host.js` on the dev env to find the tenant's Pipelines host environment:
    ```bash
-   az account get-access-token --resource "{devEnvOrigin}" --query accessToken -o tsv 2>/dev/null
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
+     --envUrl "{devEnvUrl}" \
+     --token "{DEV_TOKEN}" \
+     --userId "{userId}"
    ```
-   Where `devEnvOrigin` = scheme + host of `devEnvUrl`. Store as `DEV_TOKEN`.
+   Capture stdout as JSON: `const hostResult = JSON.parse(output)`.
+   If `hostResult.found` is true, store `hostResult.hostEnvUrl` as `HOST_ENV_URL`.
+   If `hostResult.found` is false, no default host is configured — will need to ask user.
 
-5. Call `RetrieveSetting` on the dev env to find the tenant's Pipelines host environment:
-   ```
-   GET {devEnvUrl}/api/data/v9.2/RetrieveSetting(SettingName='DefaultCustomPipelinesHostEnvForTenant')
-   Authorization: Bearer {DEV_TOKEN}
-   OData-MaxVersion: 4.0
-   OData-Version: 4.0
-   Accept: application/json
-   ```
-   Store result as `HOST_ENV_GUID`. If null/empty, no default host is configured — will need to ask user.
+5. Cross-reference `HOST_ENV_URL` with `ENV_LIST` to confirm the host environment appears in `pac env list` output. Match on the URL or `EnvironmentId` field.
 
-6. Cross-reference `HOST_ENV_GUID` with `ENV_LIST` to find the host environment URL. Match on `EnvironmentId` field. Store as `HOST_ENV_URL`.
+   If not found in `ENV_LIST`: set `HOST_ENV_URL = null` (will ask user in Phase 3).
 
-   If no match found: set `HOST_ENV_URL = null` (will ask user in Phase 3).
+6. Check for existing `.last-pipeline.json` in the project root. If found, read its contents.
 
-7. Check for existing `.last-pipeline.json` in the project root. If found, read its contents.
-
-8. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'not auto-detected'}`. Existing pipeline: found/not found."
+7. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'not auto-detected'}`. Existing pipeline: found/not found."
 
 **If an existing `.last-pipeline.json` is found**, ask via `AskUserQuestion`:
 
@@ -174,12 +176,14 @@ Authorization: Bearer {HOST_TOKEN}
 ```
 If response is 404 or returns an "unknown entity" error, stop and inform the user: "The selected host environment does not have Power Platform Pipelines installed. Please select a different environment or install the Pipelines package."
 
-**4.2 Verify solution exists in dev environment:**
+**4.2 Verify solution exists in dev environment** using `verify-solution-exists.js`:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
+  --envUrl "{devEnvUrl}" \
+  --uniqueName "{uniqueName}" \
+  --token "{DEV_TOKEN}"
 ```
-GET {devEnvUrl}/api/data/v9.1/solutions?$filter=uniquename eq '{uniqueName}'&$select=solutionid&$top=1
-Authorization: Bearer {DEV_TOKEN}
-```
-If not found: warn the user. The solution must be exported from dev before it can be deployed.
+Capture output as JSON; check `.found`. If `false`: warn the user — the solution must be exported from dev before it can be deployed.
 
 **4.3 Check for existing pipeline with same name:**
 ```
@@ -194,97 +198,48 @@ Report preflight results. If any critical check failed, stop with clear instruct
 
 Create Dataverse `deploymentenvironment` records for each environment. Process source env first, then targets.
 
-**For each environment** (dev source + each target):
+Use `create-deployment-environment.js` for each environment (dev source + each target):
 
-**5.1 Create deployment environment record:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
+  --hostEnvUrl "{HOST_ENV_URL}" \
+  --token "{HOST_TOKEN}" \
+  --name "{siteName} {label}" \
+  --environmentUrl "{environmentUrl}"
 ```
-POST {hostEnvUrl}/api/data/v9.0/deploymentenvironments
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
+Capture stdout as JSON: `const envResult = JSON.parse(output)`.
+Store `envResult.deploymentEnvironmentId` as `SOURCE_DEPLOYMENT_ENV_ID` (for the dev source env) or append to `TARGET_DEPLOYMENT_ENV_IDs` (for each target).
 
-{
-  "name": "{siteName} {label}",
-  "environmentid": "{BAP-environment-GUID}",
-  "environmenttype": 200000000
-}
-```
-
-> **Note**: Use `environmenttype: 200000000` for the source dev environment, `environmenttype: 200000001` for target environments. The `environmenturl` field does not exist on this entity.
-
-Extract `deploymentenvironmentid` from the `OData-EntityId` response header (parse the GUID from the URL). Store as `SOURCE_DEPLOYMENT_ENV_ID` (for dev) or `TARGET_DEPLOYMENT_ENV_IDs[n]` (for targets).
+> **Note**: The script POSTs to `deploymentenvironments` with `msdyn_name`, `msdyn_url`, and `msdyn_type`, extracts the GUID from the `OData-EntityId` header, then polls `msdyn_validationstatus` every 3 seconds (max 20 attempts) until status `192350001` (Succeeded) or `192350002` (Failed). On failure the script writes the error details to stderr and exits 1 — stop and report the error to the user.
 
 On failure: stop with the error — deployment environment creation is mandatory.
-
-**5.2 Poll validationstatus:**
-```
-GET {hostEnvUrl}/api/data/v9.1/deploymentenvironments({id})?$select=validationstatus
-Authorization: Bearer {HOST_TOKEN}
-```
-
-Poll until `validationstatus = 200000001` AND `statecode = 0` (Active). If `statecode = 1` with a non-null `errormessage`: the environment validation failed — report the error and stop.
-
-> **Polling details**: Poll every 2 seconds, max 30 attempts (~1 minute). `validationstatus = 200000000` = Pending (keep polling). `validationstatus = 200000001` = Succeeded (terminal ✓). Failure = `statecode = 1` (Inactive) with non-null `errormessage`.
-
-Poll every 3 seconds, max 20 attempts. All creates (deploymentenvironments, deploymentpipelines, deploymentstages) return **204**. Parse the created record ID from the `OData-EntityId` response header. If still not validated after max attempts: warn user and ask whether to continue or cancel.
 
 Report progress for each environment as validation completes.
 
 ### Phase 6 — Create Pipeline, Associate Source, Create Stages
 
-**6.1 Create pipeline record:**
+Use `create-deployment-pipeline.js` to create the pipeline, associate the source environment, and create all stage records in one call:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-pipeline.js" \
+  --hostEnvUrl "{HOST_ENV_URL}" \
+  --token "{HOST_TOKEN}" \
+  --pipelineName "{PIPELINE_NAME}" \
+  --description "Power Pages deployment pipeline for {siteName}" \
+  --sourceDeploymentEnvironmentId "{SOURCE_DEPLOYMENT_ENV_ID}" \
+  --stagesJson '[{"name":"Deploy to {targetLabel}","targetDeploymentEnvironmentId":"{TARGET_DEPLOYMENT_ENV_ID}","order":1}]'
 ```
-POST {hostEnvUrl}/api/data/v9.0/deploymentpipelines
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
+Capture stdout as JSON: `const pipelineResult = JSON.parse(output)`.
+Extract:
+- `pipelineResult.pipelineId` → store as `PIPELINE_ID`
+- `pipelineResult.stages` → array of `{ stageId, name, targetDeploymentEnvironmentId }`
 
-{
-  "name": "{PIPELINE_NAME}",
-  "description": "Power Pages deployment pipeline for {siteName}"
-}
-```
+> **What the script does internally:**
+> 1. POSTs `{ msdyn_name, msdyn_description }` to `deploymentpipelines` (v9.2) — extracts `pipelineId` from `OData-EntityId` header
+> 2. PUTs a `$ref` body to `deploymentpipelines({pipelineId})/msdyn_sourceenvironment/$ref` using the relative-path `@odata.id` format (HAR-confirmed — no leading `/` or full URL)
+> 3. For each stage: POSTs `{ msdyn_name, msdyn_order, msdyn_pipelineid@odata.bind, msdyn_targetenvironmentid@odata.bind }` to `deploymentstages` — extracts `stageId` from `OData-EntityId` header
 
-Extract `deploymentpipelineid` from `OData-EntityId` response header. Store as `PIPELINE_ID`.
-
-**6.2 Associate source environment via $ref:**
-
-> **IMPORTANT (HAR-confirmed)**: Use relative path format for `@odata.id` — do NOT use the full https URL.
-
-```
-POST {hostEnvUrl}/api/data/v9.0/deploymentpipelines({PIPELINE_ID})/deploymentpipeline_deploymentenvironment/$ref
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
-
-{
-  "@odata.context": "{hostEnvUrl}/api/data/v9.0/$metadata#$ref",
-  "@odata.id": "deploymentenvironments({SOURCE_DEPLOYMENT_ENV_ID})"
-}
-```
-
-Response is **204** (not 200 as originally assumed) — treat any 2xx as success.
-
-**6.3 Create deployment stages:**
-
-For each target environment, in deployment order:
-
-```
-POST {hostEnvUrl}/api/data/v9.0/deploymentstages
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
-
-{
-  "name": "Deploy to {targetLabel}",
-  "deploymentpipelineid@odata.bind": "/deploymentpipelines({PIPELINE_ID})",
-  "targetdeploymentenvironmentid@odata.bind": "/deploymentenvironments({TARGET_DEPLOYMENT_ENV_ID})",
-  "previousdeploymentstageid@odata.bind": "/deploymentstages({previousStageId})"
-}
-```
-
-> **Note**: The `rank` field does not exist on `deploymentstage`. For ordering multiple stages, use `"previousdeploymentstageid@odata.bind"` to reference the prior stage ID (omit this field for the first stage).
-
-```
-```
-
-Extract `deploymentstagesid` from `OData-EntityId` response header. Collect all stage IDs and names.
+On failure: the script writes the error to stderr and exits 1 — stop and report the error to the user.
 
 ### Phase 7 — Verify, Write Artifacts, Commit
 

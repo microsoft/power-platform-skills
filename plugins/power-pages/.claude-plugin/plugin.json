@@ -1,7 +1,7 @@
 {
   "name": "power-pages",
-  "version": "1.1.2",
-  "description": "Create and deploy Power Pages sites using modern development approaches. Supports code sites (SPAs) with React, Angular, Vue, or Astro, with more site types coming soon.",
+  "version": "1.2.0",
+  "description": "Create and deploy Power Pages sites using modern development approaches. Supports code sites (SPAs) with React, Angular, Vue, or Astro, with more site types coming soon. Includes ALM orchestration (plan-alm) and shared lib scripts for Dataverse API calls and validation.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"
@@ -26,8 +26,10 @@
     "schema",
     "solution",
     "alm",
+    "plan-alm",
     "ci-cd",
     "pipeline",
-    "diagnostics"
+    "diagnostics",
+    "shared-lib"
   ]
 }

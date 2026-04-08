@@ -53,16 +53,16 @@ Tasks to create:
 7. "Verify and summarize"
 
 Steps:
-1. Run `pac env who` — extract `environmentUrl` (source environment)
-2. Run `az account get-access-token --resource "{environmentUrl}" --query accessToken -o tsv` — capture token
-3. Verify API access: `GET {environmentUrl}/api/data/v9.2/WhoAmI`
-4. Read `.solution-manifest.json` from project root — extract:
+1. Run `verify-alm-prerequisites.js` with `--require-manifest` to confirm PAC CLI auth, acquire a token, verify API access, and validate that `.solution-manifest.json` exists:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   ```
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+2. Read `.solution-manifest.json` from project root — extract:
    - `solution.uniqueName` (used as base for hotfix solution name)
    - `publisher.publisherId` (reused for hotfix solution)
    - `components[0].componentId` (websiteRecordId — used to scope the component query)
    - `environmentUrl` (warn if it differs from current PAC CLI environment)
-
-If any check fails, stop and explain (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 2 — Discover Modified Components
 
@@ -156,31 +156,35 @@ Extract `solutionId` from `OData-EntityId` response header.
 
 #### 4.3 Discover Component Type
 
-Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 3.
-
+Use `discover-component-types.js` to resolve the powerpagecomponent type at runtime:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+  --envUrl "{envUrl}" \
+  --token "{token}" \
+  --websiteRecordId "{websiteRecordId}" \
+  --powerpageComponentId "{anyModifiedComponentId}"
 ```
-GET {envUrl}/api/data/v9.2/solutioncomponents
-  ?$filter=objectid eq '{anyModifiedComponentId}'
-  &$select=componenttype&$top=1
-```
-
-If not found (new component not yet indexed), fall back: query any known sub-component from the base solution to get the shared `componenttype` value.
+Capture output as JSON; extract `.subComponentType` (store as `subComponentType`). If the modified component is not yet indexed, the script falls back to querying any known sub-component from the base solution to resolve the shared type value.
 
 #### 4.4 Add Components
 
-For each modified component, call `AddSolutionComponent`:
+Build a JSON array of all modified components:
 ```json
-{
-  "ComponentId": "{powerpagecomponentid}",
-  "ComponentType": "{discoveredComponentType}",
-  "SolutionUniqueName": "{hotfixSolutionName}",
-  "AddRequiredComponents": false,
-  "DoNotIncludeSubcomponents": false,
-  "IncludedComponentSettingsValues": null
-}
+[
+  { "componentId": "{powerpagecomponentid}", "componentType": "{subComponentType}", "addRequired": false, "description": "{name}" },
+  ...
+]
 ```
 
-Track success/failure per component. Report any failures but continue with remaining components.
+Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/hotfix-components.json`), then run `add-components-to-solution.js`:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
+  --envUrl "{envUrl}" \
+  --componentsFile "C:/Users/{user}/AppData/Local/Temp/hotfix-components.json" \
+  --solutionUniqueName "{hotfixSolutionName}" \
+  --token "{token}"
+```
+Capture output as JSON; read `.total`, `.success`, `.skipped`, `.failed`, and `.failures`. Report any failures but continue — partial success is valid. Delete the temp file after completion.
 
 ### Phase 5 — Export Solution
 
@@ -194,35 +198,37 @@ Invoke `AskUserQuestion` immediately:
 |---|---|---|
 | How would you like to export this hotfix? **Managed** solutions cannot be edited in the target and support clean upgrade/delete cycles — recommended for staging and production. **Unmanaged** solutions can be edited in the target — use for dev environments. | Export Type | Managed — for staging/production (Recommended), Unmanaged — for development environments |
 
-#### 5.2 Trigger Export
+#### 5.2 Trigger Export and Poll
 
-```json
-POST {envUrl}/api/data/v9.2/ExportSolutionAsync
-{
-  "SolutionName": "{hotfixSolutionName}",
-  "Managed": true/false,
-  ...all other flags false
-}
-```
+Run `scripts/lib/export-solution-async.js` to POST `ExportSolutionAsync`, poll until terminal state, and return the `AsyncOperationId`:
 
-Poll via `scripts/poll-async-operation.js`:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/poll-async-operation.js" \
-  --asyncJobId "{AsyncOperationId}" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
   --envUrl "{envUrl}" \
-  --intervalMs 5000 \
-  --maxAttempts 60
+  --token "{token}" \
+  --solutionName "{hotfixSolutionName}" \
+  --managed {true|false}
 ```
+
+Capture stdout as JSON; extract `.asyncOperationId` (store as `asyncOperationId`).
+
+Handle script exit code:
+- Exit 0: job succeeded — proceed to 5.3
+- Exit 1: stderr contains the failure message — report it and stop
 
 #### 5.3 Download and Write Zip
 
-```json
-POST {envUrl}/api/data/v9.2/DownloadSolutionExportData
-{ "ExportJobId": "{ExportJobId}" }
+Run `scripts/lib/download-export-data.js` to POST `DownloadSolutionExportData`, decode the base64 zip, and write it to the project root:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
+  --envUrl "{envUrl}" \
+  --token "{token}" \
+  --asyncOperationId "{asyncOperationId}" \
+  --outputPath "./{hotfixSolutionName}_{managed|unmanaged}.zip"
 ```
 
-Decode `ExportSolutionFile` from base64 and write to project root:
-- File name: `{hotfixSolutionName}_{managed|unmanaged}.zip`
+Capture stdout as JSON; extract `.zipPath` (store as `zipPath`) and `.fileSizeBytes`.
 
 Record `exportedAt` timestamp.
 

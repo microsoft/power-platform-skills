@@ -213,6 +213,27 @@ Build a map `{ [Value]: Label.UserLocalizedLabel.Label }` and use it when displa
 
 **After fetching**, present a grouped summary and ask the user which categories to include. Then call `AddSolutionComponent` for each component in the selected categories, using the `subComponentType` discovered in Step 5.1.
 
+### Types 27 (Bot Consumer) and 33 (Cloud Flow) — Backing Entity Resolution
+
+The `powerpagecomponent` records for types 27 and 33 are link records only — they do NOT contain the Cloud Flow or Bot definition itself. To make flows and bots deployable, the backing `workflow` and `bot` entities must also be added to the solution separately.
+
+**Runtime field introspection pattern** (use when the lookup field name on `powerpagecomponent` is unknown):
+
+1. Query type-33 (or type-27) components for the site without `$select` restrictions on a single record:
+   ```
+   GET {envUrl}/api/data/v9.2/powerpagecomponents({firstComponentId})
+   ```
+2. Scan the response JSON for keys matching `_*_value` with a non-null GUID that ≠ `websiteRecordId`. This is the backing entity lookup field name (e.g., `_adx_workflow_value` for flows).
+3. Re-query all components of that type with the discovered field in `$select` to collect all backing entity GUIDs.
+4. Resolve backing entity names and statuses via:
+   - Cloud Flows: `GET {envUrl}/api/data/v9.2/workflows({workflowId})?$select=name,workflowid,statecode`
+   - Bots: `GET {envUrl}/api/data/v9.2/bots({botId})?$select=name,botid,statecode`
+5. Discover each backing entity's `componenttype` via:
+   ```
+   GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{id}'&$select=componenttype&$top=1
+   ```
+   If empty (entity not yet in any solution), the entity still exists and can be added — note it as "not previously in a solution."
+
 ---
 
 ## 4. Export Solution (Async)
@@ -428,6 +449,76 @@ Written by `setup-solution`, read by `export-solution`, `import-solution`, and `
       "componentId": "00000000-0000-0000-0000-000000000000",
       "description": "Website: My Contoso Site"
     }
+  ],
+  "cloudFlows": [
+    {
+      "workflowId": "00000000-0000-0000-0000-000000000000",
+      "name": "Invoice Approval Flow",
+      "status": "active"
+    }
+  ],
+  "botComponents": [
+    {
+      "botId": "00000000-0000-0000-0000-000000000000",
+      "name": "Support Bot"
+    }
   ]
 }
 ```
+
+**Notes on `cloudFlows` and `botComponents`:**
+- These arrays are **omitted entirely** when no flows or bots were discovered during `setup-solution` (not tracked).
+- An empty array `[]` means flows/bots were discovered but the user chose to exclude all of them.
+- Downstream skills (`deploy-pipeline`, `plan-alm`) can check for the presence of these arrays and display counts or warnings accordingly.
+- `status: "active"` or `"inactive"` reflects the `statecode` at time of setup — inactive flows will still deploy but may not trigger in the target environment until activated.
+
+---
+
+## 8. Solution Packaging — BYOC vs Traditional Portal
+
+Power Pages supports two site types. How cloud flows and bots are packaged differs between them.
+
+**Detect site type** from `powerpages.config.json` → `powerpagesitetype`:
+- `1` = Traditional (Classic) portal — uses managed metadata v1
+- `2` = BYOC code site — uses data model v2.0 (`datamodelversion: "2.0"`)
+
+### Cloud Flow Packaging
+
+| | Traditional portal | BYOC code site |
+|---|---|---|
+| Cloud flow component in `solutioncomponents` | `ComponentType: 29` (Workflow) | `ComponentType: 29` (Workflow) |
+| Site-level binding record | `powerpagecomponent` type **33** ("cloud flow binding") — links the flow to a specific page | **Not present.** BYOC sites call flows directly via Web API from the React/Vue/Angular app |
+| How to add to solution | Add website (pulls type-33 bindings automatically as sub-components) + add cloud flow workflow entity (type 29) separately | Add website (no type-33 records exist) + add cloud flow workflow entity (type 29) separately |
+
+> **Implication for `setup-solution`**: Querying `powerpagecomponents` for type 33 records is valid for traditional portals only. For BYOC sites this query returns 0 results — which is correct. The skill should still add cloud flow workflow entities (type 29) explicitly when present.
+
+### Bot Packaging
+
+Bots (Copilot Studio) always use the same packaging regardless of site type:
+
+| Component | Location in zip | In `solution.xml` RootComponents? |
+|---|---|---|
+| Bot definition | `bots/bot.xml` + `botcomponents/*.xml` | No — packaged implicitly |
+| Bot consumer binding | `powerpagecomponents/{id}.xml` with `powerpagecomponenttype: 27` | No — pulled in as a sub-component when website is added |
+| Bot schema reference | `botschemaname` field in the type-27 powerpagecomponent — must match bot in target | — |
+
+> **Post-import requirement**: Bots must be **republished** in the target environment after import. The `synchronizationstatus` in the exported `bot.xml` reflects the source environment's provisioning state and is not automatically updated on import.
+
+### Connection References (Cloud Flows)
+
+Connection references are declared in `customizations.xml` (`<connectionreferences>` block) and appear as separate records in the solution. They are NOT `RootComponent` entries.
+
+- The `promptingbehavior: 0` setting means the import will NOT prompt the user to bind connections during import. The flow will be imported but **left in a disabled state** if no connection is bound.
+- After import, the user must navigate to Power Automate → target environment → each flow → Edit → bind connections.
+- Connection references use logical names (e.g., `new_sharedcommondataserviceforapps_511b0`) that are consistent across environments, but the underlying connection ID is always user/environment-specific.
+
+### Hardcoded Environment URLs in Flow JSON
+
+Some flow actions (notably "Download a file or an image" from Dataverse) store the environment URL as a hardcoded string in the flow's JSON definition (e.g., `"organization": "https://orgXXXXXXXX.crm.dynamics.com"`). This is a known portability issue — the flow will silently call the **source** environment after import until the field is manually updated.
+
+**Detection** (run against the solution zip before import):
+```bash
+unzip -p "{zipPath}" "Workflows/*.json" 2>/dev/null | grep -o '"organization":\s*"https://[^"]*"'
+```
+
+If a URL is found, warn the user before import and include it in the post-import checklist.

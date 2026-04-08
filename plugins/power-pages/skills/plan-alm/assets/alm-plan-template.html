@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ALM Plan — __SITE_NAME__</title>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
+  --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#eff6fc; --accent-border:#c7e0f4;
+  --dev:#0078d4; --dev-bg:#eff6fc; --dev-border:#c7e0f4;
+  --staging:#ca5010; --staging-bg:#fff4ef; --staging-border:#f7d1bc;
+  --prod:#107c10; --prod-bg:#f0fff0; --prod-border:#bad0ba;
+  --pending:#605e5c; --pending-bg:#f3f2f1; --pending-border:#e1dfdd;
+  --skipped:#605e5c; --skipped-bg:#f3f2f1; --skipped-border:#e1dfdd;
+  --completed:#107c10; --completed-bg:#f0fff0; --completed-border:#bad0ba;
+  --in-progress:#ca5010; --in-progress-bg:#fff4ef; --in-progress-border:#f7d1bc;
+  --warning:#ca5010; --warning-bg:#fff4ef; --warning-border:#f7d1bc;
+  --info:#0078d4;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+
+/* Top bar */
+.topbar{background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.topbar-meta{font-size:12px;color:var(--text-dim);text-align:right;}
+
+/* Layout */
+.main{max-width:900px;margin:0 auto;padding:32px 28px 64px;}
+
+/* Section headings */
+.section{margin-bottom:32px;}
+h2{font-size:19px;font-weight:700;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:4px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:18px;}
+h3{font-size:14px;font-weight:600;color:var(--text-bright);margin-top:20px;margin-bottom:10px;}
+
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;box-shadow:var(--shadow-4);}
+
+/* Summary bar */
+.summary-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:28px;}
+.summary-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-4);}
+.summary-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.summary-value{font-size:15px;font-weight:700;color:var(--text-bright);}
+
+/* Pipeline diagram */
+.pipeline-diagram{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin:16px 0 24px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);}
+.stage-box{border-radius:var(--radius);padding:12px 18px;text-align:center;min-width:120px;font-weight:600;font-size:13px;flex-shrink:0;}
+.stage-box.dev{background:var(--dev-bg);border:2px solid var(--dev-border);color:var(--dev);}
+.stage-box.staging{background:var(--staging-bg);border:2px solid var(--staging-border);color:var(--staging);}
+.stage-box.production{background:var(--prod-bg);border:2px solid var(--prod-border);color:var(--prod);}
+.stage-box.target{background:var(--staging-bg);border:2px solid var(--staging-border);color:var(--staging);}
+.stage-label{font-size:13px;font-weight:700;}
+.env-url{font-size:10px;font-weight:400;opacity:0.8;font-family:var(--mono);word-break:break-all;display:block;margin-top:3px;}
+.stage-arrow{font-size:20px;color:var(--text-dim);padding:0 10px;font-weight:300;align-self:center;}
+.approval-badge{background:#fff;border:1px solid var(--border);border-radius:10px;font-size:10px;padding:2px 8px;color:var(--text-dim);margin:4px auto 0;display:inline-block;}
+
+/* Environments table */
+table{width:100%;border-collapse:collapse;margin-top:10px;}
+th{background:var(--surface2);text-align:left;padding:9px 12px;font-size:12px;font-weight:600;color:var(--text-dim);border-bottom:2px solid var(--border);text-transform:uppercase;letter-spacing:0.3px;}
+td{padding:9px 12px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:top;}
+td code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 5px;border-radius:3px;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--surface2);}
+
+/* Checklist */
+.checklist{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.checklist-item{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);font-size:13px;}
+.checklist-item.status-pending{border-color:var(--pending-border);background:var(--pending-bg);}
+.checklist-item.status-skipped{border-color:var(--skipped-border);background:var(--skipped-bg);opacity:0.7;}
+.checklist-item.status-completed{border-color:var(--completed-border);background:var(--completed-bg);}
+.checklist-item.status-in-progress{border-color:var(--in-progress-border);background:var(--in-progress-bg);}
+.checklist-icon{font-size:16px;flex-shrink:0;width:20px;text-align:center;}
+.checklist-name{flex:1;font-weight:500;}
+.status-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;flex-shrink:0;}
+.status-badge.pending{background:var(--pending-bg);color:var(--pending);border:1px solid var(--pending-border);}
+.status-badge.skipped{background:var(--skipped-bg);color:var(--skipped);border:1px solid var(--skipped-border);}
+.status-badge.completed{background:var(--completed-bg);color:var(--completed);border:1px solid var(--completed-border);}
+.status-badge.in-progress{background:var(--in-progress-bg);color:var(--in-progress);border:1px solid var(--in-progress-border);}
+
+/* Risks */
+.risk-item{display:flex;gap:12px;padding:12px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);margin-bottom:8px;font-size:13px;}
+.risk-item.type-warning{border-color:var(--warning-border);background:var(--warning-bg);}
+.risk-item.type-info{border-color:var(--accent-border);background:var(--accent-bg);}
+.risk-icon{flex-shrink:0;font-size:15px;}
+.risk-message{flex:1;line-height:1.5;}
+
+/* Note boxes */
+.note-box{padding:12px 16px;border-radius:var(--radius);font-size:13px;line-height:1.5;margin-top:6px;}
+.note-box.info{background:var(--accent-bg);border:1px solid var(--accent-border);color:var(--text);}
+.note-box.warning{background:var(--warning-bg);border:1px solid var(--warning-border);color:var(--text);}
+.note-box.neutral{background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);}
+
+/* Footer */
+.footer{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 24px;margin-top:32px;box-shadow:var(--shadow-4);display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;}
+.footer-field{display:flex;flex-direction:column;gap:2px;}
+.footer-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.4px;}
+.footer-value{font-size:13px;color:var(--text-bright);font-weight:500;}
+.plan-status{display:inline-block;padding:3px 12px;border-radius:12px;font-size:12px;font-weight:700;border:1px solid var(--border);background:var(--surface2);color:var(--text-dim);}
+.plan-status.draft{background:var(--pending-bg);color:var(--pending);border-color:var(--pending-border);}
+.plan-status.approved{background:var(--completed-bg);color:var(--completed);border-color:var(--completed-border);}
+.plan-status.in-execution{background:var(--in-progress-bg);color:var(--in-progress);border-color:var(--in-progress-border);}
+.plan-status.completed{background:var(--completed-bg);color:var(--completed);border-color:var(--completed-border);}
+.plan-status.deferred{background:var(--pending-bg);color:var(--pending);border-color:var(--pending-border);}
+
+/* Divider */
+.divider{height:1px;background:var(--border);margin:28px 0;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo">ALM</div>
+    <div>
+      <div class="topbar-title">ALM Plan — __SITE_NAME__</div>
+      <div class="topbar-sub">Power Pages Application Lifecycle Management</div>
+    </div>
+  </div>
+  <div class="topbar-meta">
+    Generated: __GENERATED_AT__
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Summary Bar -->
+  <div class="section">
+    <div class="summary-bar">
+      <div class="summary-item">
+        <div class="summary-label">Strategy</div>
+        <div class="summary-value">__STRATEGY_LABEL__</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-label">Stages</div>
+        <div class="summary-value">__STAGE_COUNT__ environments</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-label">Approval Gates</div>
+        <div class="summary-value">__APPROVAL_LABEL__</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pipeline Diagram -->
+  <div class="section">
+    <h2>Deployment Pipeline</h2>
+    <p class="section-desc">Environments in this ALM plan and how the solution will be promoted.</p>
+    <div class="pipeline-diagram">
+      __STAGES_HTML__
+    </div>
+  </div>
+
+  <!-- Environment Configuration -->
+  <div class="section">
+    <h2>Environment Configuration</h2>
+    <p class="section-desc">Target environments and their roles in the deployment process.</p>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table>
+        <thead>
+          <tr>
+            <th>Environment</th>
+            <th>Role</th>
+            <th>URL</th>
+            <th>Export Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          __ENVIRONMENTS_TABLE__
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Env Variable Strategy -->
+  <div class="section">
+    <h2>Environment Variable Strategy</h2>
+    <p class="section-desc">How environment-specific configuration values are managed across stages.</p>
+    <div class="note-box __ENV_VAR_CLASS__">
+      __ENV_VAR_NOTE__
+    </div>
+  </div>
+
+  <!-- Source Control -->
+  <div class="section">
+    <h2>Source Control</h2>
+    <p class="section-desc">Git integration status for this project.</p>
+    <div class="note-box __GIT_CLASS__">
+      __GIT_NOTE__
+    </div>
+  </div>
+
+  <!-- Execution Checklist -->
+  <div class="section">
+    <h2>Execution Checklist</h2>
+    <p class="section-desc">Skills that will be invoked in sequence when the plan is executed.</p>
+    <div class="checklist">
+      __CHECKLIST_HTML__
+    </div>
+  </div>
+
+  <!-- Risks and Recommendations -->
+  <div class="section">
+    <h2>Risks &amp; Recommendations</h2>
+    <p class="section-desc">Items to be aware of before executing this plan.</p>
+    __RISKS_HTML__
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-field">
+      <span class="footer-label">Approved by</span>
+      <span class="footer-value" id="approved-by">__APPROVED_BY__</span>
+    </div>
+    <div class="footer-field">
+      <span class="footer-label">Approval date</span>
+      <span class="footer-value" id="approval-date">__APPROVAL_DATE__</span>
+    </div>
+    <div class="footer-field">
+      <span class="footer-label">Status</span>
+      <span class="plan-status" id="plan-status">__PLAN_STATUS__</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
