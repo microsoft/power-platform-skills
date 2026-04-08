@@ -134,7 +134,7 @@ runValidation((cwd) => {
         const fnBody = content.slice(bodyStart, bodyEnd);
         if (!/\btry\s*\{/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' is missing try/catch error handling`);
-        } else if (!/\bcatch\s*\(/.test(fnBody)) {
+        } else if (!/\bcatch\s*[({]/.test(fnBody)) {
           errors.push(`${dirName}.js: function '${fn}' has try but is missing a catch block`);
         }
         if (isAsync && !/\bawait\b/.test(fnBody)) {
@@ -176,26 +176,30 @@ runValidation((cwd) => {
       }
     }
 
+    // Strip comments and string literals so disallowed-token checks don't false-positive
+    // on occurrences inside documentation comments or string values.
+    const strippedContent = stripCommentsAndStrings(content);
+
     // Check: no require/import statements
-    if (/\brequire\s*\(/.test(content) || /\bimport\s+/.test(content)) {
+    if (/\brequire\s*\(/.test(strippedContent) || /\bimport\s+/.test(strippedContent)) {
       errors.push(`${dirName}.js: contains require() or import — no external dependencies allowed`);
     }
 
     // Check: no browser APIs
     for (const api of BROWSER_APIS) {
       const regex = new RegExp(`\\b${api}`, 'g');
-      if (regex.test(content)) {
+      if (regex.test(strippedContent)) {
         errors.push(`${dirName}.js: contains browser API '${api.replace('\\.', '')}' — not available in server logic runtime`);
       }
     }
 
     // Check: no console usage
-    if (/\bconsole\s*\./.test(content)) {
+    if (/\bconsole\s*\./.test(strippedContent)) {
       errors.push(`${dirName}.js: contains console.* — use Server.Logger instead`);
     }
 
     // Check: no 'function delete()'
-    if (/(?:async\s+)?function\s+delete\s*\(/m.test(content)) {
+    if (/(?:async\s+)?function\s+delete\s*\(/m.test(strippedContent)) {
       errors.push(`${dirName}.js: uses 'function delete()' — 'delete' is a reserved word, use 'del' instead`);
     }
   }
@@ -219,6 +223,45 @@ function findServerLogicDirs(dir) {
     throw new Error(`Failed to read server logic directory '${dir}': ${err.message}`);
   }
   return dirs;
+}
+
+/**
+ * Replace all comments and string literals with whitespace so that regex
+ * checks for disallowed tokens don't match inside non-code contexts.
+ */
+function stripCommentsAndStrings(src) {
+  let result = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    // Line comment
+    if (ch === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') { result += ' '; i++; }
+      continue;
+    }
+    // Block comment
+    if (ch === '/' && src[i + 1] === '*') {
+      result += ' '; i++;
+      result += ' '; i++;
+      while (i < src.length - 1 && !(src[i] === '*' && src[i + 1] === '/')) { result += ' '; i++; }
+      if (i < src.length) { result += ' '; i++; }
+      if (i < src.length) { result += ' '; i++; }
+      continue;
+    }
+    // String literal
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      result += ' '; i++;
+      while (i < src.length && src[i] !== ch) {
+        if (src[i] === '\\') { result += ' '; i++; }
+        result += ' '; i++;
+      }
+      if (i < src.length) { result += ' '; i++; }
+      continue;
+    }
+    result += ch;
+    i++;
+  }
+  return result;
 }
 
 /**

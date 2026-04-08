@@ -27,10 +27,3 @@ test('fails when pac CLI is not available (empty PATH)', () => {
   assert.match(result.stderr, /pac auth who|environment|unable/i);
 });
 
-test('fails when az CLI is not available for token (empty PATH)', () => {
-  // With empty PATH, pac auth who also fails, so the first error fires
-  const result = runListCloudFlows({ PATH: '' });
-  assert.notEqual(result.status, 0);
-  // Should fail at authentication stage
-  assert.ok(result.stderr.length > 0, 'should produce an error message');
-});

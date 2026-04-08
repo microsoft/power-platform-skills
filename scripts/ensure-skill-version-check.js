@@ -33,16 +33,17 @@ function hasVersionCheck(content) {
 }
 
 function addVersionCheck(content) {
-  // Find the closing --- of the YAML frontmatter (second occurrence of ---)
-  const firstIdx = content.indexOf('---');
-  if (firstIdx === -1) return content;
-  const secondIdx = content.indexOf('---', firstIdx + 3);
-  if (secondIdx === -1) return content;
-  const insertPos = secondIdx + 3;
+  // Match YAML frontmatter: starts with --- on its own line, ends with --- on its own line.
+  // Use line-based matching to avoid false positives from --- inside body or values,
+  // and handle both LF and CRLF line endings.
+  const match = content.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/);
+  if (!match) return content;
+  const insertPos = match[0].length;
   return (
     content.slice(0, insertPos) +
-    '\n\n' +
+    '\n' +
     VERSION_CHECK_LINE +
+    '\n' +
     content.slice(insertPos)
   );
 }

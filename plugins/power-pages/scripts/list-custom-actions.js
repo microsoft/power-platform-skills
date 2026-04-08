@@ -150,6 +150,19 @@ async function main() {
   }
 
   const cleanUrl = envUrl.replace(/\/+$/, '');
+
+  // Validate the URL is a strict HTTPS URL to prevent shell injection via getAuthToken
+  try {
+    const parsed = new URL(cleanUrl);
+    if (parsed.protocol !== 'https:') {
+      process.stderr.write('Error: environmentUrl must use HTTPS.\n');
+      process.exit(1);
+    }
+  } catch {
+    process.stderr.write(`Error: Invalid URL: "${cleanUrl}"\n`);
+    process.exit(1);
+  }
+
   const token = getAuthToken(cleanUrl);
   if (!token) {
     process.stderr.write(

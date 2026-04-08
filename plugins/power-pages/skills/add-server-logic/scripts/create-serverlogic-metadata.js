@@ -77,7 +77,12 @@ if (fs.existsSync(filePath)) {
 const uuid = generateUuid();
 
 // Serialize a string value safely for YAML: always single-quote, escaping internal single quotes.
+// Rejects newlines since single-quoted YAML scalars cannot span lines without breaking structure.
 function yamlStr(val) {
+  if (/[\r\n]/.test(val)) {
+    console.error(`Error: Value contains newline characters which are not supported in single-line YAML fields: "${val.slice(0, 50)}..."`);
+    process.exit(1);
+  }
   return "'" + val.replace(/'/g, "''") + "'";
 }
 

@@ -15,7 +15,7 @@
 //   node list-cloud-flows.js
 //
 // Output (JSON to stdout):
-//   { "flows": [ { "id": "<guid>", "name": "<string>", "description": "<string>", "state": "Active|Draft" } ] }
+//   { "flows": [ { "id": "<guid>", "flowRpName": "<string>", "displayName": "<string>", "description": "<string>", "state": "Active|Draft" } ] }
 //
 // Exits with code 1 on errors (messages to stderr).
 
