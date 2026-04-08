@@ -79,6 +79,22 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .secrets-section{margin-top:12px;}
 .secret-chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:5px;background:#5c2d910a;border:1px solid #5c2d9120;color:#5c2d91;}
 .secret-chip .secret-icon{font-size:10px;}
+.kv-instructions{margin-top:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+.kv-instructions summary{font-size:13px;font-weight:700;color:var(--text-bright);cursor:pointer;user-select:none;}
+.kv-instructions summary:hover{color:var(--accent);}
+.kv-instructions-body{margin-top:14px;}
+.kv-method{margin-bottom:16px;}
+.kv-method:last-child{margin-bottom:0;}
+.kv-method-title{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+.kv-method-title .kv-method-icon{font-size:14px;}
+.kv-steps{font-size:12px;color:var(--text);line-height:1.8;padding-left:18px;}
+.kv-steps li{margin-bottom:4px;}
+.kv-steps code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px;}
+.kv-cmd-block{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;font-family:var(--mono);font-size:11px;line-height:1.7;white-space:pre-wrap;word-break:break-all;margin:8px 0;}
+.kv-secret-instructions{margin-top:8px;border-top:1px solid var(--border);padding-top:12px;}
+.custom-action-badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;background:#8764b80a;border:1px solid #8764b825;color:#8764b8;text-transform:uppercase;letter-spacing:0.3px;}
+.custom-action-detail{font-size:12px;color:var(--text);background:var(--purple-bg);border:1px solid var(--purple-border);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--purple);line-height:1.7;margin-top:8px;}
+.custom-action-detail code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px;}
 .fn-list{display:grid;gap:10px;margin-top:12px;}
 .fn-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;}
 .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
@@ -179,7 +195,75 @@ if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length 
           </div>
         </div>
       </div>
-    </div>`;
+    </div>` + renderKvInstructions();
+}
+
+function renderKvInstructions() {
+  const vaultName = SECRETS.vaultName ? esc(SECRETS.vaultName) : '&lt;your-vault-name&gt;';
+  const secretRows = SECRETS.secrets.map((s, i) => {
+    const sn = esc(s.name);
+    return `<li><strong>${sn}</strong>${s.purpose ? ' &mdash; ' + esc(s.purpose) : ''}` +
+      `<div class="kv-cmd-block">printf '%s' '&lt;YOUR_SECRET_VALUE&gt;' | az keyvault secret set \\
+  --vault-name "${vaultName}" \\
+  --name "${sn}" \\
+  --value @-</div></li>`;
+  }).join('');
+
+  return `
+    <details class="kv-instructions" open>
+      <summary>&#9881; How to Set Secrets in Azure Key Vault</summary>
+      <div class="kv-instructions-body">
+        <div class="kv-method">
+          <div class="kv-method-title"><span class="kv-method-icon">&#9002;</span> Option A &mdash; Azure CLI</div>
+          <ol class="kv-steps">
+            <li>Open a terminal and ensure you are logged in: <code>az login</code></li>
+            ${secretRows}
+          </ol>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">Each command prints a JSON object containing a <code>id</code> field &mdash; that is the Secret Identifier URI you will need.</div>
+        </div>
+        <div class="kv-method">
+          <div class="kv-method-title"><span class="kv-method-icon">&#9741;</span> Option B &mdash; Azure Portal</div>
+          <ol class="kv-steps">
+            <li>Go to <a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a></li>
+            <li>Search for <strong>Key vaults</strong> in the top search bar and select it</li>
+            <li>Select the Key Vault: <strong>${vaultName}</strong></li>
+            <li>In the left menu under <strong>Objects</strong>, click <strong>Secrets</strong></li>` +
+            SECRETS.secrets.map(s => {
+              const sn = esc(s.name);
+              return `
+            <li>Click <strong>+ Generate/Import</strong> and fill in:
+              <ul style="margin-top:4px;">
+                <li>Upload options: <strong>Manual</strong></li>
+                <li>Name: <code>${sn}</code></li>
+                <li>Secret value: paste your actual value</li>
+              </ul>
+              Then click <strong>Create</strong></li>`;
+            }).join('') + `
+            <li>After creating each secret, click its name &rarr; click the current version &rarr; copy the <strong>Secret Identifier</strong> URI</li>
+          </ol>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">The Secret Identifier looks like <code>https://${vaultName}.vault.azure.net/secrets/&lt;name&gt;/&lt;version&gt;</code></div>
+        </div>
+      </div>
+    </details>`;
+}
+
+function getCustomActionMarkup(item) {
+  if (!item.customAction) return '';
+  const ca = item.customAction;
+  const bindingLabel = ca.binding === 'entity' ? 'Bound to <code>' + esc(ca.boundEntity || '') + '</code>' :
+    ca.binding === 'entityCollection' ? 'Bound to <code>' + esc(ca.boundEntity || '') + '</code> collection' : 'Unbound';
+  const typeLabel = ca.type === 'function' ? 'Function (GET)' : 'Action (POST)';
+  return '<div style="margin-top:12px;"><div class="field-label">Wraps Dataverse Custom Action</div>' +
+    '<div class="custom-action-detail">' +
+    '<strong>' + esc(ca.displayName || ca.name) + '</strong>' +
+    ' &mdash; <code>' + esc(ca.name) + '</code>' +
+    '<br/>' + typeLabel + ' &bull; ' + bindingLabel +
+    '</div></div>';
+}
+
+function getCustomActionBadge(item) {
+  if (!item.customAction) return '';
+  return ' <span class="custom-action-badge">&#9881; Custom Action</span>';
 }
 
 function getSecretsMarkup(serverLogicId) {
@@ -329,7 +413,7 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div>
         <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${item.displayName || item.name}</span>
-        ${getStatusBadge(item.status)}
+        ${getStatusBadge(item.status)}${getCustomActionBadge(item)}
         <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span class="mono">${item.name}</span>${item.apiUrl ? ' • <span class="mono">' + item.apiUrl + '</span>' : ''}</div>
       </div>
     </div>
@@ -344,6 +428,7 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
         <div class="mono" style="font-size:11px;word-break:break-word;">${item.apiUrl || 'Not provided'}</div>
       </div>
     </div>
+    ${getCustomActionMarkup(item)}
 
     <div style="margin-top:12px;">
       <div class="field-label">Reasoning</div>

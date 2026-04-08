@@ -69,7 +69,17 @@ Use the **Explore agent** to quickly scan the site for existing backend integrat
 > 5. List available web roles from `.powerpages-site/web-roles/*.webrole.yml`
 > Report what backend integrations already exist so we can build on them."
 
-**Output**: Project root confirmed, existing backend integrations identified
+### 1.3 Discover Dataverse Custom Actions
+
+Check whether the user's Dataverse environment has existing custom actions that could be leveraged in the integration:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
+```
+
+The script returns Custom APIs (modern) and Custom Process Actions (legacy) with their names, descriptions, binding types, and parameters. If custom actions are found, note them — they will be factored into the recommendation in Phase 3.
+
+**Output**: Project root confirmed, existing backend integrations identified, Dataverse custom actions discovered
 
 ---
 
@@ -92,6 +102,7 @@ From the user's request and the existing site state, determine:
 - **Must logic be hidden from the browser?** (pricing rules, validation algorithms, business rules)
 - **Is this a simple data operation or complex business logic?** (CRUD vs. multi-step processing)
 - **Does any write depend on a business rule that must be tamper-proof?** (state transitions, approval conditions, computed values) — if yes, the server logic must validate AND execute the write, not just validate
+- **Can existing Dataverse custom actions handle part of the requirement?** If custom actions were discovered in Phase 1.3, check whether any align with the user's needs — server logic can wrap existing custom actions via `InvokeCustomApi` instead of building equivalent logic from scratch
 
 ### 2.2 Clarify if Ambiguous
 
@@ -128,7 +139,7 @@ Use the decision matrix, intent mapping, and **Secure Action Principle** from th
    - Business logic must be hidden from the browser
    - Multiple Dataverse queries should be batched into one endpoint
    - Server-side validation that can't be bypassed
-   - Wrapping a Dataverse Custom API for portal consumption
+   - Wrapping a Dataverse Custom API/Action for portal consumption — if custom actions were found in Phase 1.3, check whether any match the requirement before recommending building from scratch
    - **The write depends on a business rule that must be tamper-proof** (state transitions, approval conditions, computed values) — server logic must validate AND execute the write
 
 3. **Does it need Cloud Flows?** If any of these apply, Cloud Flows are the right fit:
@@ -317,7 +328,7 @@ Group the approved items by their `phase` number from the plan. Each phase is a 
 | Approach | Skill to invoke | What to pass |
 |----------|----------------|--------------|
 | Web API | `/integrate-webapi` | The user's request + tables for this phase + existing patterns |
-| Server Logic | `/add-server-logic` | The user's request + endpoints for this phase + SDK features needed + secrets identified |
+| Server Logic | `/add-server-logic` | The user's request + endpoints for this phase + SDK features needed + secrets identified + any matching Dataverse custom actions from Phase 1.3 |
 | Cloud Flow | `/add-cloud-flow` | The user's request + async operations for this phase |
 
 ### 4.2 Execute Phase by Phase

@@ -62,7 +62,7 @@ Use this framework to recommend the right backend integration approach for a Pow
 | **Integration** | Third-party services | PayPal/Stripe payment via server-side call |
 | | On-prem services | ERP via Azure Relay for stock levels |
 | | Microsoft Graph / SharePoint | Upload documents, read SharePoint lists via OAuth |
-| | Wrapping Dataverse Custom APIs | Expose `InvokeCustomApi` to the portal |
+| | Wrapping Dataverse Custom APIs/Actions | Expose existing Dataverse custom actions (both Custom APIs and Custom Process Actions) to the portal via `InvokeCustomApi`. Discover available actions with `list-custom-actions.js` before recommending building from scratch — the customer may already have actions that do what's needed. |
 
 **Not suitable when:**
 - The operation is purely async/background (no immediate response needed) — use Cloud Flows instead
@@ -229,6 +229,7 @@ Many real-world scenarios use multiple approaches together:
 | "Process orders in the background" | Cloud Flow | Background processing, user doesn't wait |
 | "Batch multiple API calls" / "dashboard loads too slow" | Server Logic | Combine multiple queries into one endpoint |
 | "Upload to SharePoint" / "call Microsoft Graph" | Server Logic | External API with OAuth credentials |
+| "Use an existing custom action" / "call a Dataverse custom API" / "wrap a custom action" | Server Logic | Existing Dataverse custom action exposed to portal via `InvokeCustomApi` — discover available actions first |
 | "Add an approval workflow" | Cloud Flow | Multi-step workflow with connectors |
 | "Hide pricing logic from the browser" | Server Logic | Code hidden from client |
 | "Bulk import CSV" / "process file in background" | Cloud Flow | Long-running background processing |

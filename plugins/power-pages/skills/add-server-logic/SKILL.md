@@ -165,6 +165,55 @@ For each validate-and-execute item, note:
 
 **Anti-pattern to avoid**: A server logic item that only validates and returns `{ valid: true/false }`, expecting the client to make a separate Web API call to perform the write. This allows the client to skip validation and write directly.
 
+### 2.1.2 Discover Dataverse Custom Actions
+
+If any planned server logic item involves Dataverse operations, check whether the user's Dataverse environment has existing custom actions (Custom APIs or Custom Process Actions) that could be leveraged instead of building logic from scratch.
+
+**Step 1 — Fetch custom actions:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
+```
+
+The script outputs a JSON object with:
+- `customApis` — Modern Custom APIs with full request parameters and response properties
+- `customProcessActions` — Legacy Custom Process Actions (activated only)
+- `total` — Total count of both types combined
+
+Each entry includes: `name`, `displayName`, `description`, `type` (`action` or `function`), `binding` (`unbound`, `entity`, or `entityCollection`), `boundEntity`, and `source` (`customApi` or `customProcessAction`). Custom APIs also include `requestParameters` and `responseProperties` arrays.
+
+**Step 2 — Present and ask the user:**
+
+If custom actions are found (`total > 0`), present a summary to the user grouped by binding type (unbound vs. entity-bound) and ask whether any should be used:
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| Your Dataverse environment has `<total>` custom action(s). Would you like to use any of these in your server logic instead of writing the logic from scratch? | Yes, let me choose which ones to use; No, build everything from scratch |
+
+Present the list clearly — for each action show: name, description, type (action/function), binding, and bound entity (if applicable). Group them as **Unbound** and **Entity-bound** for readability.
+
+If the user says **No**, skip to Phase 2.2.
+
+**Step 3 — Map custom actions to server logic items:**
+
+If the user says **Yes**, for each server logic item being created, ask which custom action (if any) it should wrap:
+
+Use `AskUserQuestion` for each server logic item:
+
+| Question | Context |
+|----------|---------|
+| For the `<server-logic-name>` endpoint, which custom action should it use? | Present the list of custom actions with their names, descriptions, and binding types. Include **"None — build from scratch"** as an option. |
+
+Record the mapping for each server logic item. For items that wrap a custom action, note:
+- The custom action name (used in the `InvokeCustomApi` call)
+- Whether it's a function (`GET`) or action (`POST`)
+- The binding type and bound entity (if applicable)
+- The request parameters and response properties (if available from Custom APIs)
+
+This mapping will be used in Phase 5.3 when generating the server logic code, and will appear in the HTML plan (Phase 4) to indicate which items wrap existing custom actions.
+
 ### 2.2 Identify SDK Features Needed
 
 Based on each planned server logic item's purpose, identify which Server SDK features are required:
@@ -492,6 +541,131 @@ function post() {
 4. It returns a success/failure result — NOT a `{ valid: true/false }` flag for the client to act on
 5. The client calls this one endpoint — it does NOT make a separate Web API PATCH call
 
+#### Custom Action Wrapping Template
+
+When a server logic item wraps a Dataverse custom action (mapped in Phase 2.1.2), use this pattern with `Server.Connector.Dataverse.InvokeCustomApi`. The server logic acts as a portal-friendly wrapper, exposing the custom action through a `/_api/serverlogics/<name>` endpoint with proper web role authorization.
+
+**Unbound action:**
+
+```javascript
+// Server Logic: <name>
+// Purpose: Wraps Dataverse custom action "<custom-action-name>" for portal consumption
+// Custom Action: <custom-action-name> (unbound, action)
+// API URL: https://<site-url>/_api/serverlogics/<name>
+
+function post() {
+    try {
+        Server.Logger.Log("<name> POST called — invoking custom action <custom-action-name>");
+
+        const body = JSON.parse(Server.Context.Body);
+
+        // Build the request payload matching the custom action's input parameters
+        const payload = JSON.stringify({
+            // "<ParameterName>": body.<clientFieldName>
+        });
+
+        const result = Server.Connector.Dataverse.InvokeCustomApi(
+            "POST",
+            "<custom-action-name>",
+            payload
+        );
+
+        Server.Logger.Log("<name> custom action completed successfully");
+
+        return JSON.stringify({
+            status: "success",
+            data: result
+        });
+    } catch (err) {
+        Server.Logger.Error("<name> POST failed: " + err.message);
+        return JSON.stringify({
+            status: "error",
+            message: err.message
+        });
+    }
+}
+```
+
+**Entity-bound action:**
+
+```javascript
+function post() {
+    try {
+        Server.Logger.Log("<name> POST called — invoking bound action <custom-action-name>");
+
+        const body = JSON.parse(Server.Context.Body);
+        const entityId = body.entityId;
+
+        const payload = JSON.stringify({
+            // "<ParameterName>": body.<clientFieldName>
+        });
+
+        // Include the entity set and record ID, followed by the fully qualified action name
+        const result = Server.Connector.Dataverse.InvokeCustomApi(
+            "POST",
+            "<entity-set-name>(" + entityId + ")/Microsoft.Dynamics.CRM.<custom-action-name>",
+            payload
+        );
+
+        Server.Logger.Log("<name> bound action completed for entity " + entityId);
+
+        return JSON.stringify({
+            status: "success",
+            data: result,
+            entityId: entityId
+        });
+    } catch (err) {
+        Server.Logger.Error("<name> POST failed: " + err.message);
+        return JSON.stringify({
+            status: "error",
+            message: err.message
+        });
+    }
+}
+```
+
+**Unbound function (read-only, GET):**
+
+```javascript
+function get() {
+    try {
+        Server.Logger.Log("<name> GET called — invoking custom function <custom-function-name>");
+
+        // Pass parameters as query string for functions
+        const param1 = Server.Context.QueryParameters["param1"];
+        const queryString = "<custom-function-name>(Param1='" + param1 + "')";
+
+        const result = Server.Connector.Dataverse.InvokeCustomApi(
+            "GET",
+            queryString,
+            null
+        );
+
+        Server.Logger.Log("<name> custom function completed successfully");
+
+        return JSON.stringify({
+            status: "success",
+            data: result
+        });
+    } catch (err) {
+        Server.Logger.Error("<name> GET failed: " + err.message);
+        return JSON.stringify({
+            status: "error",
+            message: err.message
+        });
+    }
+}
+```
+
+**Key points:**
+- **Unbound actions**: Use the action name as the URL, pass parameters as JSON body
+- **Entity-bound actions**: Include the entity set and record ID in the URL path, followed by `Microsoft.Dynamics.CRM.<action-name>`
+- **Functions (GET)**: Use `"GET"` as the HTTP method and pass parameters inline in the URL using OData function call syntax
+- **Actions (POST)**: Use `"POST"` as the HTTP method and pass parameters as JSON body payload
+- `InvokeCustomApi` is **synchronous** — do NOT use `async`/`await`
+- The server logic can add additional validation, transformation, or logging around the custom action call — it doesn't have to be a pass-through
+- When Custom API response properties are known (from Phase 2.1.2), map them to the response object for clarity
+
 #### Referencing Secrets in Code
 
 When the server logic needs a secret value identified in Phase 2.3, **never hardcode the value**. Instead, read it at runtime from a site setting backed by an environment variable:
@@ -683,9 +857,13 @@ The script outputs a JSON object with `name`, `resourceGroup`, and `location`. U
 
 **If "Store directly as environment variable"**: Skip the rest of Phase 7.2a and proceed to Phase 7.2b (direct environment variable path).
 
-**Step 3 — Provide commands for storing each secret in Key Vault:**
+**Step 3 — Provide instructions for storing each secret in Key Vault:**
 
-For each secret identified in Phase 2.3, give the user the exact command to run themselves. Do **not** ask for the secret value — secret values must never pass through the conversation.
+For each secret identified in Phase 2.3, give the user instructions to store the value themselves. Do **not** ask for the secret value — secret values must never pass through the conversation.
+
+Present **both** methods (CLI and Azure Portal) so the user can choose whichever they prefer:
+
+**Option A — Azure CLI (recommended for automation):**
 
 Present the commands as a numbered list the user can copy and run. Use the stdin form so the secret value does not appear in process listings:
 
@@ -699,6 +877,28 @@ For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with t
 ```
 
 Tell the user each command outputs a JSON object with a `secretUri` and to share the output (which contains only the URI, not the secret) so the workflow can continue.
+
+**Option B — Azure Portal:**
+
+Provide these steps for each secret:
+
+```
+1. Go to the Azure Portal (https://portal.azure.com)
+2. Search for "Key vaults" in the top search bar and select it
+3. Select the Key Vault: <selected-vault>
+4. In the left menu under "Objects", click "Secrets"
+5. Click "+ Generate/Import" at the top
+6. Fill in the fields:
+   - Upload options: Manual
+   - Name: <secret-name>
+   - Secret value: paste your secret value here
+   - Leave other fields as defaults
+7. Click "Create"
+8. After creation, click on the secret name, then click the current version
+9. Copy the "Secret Identifier" URI and share it here so the workflow can continue
+```
+
+Tell the user the Secret Identifier URI looks like `https://<vault-name>.vault.azure.net/secrets/<secret-name>/<version>` and that this URI (not the secret value) is what should be shared back.
 
 **Step 4 — Create environment variable in Dataverse:**
 
@@ -997,13 +1197,14 @@ After deployment (or if skipped), remind the user:
 ### Key Decision Points (Wait for User)
 
 1. At Phase 1.5: Deploy now or cancel (if `.powerpages-site` missing — mandatory)
-2. At Phase 2: Confirm requirements (purpose, name, HTTP methods, secrets)
-3. At Phase 4: Approve implementation plan before writing code
-4. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
-5. At Phase 2.3.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
-6. At Phase 7.2a Step 2: Create a new Key Vault or fall back to direct environment variable (if no vaults found)
-7. At Phase 9.1: Create frontend integration or skip
-8. At Phase 11.3: Deploy now or deploy later
+2. At Phase 2.1.2: Use existing Dataverse custom actions or build from scratch (if custom actions found)
+3. At Phase 2: Confirm requirements (purpose, name, HTTP methods, secrets)
+4. At Phase 4: Approve implementation plan before writing code
+5. At Phase 6.2: Review and approve the `table-permissions-architect` plan (if Dataverse connector is used)
+6. At Phase 2.3.1: Choose Azure Key Vault or direct environment variable (if secrets needed)
+7. At Phase 7.2a Step 2: Create a new Key Vault or fall back to direct environment variable (if no vaults found)
+8. At Phase 9.1: Create frontend integration or skip
+9. At Phase 11.3: Deploy now or deploy later
 
 ### SDK Pattern Source of Truth
 
@@ -1016,7 +1217,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, explore existing server logics and frontend patterns, verify .powerpages-site exists (mandatory) |
-| Understand requirements | Gathering requirements | Determine user intent, whether one or more server logic files are needed, the methods/features for each item, and any secrets required |
+| Understand requirements | Gathering requirements | Determine user intent, whether one or more server logic files are needed, the methods/features for each item, discover Dataverse custom actions, and any secrets required |
 | Fetch latest documentation | Fetching Microsoft Learn docs | Query Microsoft Learn for current Server Logic SDK reference and samples |
 | Review implementation plan | Reviewing plan with user | Present plan (server logic inventory, functions, SDK features, external APIs, secrets) and confirm before writing code |
 | Implement server logic | Writing server logic code | Determine/create required web roles, create approved `.js` and `.serverlogic.yml` files, validate code |

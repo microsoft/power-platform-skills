@@ -72,6 +72,36 @@ Each `webRoles` entry should explain **why that specific role is assigned to tha
 
 Each `functions` entry should explain **why that specific function is being implemented for that specific server logic**.
 
+When a server logic item wraps a Dataverse custom action (mapped in Phase 2.1.2), include a `customAction` object:
+
+```json
+{
+  "id": "calculate-discount",
+  "name": "calculate-discount",
+  "displayName": "Calculate Discount",
+  "status": "create",
+  "customAction": {
+    "name": "new_CalculateDiscount",
+    "displayName": "Calculate Discount",
+    "type": "action",
+    "binding": "entity",
+    "boundEntity": "salesorder"
+  },
+  "...": "other fields as above"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `customAction` | *(Optional)* Present only when the server logic wraps a Dataverse custom action |
+| `customAction.name` | The unique name of the custom action (used in `InvokeCustomApi`) |
+| `customAction.displayName` | Human-readable display name |
+| `customAction.type` | `action` (POST) or `function` (GET) |
+| `customAction.binding` | `unbound`, `entity`, or `entityCollection` |
+| `customAction.boundEntity` | *(Optional)* Logical name of the bound entity, if applicable |
+
+When `customAction` is present, the plan HTML renders a badge on the server logic card indicating that it wraps an existing Dataverse custom action. When `customAction` is absent or `null`, no badge is shown.
+
 ### RATIONALE_DATA Format
 
 ```json
