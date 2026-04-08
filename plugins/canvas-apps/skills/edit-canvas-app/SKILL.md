@@ -200,6 +200,9 @@ Track how many `compile_canvas` passes were needed.
 
 ## Phase 6 — Summary
 
+Delete `canvas-edit-plan.md` from the working directory using `Bash`:
+`rm <working-directory>/canvas-edit-plan.md`
+
 Present a final summary:
 
 > **Edit complete.**

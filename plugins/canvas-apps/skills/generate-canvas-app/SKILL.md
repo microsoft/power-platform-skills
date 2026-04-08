@@ -123,6 +123,9 @@ Track how many `compile_canvas` passes were needed.
 
 ## Phase 4 — Summary
 
+Delete `canvas-app-plan.md` from the working directory using `Bash`:
+`rm <working-directory>/canvas-app-plan.md`
+
 Present a final summary:
 
 > **App generation complete.**
