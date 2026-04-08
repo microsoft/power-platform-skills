@@ -18,7 +18,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
 11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
-13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > GenUX Page Navigation**.
+13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 
 ---
 
@@ -227,7 +227,7 @@ const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.lo
 
 ## Special Patterns
 
-### GenUX Page Navigation
+### Generative Page Navigation
 
 Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction (`window.location`, query strings) breaks the hosting context and must not be used — not even as a fallback.
 
@@ -237,8 +237,14 @@ const xrm = (window as any).Xrm;
 // Entity record
 xrm.Navigation.navigateTo({ pageType: "entityrecord", entityName: "account", entityId: recordId });
 
-// Another genux page (data arrives as props.pageInput.data on the target)
-xrm.Navigation.navigateTo({ pageType: "genux", id: pageId, data: { entityName, recordId } });
+// Another generative page with record context (entityName and recordId arrive as props.pageInput)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId });
+
+// Another generative page with custom data (arrives as props.pageInput.data on the target)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, data: { customParam1: "value1", customParam2: 42 } });
+
+// Combining record context with additional custom data
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId, data: { view: "summary" } });
 ```
 
 ### Dark Mode Toggle
