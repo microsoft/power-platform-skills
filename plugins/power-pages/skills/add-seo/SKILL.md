@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskC
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Add SEO
 
 Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`, and meta tags.

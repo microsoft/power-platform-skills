@@ -12,6 +12,8 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Test Power Pages Site
 
 Test a deployed, activated Power Pages site at runtime. Navigate the site in a browser, crawl all discoverable links, verify pages load correctly, capture network traffic to test API requests, and generate a comprehensive test report.

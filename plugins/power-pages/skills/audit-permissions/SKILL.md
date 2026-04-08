@@ -14,6 +14,8 @@ allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskU
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Audit Permissions
 
 Audit existing table permissions on a Power Pages code site. Analyze permissions against the site code and Dataverse metadata, then generate a visual HTML audit report with findings, reasoning, and suggested fixes.

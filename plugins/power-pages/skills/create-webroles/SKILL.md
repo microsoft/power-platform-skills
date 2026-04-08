@@ -10,6 +10,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Create Web Roles
 
 Create web roles for a Power Pages code site. Web roles define the permissions and access levels for different types of site users.

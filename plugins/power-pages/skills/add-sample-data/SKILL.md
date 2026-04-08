@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Add Sample Data
 
 Populate Dataverse tables with sample records via OData API so users can test and demo their Power Pages sites.

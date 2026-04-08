@@ -15,6 +15,8 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Add Server Logic
 
 Create and manage one or more Power Pages Server Logic files — server-side JavaScript that runs securely on the Power Pages runtime, hidden from the browser and protected by web roles and table permissions. Server Logic enables secure external API integrations, Dataverse operations, and custom business logic without exposing sensitive code or credentials to the client.
@@ -141,6 +143,27 @@ Prefer multiple server logic files when the use case naturally separates into di
 - Separate read vs. write workflows with different web role requirements
 - Distinct integrations with different external systems or site settings
 - Independent business capabilities that would be harder to test or reason about if merged into one endpoint
+
+### 2.1.1 Identify Validate-and-Execute Patterns
+
+For each planned server logic item, determine whether it should **validate-and-execute** — meaning the server logic both validates a business rule AND performs the resulting Dataverse write, rather than just returning a validation result for the client to act on.
+
+A server logic item should validate-and-execute when **any** of these are true:
+
+| Condition | Example |
+|-----------|---------|
+| It enforces a state machine or lifecycle | Order status: Draft → Submitted → Approved |
+| The write is conditional on a business rule that must be tamper-proof | "Only allow bid submission before the deadline" |
+| The operation spans multiple tables atomically | Award a bid + reject all others + update event status |
+| The write involves a computed or derived value | Server calculates a score and writes it |
+| The client should not have direct write access to the field | Status fields with strict transition rules |
+
+For each validate-and-execute item, note:
+- **Which Dataverse writes the server logic will perform** (UpdateRecord, CreateRecord, etc.)
+- **Which fields are being written** — these fields should NOT be writable via Web API from the client
+- **What the server logic returns to the client** — typically a success/failure result with the before/after state, NOT a validation flag that the client acts on
+
+**Anti-pattern to avoid**: A server logic item that only validates and returns `{ valid: true/false }`, expecting the client to make a separate Web API call to perform the write. This allows the client to skip validation and write directly.
 
 ### 2.2 Identify SDK Features Needed
 
@@ -383,6 +406,79 @@ function get() {
     }
 }
 ```
+
+#### Validate-and-Execute Template
+
+When a server logic item is identified as validate-and-execute (see Phase 2.1.1), use this pattern. The key difference: the server logic reads the current state, validates the business rule, AND writes the result to Dataverse — all in one call. The client never writes the protected field directly.
+
+```javascript
+// Server Logic: <name>
+// Purpose: Validate and execute <describe the operation>
+// Pattern: Validate-and-execute — this endpoint both validates the business rule
+//          and performs the Dataverse write. The client should NOT write <protected fields>
+//          via Web API — all writes to those fields go through this endpoint.
+// API URL: https://<site-url>/_api/serverlogics/<name>
+
+function post() {
+    try {
+        Server.Logger.Log("<name> POST called");
+
+        const body = JSON.parse(Server.Context.Body);
+        const entityId = body.entityId;
+        const targetStatus = body.targetStatus;
+
+        // 1. Read the current record from Dataverse
+        const current = Server.Connector.Dataverse.RetrieveRecord("<table-name>", entityId, "?$select=<status-field>");
+        const currentStatus = current["<status-field>"];
+
+        // 2. Validate the transition
+        const allowedTransitions = {
+            "Draft": ["Submitted"],
+            "Submitted": ["Approved", "Rejected"],
+            "Approved": ["Fulfilled"]
+        };
+
+        const allowed = allowedTransitions[currentStatus] || [];
+        if (!allowed.includes(targetStatus)) {
+            return JSON.stringify({
+                status: "error",
+                message: "Invalid transition: " + currentStatus + " → " + targetStatus + " is not allowed",
+                currentStatus: currentStatus,
+                targetStatus: targetStatus,
+                allowedTargets: allowed
+            });
+        }
+
+        // 3. Execute the write — server performs the Dataverse update
+        const updateData = {};
+        updateData["<status-field>"] = targetStatus;
+        Server.Connector.Dataverse.UpdateRecord("<table-name>", entityId, JSON.stringify(updateData));
+
+        Server.Logger.Log("<name> transition executed: " + currentStatus + " → " + targetStatus);
+
+        // 4. Return the result — client receives confirmation, not a validation flag
+        return JSON.stringify({
+            status: "success",
+            previousStatus: currentStatus,
+            newStatus: targetStatus,
+            entityId: entityId
+        });
+    } catch (err) {
+        Server.Logger.Error("<name> POST failed: " + err.message);
+        return JSON.stringify({
+            status: "error",
+            message: err.message
+        });
+    }
+}
+```
+
+**Key differences from the basic template:**
+1. The server logic reads the current state from Dataverse (not trusting the client's view)
+2. It validates the business rule server-side
+3. It writes the result to Dataverse via `Server.Connector.Dataverse.UpdateRecord`
+4. It returns a success/failure result — NOT a `{ valid: true/false }` flag for the client to act on
+5. The client calls this one endpoint — it does NOT make a separate Web API PATCH call
 
 #### Referencing Secrets in Code
 
@@ -745,6 +841,7 @@ Following the reference:
 - Update the relevant pages, components, forms, buttons, or user journeys so the new backend behavior is reachable from the interface
 - Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
 - Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
+- **For validate-and-execute endpoints**: The frontend must call the server logic endpoint for the protected operation (e.g., status transition) — it must NOT make a separate Web API PATCH for the same field. Ensure the UI for that operation (e.g., a "Submit" or "Approve" button) calls the server logic service function, not the Web API service
 
 ### 9.4 Git Commit
 

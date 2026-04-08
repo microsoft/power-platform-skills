@@ -46,6 +46,16 @@ model: opus
 
 Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML list syntax. Do not add `hooks` to skill frontmatter; Power Pages skills register lifecycle hooks centrally.
 
+### Plugin Version Check
+
+Every SKILL.md must include the following line immediately after the closing `---` of the frontmatter (before the `#` title):
+
+```markdown
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+```
+
+This runs a lightweight check comparing the local plugin version against `origin/main` and shows an update notice if a newer version is available.
+
 ### Key Patterns
 
 - **User confirmation** — Pause with `AskUserQuestion` after gathering requirements, after presenting a plan, after implementation, and before deployment.

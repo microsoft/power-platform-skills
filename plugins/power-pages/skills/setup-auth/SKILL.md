@@ -13,6 +13,8 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskC
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Set Up Authentication & Authorization
 
 Configure authentication (login/logout via Microsoft Entra ID) and role-based authorization for a Power Pages code site. This skill creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework.

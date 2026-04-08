@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate,
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Set Up Dataverse Data Model
 
 Guide the user through creating Dataverse tables, columns, and relationships for their Power Pages site. Follow a systematic approach: verify prerequisites, obtain a data model (via AI analysis or user-provided diagram), review and approve, then create all schema objects via OData API.

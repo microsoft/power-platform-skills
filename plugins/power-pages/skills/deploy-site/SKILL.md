@@ -6,6 +6,8 @@ allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Deploy Power Pages Code Site
 
 Guide the user through deploying an existing Power Pages code site to a Power Pages environment using PAC CLI. Follow a systematic approach: verify tooling, authenticate, confirm the target environment, build and upload the site, and handle any blockers.

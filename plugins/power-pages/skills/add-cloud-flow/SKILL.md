@@ -16,6 +16,8 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Add Cloud Flow
 
 Connect one or more Power Automate cloud flows to a Power Pages code site, or wire already-registered flows into additional pages/components. For new flows this skill:
