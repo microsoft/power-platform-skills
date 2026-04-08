@@ -8,12 +8,30 @@ description: >
 user-invocable: true
 argument-hint: Optional commit message
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: sonnet
+model: opus
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/git-commit/scripts/validate-git-commit.js"'
+          timeout: 30
+        - type: prompt
+          prompt: |
+            Check whether the git-commit skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
+            1. The environment was verified as connected to Git
+            2. Pending changes were queried and displayed to the user
+            3. A commit message was determined (auto-generated or user-provided)
+            4. The CommitToGit action was executed successfully
+            5. Post-commit verification showed no remaining pending changes (or reduced count)
+            6. A completion summary was presented with commit message, component count, and branch
+          timeout: 30
 ---
 
 # Commit Power Pages Changes to Git
 
 Commit pending changes from a Power Pages environment to the connected Git repository using the Dataverse `CommitToGit` OData action.
+
+> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for all OData API patterns used in this skill.
 
 ## Core Principles
 

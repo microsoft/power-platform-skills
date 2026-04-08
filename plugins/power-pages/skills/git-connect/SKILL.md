@@ -9,12 +9,30 @@ description: >
 user-invocable: true
 argument-hint: Optional solution name or repo URL
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: sonnet
+model: opus
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/validate-git-connect.js"'
+          timeout: 30
+        - type: prompt
+          prompt: |
+            Check whether the git-connect skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
+            1. Prerequisites were verified (PAC CLI, Azure CLI, Managed Environment)
+            2. A solution was selected for git connection
+            3. A repository, branch, and folder were selected via OData virtual entities
+            4. The ConnectToGit action was executed successfully
+            5. The connection was verified via sourcecontrolconfigurations query
+            6. A completion summary was presented with repo, branch, and status
+          timeout: 30
 ---
 
 # Connect Power Pages Environment to Git
 
 Guide the user through connecting a Power Pages solution to a Git repository (Azure DevOps or GitHub) for source control. Uses the Dataverse Native Git integration OData actions.
+
+> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for all OData API patterns used in this skill.
 
 ## Core Principles
 

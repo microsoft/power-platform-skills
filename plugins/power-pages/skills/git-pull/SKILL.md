@@ -7,12 +7,31 @@ description: >
   from the connected Git repository into their Power Pages environment.
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: sonnet
+model: opus
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/git-pull/scripts/validate-git-pull.js"'
+          timeout: 30
+        - type: prompt
+          prompt: |
+            Check whether the git-pull skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
+            1. The environment was verified as connected to Git
+            2. RefreshChangesFromGit was executed to check for updates
+            3. Available changes were queried and displayed to the user
+            4. Conflicts were checked and resolved (if any)
+            5. The PullChangesFromGit action was executed successfully
+            6. Post-pull verification showed no remaining available updates (or reduced count)
+            7. A completion summary was presented with component count, branch, and status
+          timeout: 30
 ---
 
 # Pull Changes from Git
 
 Pull the latest changes from the connected Git repository into a Power Pages environment using the Dataverse `RefreshChangesFromGit` and `PullChangesFromGit` OData actions.
+
+> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for all OData API patterns used in this skill.
 
 ## Core Principles
 
