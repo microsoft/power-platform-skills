@@ -461,7 +461,7 @@ return (
 8. **Preserve API signatures** - Don't rename dataApi methods/parameters
 9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
 10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
-11. **Lookup display-name fields cannot be in $select** - Any `*name` or `*yominame` property on a lookup (e.g., `regardingobjectidname`) is an OData annotation, not a selectable column. Select the FK column (`_regardingobjectid_value`) and read the display name from `@OData.Community.Display.V1.FormattedValue`:
+11. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
 
 ```typescript
 // WRONG — causes runtime error
