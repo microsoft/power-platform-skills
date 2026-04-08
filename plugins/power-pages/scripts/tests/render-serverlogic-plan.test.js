@@ -114,6 +114,61 @@ test('render-serverlogic-plan renders HTML from JSON data', () => {
   assert.match(html, /Export initiation changes state/);
 });
 
+test('render-serverlogic-plan renders Key Vault banner when SECRETS_DATA has useKeyVault true', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serverlogic-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'serverlogic-plan.html');
+
+  const dataWithSecrets = {
+    ...SAMPLE_DATA,
+    SECRETS_DATA: {
+      useKeyVault: true,
+      vaultName: 'contoso-kv',
+      secrets: [
+        {
+          name: 'DashboardApiKey',
+          purpose: 'API key for the dashboard analytics service',
+          siteSetting: 'ExternalApi/DashboardApiKey',
+          serverLogicId: 'dashboard-summary',
+        },
+      ],
+    },
+  };
+
+  fs.writeFileSync(dataPath, JSON.stringify(dataWithSecrets, null, 2), 'utf8');
+
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /useKeyVault/);
+  assert.match(html, /contoso-kv/);
+  assert.match(html, /DashboardApiKey/);
+});
+
+test('render-serverlogic-plan defaults SECRETS_DATA to null when not provided', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serverlogic-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'serverlogic-plan.html');
+
+  // SAMPLE_DATA has no SECRETS_DATA key
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // The template should contain `const SECRETS = null;` (no unreplaced placeholder)
+  assert.ok(!html.includes('__SECRETS_DATA__'), 'SECRETS_DATA placeholder should be replaced');
+  assert.match(html, /const SECRETS = null/);
+});
+
 test('render-serverlogic-plan refuses to overwrite an existing file', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'serverlogic-plan-'));
   const dataPath = path.join(tempDir, 'data.json');

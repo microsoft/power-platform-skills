@@ -199,6 +199,18 @@ For each identified secret, capture:
 
 These values will be used in Phase 7 to create the environment variables and site settings.
 
+### 2.3.1 Key Vault Decision
+
+If secrets were identified in Phase 2.3, ask the user now whether they want to use Azure Key Vault. This decision must happen before Phase 4 so the implementation plan can show the chosen secret management approach.
+
+Use `AskUserQuestion`:
+
+| Question | Options |
+|----------|---------|
+| This server logic requires secret values (e.g., API keys, client secrets). Azure Key Vault is the recommended way to store secrets securely. Would you like to use Azure Key Vault? | Yes, use Azure Key Vault (Recommended), No, store directly as environment variable |
+
+Record the user's choice — it will be shown in the HTML plan (Phase 4) and executed in Phase 7.
+
 ### 2.4 Confirm with User
 
 If the requirements are ambiguous, use `AskUserQuestion` to clarify:
@@ -271,7 +283,7 @@ The rendered plan should summarize:
 - The functions that will be implemented and what each one does
 - The SDK features, external services, and Dataverse tables involved for each item
 - The web roles, security constraints, and site settings that apply to each item
-- Any secrets or sensitive values that will be stored as environment variables (with or without Azure Key Vault)
+- Any secrets or sensitive values that will be stored as environment variables (with or without Azure Key Vault). If the user chose Azure Key Vault in Phase 2.3.1, populate `SECRETS_DATA` with `useKeyVault: true` and the list of secrets — the HTML plan will render a Key Vault banner explaining the security benefits and show which secrets each server logic depends on. If no secrets are needed, set `SECRETS_DATA` to `null`.
 - The expected next steps after approval
 
 ### 4.2 Render the HTML Plan
@@ -618,19 +630,13 @@ After table permissions (and any new web roles) are created, do a git commit for
 
 **Actions**:
 
-### 7.1 Recommend Azure Key Vault
+### 7.1 Recall Key Vault Decision
 
-Ask the user whether they want to use Azure Key Vault to securely store secrets. Present Key Vault as the recommended approach:
-
-Use `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| This server logic requires secret values (e.g., API keys, client secrets). Azure Key Vault is the recommended way to store secrets securely. Would you like to use Azure Key Vault? | Yes, use Azure Key Vault (Recommended), No, store directly as environment variable |
+The user already chose whether to use Azure Key Vault in Phase 2.3.1 (before the plan was presented). Use that decision here — do **not** re-ask.
 
 ### 7.2a Azure Key Vault Path
 
-If the user chose Azure Key Vault:
+If the user chose Azure Key Vault in Phase 2.3.1:
 
 **Step 1 — List available Key Vaults:**
 

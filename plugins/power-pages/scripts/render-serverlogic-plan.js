@@ -21,6 +21,14 @@ if (!args.output || !args.data) {
   process.exit(1);
 }
 
+const dataPath = path.resolve(args.data);
+const data = JSON.parse(require('fs').readFileSync(dataPath, 'utf8'));
+
+// Default SECRETS_DATA to null when not provided (no secrets needed)
+if (!('SECRETS_DATA' in data)) {
+  data.SECRETS_DATA = null;
+}
+
 renderTemplate({
   templatePath: path.join(
     __dirname,
@@ -31,7 +39,7 @@ renderTemplate({
     'serverlogic-plan.html'
   ),
   outputPath: path.resolve(args.output),
-  dataPath: path.resolve(args.data),
+  dataObject: data,
   requiredKeys: [
     'SITE_NAME',
     'PLAN_TITLE',

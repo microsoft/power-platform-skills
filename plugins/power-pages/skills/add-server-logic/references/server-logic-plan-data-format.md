@@ -18,7 +18,8 @@ Write a temporary JSON data file with these keys:
   "SUMMARY": "A 1-2 sentence summary of what this endpoint will do and why",
   "WEB_ROLES_DATA": [],
   "SERVER_LOGICS_DATA": [],
-  "RATIONALE_DATA": []
+  "RATIONALE_DATA": [],
+  "SECRETS_DATA": null
 }
 ```
 
@@ -84,6 +85,38 @@ Each `functions` entry should explain **why that specific function is being impl
 ```
 
 The overview tab renders these rationale items in the same style as the other Power Pages plan documents.
+
+### SECRETS_DATA Format
+
+Set to `null` when the server logic does not require any secrets. When the user has chosen to use Azure Key Vault, provide an object:
+
+```json
+{
+  "useKeyVault": true,
+  "vaultName": "contoso-keyvault",
+  "secrets": [
+    {
+      "name": "ExchangeRateApiKey",
+      "purpose": "API key for the exchange rate service",
+      "siteSetting": "ExternalApi/ExchangeRateApiKey",
+      "serverLogicId": "exchange-rate"
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `useKeyVault` | `true` if the user chose Azure Key Vault; omit or set `false` for direct env vars |
+| `vaultName` | *(Optional)* Name of the selected/created Key Vault — shown in the plan if known |
+| `secrets[].name` | Descriptive name for the secret (e.g., `ExchangeRateApiKey`) |
+| `secrets[].purpose` | Why the secret is needed |
+| `secrets[].siteSetting` | The site setting name the server logic reads via `Server.Sitesetting.Get()` |
+| `secrets[].serverLogicId` | The `id` (or `name`) of the server logic item that uses this secret — links the secret to the correct card in the plan |
+
+When `useKeyVault` is `true`, the plan HTML renders a prominent banner in the Overview tab explaining that secrets are stored in Azure Key Vault and why it matters (centralized access control, audit logging, rotation support, secrets never in code). Each server logic card also shows the secrets it depends on.
+
+When `SECRETS_DATA` is `null` or `useKeyVault` is `false`, the banner and per-card secrets sections are hidden.
 
 ## Render the HTML File
 

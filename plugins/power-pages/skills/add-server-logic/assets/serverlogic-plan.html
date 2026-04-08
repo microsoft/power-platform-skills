@@ -69,6 +69,16 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .reasoning-list{margin:0;padding-left:18px;list-style:disc;}
 .reasoning-list li{margin-bottom:2px;}
 .reasoning-list li strong{color:var(--text-bright);}
+.keyvault-banner{background:linear-gradient(135deg,#0078d408,#5c2d9108);border:1px solid #5c2d9130;border-radius:12px;padding:20px 22px;margin-bottom:22px;display:flex;gap:16px;align-items:flex-start;}
+.keyvault-banner .kv-icon{width:40px;height:40px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;color:#fff;}
+.keyvault-banner .kv-title{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;}
+.keyvault-banner .kv-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+.keyvault-banner .kv-benefits{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
+.keyvault-banner .kv-benefit{font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px;}
+.keyvault-banner .kv-benefit-icon{color:var(--pass);font-size:13px;flex-shrink:0;}
+.secrets-section{margin-top:12px;}
+.secret-chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:5px;background:#5c2d910a;border:1px solid #5c2d9120;color:#5c2d91;}
+.secret-chip .secret-icon{font-size:10px;}
 .fn-list{display:grid;gap:10px;margin-top:12px;}
 .fn-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;}
 .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
@@ -113,6 +123,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
           <div class="stat-card"><div class="stat-num" style="color:var(--purple)" id="statReuse">0</div><div class="stat-label">Reused</div></div>
         </div>
 
+        <div id="keyvaultBanner"></div>
+
         <div class="card">
           <div class="field-label">Status Summary</div>
           <div class="chip-row" id="statusSummary"></div>
@@ -141,6 +153,41 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 const WEB_ROLES = __WEB_ROLES_DATA__;
 const SERVER_LOGICS = __SERVER_LOGICS_DATA__;
 const RATIONALE = __RATIONALE_DATA__;
+const SECRETS = __SECRETS_DATA__;
+
+// Key Vault banner rendering
+const kvBanner = document.getElementById('keyvaultBanner');
+if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length > 0) {
+  kvBanner.innerHTML = `
+    <div class="keyvault-banner">
+      <div class="kv-icon">&#128273;</div>
+      <div style="flex:1;">
+        <div class="kv-title">Azure Key Vault</div>
+        <div class="kv-desc">Secrets for this implementation will be stored in Azure Key Vault${SECRETS.vaultName ? ' (<span class="mono">' + SECRETS.vaultName + '</span>)' : ''}, keeping sensitive values out of source code and Dataverse environment variables.</div>
+        <div class="keyvault-banner kv-benefits" style="border:none;padding:0;margin-top:12px;background:none;">
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Secrets never stored in code or config files</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Centralized access control via Azure RBAC</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Automatic secret rotation support</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Audit logging for all secret access</div>
+        </div>
+        <div style="margin-top:12px;">
+          <div class="field-label">Secrets (${SECRETS.secrets.length})</div>
+          <div class="chip-row" style="margin-top:4px;">
+            ${SECRETS.secrets.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + s.name + '</span>').join('')}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function getSecretsMarkup(serverLogicId) {
+  if (!SECRETS || !SECRETS.useKeyVault || !SECRETS.secrets) return '';
+  const matched = SECRETS.secrets.filter(s => s.serverLogicId === serverLogicId);
+  if (matched.length === 0) return '';
+  return '<div class="secrets-section"><div class="field-label">Secrets (Azure Key Vault)</div><div class="chip-row" style="margin-top:4px;">' +
+    matched.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + s.name + ' &mdash; ' + (s.purpose || '') + '</span>').join('') +
+    '</div></div>';
+}
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -310,6 +357,7 @@ serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
       <div class="field-label">Functions</div>
       <div class="fn-list">${fnMarkup || '<div class="fn-item">No functions proposed.</div>'}</div>
     </div>
+    ${getSecretsMarkup(item.id || item.name)}
   </div>`;
 }).join('');
 </script>
