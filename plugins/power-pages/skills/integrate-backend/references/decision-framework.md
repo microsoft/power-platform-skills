@@ -23,7 +23,7 @@ Use this framework to recommend the right backend integration approach for a Pow
 - API keys, client secrets, or other credentials are involved
 - Business logic must be hidden from the browser (pricing rules, validation algorithms)
 - The operation needs to batch multiple table queries into one call for performance
-- The user wants server-side validation that can't be bypassed from the browser
+- The write depends on a business rule that must be tamper-proof (e.g., status transitions, approval workflows) — use Server Logic to validate AND execute the write in a single call instead (see Secure Action Principle)
 - The operation should happen in the background after the user moves on
 
 **Key characteristics:**
@@ -54,7 +54,8 @@ Use this framework to recommend the right backend integration approach for a Pow
 | | Row-level logic | Manager approves expenses for direct reports < $1K |
 | **Data Integrity** | Cross-entity transactions | Order + line items + inventory: all roll back if one fails |
 | | Computed data | Insurance premium calculated server-side; client sees result |
-| | Business rule enforcement | Permit: Submitted > Review > Approved sequence |
+| | Business rule enforcement (validate-and-execute) | Permit: Submitted > Review > Approved — server logic validates the transition AND writes the new status to Dataverse in a single call, so the client never writes the status field directly |
+| | State machine transitions | Server logic reads current status, validates the target status is reachable, and performs the update — preventing clients from jumping to arbitrary states |
 | **Performance** | Batch operations | Dashboard: Contacts + Orders + Products in one call |
 | | Data aggregation | 12 monthly totals instead of 10,000 raw rows |
 | | Response formatting | JSON, CSV, or XML based on caller request |
@@ -122,6 +123,7 @@ Use these questions to narrow down the recommendation:
 | Does it call external APIs (non-Dataverse)? | No | **Yes** | Possible |
 | Are credentials/secrets involved? | No | **Yes** | Possible |
 | Must business logic be hidden from the browser? | No | **Yes** | N/A |
+| Does the write depend on a business rule that must be tamper-proof? | No | **Yes (validate-and-execute)** | No |
 | Is the operation async/background (user doesn't wait)? | No | No | **Yes** |
 | Is it a simple Dataverse CRUD with no extra logic? | **Yes** | Overkill | Overkill |
 | Does it need 400+ connectors (Teams, Outlook, SAP)? | No | No | **Yes** |
@@ -130,16 +132,84 @@ Use these questions to narrow down the recommendation:
 | Is it a long-running process (>120 seconds)? | No | No | **Yes** |
 | Should non-developers be able to modify the logic? | No | No | **Yes** |
 
+## The Secure Action Principle
+
+**When server logic validates a business rule, it must also execute the resulting action.**
+
+This is the most important architectural principle for secure backend integration. Splitting validation from execution — where server logic validates a rule and then a separate client-side Web API call performs the write — creates a security gap because the client can skip the validation call and write directly via Web API.
+
+### Anti-Pattern: Validate-Only Server Logic + Client-Side Write
+
+```
+❌ INSECURE — Do NOT use this pattern for security-sensitive operations:
+
+1. Browser calls /_api/serverlogics/validate-transition (Server Logic checks Draft → Submitted is valid)
+2. Server Logic returns { valid: true }
+3. Browser calls /_api/cr65f_orders(id) with PATCH { status: "Submitted" } (Web API writes the change)
+
+Problem: A user can skip step 1 and go directly to step 3 via browser dev tools,
+bypassing all server-side validation.
+```
+
+### Correct Pattern: Validate-and-Execute Server Logic
+
+```
+✅ SECURE — Server logic validates AND executes:
+
+1. Browser calls /_api/serverlogics/transition-order with POST { orderId: "...", newStatus: "Submitted" }
+2. Server Logic reads current record from Dataverse, validates Draft → Submitted is allowed
+3. Server Logic writes the status change to Dataverse via Server.Connector.Dataverse.UpdateRecord
+4. Server Logic returns { status: "success", previousStatus: "Draft", newStatus: "Submitted" }
+
+The browser never makes a direct Web API write for this operation.
+```
+
+### When Does This Apply?
+
+Use validate-and-execute (server logic performs the write) whenever **any** of these are true:
+
+| Condition | Example |
+|-----------|---------|
+| The operation enforces a state machine or lifecycle | Order status: Draft → Submitted → Approved → Fulfilled |
+| The write depends on a business rule that must be tamper-proof | "Only allow bid submission before the deadline" |
+| The operation spans multiple tables atomically | Award a bid + reject all others + update RFx status |
+| The write involves computed or derived values the client shouldn't control | Server calculates a discount or score and writes it |
+| The operation requires authorization beyond table permissions | "Managers can only approve expenses for their direct reports" |
+| The client should not have write access to the field at all | Status fields that follow strict transitions |
+
+Use Web API for the write (validation-only server logic is fine) when **all** of these are true:
+
+| Condition | Example |
+|-----------|---------|
+| The write is simple CRUD with no business rules | Editing a name or description field |
+| Table permissions alone enforce the access control | User edits their own profile |
+| The fields being written have no restricted value constraints | Free-text fields, dates the user picks |
+| Skipping validation would not cause a security or data integrity issue | Updating a contact's phone number |
+
+### Impact on Plan Design
+
+When building integration plans, this principle affects how items are assigned to approaches:
+
+1. **State transitions** — The server logic endpoint should accept the entity ID and target status, validate the transition, and write the new status to Dataverse. The frontend calls only the server logic endpoint — there is no separate Web API PATCH for the status field.
+
+2. **Multi-step operations** — When an action involves validation + write + side effects (e.g., award a bid, reject losers, update event status), the entire sequence belongs in one server logic endpoint. The frontend makes a single call.
+
+3. **Mixed operations on the same table** — A table may use Web API for some fields (e.g., editing a description) and server logic for others (e.g., changing status). This is expected and correct. Table permissions should grant read access broadly but restrict write access to fields that are safe for direct client writes.
+
+4. **Phase ordering** — Server logic endpoints that validate-and-execute should be built before any dependent frontend work. The frontend for these operations calls server logic, not Web API.
+
+---
+
 ## Common Combinations
 
 Many real-world scenarios use multiple approaches together:
 
 | Combination | When to use | Example |
 |-------------|-------------|---------|
-| **Web API + Server Logic** | UI reads/writes Dataverse directly, but some operations need server-side logic | Dashboard displays records via Web API, but "Export to PDF" calls server logic |
-| **Server Logic + Cloud Flow** | Real-time endpoint handles the request, then kicks off background processing | Server logic validates and records the order, then triggers a Cloud Flow to send confirmation email |
-| **Web API + Cloud Flow** | UI manages data directly, but some actions trigger background workflows | User edits a record via Web API, a "Submit for Approval" button triggers a Cloud Flow |
-| **All three** | Complex application with data display, server processing, and automation | Web API for browsing data, Server Logic for payment processing, Cloud Flow for order fulfillment notifications |
+| **Web API + Server Logic** | UI reads/writes non-sensitive fields directly, but security-sensitive operations go through server logic that validates and executes | Dashboard displays records via Web API; status transitions go through server logic that validates and writes |
+| **Server Logic + Cloud Flow** | Real-time endpoint validates and executes the action, then async processing follows | Server logic validates transition and writes the new status, then a Cloud Flow sends the notification email |
+| **Web API + Cloud Flow** | UI manages data directly (no business rules on the write), and some actions trigger background workflows | User edits a description via Web API; a separate "Submit for Approval" action triggers a Cloud Flow |
+| **All three** | Complex application with safe direct writes, secure server-side actions, and automation | Web API for browsing/editing non-sensitive fields, Server Logic for state transitions and payment processing, Cloud Flow for notifications |
 
 ## Mapping User Intent to Approach
 
@@ -151,7 +221,7 @@ Many real-world scenarios use multiple approaches together:
 | "Add validation on the server" / "prevent bypassing" | Server Logic | Server-side enforcement (security) |
 | "Rate limit submissions" / "prevent abuse" | Server Logic | Server-side enforcement (security) |
 | "Calculate premium/price/discount on the server" | Server Logic | Computed data — logic hidden from browser |
-| "Enforce a workflow sequence" / "status transitions" | Server Logic | Business rule enforcement (data integrity) |
+| "Enforce a workflow sequence" / "status transitions" | Server Logic (validate-and-execute) | Server logic validates the transition AND writes the new status — the client never writes status directly via Web API |
 | "Only let managers approve their team's expenses" | Server Logic | Row-level authorization logic |
 | "Connect to our on-prem ERP" / "Azure Relay" | Server Logic | On-prem integration via server-side call |
 | "Return data as CSV/XML" / "format the response" | Server Logic | Response formatting (performance) |

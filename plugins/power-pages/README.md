@@ -33,8 +33,8 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
-| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
+| [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
 
 ## Skills
 
@@ -206,10 +206,11 @@ claude --dangerously-skip-permissions
 
 ## Documentation
 
-- [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
-- [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/pages)
-- [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
-- [Dataverse Web API](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/overview)
+- [Power Pages AI Plugin Documentation](https://learn.microsoft.com/power-pages/configure/create-code-site-using-claude-code)
+- [Power Pages Code Sites](https://learn.microsoft.com/power-pages/configure/create-code-sites)
+- [PAC CLI Reference](https://learn.microsoft.com/power-platform/developer/cli/reference/pages)
+- [Power Pages REST API](https://learn.microsoft.com/rest/api/power-platform/powerpages/websites)
+- [Dataverse Web API](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/overview)
 
 ## Testing validator scripts
 
