@@ -435,75 +435,15 @@ Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions wi
 
 **Always use a single batched state object** (`{ records, loading, error }`) — multiple separate `setState` calls in an async function produce separate renders in React 17, each potentially showing an intermediate state.
 
-**List/explorer page — array cache:**
+**Key rules:**
+- Initialize module-level variables from `window.__pp<EntityName>Cache` (naming convention to avoid collisions)
+- Write back to `window` after fetch so the data survives module re-evaluation
+- Use a single batched state object (`{ records, loading, error }`) — separate `setState` calls in async functions produce intermediate renders in React 17
+- For detail pages, use a `Map<string, MyRow>` on `window` keyed by `recordId`
 
-```typescript
-// Reads from window on module eval; survives navigation even if module is re-evaluated
-let _recordsCache: MyRow[] | null = (window as any).__ppMyEntityCache ?? null;
+**When to apply:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit shows a spinner; return visits render instantly.
 
-const [{ records, loading, error }, setData] = useState<{
-    records: MyRow[];
-    loading: boolean;
-    error: string | null;
-}>({ records: _recordsCache ?? [], loading: _recordsCache === null, error: null });
-
-useEffect(() => {
-    if (!dataApi) { setData(prev => ({ ...prev, loading: false })); return; }
-    if (_recordsCache !== null) return; // already cached — skip fetch, no spinner
-    (async () => {
-        try {
-            const result = await dataApi.queryTable("myentity", { select: [...] });
-            _recordsCache = result.rows;
-            (window as any).__ppMyEntityCache = result.rows; // persist through navigation
-            setData({ records: result.rows, loading: false, error: null });
-        } catch (err) {
-            if (_recordsCache === null) {
-                setData({ records: [], loading: false, error: "Unable to load records." });
-            }
-        }
-    })();
-}, [dataApi]);
-```
-
-**Detail page — per-record Map cache:**
-
-```typescript
-// IIFE re-attaches to the window Map on module re-eval rather than creating a new one
-const _detailCache: Map<string, MyRow> = (() => {
-    if (!(window as any).__ppMyEntityDetailCache) {
-        (window as any).__ppMyEntityDetailCache = new Map<string, MyRow>();
-    }
-    return (window as any).__ppMyEntityDetailCache;
-})();
-
-const recordId = pageInput?.recordId;
-const cachedRecord = recordId ? (_detailCache.get(recordId) ?? null) : null;
-
-const [{ record, loading, error }, setData] = useState<{
-    record: MyRow | null;
-    loading: boolean;
-    error: string | null;
-}>({ record: cachedRecord, loading: !!recordId && cachedRecord === null, error: null });
-
-useEffect(() => {
-    if (!dataApi || !recordId) { setData(prev => ({ ...prev, loading: false })); return; }
-    if (_detailCache.has(recordId)) return; // already cached — skip fetch, no spinner
-    setData({ record: null, loading: true, error: null });
-    (async () => {
-        try {
-            const row = await dataApi.retrieveRow("myentity", { id: recordId, select: [...] });
-            _detailCache.set(recordId, row);
-            setData({ record: row, loading: false, error: null });
-        } catch (err) {
-            if (!_detailCache.has(recordId)) {
-                setData({ record: null, loading: false, error: "Unable to load record." });
-            }
-        }
-    })();
-}, [dataApi, recordId]);
-```
-
-**When to apply this pattern:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit still shows a spinner (expected); all return visits render instantly.
+See [9-data-caching.tsx](../../samples/9-data-caching.tsx) for complete list-page and detail-page caching examples.
 
 ### Charts and Visualization
 - Use D3.js for all charts

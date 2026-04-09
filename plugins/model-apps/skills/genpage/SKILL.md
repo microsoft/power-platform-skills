@@ -170,6 +170,7 @@ Also read a relevant sample for reference:
 | [6-navigation-sidebar.tsx](../../samples/6-navigation-sidebar.tsx) | Sidebar navigation layout |
 | [7-comprehensive-form.tsx](../../samples/7-comprehensive-form.tsx) | Complex form with validation |
 | [8-responsive-cards.tsx](../../samples/8-responsive-cards.tsx) | Card-based responsive layout |
+| [9-data-caching.tsx](../../samples/9-data-caching.tsx) | Caching data across navigations |
 
 ### Step 7: Generate Code
 
