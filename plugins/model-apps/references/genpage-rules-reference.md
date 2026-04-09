@@ -65,7 +65,7 @@ import type {
 // Sub-components as separate top-level functions
 
 const GeneratedComponent = (props: GeneratedComponentProps) => {
-  const { dataApi } = props;
+  const { dataApi, pageInput } = props;
   // Component implementation
 }
 
