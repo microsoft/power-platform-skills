@@ -200,7 +200,7 @@ Uploads a file or image to a record column. Accepts a standard browser `File` ob
 
 - `columnName` — must be `UploadColumnName` (works for both file and image columns)
 - `fileDisplayName` — optional friendly name shown in Dataverse; defaults to `file.name`
-- Returns `IOperationResult<void>`
+- Returns a result object with `success`, `data`, and `error` fields; for uploads, `data` is empty
 
 ```tsx
 const [uploading, setUploading] = useState(false);
