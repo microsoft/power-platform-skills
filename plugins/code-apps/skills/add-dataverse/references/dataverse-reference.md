@@ -224,10 +224,10 @@ const handleUpload = async () => {
 
 ### `downloadFile(id, columnName)`
 
-Downloads a file column and returns the raw bytes.
+Downloads a file column. The file bytes are returned in `result.data`.
 
 - `columnName` — must be `FileColumnName` (file columns only, not image)
-- Returns `IOperationResult<Uint8Array>` — includes `result.fileName` with the original filename
+- Returns `IOperationResult<Uint8Array>` — use `result.data` for the raw bytes and `result.fileName` for the original filename
 
 ### `downloadImage(id, columnName, fullSize?)`
 
