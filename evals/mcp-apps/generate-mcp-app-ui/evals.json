@@ -1,5 +1,5 @@
 {
-  "skill_name": "generate-mcp-app",
+  "skill_name": "generate-mcp-app-ui",
   "common_assertions": [
     "Output is a complete HTML file starting with <!DOCTYPE html>",
     "Contains exactly one <script type=\"module\"> block",

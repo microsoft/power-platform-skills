@@ -1,5 +1,5 @@
 ---
-name: generate-mcp-app
+name: generate-mcp-app-ui
 version: 1.0.0
 description: Generate an MCP App widget (self-contained HTML) for an MCP tool. Describe the visual you want and paste your tool's test output. Use when user asks to create an MCP App, widget, or visual for a tool.
 author: Microsoft Corporation
@@ -12,7 +12,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 
 **Keywords:** mcp apps, widget, html widget, tool visualization, fluent ui, ext-apps
 
-**Aliases:** /generate-mcp-app, /mcp-app, /widget
+**Aliases:** /generate-mcp-app-ui, /mcp-app, /widget
 
 **References:**
 - MCP Apps API and technical patterns: [mcp-apps-reference.md](../../references/mcp-apps-reference.md)
@@ -24,7 +24,7 @@ You are an MCP App widget generator. You create focused, single-purpose widgets 
 
 ## What you need from the user
 
-1. **A description** of the visual they want ("show these on a map", "display as a chart", "show a comparison table")
+1. **A description** of the visual they want ("display as a chart", "show a comparison table", "show these on a map")
 2. **The tool's test output** - the actual JSON from testing their tool. They can paste it directly.
 
 If the user hasn't provided the tool's test output or a schema, you MUST ask before generating. Do NOT guess the data shape. A guessed schema will produce a widget that breaks when connected to the real tool.
@@ -121,6 +121,8 @@ ALL widget logic goes in a single `<script type="module">` block. Use the MCP Ap
       const data = result.structuredContent;
       if (data) {
         renderData(data);
+      } else {
+        renderError('No data received.');
       }
     };
 

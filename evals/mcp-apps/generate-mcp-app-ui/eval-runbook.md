@@ -1,12 +1,12 @@
-# Eval Runbook for generate-mcp-app
+# Eval Runbook for generate-mcp-app-ui
 
-How to evaluate the `generate-mcp-app` skill. Three layers, run in order.
+How to evaluate the `generate-mcp-app-ui` skill. Three layers, run in order.
 
 ## Related files
 
-- **Skill definition:** `plugins/mcp-apps/skills/generate-mcp-app/SKILL.md`
+- **Skill definition:** `plugins/mcp-apps/skills/generate-mcp-app-ui/SKILL.md`
 - **Reference docs:** `plugins/mcp-apps/references/mcp-apps-reference.md`, `plugins/mcp-apps/references/design-guidelines.md`
-- **Sample widget:** `plugins/mcp-apps/samples/flight-status-widget.html`
+- **Sample widgets:** `plugins/mcp-apps/samples/flight-status-widget.html`, `plugins/mcp-apps/samples/weather-refresh-widget.html`
 
 ## Eval data
 
@@ -36,7 +36,7 @@ Here is a complete example using eval id 2 (weather widget).
 1. Open Claude Code (or any Claude-powered tool with the skill installed).
 2. Send a message like:
 
-   > /generate-mcp-app Create a weather widget showing current conditions and 5-day forecast.
+   > /generate-mcp-app-ui Create a weather widget showing current conditions and 5-day forecast.
    >
    > Here is the tool's test output:
    >
@@ -65,7 +65,7 @@ Here is a complete example using eval id 2 (weather widget).
 
 ### Step 1: Generate widgets
 
-Invoke the `generate-mcp-app` skill via Claude Code by running `/generate-mcp-app` followed by the eval's `prompt`. Paste the eval's `data` JSON into the conversation as the tool's test output.
+Invoke the `generate-mcp-app-ui` skill via Claude Code by running `/generate-mcp-app-ui` followed by the eval's `prompt`. Paste the eval's `data` JSON into the conversation as the tool's test output.
 
 For each eval in `evals.json`:
 
