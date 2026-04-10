@@ -19,7 +19,7 @@
     {
       "id": 1,
       "tier": "smoke",
-      "prompt": "Create a map widget showing tourist attractions in San Francisco. Use Leaflet.",
+      "prompt": "Create a map widget showing tourist attractions in San Francisco.",
       "data": {
         "city": "San Francisco",
         "attractions": [
@@ -58,9 +58,9 @@
         ]
       },
       "assertions": [
-        "Uses Leaflet (not Google Maps)",
-        "Loads Leaflet before Fluent UI to avoid global collision",
-        "Uses window.Leaflet (not L) for API calls",
+        "Uses a mapping library with interactive markers",
+        "Loads map library before Fluent UI to avoid global collision",
+        "Saves map library global reference to avoid Fluent overwriting it",
         "Shows markers for all attractions",
         "Map has explicit height"
       ]
@@ -184,7 +184,7 @@
       },
       "assertions": [
         "Shows key metrics as cards (revenue, target, growth)",
-        "Includes a Chart.js bar or line chart",
+        "Includes a bar or line chart",
         "Formats currency values with $ and commas"
       ]
     },
@@ -2420,7 +2420,7 @@
         "stories_remaining": 4
       },
       "assertions": [
-        "Uses Chart.js for the chart",
+        "Uses a charting library for the chart",
         "Shows actual burndown line",
         "Shows ideal burndown line",
         "Displays sprint dates"
@@ -3602,7 +3602,7 @@
         ]
       },
       "assertions": [
-        "Uses Chart.js or CSS bars for visualization",
+        "Uses a charting library or CSS bars for visualization",
         "Handles revenue values that are strings (e.g. '285000') by parsing to numbers",
         "Does not display NaN or undefined for missing revenue",
         "Uses parseFloat or equivalent for numeric conversion, not Number()",
@@ -3711,7 +3711,7 @@
         ]
       },
       "assertions": [
-        "Uses Leaflet for the map",
+        "Uses a mapping library for the map",
         "Does not place markers at [0,0] for leads with empty string coordinates",
         "Leads with empty string lat/lng use city/state fallback or are omitted",
         "Leads with valid string coordinates (e.g. '36.1627') are parsed and placed correctly",

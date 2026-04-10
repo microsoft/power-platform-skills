@@ -70,7 +70,7 @@ ALL widget logic goes in a single `<script type="module">` block. Use the MCP Ap
     *, *::before, *::after { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 16px;
+      padding: 24px;
       font-family: var(--fontFamilyBase, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
       font-size: 14px;
       line-height: 1.5;

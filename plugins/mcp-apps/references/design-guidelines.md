@@ -32,7 +32,7 @@ Disable action buttons while a tool call is in flight to prevent double-submissi
 
 Use a consistent scale: 4px, 8px, 12px, 16px, 24px, 32px. Avoid arbitrary values like 10px, 14px, 22px.
 
-- Card internal padding: 12px or 16px
+- Card internal padding: 16px or 24px
 - Gap between list items: 8px or 12px
 - Gap between sections: 16px or 24px
 - Border radius: 8px for small elements, 12px for cards/containers

@@ -76,11 +76,11 @@ Available components (use these instead of plain HTML equivalents):
 
 ## Loading CDN libraries
 
-You can load external CDN libraries (Leaflet for maps, Chart.js for charts, D3 for data visualization) via script tags when they add clear value.
+You can load external CDN libraries (for maps, charts, data visualization, etc.) via script tags when they add clear value.
 
 ### UMD global collision
 
-When loading multiple UMD libraries via `<script>` tags, they can overwrite each other's globals. For example, Fluent UI Web Components overwrites the global `L` variable that Leaflet uses.
+When loading multiple UMD libraries via `<script>` tags, they can overwrite each other's globals. For example, Fluent UI Web Components can overwrite globals that other UMD libraries register (such as single-letter variables like `L` or `_`).
 
 **Best practice:** Load UMD libraries sequentially. After each one loads, save a reference to its global before loading the next:
 
@@ -88,10 +88,10 @@ When loading multiple UMD libraries via `<script>` tags, they can overwrite each
 <script>
   (function() {
     var s = document.createElement('script');
-    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    s.src = 'https://cdn.example.com/my-map-lib.js'; // your UMD library
     s.onload = function() {
-      // Save Leaflet's global before Fluent overwrites it
-      window.Leaflet = window.L;
+      // Save the library's global before Fluent overwrites it
+      window.MyMapLib = window.L;
       // Now safe to load Fluent
       var f = document.createElement('script');
       f.src = 'https://unpkg.com/@fluentui/web-components@beta/dist/web-components.min.js';
@@ -102,12 +102,12 @@ When loading multiple UMD libraries via `<script>` tags, they can overwrite each
 </script>
 ```
 
-Then use `Leaflet` (NOT `L`) for all API calls: `Leaflet.map()`, `Leaflet.marker()`, `Leaflet.tileLayer()`, etc.
+Then use the saved reference (NOT the original global) for all API calls: `MyMapLib.map()`, `MyMapLib.marker()`, etc.
 
 Guard initialization since scripts load asynchronously:
 ```javascript
 function initWhenReady(data) {
-  if (window.Leaflet && typeof window.Leaflet.map === 'function') {
+  if (window.MyMapLib && typeof window.MyMapLib.map === 'function') {
     initMap(data);
   } else {
     setTimeout(() => initWhenReady(data), 100);
@@ -115,21 +115,7 @@ function initWhenReady(data) {
 }
 ```
 
-This pattern applies to any UMD library, not just Leaflet. If you load multiple libraries that use globals, save each reference immediately after loading.
-
-### Map tips (when using Leaflet)
-
-- Include CSS: `<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />`
-- Use OpenStreetMap tiles: `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`
-- Use `Leaflet.divIcon` for custom numbered markers
-- Call `map.fitBounds()` to auto-zoom to show all markers
-- Call `map.invalidateSize()` after the map container becomes visible
-
-### Chart tips (when using Chart.js)
-
-- Load via: `<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>`
-- Use `<canvas>` element for rendering
-- Chart.js doesn't have UMD collision issues with Fluent
+This pattern applies to any UMD library. If you load multiple libraries that use globals, save each reference immediately after loading.
 
 ## Security
 
