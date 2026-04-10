@@ -102,7 +102,7 @@ Can add multiple tables by running the command for each one.
 
 The command generates:
 
-- `src/generated/models/{Table}Model.ts` -- TypeScript interfaces, plus `FileColumnName`, `ImageColumnName`, `UploadColumnName` union types if the table has file/image columns
+- `src/generated/models/{Table}Model.ts` -- TypeScript interfaces, plus `{Table}FileColumnName`, `{Table}ImageColumnName`, `{Table}UploadColumnName` union types if the table has file/image columns
 - `src/generated/services/{Table}Service.ts` -- CRUD methods (create, get, getAll, update, delete) plus `upload`, `downloadFile`, `downloadImage`, `deleteFileOrImage` if file/image columns exist
 
 Show the user a usage example:
