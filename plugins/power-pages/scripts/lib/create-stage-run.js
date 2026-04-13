@@ -2,9 +2,10 @@
 
 // Creates a deploymentstageruns record to initiate a Power Platform Pipeline deployment stage.
 //
-// Usage: node create-stage-run.js --hostEnvUrl <url> --token <token> --pipelineId <id>
+// Usage: node create-stage-run.js --hostEnvUrl <url> --token <token>
 //                                  --stageId <id> --sourceDeploymentEnvironmentId <id>
-//                                  --artifactTrackingId <id>
+//                                  --solutionId <guid> --artifactName <uniqueName>
+//                                  [--pipelineId <id>]  (optional — not used in body, kept for logging)
 //
 // Output (JSON to stdout):
 //   { "stageRunId": "..." }
@@ -23,7 +24,8 @@ function parseArgs(argv) {
     pipelineId: null,
     stageId: null,
     sourceDeploymentEnvironmentId: null,
-    artifactTrackingId: null,
+    solutionId: null,
+    artifactName: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -32,25 +34,30 @@ function parseArgs(argv) {
     else if (args[i] === '--pipelineId' && args[i + 1]) result.pipelineId = args[++i];
     else if (args[i] === '--stageId' && args[i + 1]) result.stageId = args[++i];
     else if (args[i] === '--sourceDeploymentEnvironmentId' && args[i + 1]) result.sourceDeploymentEnvironmentId = args[++i];
-    else if (args[i] === '--artifactTrackingId' && args[i + 1]) result.artifactTrackingId = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) result.solutionId = args[++i];
+    else if (args[i] === '--artifactName' && args[i + 1]) result.artifactName = args[++i];
   }
 
   return result;
 }
 
-async function createStageRun({ hostEnvUrl, token, pipelineId, stageId, sourceDeploymentEnvironmentId, artifactTrackingId }) {
-  if (!hostEnvUrl || !token || !pipelineId || !stageId || !sourceDeploymentEnvironmentId || !artifactTrackingId) {
+async function createStageRun({ hostEnvUrl, token, pipelineId, stageId, sourceDeploymentEnvironmentId, solutionId, artifactName }) {
+  if (!hostEnvUrl || !token || !stageId || !sourceDeploymentEnvironmentId || !solutionId || !artifactName) {
     throw new Error(
-      'Missing required arguments: --hostEnvUrl, --token, --pipelineId, --stageId, --sourceDeploymentEnvironmentId, --artifactTrackingId'
+      'Missing required arguments: --hostEnvUrl, --token, --stageId, --sourceDeploymentEnvironmentId, --solutionId, --artifactName'
     );
   }
 
-  const url = `${hostEnvUrl.replace(/\/+$/, '')}/api/data/v9.2/deploymentstageruns`;
+  // Uses v9.0 API with HAR-confirmed field names (no msdyn_ prefix).
+  // $select=deploymentstagerunid ensures the created ID is returned in the response body (201)
+  // or can be read from OData-EntityId header (204).
+  const url = `${hostEnvUrl.replace(/\/+$/, '')}/api/data/v9.0/deploymentstageruns?$select=deploymentstagerunid`;
   const body = JSON.stringify({
-    'msdyn_pipelineid@odata.bind': `/deploymentpipelines(${pipelineId})`,
-    'msdyn_stageid@odata.bind': `/deploymentstages(${stageId})`,
-    'msdyn_sourceenvironmentid@odata.bind': `/deploymentenvironments(${sourceDeploymentEnvironmentId})`,
-    'msdyn_artifacttrackingid': artifactTrackingId,
+    'deploymentstageid@odata.bind': `/deploymentstages(${stageId})`,
+    'devdeploymentenvironment@odata.bind': `/deploymentenvironments(${sourceDeploymentEnvironmentId})`,
+    'artifactname': artifactName,           // solution unique name for artifact lookup
+    'solutionid': solutionId,              // solution GUID for pipeline artifact resolution
+    'makerainoteslanguagecode': 'en-US',
   });
 
   const res = await helpers.makeRequest({

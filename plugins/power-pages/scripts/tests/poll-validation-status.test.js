@@ -14,16 +14,15 @@ const VALID_ARGS = {
   maxAttempts: 5,
 };
 
-test('pollValidationStatus returns immediately when operation is not 200000201 and status is not Failed', async (t) => {
+test('pollValidationStatus returns immediately when stageRunStatus is Validation Succeeded (200000007)', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const origReq = helpers.makeRequest;
 
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_operation: 200000202,          // some non-validating operation
-      msdyn_stagerunstatus: 200000007,     // Validation Succeeded
-      msdyn_validationresults: null,
+      stagerunstatus: 200000007,     // Validation Succeeded
+      validationresults: null,
     }),
   });
 
@@ -42,9 +41,8 @@ test('pollValidationStatus returns validationResults when validation succeeds wi
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_operation: 200000202,
-      msdyn_stagerunstatus: 200000007,
-      msdyn_validationresults: '{"ValidationStatus":"Succeeded"}',
+      stagerunstatus: 200000007,
+      validationresults: '{"ValidationStatus":"Succeeded"}',
     }),
   });
 
@@ -61,9 +59,8 @@ test('pollValidationStatus throws when stageRunStatus is Failed with validationR
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_operation: 200000202,          // done validating
-      msdyn_stagerunstatus: 200000003,     // Failed
-      msdyn_validationresults: 'Missing dependency: SomeComponent',
+      stagerunstatus: 200000003,     // Failed
+      validationresults: 'Missing dependency: SomeComponent',
     }),
   });
 
@@ -75,17 +72,16 @@ test('pollValidationStatus throws when stageRunStatus is Failed with validationR
   );
 });
 
-test('pollValidationStatus throws when maxAttempts exceeded (always returns 200000201)', async (t) => {
+test('pollValidationStatus throws when maxAttempts exceeded (always in validating state)', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const origReq = helpers.makeRequest;
 
-  // Always return "still validating" operation
+  // Always return an in-progress validation state (not Succeeded or Failed)
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_operation: 200000201,          // still validating
-      msdyn_stagerunstatus: 200000006,
-      msdyn_validationresults: null,
+      stagerunstatus: 200000006,   // Validating (in-progress)
+      validationresults: null,
     }),
   });
 

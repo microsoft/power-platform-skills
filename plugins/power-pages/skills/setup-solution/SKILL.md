@@ -60,6 +60,12 @@ Steps:
    Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
 4. Confirm `.powerpages-site/` folder exists (required to find component records)
+5. **Check for ALM plan context** — look for `.alm-plan-context.json` in the project root:
+   - If found, ask via `AskUserQuestion`:
+     > "An ALM plan was previously generated for this site. It includes a pre-classified list of site settings (keepAsIs, promoteToEnvVar, authNoValue, excluded). Would you like to use those choices, or re-discover and re-classify everything now?"
+   - Options: **"Use pre-loaded choices from plan"** / **"Re-discover and re-classify"**
+   - If user chooses pre-loaded: read `.alm-plan-context.json`, store the `siteSettings` object as `preloadedSettings`. When Step 5.3 is reached, **skip the query and classification logic** — use `preloadedSettings` directly.
+   - If user chooses re-discover: proceed normally (Steps 5.3–5.4 query Dataverse and reclassify).
 
 ### Phase 2 — Gather Solution Configuration
 
@@ -214,27 +220,33 @@ And discover bot component type via `solutioncomponents`. Store as `botComponent
 
 #### Step 5.3 — Categorize Site Settings
 
-Site Settings (powerpagecomponenttype=9) have distinct security profiles. Split them before presenting:
+**If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.excluded` directly.
 
-| Category | Name pattern | Default |
-|---|---|---|
-| Web API settings | `Webapi/*` | **Include** — required for Web API to work in target env |
-| Feature flags | `CodeSite/*`, `Search/*`, `Site/*`, `Profile/*`, `Header/*`, `Footer/*`, `ThemeFeature`, `HTTP/*`, `SiteCopilot/*`, `CustomerSupport/*`, `KnowledgeManagement/*`, `MultiLanguage/*`, `OnlineDomains` | **Include** — safe |
-| Auth config (non-secret) | `Authentication/Registration/*`, `Authentication/OpenIdConnect/*/Caption`, `Authentication/LoginThrottling/*`, `Authentication/LoginTrackingEnabled`, `Authentication/OpenIdConnect/*/RebrandDisclaimerEnabled` | **Include** — safe |
-| OAuth secrets | Any setting whose name contains `Secret`, `ClientSecret`, `AppSecret`, `ConsumerSecret`, `AppId`, `ConsumerKey` (social provider credentials) | **Exclude by default** |
+**Otherwise**, classify each discovered Site Setting (powerpagecomponenttype=9) using this three-tier logic:
 
-#### Step 5.4 — OAuth Secrets: Convert to Environment Variables?
+| Tier | Condition | Bucket | Handling |
+|---|---|---|---|
+| 1 — Credential secrets | Name matches `/ConsumerKey\|ConsumerSecret\|ClientId\|ClientSecret\|AppSecret\|AppKey\|ApiKey\|Password/i` | `excluded` | **Never** add to solution |
+| 2a — Auth config with value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND has a value | `promoteToEnvVar` | Present to user for review — may differ per environment |
+| 2b — Auth config, no value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND value is null/empty | `authNoValue` | Add to solution as-is with a note |
+| 3 — All other settings | Does not match above | `keepAsIs` | Include in solution unchanged |
 
-Before presenting the final manifest, handle the excluded OAuth secrets. These settings won't travel in the solution — but the user can choose to convert any or all of them to environment variables instead, so they are tracked in the solution schema and injected per environment at deploy time.
+**Note on `authNoValue` settings**: These are auth configuration settings where no value has been set in the dev environment. They will be added to the solution as-is. After deploying to each target environment, the correct value should be configured there. Present these in a warning note box during the manifest review (Step 5.5).
 
-**Ask via `AskUserQuestion` with `multiSelect: true`**, listing each excluded OAuth secret by name:
+#### Step 5.4 — Handle Auth Settings: Promote to Env Var?
 
-> "These OAuth secret site settings will be excluded from the solution. Select any you'd like to convert to environment variables instead (env var definitions will be added to the solution; you'll link each one via the Power Pages Management UI after). Leave all unselected to just exclude them."
+Before presenting the final manifest, handle the three non-keepAsIs categories:
 
-- One option per secret (e.g. `Authentication/OpenAuth/Microsoft/ClientSecret`)
-- Plus options: **"Convert all of them"** and **"Exclude all (don't convert any)"**
+**A. `promoteToEnvVar` settings (auth config with values):**
 
-For each secret the user selects to convert:
+Ask via `AskUserQuestion` with `multiSelect: true`, listing each `promoteToEnvVar` setting by name + current value:
+
+> "These authentication configuration settings have values set in your dev environment. If any of them should have **different values per environment** (e.g., feature flags, login modes, AzureAD tenant settings), promote them to environment variables — they'll be tracked in the solution and injected per stage at deploy time. Leave others as plain site settings."
+
+- One option per setting (e.g. `Authentication/Registration/LocalLoginEnabled = true`)
+- Plus options: **"Promote all of them to env vars"** and **"Keep all as plain site settings"**
+
+For each setting the user selects to promote:
 1. Create an `environmentvariabledefinition` using `create-env-var-definition.js`:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
@@ -242,11 +254,11 @@ For each secret the user selects to convert:
      --token "{token}" \
      --schemaName "{prefix}_{sanitizedSettingName}" \
      --displayName "{friendlyName}" \
-     --type 100000003
+     --type 100000000
    ```
-   Use type `100000003` (Secret) so the value is stored encrypted. Schema name: take the setting name, replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_auth_openauth_microsoft_clientsecret`). Capture output as JSON; extract `.definitionId` and `.schemaName`.
-2. Add the env var definition to the solution (`ComponentType: 380`). (This is done in bulk in Step 5.6 — record the `definitionId` for inclusion in the components list.)
-3. **Link the site setting to the env var** using `link-site-setting-to-env-var.js` (HAR-confirmed pattern — no UI step required):
+   Use type `100000000` (String) for auth config settings (not Secret — these are feature flags, not credentials). Schema name: replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_authentication_registration_localloginenabled`). Capture output as JSON; extract `.definitionId` and `.schemaName`.
+2. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
+3. **Link the site setting to the env var** using `link-site-setting-to-env-var.js`:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/link-site-setting-to-env-var.js" \
      --envUrl "{envUrl}" \
@@ -255,10 +267,19 @@ For each secret the user selects to convert:
      --definitionId "{definitionId}" \
      --schemaName "{schemaName}"
    ```
-   Capture output as JSON; check `.ok` and `.verified` are both `true`. The script uses v9.0 (not v9.2), the `EnvironmentValue` nav property, and the required `if-match: *` and `clienthost: Browser` headers internally.
-4. Record each created env var definition ID and setting ID in the manifest.
+   Check `.ok` and `.verified` are both `true`.
 
-OAuth secrets the user chose NOT to convert remain excluded — they are simply not added to the solution.
+Settings the user chose NOT to promote move from `promoteToEnvVar` into `keepAsIs` — they will be included in the solution as plain site settings.
+
+**B. `authNoValue` settings (auth config, no dev value):**
+
+No user decision required. These are automatically included in the solution as-is. At Step 5.5, display them in a warning box:
+> "The following auth settings have no value set in your dev environment. They will be added to the solution as-is. After deploying to each target environment, verify or set the correct value there."
+
+**C. `excluded` settings (credential secrets):**
+
+These are never added to the solution. At Step 5.5, display them in a neutral note box:
+> "The following OAuth credential secrets are excluded from the solution and must be configured manually in each target environment after deployment."
 
 #### Step 5.5 — Present Full Manifest and Get User Confirmation
 
@@ -389,15 +410,22 @@ Display a summary table:
 | Env var definitions added | N (if any OAuth secrets converted) |
 | Manifest written | `.solution-manifest.json` |
 
-**If any OAuth secrets were converted to env vars**, confirm that each site setting was automatically linked (source=1, envvar ID set). Show a brief confirmation:
+**If any auth settings were promoted to env vars**, confirm that each site setting was automatically linked. Show a brief confirmation:
 
 ```
-OAuth secrets linked to environment variables:
-  ✓ Authentication/OpenAuth/Microsoft/ClientSecret → ids_auth_openauth_microsoft_clientsecret
-  ✓ Authentication/OpenAuth/Twitter/ConsumerSecret → ids_auth_openauth_twitter_consumersecret
+Auth settings promoted to environment variables:
+  ✓ Authentication/Registration/LocalLoginEnabled → ids_authentication_registration_localloginenabled
+  ✓ Authentication/Registration/AzureADLoginEnabled → ids_authentication_registration_azureadloginenabled
 ```
 
-Note: Secret values themselves must still be set per environment (in Power Pages Management or via `configure-env-variables`).
+Note: Per-environment values must still be set via `configure-env-variables` or the Power Pages Management UI.
+
+**If any `authNoValue` settings were included**, show a reminder:
+```
+Auth settings included without a dev value (configure in each target env after deploy):
+  ⚠ Authentication/OpenAuth/Facebook/AppId
+  ⚠ Authentication/Registration/LoginButtonAuthenticationType
+```
 
 **Ask what the user wants to do next** via `AskUserQuestion`:
 
@@ -419,8 +447,9 @@ If the user selects **option 3**, show:
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
-3. **Phase 5, Step 5.4**: OAuth secrets — multi-select which (if any) to convert to env vars vs exclude entirely
-4. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions) and confirms or adjusts before any components are written
+3. **Phase 1, Step 5**: ALM plan context — use pre-loaded site settings classification from plan-alm, or re-discover and reclassify
+4. **Phase 5, Step 5.4**: Auth settings with values — multi-select which to promote to env vars vs keep as plain site settings (excluded credential secrets are never shown)
+5. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions, authNoValue warnings) and confirms or adjusts before any components are written
 5. **Phase 7**: Next step — PP Pipelines (recommended) vs export/import manually vs decide later
 
 ## Error Handling

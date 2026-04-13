@@ -12,7 +12,8 @@ const VALID_ARGS = {
   pipelineId: 'pipeline-guid-1234',
   stageId: 'stage-guid-5678',
   sourceDeploymentEnvironmentId: 'srcenv-guid-9012',
-  artifactTrackingId: 'artifact-guid-3456',
+  solutionId: 'solution-guid-3456',
+  artifactName: 'MySolutionUniqueName',
 };
 
 test('createStageRun returns stageRunId from OData-EntityId on 204', async (t) => {

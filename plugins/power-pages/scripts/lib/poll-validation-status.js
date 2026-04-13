@@ -14,7 +14,7 @@
 
 const helpers = require('./validation-helpers');
 
-const OPERATION_VALIDATING = 200000201;
+const STAGE_RUN_STATUS_VALIDATION_SUCCEEDED = 200000007;
 const STAGE_RUN_STATUS_FAILED = 200000003;
 
 function parseArgs(argv) {
@@ -48,7 +48,7 @@ async function pollValidationStatus({ hostEnvUrl, token, stageRunId, intervalMs 
   }
 
   const baseUrl = hostEnvUrl.replace(/\/+$/, '');
-  const url = `${baseUrl}/api/data/v9.2/deploymentstageruns(${stageRunId})?$select=msdyn_operation,msdyn_validationresults,msdyn_stagerunstatus`;
+  const url = `${baseUrl}/api/data/v9.0/deploymentstageruns(${stageRunId})?$select=operation,validationresults,stagerunstatus`;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await helpers.makeRequest({
@@ -78,30 +78,26 @@ async function pollValidationStatus({ hostEnvUrl, token, stageRunId, intervalMs 
       throw new Error(`Invalid JSON response: ${res.body}`);
     }
 
-    const operation = data.msdyn_operation;
-    const stageRunStatus = data.msdyn_stagerunstatus;
-    const validationResults = data.msdyn_validationresults || null;
+    const stageRunStatus = data.stagerunstatus;
+    const validationResults = data.validationresults || null;
 
-    // Still validating — wait and retry
-    if (operation === OPERATION_VALIDATING) {
-      if (attempt < maxAttempts) {
-        await sleep(intervalMs);
-        continue;
-      }
-      throw new Error(
-        `Validation polling timed out after ${maxAttempts} attempts (${Math.round((maxAttempts * intervalMs) / 1000)}s). ` +
-        'Check status in Power Platform.'
-      );
+    // Validation succeeded — done
+    if (stageRunStatus === STAGE_RUN_STATUS_VALIDATION_SUCCEEDED) {
+      return { stageRunId, validationResults, stageRunStatus };
     }
 
-    // Done validating — check final status
+    // Validation failed
     if (stageRunStatus === STAGE_RUN_STATUS_FAILED) {
       throw new Error(
         `Validation failed (stageRunStatus=${stageRunStatus}). Validation results: ${validationResults || '(none)'}`
       );
     }
 
-    return { stageRunId, validationResults, stageRunStatus };
+    // Still validating — wait and retry
+    if (attempt < maxAttempts) {
+      await sleep(intervalMs);
+      continue;
+    }
   }
 
   throw new Error(

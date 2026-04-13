@@ -266,6 +266,110 @@ test('render-alm-plan: exits non-zero when required keys are missing from data',
   }
 });
 
+// ── Test 8b: solutionContents null → fallback note ────────────────────────────
+
+test('render-alm-plan: solutionContents absent renders fallback note', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    // solutionContents not provided — should render gracefully
+    const { status } = runScript(makeValidData(), outputPath);
+    assert.equal(status, 0, 'Expected exit 0 even when solutionContents is absent');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('Setup Solution'),
+      'Fallback note should mention Setup Solution step'
+    );
+    assert.ok(!html.includes('__SOLUTION_CONTENTS__'), 'Placeholder should be replaced');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Test 8c: solutionContents with data renders tables and site settings ──────
+
+test('render-alm-plan: solutionContents with data renders tables, promote table, excluded note', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  const solutionContents = {
+    tables: ['crd50_invoice', 'crd50_order'],
+    botComponents: [{ name: 'Bot Consumer' }],
+    siteSettings: {
+      keepAsIs: [{ name: 'Search/Enabled' }],
+      promoteToEnvVar: [{ name: 'Feature/EnablePortal', value: 'true' }],
+      excluded: [{ name: 'Authentication/OpenAuth/ClientId' }],
+    },
+  };
+
+  try {
+    const { status } = runScript(makeValidData({ solutionContents }), outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(html.includes('crd50_invoice'), 'HTML should show table name');
+    assert.ok(html.includes('Bot Consumer'), 'HTML should show bot component name');
+    assert.ok(html.includes('Feature/EnablePortal'), 'HTML should show promote-to-env-var setting');
+    assert.ok(html.includes('credential secret(s) excluded'), 'HTML should show excluded secrets note');
+    assert.ok(html.includes('Review for Env Var Promotion'), 'HTML should show promotion table heading');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Test 8d: solutionContents with authNoValue renders warning table ───────────
+
+test('render-alm-plan: solutionContents authNoValue renders warning note with setting names', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  const solutionContents = {
+    tables: [],
+    botComponents: [],
+    siteSettings: {
+      keepAsIs: [{ name: 'Search/Enabled' }],
+      promoteToEnvVar: [],
+      authNoValue: [
+        'Authentication/OpenAuth/Twitter/ConsumerKey',
+        'AzureAD/LoginNonce',
+      ],
+      excluded: [],
+    },
+  };
+
+  try {
+    const { status } = runScript(makeValidData({ solutionContents }), outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('Auth settings included without a dev value'),
+      'HTML should show auth-no-value warning heading'
+    );
+    assert.ok(
+      html.includes('Authentication/OpenAuth/Twitter/ConsumerKey'),
+      'HTML should show first authNoValue setting name'
+    );
+    assert.ok(
+      html.includes('AzureAD/LoginNonce'),
+      'HTML should show second authNoValue setting name'
+    );
+    assert.ok(
+      html.includes('No value configured in dev'),
+      'HTML should explain why auth setting has no value'
+    );
+    // Summary counts: 1 keepAsIs, 0 promoteToEnvVar, 2 authNoValue, 0 excluded
+    assert.ok(
+      html.includes('2 auth settings without dev values'),
+      'Summary should show count of authNoValue settings'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ── Test 9: Exits non-zero when --output or --data args are missing ───────────
 
 test('render-alm-plan: exits non-zero when --output arg is not provided', () => {

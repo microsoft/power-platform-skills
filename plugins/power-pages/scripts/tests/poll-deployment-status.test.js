@@ -21,9 +21,8 @@ test('pollDeploymentStatus returns { status: Succeeded } on first poll', async (
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_stagerunstatus: 200000002,  // Succeeded
-      msdyn_deploymentresults: '{"result":"ok"}',
-      msdyn_errordetails: null,
+      stagerunstatus: 200000002,  // Succeeded
+      errormessage: null,
     }),
   });
 
@@ -32,20 +31,18 @@ test('pollDeploymentStatus returns { status: Succeeded } on first poll', async (
   const result = await pollDeploymentStatus(VALID_ARGS);
   assert.equal(result.status, 'Succeeded');
   assert.equal(result.stageRunId, VALID_ARGS.stageRunId);
-  assert.equal(result.deploymentResults, '{"result":"ok"}');
   assert.equal(result.errorDetails, null);
 });
 
-test('pollDeploymentStatus returns { status: Awaiting } for approval gate and does NOT throw', async (t) => {
+test('pollDeploymentStatus returns { status: Awaiting } for PendingApproval (200000005) and does NOT throw', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const origReq = helpers.makeRequest;
 
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_stagerunstatus: 200000005,  // Awaiting approval
-      msdyn_deploymentresults: null,
-      msdyn_errordetails: null,
+      stagerunstatus: 200000005,  // PendingApproval
+      errormessage: null,
     }),
   });
 
@@ -55,20 +52,38 @@ test('pollDeploymentStatus returns { status: Awaiting } for approval gate and do
   const result = await pollDeploymentStatus(VALID_ARGS);
   assert.equal(result.status, 'Awaiting');
   assert.equal(result.stageRunId, VALID_ARGS.stageRunId);
-  assert.equal(result.deploymentResults, null);
   assert.equal(result.errorDetails, null);
 });
 
-test('pollDeploymentStatus throws on Failed status with errorDetails', async (t) => {
+test('pollDeploymentStatus returns { status: Awaiting } for AwaitingPreDeployApproval (200000008) and does NOT throw', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const origReq = helpers.makeRequest;
 
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_stagerunstatus: 200000003,  // Failed
-      msdyn_deploymentresults: null,
-      msdyn_errordetails: 'Import failed: missing dependency',
+      stagerunstatus: 200000008,  // AwaitingPreDeployApproval
+      errormessage: null,
+    }),
+  });
+
+  t.after(() => { helpers.makeRequest = origReq; });
+
+  const result = await pollDeploymentStatus(VALID_ARGS);
+  assert.equal(result.status, 'Awaiting');
+  assert.equal(result.stageRunId, VALID_ARGS.stageRunId);
+  assert.equal(result.errorDetails, null);
+});
+
+test('pollDeploymentStatus throws on Failed status with errormessage', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const origReq = helpers.makeRequest;
+
+  helpers.makeRequest = async () => ({
+    statusCode: 200,
+    body: JSON.stringify({
+      stagerunstatus: 200000003,  // Failed
+      errormessage: 'Import failed: missing dependency',
     }),
   });
 
@@ -87,9 +102,8 @@ test('pollDeploymentStatus throws on Canceled status', async (t) => {
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_stagerunstatus: 200000004,  // Canceled
-      msdyn_deploymentresults: null,
-      msdyn_errordetails: null,
+      stagerunstatus: 200000004,  // Canceled
+      errormessage: null,
     }),
   });
 
@@ -109,9 +123,8 @@ test('pollDeploymentStatus throws when maxAttempts exceeded (always in-progress)
   helpers.makeRequest = async () => ({
     statusCode: 200,
     body: JSON.stringify({
-      msdyn_stagerunstatus: 200000010,  // Deploying (in-progress)
-      msdyn_deploymentresults: null,
-      msdyn_errordetails: null,
+      stagerunstatus: 200000010,  // Deploying (in-progress)
+      errormessage: null,
     }),
   });
 

@@ -72,13 +72,16 @@ const approvalLabel = (() => {
 })();
 
 // ── Build __STAGES_HTML__ ─────────────────────────────────────────────────────
-function stageClass(stage, index) {
-  if (stage.type === 'source' || stage.label.toLowerCase() === 'dev') return 'dev';
-  // Last stage gets production color; intermediate stages get staging color
-  const targets = (data.stages || []).filter(s => s.type !== 'source');
-  const targetIndex = targets.indexOf(stage);
-  if (targetIndex === targets.length - 1 && targets.length > 1) return 'production';
-  return 'staging';
+function stageClass(stage) {
+  // Explicit deployment status takes priority
+  const ds = String(stage.deployStatus || '').toLowerCase();
+  if (ds === 'deployed')     return 'stage-deployed';
+  if (ds === 'failed')       return 'stage-failed';
+  if (ds === 'not-deployed') return 'stage-pending';
+  // Source stage is always blue (not a deployment target)
+  if (stage.type === 'source') return 'stage-not-started';
+  // Target stages with no status yet → not-started (blue)
+  return 'stage-not-started';
 }
 
 const stagesHtml = (data.stages || []).map((stage, i) => {
@@ -114,9 +117,23 @@ const envRows = (data.stages || []).map(stage => {
 
 // ── Build __ENV_VAR_NOTE__ and __ENV_VAR_CLASS__ ───────────────────────────────
 const envVarNote = data.HAS_ENV_VARS
-  ? 'This solution contains environment variables. You will be prompted to provide per-stage values during each deployment run. Ensure you have the correct values ready for each target environment before executing.'
-  : 'No environment variable overrides are required for this solution.';
+  ? 'This solution has environment variables defined. Per-stage values will be captured or confirmed during the Setup Solution step, then stored in <code>deployment-settings.json</code>. Have the correct values ready for each target environment before executing.'
+  : 'No environment variables have been detected in this solution yet. If environment-specific configuration is needed (API endpoints, feature flags, site URLs), variables can be added during the Setup Solution step and will flow through the pipeline automatically.';
 const envVarClass = data.HAS_ENV_VARS ? 'warning' : 'neutral';
+
+// ── Build __ENVVAR_FRONTLOAD_NOTICE__ ──────────────────────────────────────────
+const envVarFrontloadNotice = data.HAS_ENV_VARS
+  ? `<div class="note-box warning" style="margin-bottom:28px;">
+  <strong>Environment variables detected.</strong> This solution contains environment-specific configuration.
+  Variable names, types, and per-stage values will be defined during the <strong>Setup Solution</strong> step.
+  Per-stage overrides are then stored in <code>deployment-settings.json</code> and applied automatically during deployment.
+  See <a href="#env-vars" style="color:inherit;">Environment Variable Strategy</a> below for details.
+</div>`
+  : `<div class="note-box neutral" style="margin-bottom:28px;">
+  <strong>Environment Variables:</strong> Any environment-specific configuration (API endpoints, feature flags, site URLs)
+  can be added as environment variables during the <strong>Setup Solution</strong> step.
+  Each stage (Staging, Production) will then use its own values — no code changes needed between environments.
+</div>`;
 
 // ── Build __GIT_NOTE__ and __GIT_CLASS__ ──────────────────────────────────────
 const gitNotes = {
@@ -153,6 +170,103 @@ const risksHtml = (data.risks || []).length > 0
     }).join('\n')
   : '<div class="note-box neutral">No risks or recommendations identified for this plan.</div>';
 
+// ── Build __SOLUTION_CONTENTS__ ───────────────────────────────────────────────
+const sc = data.solutionContents;
+let solutionContentsHtml = '';
+
+if (!sc) {
+  solutionContentsHtml =
+    '<div class="note-box neutral">Solution contents will be discovered and added to the solution during the <strong>Setup Solution</strong> step.</div>';
+} else {
+  // Tables
+  const tables = Array.isArray(sc.tables) ? sc.tables : [];
+  const tablesHtml = tables.length > 0
+    ? tables.map(t => `<span class="table-chip">${escapeHtml(t)}</span>`).join('')
+    : '<em style="color:var(--text-dim);font-size:12px;">Will be discovered during Setup Solution</em>';
+
+  // Bot components
+  const bots = Array.isArray(sc.botComponents) ? sc.botComponents : [];
+  const botsHtml = bots.length > 0
+    ? bots.map(b => escapeHtml(b.name || String(b))).join(', ')
+    : '<em style="color:var(--text-dim);font-size:12px;">None detected</em>';
+
+  // Site settings
+  const ss = sc.siteSettings || null;
+  let settingsSummaryHtml = '';
+  let promoteTableHtml = '';
+  let excludedNoteHtml = '';
+
+  if (ss) {
+    const keepList = Array.isArray(ss.keepAsIs) ? ss.keepAsIs : [];
+    const authNoValueList = Array.isArray(ss.authNoValue) ? ss.authNoValue : [];
+    const promoteList = Array.isArray(ss.promoteToEnvVar) ? ss.promoteToEnvVar : [];
+    const excludedList = Array.isArray(ss.excluded) ? ss.excluded : [];
+    const total = keepList.length + authNoValueList.length + promoteList.length + excludedList.length;
+
+    settingsSummaryHtml = `<div class="note-box info" style="margin-bottom:14px;">
+  <strong>Site Settings:</strong> ${total} detected &mdash;
+  <span style="color:var(--text-dim);">${keepList.length} regular settings</span> (included as-is),
+  <span style="color:var(--warning);">${promoteList.length} auth settings with values</span> (review for env var promotion),
+  ${authNoValueList.length > 0 ? `<span style="color:var(--accent);">${authNoValueList.length} auth settings without dev values</span> (will be included with note),` : ''}
+  <span style="color:var(--text-dim);">${excludedList.length} credential secrets excluded</span> (never added to solution).
+</div>`;
+
+    if (promoteList.length > 0) {
+      const rows = promoteList.map(s => {
+        const displayVal = String(s.value || '');
+        const truncated = displayVal.length > 60 ? displayVal.substring(0, 60) + '…' : displayVal;
+        return `<tr>
+  <td><code>${escapeHtml(s.name)}</code></td>
+  <td style="font-family:var(--mono);font-size:11px;max-width:220px;word-break:break-all;">${escapeHtml(truncated)}</td>
+  <td><span class="env-var-badge promote">Review</span></td>
+</tr>`;
+      }).join('\n');
+      promoteTableHtml = `<h3>Site Settings with Values &mdash; Review for Env Var Promotion</h3>
+<p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">If a setting's value should differ per environment (e.g. a feature flag, API endpoint, or site URL), promote it to an environment variable during Setup Solution. If the value is the same everywhere, include it as a plain site setting.</p>
+<div class="card" style="padding:0;overflow:hidden;margin-top:0;">
+<table>
+  <thead><tr><th>Setting Name</th><th>Current Value (dev)</th><th>Action</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+</div>`;
+    }
+
+    if (excludedList.length > 0) {
+      excludedNoteHtml = `<div class="note-box neutral" style="margin-top:12px;font-size:12px;">
+  <strong>${excludedList.length} credential secret(s) excluded:</strong> OAuth/identity credentials (ConsumerKey, ClientSecret, AppSecret, etc.) are never added to the solution — they must be configured manually in each target environment after deployment.
+</div>`;
+    }
+
+    if (authNoValueList.length > 0) {
+      const authNoValueRows = authNoValueList.map(name =>
+        `<tr><td><code>${escapeHtml(name)}</code></td><td style="color:var(--text-dim);font-size:12px;">No value configured in dev — will be included in the solution as-is. Verify or set the correct value in each target environment after deployment.</td></tr>`
+      ).join('\n');
+      excludedNoteHtml += `<div class="note-box warning" style="margin-top:12px;">
+  <strong>Auth settings included without a dev value (${authNoValueList.length}):</strong> These are authentication configuration settings that have no value set in your dev environment. They will be added to the solution with no value. After deploying to each target environment, confirm the correct value is configured there.
+  <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+  <table><thead><tr><th>Setting Name</th><th>Note</th></tr></thead>
+  <tbody>${authNoValueRows}</tbody></table></div>
+</div>`;
+    }
+  } else {
+    settingsSummaryHtml =
+      '<div class="note-box neutral" style="margin-bottom:14px;">Site settings could not be queried. They will be discovered during Setup Solution.</div>';
+  }
+
+  const contentsGrid = `<div class="contents-grid">
+  <div class="contents-card">
+    <div class="contents-card-label">Dataverse Tables</div>
+    <div style="line-height:2;">${tablesHtml}</div>
+  </div>
+  <div class="contents-card">
+    <div class="contents-card-label">Bot Components</div>
+    <div style="font-size:13px;">${botsHtml}</div>
+  </div>
+</div>`;
+
+  solutionContentsHtml = contentsGrid + settingsSummaryHtml + promoteTableHtml + excludedNoteHtml;
+}
+
 // ── Build plan-status CSS class ───────────────────────────────────────────────
 const planStatusClass = String(data.PLAN_STATUS || 'Draft')
   .toLowerCase()
@@ -170,6 +284,7 @@ const replacements = {
   ENVIRONMENTS_TABLE: envRows,
   ENV_VAR_NOTE: envVarNote,
   ENV_VAR_CLASS: envVarClass,
+  ENVVAR_FRONTLOAD_NOTICE: envVarFrontloadNotice,
   GIT_NOTE: gitNote,
   GIT_CLASS: gitClass,
   CHECKLIST_HTML: checklistHtml,
@@ -177,6 +292,7 @@ const replacements = {
   APPROVED_BY: data.APPROVED_BY || '',
   APPROVAL_DATE: data.APPROVAL_DATE || '',
   PLAN_STATUS: data.PLAN_STATUS || 'Draft',
+  SOLUTION_CONTENTS: solutionContentsHtml,
 };
 
 let result = template;

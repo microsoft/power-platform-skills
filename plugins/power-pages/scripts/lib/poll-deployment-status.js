@@ -9,10 +9,11 @@
 //   200000002 = Succeeded
 //   200000003 = Failed
 //   200000004 = Canceled
-//   200000005 = Awaiting (approval gate — returns without error)
+//   200000005 = PendingApproval (post-validation approval gate — returns without error)
+//   200000008 = AwaitingPreDeployApproval (pre-deploy approval gate — returns without error)
 //
 // Output (JSON to stdout):
-//   { "stageRunId": "...", "status": "Succeeded|Awaiting", "deploymentResults": "<string|null>", "errorDetails": "<string|null>" }
+//   { "stageRunId": "...", "status": "Succeeded|Awaiting", "errorDetails": "<string|null>" }
 //
 // Exit 0 on success or awaiting approval, exit 1 on failure (error on stderr).
 
@@ -23,7 +24,8 @@ const helpers = require('./validation-helpers');
 const STATUS_SUCCEEDED = 200000002;
 const STATUS_FAILED = 200000003;
 const STATUS_CANCELED = 200000004;
-const STATUS_AWAITING = 200000005;
+const STATUS_PENDING_APPROVAL = 200000005;
+const STATUS_AWAITING_PRE_DEPLOY = 200000008;
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -56,7 +58,7 @@ async function pollDeploymentStatus({ hostEnvUrl, token, stageRunId, intervalMs 
   }
 
   const baseUrl = hostEnvUrl.replace(/\/+$/, '');
-  const url = `${baseUrl}/api/data/v9.2/deploymentstageruns(${stageRunId})?$select=msdyn_stagerunstatus,msdyn_errordetails,msdyn_deploymentresults`;
+  const url = `${baseUrl}/api/data/v9.0/deploymentstageruns(${stageRunId})?$select=stagerunstatus,errormessage`;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await helpers.makeRequest({
@@ -86,23 +88,22 @@ async function pollDeploymentStatus({ hostEnvUrl, token, stageRunId, intervalMs 
       throw new Error(`Invalid JSON response: ${res.body}`);
     }
 
-    const stageRunStatus = data.msdyn_stagerunstatus;
-    const errorDetails = data.msdyn_errordetails || null;
-    const deploymentResults = data.msdyn_deploymentresults || null;
+    const stageRunStatus = data.stagerunstatus;
+    const errorMessage = data.errormessage || null;
 
     if (stageRunStatus === STATUS_SUCCEEDED) {
-      return { stageRunId, status: 'Succeeded', deploymentResults, errorDetails: null };
+      return { stageRunId, status: 'Succeeded', errorDetails: null };
     }
 
-    if (stageRunStatus === STATUS_AWAITING) {
+    if (stageRunStatus === STATUS_PENDING_APPROVAL || stageRunStatus === STATUS_AWAITING_PRE_DEPLOY) {
       // Approval gate — non-blocking, return for caller to handle
-      return { stageRunId, status: 'Awaiting', deploymentResults: null, errorDetails: null };
+      return { stageRunId, status: 'Awaiting', errorDetails: null };
     }
 
     if (stageRunStatus === STATUS_FAILED || stageRunStatus === STATUS_CANCELED) {
       const label = stageRunStatus === STATUS_FAILED ? 'Failed' : 'Canceled';
       throw new Error(
-        `Deployment ${label} (stageRunStatus=${stageRunStatus}). Error details: ${errorDetails || '(none)'}`
+        `Deployment ${label} (stageRunStatus=${stageRunStatus}). Error: ${errorMessage || '(none)'}`
       );
     }
 

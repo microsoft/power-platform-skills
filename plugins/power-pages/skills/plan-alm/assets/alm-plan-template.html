@@ -10,9 +10,12 @@
   --border:#e1dfdd; --border-light:#c8c6c4;
   --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
   --accent:#0078d4; --accent-bg:#eff6fc; --accent-border:#c7e0f4;
-  --dev:#0078d4; --dev-bg:#eff6fc; --dev-border:#c7e0f4;
-  --staging:#ca5010; --staging-bg:#fff4ef; --staging-border:#f7d1bc;
-  --prod:#107c10; --prod-bg:#f0fff0; --prod-border:#bad0ba;
+  /* Stage status palette */
+  --not-started:#0078d4; --not-started-bg:#eff6fc; --not-started-border:#c7e0f4;
+  --stage-pending:#8a6800; --stage-pending-bg:#fffbe5; --stage-pending-border:#f0d060;
+  --deployed:#107c10; --deployed-bg:#f0fff0; --deployed-border:#bad0ba;
+  --failed:#a4262c; --failed-bg:#fdf3f4; --failed-border:#f1aaad;
+  /* Legacy aliases used by checklist / note boxes */
   --pending:#605e5c; --pending-bg:#f3f2f1; --pending-border:#e1dfdd;
   --skipped:#605e5c; --skipped-bg:#f3f2f1; --skipped-border:#e1dfdd;
   --completed:#107c10; --completed-bg:#f0fff0; --completed-border:#bad0ba;
@@ -24,50 +27,77 @@
   --radius:8px; --radius-sm:4px;
   --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
   --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+  --sidebar-w:176px;
+  --topbar-h:66px;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 
-/* Top bar */
-.topbar{background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.topbar{height:var(--topbar-h);background:var(--surface);box-shadow:var(--shadow-4);padding:0 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:20;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
 .topbar-meta{font-size:12px;color:var(--text-dim);text-align:right;}
 
-/* Layout */
-.main{max-width:900px;margin:0 auto;padding:32px 28px 64px;}
+/* ── Page layout (sidebar + content) ────────────────────────────────────── */
+.page-layout{display:flex;min-height:calc(100vh - var(--topbar-h));}
 
-/* Section headings */
+/* ── Vertical tab sidebar ────────────────────────────────────────────────── */
+.tab-sidebar{width:var(--sidebar-w);flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);position:sticky;top:var(--topbar-h);height:calc(100vh - var(--topbar-h));overflow-y:auto;padding:24px 0 20px;}
+.sidebar-section-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;padding:0 18px;margin-bottom:6px;margin-top:20px;}
+.sidebar-section-label:first-child{margin-top:0;}
+.tab-btn{display:flex;align-items:center;gap:9px;width:100%;padding:9px 18px;font-family:var(--sans);font-size:13px;font-weight:500;color:var(--text-dim);background:none;border:none;border-left:3px solid transparent;cursor:pointer;text-align:left;transition:color 0.12s,background 0.12s,border-color 0.12s;outline:none;line-height:1.3;}
+.tab-btn:hover{color:var(--text-bright);background:var(--surface2);}
+.tab-btn.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-bg);font-weight:600;}
+.tab-icon{font-size:14px;flex-shrink:0;opacity:0.75;}
+
+/* ── Content area ────────────────────────────────────────────────────────── */
+.content-area{flex:1;min-width:0;}
+.tab-content{display:none;}
+.tab-content.active{display:block;}
+
+/* ── Inner layout ────────────────────────────────────────────────────────── */
+.main{max-width:860px;margin:0 auto;padding:32px 28px 64px;}
 .section{margin-bottom:32px;}
 h2{font-size:19px;font-weight:700;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:4px;}
 .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:18px;}
 h3{font-size:14px;font-weight:600;color:var(--text-bright);margin-top:20px;margin-bottom:10px;}
 
-/* Cards */
+/* ── Cards ───────────────────────────────────────────────────────────────── */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;box-shadow:var(--shadow-4);}
 
-/* Summary bar */
-.summary-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:28px;}
+/* ── Summary bar ─────────────────────────────────────────────────────────── */
+.summary-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:28px;}
 .summary-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-4);}
 .summary-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
 .summary-value{font-size:15px;font-weight:700;color:var(--text-bright);}
 
-/* Pipeline diagram */
-.pipeline-diagram{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin:16px 0 24px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);}
-.stage-box{border-radius:var(--radius);padding:12px 18px;text-align:center;min-width:120px;font-weight:600;font-size:13px;flex-shrink:0;}
-.stage-box.dev{background:var(--dev-bg);border:2px solid var(--dev-border);color:var(--dev);}
-.stage-box.staging{background:var(--staging-bg);border:2px solid var(--staging-border);color:var(--staging);}
-.stage-box.production{background:var(--prod-bg);border:2px solid var(--prod-border);color:var(--prod);}
-.stage-box.target{background:var(--staging-bg);border:2px solid var(--staging-border);color:var(--staging);}
+/* ── Pipeline diagram ────────────────────────────────────────────────────── */
+.pipeline-diagram{display:flex;align-items:center;flex-wrap:wrap;gap:0;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-4);}
+.stage-box{border-radius:var(--radius);padding:12px 18px;text-align:center;min-width:130px;font-weight:600;font-size:13px;flex-shrink:0;}
+/* Status-based stage colors */
+.stage-box.stage-not-started{background:var(--not-started-bg);border:2px solid var(--not-started-border);color:var(--not-started);}
+.stage-box.stage-pending{background:var(--stage-pending-bg);border:2px solid var(--stage-pending-border);color:var(--stage-pending);}
+.stage-box.stage-deployed{background:var(--deployed-bg);border:2px solid var(--deployed-border);color:var(--deployed);}
+.stage-box.stage-failed{background:var(--failed-bg);border:2px solid var(--failed-border);color:var(--failed);}
 .stage-label{font-size:13px;font-weight:700;}
 .env-url{font-size:10px;font-weight:400;opacity:0.8;font-family:var(--mono);word-break:break-all;display:block;margin-top:3px;}
 .stage-arrow{font-size:20px;color:var(--text-dim);padding:0 10px;font-weight:300;align-self:center;}
 .approval-badge{background:#fff;border:1px solid var(--border);border-radius:10px;font-size:10px;padding:2px 8px;color:var(--text-dim);margin:4px auto 0;display:inline-block;}
 
-/* Environments table */
+/* ── Stage color legend ──────────────────────────────────────────────────── */
+.stage-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;padding:10px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;}
+.legend-item{display:flex;align-items:center;gap:6px;color:var(--text-dim);}
+.legend-swatch{width:14px;height:14px;border-radius:3px;border:2px solid;}
+.legend-swatch.not-started{background:var(--not-started-bg);border-color:var(--not-started-border);}
+.legend-swatch.not-deployed{background:var(--stage-pending-bg);border-color:var(--stage-pending-border);}
+.legend-swatch.deployed{background:var(--deployed-bg);border-color:var(--deployed-border);}
+.legend-swatch.failed{background:var(--failed-bg);border-color:var(--failed-border);}
+
+/* ── Table ───────────────────────────────────────────────────────────────── */
 table{width:100%;border-collapse:collapse;margin-top:10px;}
 th{background:var(--surface2);text-align:left;padding:9px 12px;font-size:12px;font-weight:600;color:var(--text-dim);border-bottom:2px solid var(--border);text-transform:uppercase;letter-spacing:0.3px;}
 td{padding:9px 12px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:top;}
@@ -75,7 +105,7 @@ td code{font-family:var(--mono);font-size:12px;background:var(--surface2);paddin
 tr:last-child td{border-bottom:none;}
 tr:hover td{background:var(--surface2);}
 
-/* Checklist */
+/* ── Checklist ───────────────────────────────────────────────────────────── */
 .checklist{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
 .checklist-item{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);font-size:13px;}
 .checklist-item.status-pending{border-color:var(--pending-border);background:var(--pending-bg);}
@@ -90,21 +120,21 @@ tr:hover td{background:var(--surface2);}
 .status-badge.completed{background:var(--completed-bg);color:var(--completed);border:1px solid var(--completed-border);}
 .status-badge.in-progress{background:var(--in-progress-bg);color:var(--in-progress);border:1px solid var(--in-progress-border);}
 
-/* Risks */
+/* ── Risks ───────────────────────────────────────────────────────────────── */
 .risk-item{display:flex;gap:12px;padding:12px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);margin-bottom:8px;font-size:13px;}
 .risk-item.type-warning{border-color:var(--warning-border);background:var(--warning-bg);}
 .risk-item.type-info{border-color:var(--accent-border);background:var(--accent-bg);}
 .risk-icon{flex-shrink:0;font-size:15px;}
 .risk-message{flex:1;line-height:1.5;}
 
-/* Note boxes */
+/* ── Note boxes ──────────────────────────────────────────────────────────── */
 .note-box{padding:12px 16px;border-radius:var(--radius);font-size:13px;line-height:1.5;margin-top:6px;}
 .note-box.info{background:var(--accent-bg);border:1px solid var(--accent-border);color:var(--text);}
 .note-box.warning{background:var(--warning-bg);border:1px solid var(--warning-border);color:var(--text);}
 .note-box.neutral{background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);}
 
-/* Footer */
-.footer{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 24px;margin-top:32px;box-shadow:var(--shadow-4);display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;}
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.footer{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 24px;margin:0 28px 28px;box-shadow:var(--shadow-4);display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;margin-left:calc(var(--sidebar-w) + 28px);}
 .footer-field{display:flex;flex-direction:column;gap:2px;}
 .footer-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.4px;}
 .footer-value{font-size:13px;color:var(--text-bright);font-weight:500;}
@@ -115,12 +145,23 @@ tr:hover td{background:var(--surface2);}
 .plan-status.completed{background:var(--completed-bg);color:var(--completed);border-color:var(--completed-border);}
 .plan-status.deferred{background:var(--pending-bg);color:var(--pending);border-color:var(--pending-border);}
 
-/* Divider */
+/* ── Solution contents ───────────────────────────────────────────────────── */
+.contents-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+.contents-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow-4);}
+.contents-card-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;}
+.table-chip{display:inline-block;font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 6px;margin:2px 2px 2px 0;}
+.env-var-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;}
+.env-var-badge.keep{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+.env-var-badge.promote{background:var(--warning-bg);color:var(--warning);border:1px solid var(--warning-border);}
+.env-var-badge.exclude{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
+
+/* ── Divider ─────────────────────────────────────────────────────────────── */
 .divider{height:1px;background:var(--border);margin:28px 0;}
 </style>
 </head>
 <body>
 
+<!-- Top bar -->
 <div class="topbar">
   <div class="topbar-left">
     <div class="logo">ALM</div>
@@ -129,113 +170,195 @@ tr:hover td{background:var(--surface2);}
       <div class="topbar-sub">Power Pages Application Lifecycle Management</div>
     </div>
   </div>
-  <div class="topbar-meta">
-    Generated: __GENERATED_AT__
+  <div class="topbar-meta">Generated: __GENERATED_AT__</div>
+</div>
+
+<!-- Page layout: sidebar + content -->
+<div class="page-layout">
+
+  <!-- Vertical tab sidebar -->
+  <nav class="tab-sidebar">
+    <div class="sidebar-section-label">Plan</div>
+    <button class="tab-btn active" data-tab="overview">
+      <span class="tab-icon">◈</span>Overview
+    </button>
+    <div class="sidebar-section-label">Detail</div>
+    <button class="tab-btn" data-tab="solution-contents">
+      <span class="tab-icon">⬡</span>Solution Contents
+    </button>
+    <button class="tab-btn" data-tab="configuration">
+      <span class="tab-icon">⚙</span>Configuration
+    </button>
+  </nav>
+
+  <!-- Content area -->
+  <div class="content-area">
+
+    <!-- ═══ TAB: Overview ═══════════════════════════════════════════════════ -->
+    <div id="tab-overview" class="tab-content active">
+    <div class="main">
+
+      <!-- Summary Bar -->
+      <div class="section">
+        <div class="summary-bar">
+          <div class="summary-item">
+            <div class="summary-label">Strategy</div>
+            <div class="summary-value">__STRATEGY_LABEL__</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Stages</div>
+            <div class="summary-value">__STAGE_COUNT__ environments</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Approval Gates</div>
+            <div class="summary-value">__APPROVAL_LABEL__</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Env Variables Front-load Notice -->
+      __ENVVAR_FRONTLOAD_NOTICE__
+
+      <!-- Pipeline Diagram -->
+      <div class="section">
+        <h2>Deployment Pipeline</h2>
+        <p class="section-desc">Environments in this ALM plan and how the solution will be promoted.</p>
+        <div class="pipeline-diagram">
+          __STAGES_HTML__
+        </div>
+        <!-- Stage color legend -->
+        <div class="stage-legend">
+          <span class="legend-item">
+            <span class="legend-swatch not-started"></span>Not started
+          </span>
+          <span class="legend-item">
+            <span class="legend-swatch not-deployed"></span>Not deployed
+          </span>
+          <span class="legend-item">
+            <span class="legend-swatch deployed"></span>Deployed
+          </span>
+          <span class="legend-item">
+            <span class="legend-swatch failed"></span>Failed
+          </span>
+        </div>
+      </div>
+
+      <!-- Environment Configuration -->
+      <div class="section">
+        <h2>Environment Configuration</h2>
+        <p class="section-desc">Target environments and their roles in the deployment process.</p>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <table>
+            <thead>
+              <tr>
+                <th>Environment</th>
+                <th>Role</th>
+                <th>URL</th>
+                <th>Export Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              __ENVIRONMENTS_TABLE__
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Execution Checklist -->
+      <div class="section">
+        <h2>Execution Checklist</h2>
+        <p class="section-desc">Skills that will be invoked in sequence when the plan is executed.</p>
+        <div class="checklist">
+          __CHECKLIST_HTML__
+        </div>
+      </div>
+
+      <!-- Risks and Recommendations -->
+      <div class="section">
+        <h2>Risks &amp; Recommendations</h2>
+        <p class="section-desc">Items to be aware of before executing this plan.</p>
+        __RISKS_HTML__
+      </div>
+
+    </div>
+    </div><!-- /tab-overview -->
+
+    <!-- ═══ TAB: Solution Contents ══════════════════════════════════════════ -->
+    <div id="tab-solution-contents" class="tab-content">
+    <div class="main">
+
+      <div class="section" id="solution-contents">
+        <h2>Solution Contents Preview</h2>
+        <p class="section-desc">Components discovered in the dev environment that will be packaged into the solution.</p>
+        __SOLUTION_CONTENTS__
+      </div>
+
+    </div>
+    </div><!-- /tab-solution-contents -->
+
+    <!-- ═══ TAB: Configuration ══════════════════════════════════════════════ -->
+    <div id="tab-configuration" class="tab-content">
+    <div class="main">
+
+      <!-- Env Variable Strategy -->
+      <div class="section" id="env-vars">
+        <h2>Environment Variable Strategy</h2>
+        <p class="section-desc">How environment-specific configuration values are managed across stages.</p>
+        <div class="note-box __ENV_VAR_CLASS__">
+          __ENV_VAR_NOTE__
+        </div>
+        <div class="note-box info" style="margin-top:10px;">
+          <strong>When are variables defined?</strong> Variable names, types, and per-stage values are captured during the <strong>Setup Solution</strong> step — not during plan generation. Once defined, values are stored in <code>deployment-settings.json</code> and applied automatically each time <code>deploy-pipeline</code> runs for a given stage.
+        </div>
+      </div>
+
+      <!-- Source Control -->
+      <div class="section">
+        <h2>Source Control</h2>
+        <p class="section-desc">Git integration status for this project.</p>
+        <div class="note-box __GIT_CLASS__">
+          __GIT_NOTE__
+        </div>
+      </div>
+
+    </div>
+    </div><!-- /tab-configuration -->
+
+  </div><!-- /content-area -->
+</div><!-- /page-layout -->
+
+<!-- Footer — always visible, outside tabs -->
+<div class="footer">
+  <div class="footer-field">
+    <span class="footer-label">Approved by</span>
+    <span class="footer-value" id="approved-by">__APPROVED_BY__</span>
+  </div>
+  <div class="footer-field">
+    <span class="footer-label">Approval date</span>
+    <span class="footer-value" id="approval-date">__APPROVAL_DATE__</span>
+  </div>
+  <div class="footer-field">
+    <span class="footer-label">Status</span>
+    <span class="plan-status" id="plan-status">__PLAN_STATUS__</span>
   </div>
 </div>
 
-<div class="main">
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.tab-btn');
+  var contents = document.querySelectorAll('.tab-content');
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = btn.getAttribute('data-tab');
+      buttons.forEach(function (b) { b.classList.remove('active'); });
+      contents.forEach(function (c) { c.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById('tab-' + target).classList.add('active');
+      window.scrollTo(0, 0);
+    });
+  });
+})();
+</script>
 
-  <!-- Summary Bar -->
-  <div class="section">
-    <div class="summary-bar">
-      <div class="summary-item">
-        <div class="summary-label">Strategy</div>
-        <div class="summary-value">__STRATEGY_LABEL__</div>
-      </div>
-      <div class="summary-item">
-        <div class="summary-label">Stages</div>
-        <div class="summary-value">__STAGE_COUNT__ environments</div>
-      </div>
-      <div class="summary-item">
-        <div class="summary-label">Approval Gates</div>
-        <div class="summary-value">__APPROVAL_LABEL__</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Pipeline Diagram -->
-  <div class="section">
-    <h2>Deployment Pipeline</h2>
-    <p class="section-desc">Environments in this ALM plan and how the solution will be promoted.</p>
-    <div class="pipeline-diagram">
-      __STAGES_HTML__
-    </div>
-  </div>
-
-  <!-- Environment Configuration -->
-  <div class="section">
-    <h2>Environment Configuration</h2>
-    <p class="section-desc">Target environments and their roles in the deployment process.</p>
-    <div class="card" style="padding:0;overflow:hidden;">
-      <table>
-        <thead>
-          <tr>
-            <th>Environment</th>
-            <th>Role</th>
-            <th>URL</th>
-            <th>Export Type</th>
-          </tr>
-        </thead>
-        <tbody>
-          __ENVIRONMENTS_TABLE__
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Env Variable Strategy -->
-  <div class="section">
-    <h2>Environment Variable Strategy</h2>
-    <p class="section-desc">How environment-specific configuration values are managed across stages.</p>
-    <div class="note-box __ENV_VAR_CLASS__">
-      __ENV_VAR_NOTE__
-    </div>
-  </div>
-
-  <!-- Source Control -->
-  <div class="section">
-    <h2>Source Control</h2>
-    <p class="section-desc">Git integration status for this project.</p>
-    <div class="note-box __GIT_CLASS__">
-      __GIT_NOTE__
-    </div>
-  </div>
-
-  <!-- Execution Checklist -->
-  <div class="section">
-    <h2>Execution Checklist</h2>
-    <p class="section-desc">Skills that will be invoked in sequence when the plan is executed.</p>
-    <div class="checklist">
-      __CHECKLIST_HTML__
-    </div>
-  </div>
-
-  <!-- Risks and Recommendations -->
-  <div class="section">
-    <h2>Risks &amp; Recommendations</h2>
-    <p class="section-desc">Items to be aware of before executing this plan.</p>
-    __RISKS_HTML__
-  </div>
-
-  <div class="divider"></div>
-
-  <!-- Footer -->
-  <div class="footer">
-    <div class="footer-field">
-      <span class="footer-label">Approved by</span>
-      <span class="footer-value" id="approved-by">__APPROVED_BY__</span>
-    </div>
-    <div class="footer-field">
-      <span class="footer-label">Approval date</span>
-      <span class="footer-value" id="approval-date">__APPROVAL_DATE__</span>
-    </div>
-    <div class="footer-field">
-      <span class="footer-label">Status</span>
-      <span class="plan-status" id="plan-status">__PLAN_STATUS__</span>
-    </div>
-  </div>
-
-</div>
 </body>
 </html>

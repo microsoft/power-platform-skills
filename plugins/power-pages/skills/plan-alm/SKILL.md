@@ -76,11 +76,63 @@ Steps:
    ```
    Store output as `ENV_LIST` for pre-filling environment URLs in Phase 2.
 
-6. Report to user:
+6. Acquire dev environment token (silently):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
+   ```
+   Store `.token` as `DEV_TOKEN` and `.userId` as `userId`. If this fails (auth error), set `DEV_TOKEN = null` and continue — contents discovery will be skipped gracefully.
+
+7. Discover and classify site settings (if `DEV_TOKEN` is available and `websiteRecordId` is known):
+
+   Use Node.js `https` module to query:
+   ```
+   GET {DEV_ENV_URL}/api/data/v9.2/mspp_sitesettings?$filter=_mspp_websiteid_value eq '{websiteRecordId}'&$select=mspp_name,mspp_value&$top=500
+   Authorization: Bearer {DEV_TOKEN}
+   ```
+
+   Classify each returned setting using this three-tier logic:
+
+   **Tier 1 — Excluded (true credentials, never add to solution):**
+   Name matches `/ConsumerKey|ConsumerSecret|ClientId|ClientSecret|AppSecret|AppKey|ApiKey|Password/i`
+   These are OAuth/identity credential fields — adding them to a solution would expose secrets.
+
+   **Tier 2 — Auth config (per-environment auth settings):**
+   Name matches `Authentication/` or `AzureAD/` (but NOT in Tier 1).
+   These are authentication feature flags and configuration that may differ per environment.
+   - If `mspp_value` is non-empty → **`promoteToEnvVar`**: recommend promoting to an environment variable during `setup-solution` so staging/production can use different values
+   - If `mspp_value` is null or empty → **`authNoValue`**: include in solution as-is (no secret to protect), but show a note that this is an auth setting with no dev value and the user should verify the correct value is set in each target environment after deployment
+
+   **Tier 3 — Regular settings (all others):**
+   Everything else — Search, Bootstrap, WebApi field lists, feature flags, site tracking, etc.
+   → **`keepAsIs`**: include in solution as-is regardless of whether a value is set. These settings do not need per-environment variation and no special treatment is required.
+
+   Store as:
+   ```js
+   SITE_SETTINGS_DATA = {
+     keepAsIs: [{name}],                    // regular settings (Tier 3)
+     authNoValue: [{name}],                 // auth config with no dev value (Tier 2, no value)
+     promoteToEnvVar: [{name, value}],      // auth config with dev value (Tier 2, has value)
+     excluded: [{name}]                     // true credentials (Tier 1)
+   }
+   ```
+   If the query fails, set `SITE_SETTINGS_DATA = null` and continue.
+
+8. Build `SOLUTION_CONTENTS_DATA`:
+   ```js
+   {
+     tables: solutionManifest?.components?.tables || [],     // from .solution-manifest.json if SOLUTION_DONE
+     botComponents: solutionManifest?.botComponents || [],   // from manifest if available
+     siteSettings: SITE_SETTINGS_DATA                        // from step 7, or null
+   }
+   ```
+   If `SOLUTION_DONE = false` and manifest is absent, `tables` and `botComponents` will be empty arrays — the plan will show a note that they will be discovered during setup-solution.
+
+9. Report to user:
    ```
    Found: **{siteName}** on `{devEnvUrl}`.
    Solution: {✓ already set up ({solutionUniqueName}) / ✗ not yet}.
    Pipeline: {✓ already set up ({pipelineName}) / ✗ not yet}.
+   Site settings: {N total — K regular (keep as-is), P auth settings to review for env var, A auth settings (no dev value), E credential secrets excluded / unable to query}.
    ```
 
 ---
@@ -135,18 +187,18 @@ Then re-ask Q2 with only options 1–3.
 
 ---
 
-### PP Pipelines Path — Q3 through Q8
+### PP Pipelines Path — Q3 through Q7
 
 **Q3:** Ask via `AskUserQuestion`:
-> "How many deployment stages do you need?"
+> "How many deployment stages do you want in this pipeline?"
 
 Options:
-1. Dev → Staging (2 environments)
-2. Dev → Staging → Production (3 environments, Recommended)
-3. Dev → Production only
-4. Custom — I'll describe it
+1. **Staging only** — Dev → Staging (I'll add Production later)
+2. **Staging + Production** — Dev → Staging → Production (full promotion chain)
+3. **Production directly** — Dev → Production only (bypass staging)
+4. **Custom** — I'll describe my own stage layout
 
-If option 4: accept free-text description and build a stage list from the response.
+If option 4: accept free-text description (via "Other") and build a stage list from the response.
 
 Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the source.
 
@@ -160,9 +212,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
 
 - **If auto-detected:** Ask via `AskUserQuestion`:
   > "Use detected Pipelines host environment `{HOST_ENV_URL}`?"
-  Options: 1. Yes, use this / 2. Enter a different URL
+  Options: 1. Yes, use this / 2. Use a different host environment (enter via Other)
 
-- **If not detected:** Ask for free-text input. Pre-fill from `.last-pipeline.json` if present.
+- **If not detected:** Ask via `AskUserQuestion` — pre-fill options from `ENV_LIST` (up to 3 known environment URLs from `pac env list`) plus "Other" for a custom URL. Pre-fill first option from `.last-pipeline.json` if present.
 
 Store as `HOST_ENV_URL`.
 
@@ -176,24 +228,18 @@ Options:
 
 Store as `PP_APPROVAL_MODE`.
 
-**Q6:** Ask via `AskUserQuestion`:
-> "How should the solution be exported for production?"
+**Note:** PP Pipelines always exports as a **managed** solution to target environments. Set `EXPORT_TYPE = "managed"` automatically — no question needed.
+
+**Q6 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values. If manifest not present (SOLUTION_DONE=false), set `HAS_ENV_VARS = false` — variables will be discovered during setup-solution.
+
+**Q7:** Ask via `AskUserQuestion`:
+> "Is this project's code tracked in Git source control?"
+> *(Informational only — this determines whether the plan includes a source control recommendation. No automation is applied.)*
 
 Options:
-1. Managed — cannot be edited in target (Recommended)
-2. Unmanaged — can be edited in target
-
-Store as `EXPORT_TYPE` (`managed` or `unmanaged`).
-
-**Q7 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values.
-
-**Q8:** Ask via `AskUserQuestion`:
-> "Do you use Git source control for this site?" (informational only — no automation)
-
-Options:
-1. Yes — we use Git
-2. No — not using source control
-3. Not yet
+1. Yes — we use Git (changes tracked before each deployment)
+2. No — not using source control (plan will recommend enabling it before production)
+3. Not yet set up (plan will include source control guidance)
 
 Store as `GIT_STATUS`.
 
@@ -239,9 +285,9 @@ Options:
 
 Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 
-**Q7 (auto-detect, no question):** Same as PP Pipelines Q7 — check for env var definitions.
+**Q6 (auto-detect, no question):** Same as PP Pipelines Q6 — check for env var definitions.
 
-**Q8:** Same as PP Pipelines Q8 — Git source control status.
+**Q7:** Same as PP Pipelines Q7 — Git source control status.
 
 ---
 
@@ -259,8 +305,11 @@ Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 | 2 | Approve ALM plan | Awaiting plan approval | Present inline summary, get user confirmation |
 | 3 | Setup solution | Setting up solution | Invoke setup-solution skill (conditional) |
 | 4 | Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill (conditional) |
-| 5 | Deploy via pipeline | Deploying via pipeline | Invoke deploy-pipeline skill |
-| 6 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
+| 5..N | Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill for this stage — one task per target stage |
+| 5..N+1 | Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site if not yet provisioned — one task per target stage |
+| N+2 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
+
+Create one **Deploy to {stageName}** + **Activate site in {stageName}** task pair for each target stage in `PP_STAGES` (e.g. Staging, Production).
 
 **For Manual path**, create:
 
@@ -271,10 +320,15 @@ Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 | 3 | Setup solution | Setting up solution | Invoke setup-solution skill (conditional) |
 | 4 | Export solution | Exporting solution | Invoke export-solution skill |
 | 5..N | Import to {targetLabel} | Importing solution | Switch PAC CLI context, invoke import-solution (one task per target) |
-| N+1 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
+| N+1 | Activate site in {targetLabel} | Activating site | Check activation status, invoke activate-site if not yet provisioned (one task per target, optional) |
+| N+2 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
 
 If `SOLUTION_DONE = true`, add `(will skip — already set up)` to the setup-solution task description.
 If `PIPELINE_DONE = true` (PP path), add `(will skip — already set up)` to the setup-pipeline task description.
+
+**Activation steps (PP path):** Create a separate **"Activate site in {stageName}"** task for every target stage. After each `deploy-pipeline` invocation succeeds, the activation task for that stage runs immediately — do not wait until all stages are deployed. The planData `steps` array must include one `"Deploy to {stageName}"` + one `"Activate site in {stageName}"` pair per target stage. Activation happens after every stage deployment — not just Production.
+
+**Activation steps (Manual path):** For the Manual path, create one "Activate site in {targetLabel}" task per target environment. These run after the corresponding import completes.
 
 Mark task 1 ("Generate ALM plan") as `in_progress`.
 
@@ -287,7 +341,7 @@ Build a `planData` object with all gathered strategy inputs:
   "SITE_NAME": "{siteName}",
   "GENERATED_AT": "{ISO timestamp}",
   "STRATEGY": "pp-pipelines | manual",
-  "EXPORT_TYPE": "managed | unmanaged",
+  "EXPORT_TYPE": "managed | unmanaged",   // PP Pipelines path: always "managed"
   "APPROVAL_MODE": "{approvalMode description}",
   "GIT_STATUS": "yes | no | not-yet",
   "HAS_ENV_VARS": true | false,
@@ -304,13 +358,27 @@ Build a `planData` object with all gathered strategy inputs:
   "steps": [
     { "name": "Setup solution", "status": "pending", "skip": false },
     { "name": "Setup pipeline", "status": "pending", "skip": false },
-    { "name": "Deploy via pipeline", "status": "pending", "skip": false }
+    { "name": "Deploy via pipeline to Staging", "status": "pending", "skip": false },
+    { "name": "Activate site in Staging", "status": "pending", "skip": false },
+    { "name": "Deploy via pipeline to Production", "status": "pending", "skip": false },
+    { "name": "Activate site in Production", "status": "pending", "skip": false }
   ],
   "risks": [
     { "type": "info", "message": "..." }
-  ]
+  ],
+  "solutionContents": {
+    "tables": ["{table1}", "{table2}"],
+    "botComponents": [{ "name": "..." }],
+    "siteSettings": {
+      "keepAsIs": [{ "name": "..." }],
+      "promoteToEnvVar": [{ "name": "...", "value": "..." }],
+      "excluded": [{ "name": "..." }]
+    }
+  }
 }
 ```
+
+`solutionContents` is populated from `SOLUTION_CONTENTS_DATA` built in Phase 1. If discovery was unavailable, pass `null` — the renderer will show a fallback note.
 
 Populate `risks` based on gathered data:
 - If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables — you will be prompted for per-stage values during deployment." }`
@@ -329,6 +397,21 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
 ```
 
 Delete `docs/.alm-plan-data.json` after success.
+
+Write `.alm-plan-context.json` to the project root (persists so `setup-solution` can read it):
+```json
+{
+  "generatedAt": "{ISO timestamp}",
+  "siteName": "{siteName}",
+  "siteSettings": {
+    "keepAsIs": [{name}],
+    "authNoValue": [{name}],
+    "promoteToEnvVar": [{name, value}],
+    "excluded": [{name}]
+  }
+}
+```
+This file is intentionally NOT deleted — `setup-solution` and other skills read it to skip re-discovery.
 
 Mark task 1 as `completed`.
 
@@ -432,14 +515,41 @@ If option 2: update HTML plan footer to "Approved — Deferred (paused after exp
 
 ### PP Pipelines path
 
-Mark the "Deploy via pipeline" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+**For each target stage in `PP_STAGES` (e.g. Staging, then Production), run this loop:**
+
+**Step A — Deploy:**
+Mark the "Deploy to {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
 
 Invoke the skill:
 ```
 /power-pages:deploy-pipeline
 ```
 
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`.
+After completion: mark deploy task as `completed`. Update HTML checklist step to `status-completed`.
+
+**Step B — Activate (immediately after deploy for this stage):**
+Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+
+Read `.last-deploy.json` to check whether activation already happened inside `deploy-pipeline`:
+```bash
+node -e "const d=require('./.last-deploy.json'); process.stdout.write(JSON.stringify({activationStatus: d.activationStatus, siteUrl: d.siteUrl}))"
+```
+
+- `activationStatus === "Activated"`: site is live. Mark task `completed`. Update checklist step to `status-completed`. Show site URL.
+- `activationStatus === "Pending"` or `null`: activation was deferred or didn't run. Switch PAC CLI to the target environment and ask via `AskUserQuestion`:
+
+  > "**{siteName}** was deployed to **{stageName}** successfully. The site is not yet activated (not publicly accessible). Activate it now?"
+
+  Options:
+  1. **Yes, activate now** — invoke `/power-pages:activate-site`. After it completes, mark task `completed`, update checklist step to `status-completed`.
+  2. **No, skip for now** — mark task `skipped`, update checklist step to `status-skipped`.
+
+After handling activation, switch PAC CLI back to the dev environment:
+```bash
+pac env select --environment "{devEnvUrl}"
+```
+
+**Then repeat Step A + B for the next stage** (if any).
 
 ### Manual path (one import per target environment)
 
@@ -458,6 +568,17 @@ For each entry in `MANUAL_TARGETS`:
    ```
 
 4. After completion: mark the task as `completed`. Update the HTML checklist step to `status-completed`.
+
+5. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+
+   PAC CLI is already pointing to the target environment from step 2. Run the activation check:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+   ```
+
+   - **`activated: true`**: Site is already live. Mark task as `completed`. Update checklist step to `status-completed`.
+   - **`activated: false`**: Invoke `/power-pages:activate-site`. After completion, mark task as `completed`. Update checklist step to `status-completed`.
+   - **`error`**: Mark task as `skipped`. Note error in summary.
 
 After all imports: switch PAC CLI back to the dev environment:
 ```bash
@@ -507,7 +628,13 @@ Display a summary:
 - docs/alm-plan.html — ALM plan document
 - .solution-manifest.json — Solution configuration {(if newly created)}
 - .last-pipeline.json — Pipeline configuration {(PP path only, if newly created)}
+- .last-deploy.json — Last deployment record {(PP path only)}
 - {solutionName}_{managed|unmanaged}.zip — Solution package {(manual path only)}
+
+**Site activation:** {
+  PP path: "Activation status per stage is in .last-deploy.json and each deploy history file."
+  Manual path: list each target env and its activation status (Activated / Pending)
+}
 ```
 
 Mark the "Finalize" task as `completed`.
@@ -523,8 +650,10 @@ Mark the "Finalize" task as `completed`.
 | Setup solution | Setting up solution | Invoke setup-solution skill (skip if .solution-manifest.json exists) |
 | Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill — PP Pipelines path only (skip if .last-pipeline.json exists) |
 | Export solution | Exporting solution | Invoke export-solution skill — Manual path only |
-| Deploy via pipeline | Deploying via pipeline | Invoke deploy-pipeline skill — PP Pipelines path |
+| Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill — PP Pipelines path, one task per target stage |
+| Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site immediately after each stage deploys — one task per target stage |
 | Import to {targetEnv} | Importing solution | Switch PAC CLI context, invoke import-solution — Manual path, one task per target |
+| Activate site in {targetEnv} | Activating site | Check activation status + invoke activate-site if needed — Manual path, one task per target |
 | Finalize | Finalizing | Update HTML plan status, commit, run skill tracking, present summary |
 
 ---
@@ -533,7 +662,8 @@ Mark the "Finalize" task as `completed`.
 
 1. **Phase 2, Q1**: Solution setup — confirm existing or include `setup-solution` in plan
 2. **Phase 2, Q2**: Promotion strategy — PP Pipelines, Manual, or already set up
-3. **Phase 2, Q3–Q8**: Stage count, target environments, host env, approval gates, export type, checkpoint pause, Git status
+3. **Phase 2, Q3–Q7** (PP path): Stage count, host env, approval gates (managed auto-set), Git status
+   **Phase 2, Q3–Q7** (Manual path): Target count, target env URLs, export type, checkpoint pause, Git status
 4. **Phase 4**: Plan approval — execute, defer, or revise
 5. **Phase 6, Manual**: Checkpoint pause after export (if Q6 = Yes)
 6. **Phase 7 (delegated)**: Each invoked skill has its own approval gates

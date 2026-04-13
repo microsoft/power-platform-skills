@@ -146,7 +146,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-stage-run.js" \
   --pipelineId "{pipelineId}" \
   --stageId "{SELECTED_STAGE.stageId}" \
   --sourceDeploymentEnvironmentId "{sourceDeploymentEnvironmentId}" \
-  --artifactTrackingId "{ARTIFACT_SOLUTION_ID}"
+  --solutionId "{ARTIFACT_SOLUTION_ID}" \
+  --artifactName "{ARTIFACT_SOLUTION_NAME}"
 ```
 
 Capture stdout as JSON: `const result = JSON.parse(output)`. Extract `result.stageRunId` and store as `STAGE_RUN_ID`.
@@ -438,48 +439,66 @@ These warnings are informational only — do not block the summary or use `AskUs
   "hostEnvUrl": "{hostEnvUrl}",
   "targetEnvironmentUrl": "{SELECTED_STAGE.targetEnvironmentUrl}",
   "artifactVersion": "{artifactVersion from Phase 5.2 PATCH}",
-  "deployHistoryFile": "docs/deploy-history/{YYYY-MM-DD}-{stageName}-{artifactVersion}.md"
+  "deployHistoryFile": "docs/deploy-history/{YYYY-MM-DD}-{stageName}-{artifactVersion}.html",
+  "activationStatus": null,
+  "siteUrl": null
 }
 ```
 
+`activationStatus` and `siteUrl` start as `null` and are patched at the end of Phase 7.7 once the activation outcome is known.
+
 Where `{YYYY-MM-DD}` is the date portion of `deployedAt` and `{stageName}` is the stage name with spaces replaced by hyphens (lowercased), e.g. `2026-04-06-staging-1.0.0.3.md`.
 
-**7.4 Write deployment history entry:**
+**7.4 Write deployment history entry (HTML):**
 
-Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.md` (same derivation as above).
+Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.html` (same derivation as `.last-deploy.json`'s `deployHistoryFile` field — replace spaces with hyphens, lowercase stage name).
 
 Create `docs/deploy-history/` if it does not already exist:
 ```bash
 mkdir -p docs/deploy-history
 ```
 
-Write `docs/deploy-history/{filename}.md` with the following content:
+Read the template at `${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/assets/deploy-history-template.html` and replace the following `__PLACEHOLDER__` tokens:
 
-```markdown
-# Deployment: {solutionFriendlyName} → {stageName}
+**Overview tab:**
 
-| Field | Value |
+| Placeholder | Value |
 |---|---|
-| Date | {deployedAt ISO string} |
-| Solution | {solutionUniqueName} v{artifactVersion} |
-| Stage | {stageName} |
-| Target | {targetEnvironmentUrl} |
-| Stage Run ID | {stageRunId} |
-| Status | {Succeeded / Failed / PendingApproval} |
-| Pipeline | {pipelineName} |
+| `__SOLUTION_FRIENDLY_NAME__` | Solution friendly name (from `.solution-manifest.json`) or `{solutionUniqueName}` |
+| `__SOLUTION_NAME__` | `{ARTIFACT_SOLUTION_NAME}` |
+| `__STAGE_NAME__` | `{SELECTED_STAGE.name}` |
+| `__TARGET_ENV_URL__` | `{SELECTED_STAGE.targetEnvironmentUrl}` |
+| `__STAGE_RUN_ID__` | `{STAGE_RUN_ID}` |
+| `__PIPELINE_NAME__` | `{pipelineName}` |
+| `__DEPLOYED_AT__` | `{deployedAt ISO string}` |
+| `__ARTIFACT_VERSION__` | `{artifactVersion from Phase 5.2}` |
+| `__PREV_ARTIFACT_VERSION__` | `{artifactDevCurrentVersion}` — the version that was in dev before this deploy |
+| `__STATUS_CLASS__` | `succeeded` / `failed` / `pending-approval` |
+| `__STATUS_ICON__` | `✓` for Succeeded, `✗` for Failed, `⏳` for PendingApproval |
+| `__STATUS_LABEL__` | `Succeeded` / `Failed` / `Pending Approval` |
+| `__ACTIVATION_SECTION__` | Initially `''` — replaced in Phase 7.7 once activation outcome is known |
 
-## Environment Variables
-{If deploymentsettingsjson was patched: list the env var schemaNames that were overridden. Otherwise: "None overridden."}
+**Solution tab** — read `.solution-manifest.json` to build these sections:
 
-## Deployment Notes
-{If AI_DEPLOY_NOTES was fetched in Phase 4.4: include here. Otherwise omit this section.}
-```
+| Placeholder | Value |
+|---|---|
+| `__SOLUTION_META_ROWS__` | `<tr>` rows for: Friendly Name, Unique Name, Version (new → previous), Type (Managed/Unmanaged), Publisher, Total Components. Source: manifest + `validationResults.SolutionDetails` from Phase 6. |
+| `__VALIDATION_SECTION__` | If validation passed: `<div class="note-box succeeded"><span class="validation-badge passed">✓ Validation Passed</span> — No missing dependencies.</div>`. If failed or deps present: `<div class="note-box warning">` listing each missing dependency name. |
+| `__SOLUTION_CONTENTS_SECTION__` | Build from `.solution-manifest.json`: a `<div class="contents-grid">` with two `<div class="contents-card">` blocks — **Dataverse Tables** (as `<span class="table-chip">` per table) and **Bot Components** (comma-separated names). Below the grid, add a `<div class="note-box neutral">` with: `{totalAdded} components added to solution` (from `components.totalAdded`). If manifest is unavailable, show a neutral note. |
 
-Where `{solutionFriendlyName}` is the solution display name if available; fall back to `{solutionUniqueName}`.
+**Config & Notes tab:**
 
-Then add the history file to git alongside `.last-deploy.json` in the git commit for this phase (see step 7.5 below), or in a separate commit if the main commit has already been made. Add it to the staging area:
+| Placeholder | Value |
+|---|---|
+| `__ENV_VARS_SECTION__` | If `ENV_VAR_OVERRIDES` was non-empty: a `<div class="card"><h3>Environment Variable Overrides</h3>` table with schema name + override value columns. Otherwise: `<div class="note-box neutral">No environment variable overrides applied.</div>` |
+| `__DEPLOYMENT_NOTES_SECTION__` | If `AI_DEPLOY_NOTES` is available: `<div class="card"><h3>AI Deployment Notes</h3><p>…</p></div>`. Otherwise: `''` |
+| `__POST_DEPLOY_WARNINGS__` | One `<div class="note-box warning">` per post-deploy warning (connection refs, bot republish). Empty string if none. |
+
+Write the rendered HTML to `docs/deploy-history/{filename}.html`.
+
+Then add to the staging area:
 ```bash
-git add .last-deploy.json docs/deploy-history/{filename}.md
+git add .last-deploy.json docs/deploy-history/{filename}.html
 git commit -m "Deploy {solutionUniqueName} v{artifactVersion} to {stageName} ({status})"
 ```
 
@@ -504,6 +523,7 @@ If **Succeeded**:
   Target:       {targetEnvironmentUrl}
   Completed at: {deployedAt}
   Stage run ID: {STAGE_RUN_ID}
+  Site URL:     {siteUrl from 7.7, or "— activation pending" if not yet activated, or "— checking…" before 7.7 runs}
 ```
 
 If **Failed**:
@@ -559,19 +579,47 @@ Then switch PAC CLI back to the source (dev) environment regardless of the resul
 pac env select --environment "{sourceEnvUrl}"
 ```
 
-Evaluate the result:
+Evaluate the result and take action based on the outcome. In all cases, **after the outcome is resolved**, update `.last-deploy.json` and the deploy history file (described below).
 
-- **`activated: true`**: Include `siteUrl` in the Phase 7.6 summary output.
+- **`activated: true`**: Site is already live. Set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{result.websiteUrl}" }`.
+
 - **`activated: false`**: Ask the user via `AskUserQuestion`:
 
   | Question | Header | Options |
   |---|---|---|
   | The Power Pages site was deployed to `{SELECTED_STAGE.targetEnvironmentUrl}` but is not yet activated (provisioned). Activate it now to make it publicly accessible. | Activate Site | Yes, activate now (Recommended), No, I'll activate later |
 
-  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill will handle subdomain selection, confirmation, and provisioning.
-  - **If "No"**: Note in the summary that activation is pending and remind the user to run `/power-pages:activate-site` (after switching PAC auth to the target env) when ready.
+  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill handles subdomain selection, confirmation, and provisioning. After it completes, set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{site URL from activate-site}" }`.
+  - **If "No"**: Set `ACTIVATION_OUTCOME = { status: "Pending", siteUrl: null }`.
 
-- **`error` present**: Skip silently — do not fail the deployment summary over an activation check error.
+- **`error` present**: Set `ACTIVATION_OUTCOME = null` — skip the update steps below silently.
+
+**After activation outcome is resolved**, patch `.last-deploy.json` (in-place `Edit`) with the actual values:
+- `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
+- `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
+
+Then update the deploy history HTML file (in-place `Edit`) — replace `__ACTIVATION_SECTION__` with the appropriate HTML:
+
+- **`status: "Activated"`**:
+  ```html
+  <div class="card">
+    <h2>Site Activation</h2>
+    <table><tbody>
+      <tr><td class="label-col">Status</td><td style="color:var(--succeeded);font-weight:600;">✓ Activated</td></tr>
+      <tr><td class="label-col">Site URL</td><td><a href="__SITE_URL__" style="color:var(--accent);">__SITE_URL__</a></td></tr>
+    </tbody></table>
+  </div>
+  ```
+  (Replace `__SITE_URL__` with `ACTIVATION_OUTCOME.siteUrl`)
+
+- **`status: "Pending"`**:
+  ```html
+  <div class="note-box neutral">
+    <strong>Site activation pending.</strong> The solution was deployed but the site has not yet been provisioned in this environment. Run <code>/power-pages:activate-site</code> (with PAC CLI authenticated to the target environment) to activate it.
+  </div>
+  ```
+
+If `ACTIVATION_OUTCOME` is null (error during check), leave the `__ACTIVATION_SECTION__` placeholder as an empty string (strip it from the file).
 
 **7.8 Detect and guide cloud flow registration** (only if deployment **Succeeded**):
 
@@ -615,7 +663,7 @@ Authorization: Bearer {HOST_TOKEN}
 3. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
 4. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
 5. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
-6. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target
+6. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `.last-deploy.json` and the deploy history HTML.
 7. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
