@@ -37,6 +37,8 @@ skills/
     SKILL.md                   ← Orchestrates canvas-app-planner + canvas-screen-builder agents
   edit-canvas-app/
     SKILL.md                   ← Edits pa.yaml source files for an existing Canvas App
+  add-data-source/
+    SKILL.md                   ← Guides user to add a data source or connector in Studio, then verifies
 ```
 
 ## Skills
@@ -46,6 +48,7 @@ skills/
 | `/configure-canvas-mcp` | Register the Canvas Authoring MCP server with Claude Code |
 | `/generate-canvas-app` | Generate a complete Canvas App from a natural language description |
 | `/edit-canvas-app` | Edit an existing Canvas App from a natural language description of changes |
+| `/add-data-source` | Guide the user to add a data source, connection, or API connector in Studio, then verify it is available |
 
 ## Agents
 
