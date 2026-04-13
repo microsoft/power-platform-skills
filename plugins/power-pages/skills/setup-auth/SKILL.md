@@ -9,11 +9,11 @@ description: >
   "add SAML authentication", "configure OpenID Connect", "add OIDC",
   "set up local login", "add username password login", "add social login",
   "configure Facebook login", "add Google sign in", "set up WS-Federation",
-  "configure Azure AD B2C", "set up B2C auth", "add B2C login",
+  "configure Entra External ID", "set up External ID auth", "add External ID login",
   "enable two-factor authentication", "add 2FA", "set up invitation login",
   or wants to set up authentication (login/logout) and role-based
   authorization for their Power Pages code site using any supported
-  identity provider (Microsoft Entra ID, Azure AD B2C, OpenID Connect,
+  identity provider (Microsoft Entra ID, Entra External ID, OpenID Connect,
   SAML2, WS-Federation, local authentication, or social OAuth providers).
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
@@ -24,7 +24,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Azure AD B2C (with user flow policies), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -148,13 +148,13 @@ Use `AskUserQuestion` to determine the identity provider:
 
 | Question | Options |
 |----------|---------|
-| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Azure AD B2C — Azure AD B2C with user flow policies (sign-up/sign-in, password reset, profile edit), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
+| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Entra External ID — Customer-facing identity with self-service sign-up (CIAM), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
 
-**If "Social OAuth"**, follow up with:
+**If "Social OAuth"**, follow up — ask the user which specific provider(s) they want. Do NOT assume or pre-select providers:
 
 | Question | Options |
 |----------|---------|
-| Which social provider(s) do you want to configure? | Microsoft Account, Facebook, Google |
+| Which social provider(s) do you want to configure? (select all that apply) | Microsoft Account, Facebook, Google |
 
 **If "OpenID Connect (Generic)"**, ask for the provider details:
 
@@ -241,7 +241,7 @@ Create the auth service file based on the detected framework and selected identi
 **Login flow varies by provider type:**
 
 - **Microsoft Entra ID**: Form POST to `/Account/Login/ExternalLogin` with provider `https://login.windows.net/{tenantId}/`
-- **Azure AD B2C**: Form POST to `/Account/Login/ExternalLogin` with provider set to the B2C `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`). B2C requires additional `PasswordResetPolicyId`, `ProfileEditPolicyId`, and `DefaultPolicyId` settings. The server handles B2C error codes `AADB2C90118` (password reset redirect) and `AADB2C90091` (user cancellation) automatically.
+- **Entra External ID**: Form POST to `/Account/Login/ExternalLogin` with provider set to the External ID `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`). Uses OpenID Connect underneath with the External ID tenant authority URL.
 - **OpenID Connect (Generic)**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
 - **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
 - **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
@@ -519,246 +519,261 @@ If the auth button is not visible or the page has rendering errors, fix the issu
 
 #### 8.1 Create Site Settings
 
-The site needs provider-specific site settings. Check if `.powerpages-site/site-settings/` exists. Generate a UUID for each setting file:
+The site needs provider-specific site settings. Check if `.powerpages-site/site-settings/` exists. Use the `create-site-setting.js` script for all site settings:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "<Setting/Name>" \
+  --value "<value>" \
+  --description "<description>"
 ```
 
-**Always create** — `authentication-registration-profileredirectenabled.yml`:
+**How values are sourced:**
+- **Non-secret values** (authority URL, site URL, redirect URIs, AuthenticationType) → filled automatically from information gathered during the flow. The user should NOT need to edit any files.
+- **ClientId** → ask the user for this value during the flow using `AskUserQuestion` ("What is the Client ID / Application ID from your identity provider's app registration?"). Then pass it to the script.
+- **Secrets** (`ClientSecret`, `AppSecret`) → use environment variables via `create-environment-variable.js`. Never ask for or store secret values directly. See the secrets section below.
 
-```yaml
-id: <UUID>
-name: Authentication/Registration/ProfileRedirectEnabled
-value: false
+**Always create** — ProfileRedirectEnabled:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/ProfileRedirectEnabled" \
+  --value "false" \
+  --description "Disable profile redirect for code sites" \
+  --type boolean
 ```
 
-**Provider-specific settings** — create additional site setting files based on the selected identity provider:
+**Provider-specific settings** — create additional site settings based on the selected identity provider:
 
 **Microsoft Entra ID** (no additional settings needed — configured via Power Pages admin center).
 
-**OpenID Connect (Generic)** — create settings for the provider:
+**OpenID Connect (Generic)** — create settings for the provider. Ask the user for their ClientId:
 
-```yaml
-# authentication-openidconnect-{provider}-authority.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/Authority
-value: <authority-url-from-user>
+```powershell
+# Authority
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
+  --value "<authority-url-from-user>" \
+  --description "OIDC authority URL"
 
-# authentication-openidconnect-{provider}-clientid.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/ClientId
-value: <to-be-configured>
+# ClientId — ask user for this value during the flow
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
+  --value "<client-id-from-user>" \
+  --description "Application client ID"
 
-# authentication-openidconnect-{provider}-authenticationtype.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/AuthenticationType
-value: <authority-url-from-user>
+# AuthenticationType
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
+  --value "<authority-url-from-user>" \
+  --description "Provider identifier for ExternalLogin"
 
-# authentication-openidconnect-{provider}-redirecturi.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/RedirectUri
-value: <site-url>/signin-{provider}
+# RedirectUri
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
+  --value "<site-url>/signin-{provider}" \
+  --description "OAuth callback URL"
 
-# authentication-openidconnect-{provider}-externallogoutenabled.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled
-value: true
-```
-
-> **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. If not set, it defaults to the `Authority` URL. This value must match what `resolveProviderIdentifier()` returns in the auth service.
-
-> **Security Warning:** Never commit `ClientSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values.
-
-**Azure AD B2C** — create settings for the B2C provider (uses OpenID Connect path with additional policy settings):
-
-```yaml
-# authentication-openidconnect-{provider}-authority.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/Authority
-value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/
-
-# authentication-openidconnect-{provider}-clientid.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/ClientId
-value: <to-be-configured>
-
-# authentication-openidconnect-{provider}-authenticationtype.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/AuthenticationType
-value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/
-
-# authentication-openidconnect-{provider}-metadataaddress.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/MetadataAddress
-value: https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/.well-known/openid-configuration?p={sign-up-sign-in-policy}
-
-# authentication-openidconnect-{provider}-defaultpolicyid.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/DefaultPolicyId
-value: B2C_1_signupsignin
-
-# authentication-openidconnect-{provider}-passwordresetpolicyid.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/PasswordResetPolicyId
-value: B2C_1_passwordreset
-
-# authentication-openidconnect-{provider}-profileeditpolicyid.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/ProfileEditPolicyId
-value: B2C_1_profileedit
-
-# authentication-openidconnect-{provider}-redirecturi.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/RedirectUri
-value: <site-url>/signin-{provider}
-
-# authentication-openidconnect-{provider}-externallogoutenabled.yml
-id: <UUID>
-name: Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled
-value: true
-```
-
-> **Note:** B2C error codes `AADB2C90118` (password reset) and `AADB2C90091` (user cancellation) are handled automatically by the Power Pages server middleware. No client-side error handling is needed.
-
-> **Security Warning:** Never commit `ClientSecret` values to source control. Configure secrets in the Power Pages admin center.
-
-**SAML2** — create settings for the provider:
-
-```yaml
-# authentication-saml2-{provider}-metadataaddress.yml
-id: <UUID>
-name: Authentication/SAML2/{ProviderName}/MetadataAddress
-value: <metadata-url-from-user>
-
-# authentication-saml2-{provider}-authenticationtype.yml
-id: <UUID>
-name: Authentication/SAML2/{ProviderName}/AuthenticationType
-value: <site-url>
-
-# authentication-saml2-{provider}-serviceproviderrealm.yml
-id: <UUID>
-name: Authentication/SAML2/{ProviderName}/ServiceProviderRealm
-value: <site-url>
-```
-
-**WS-Federation** — create settings for the provider:
-
-```yaml
-# authentication-wsfederation-{provider}-metadataaddress.yml
-id: <UUID>
-name: Authentication/WsFederation/{ProviderName}/MetadataAddress
-value: <metadata-url-from-user>
-
-# authentication-wsfederation-{provider}-authenticationtype.yml
-id: <UUID>
-name: Authentication/WsFederation/{ProviderName}/AuthenticationType
-value: <provider-realm-or-identifier>
-
-# authentication-wsfederation-{provider}-wtrealm.yml
-id: <UUID>
-name: Authentication/WsFederation/{ProviderName}/Wtrealm
-value: <site-url>
+# ExternalLogoutEnabled
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
+  --value "true" \
+  --description "Sign out of IdP on logout" \
+  --type boolean
 ```
 
 > **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. This value must match what `resolveProviderIdentifier()` returns in the auth service.
 
+**Entra External ID** — same as OIDC but with `ciamlogin.com` authority URL:
+
+```powershell
+# Authority — uses ciamlogin.com domain
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
+  --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
+  --description "Entra External ID authority URL"
+
+# ClientId — ask user for this value during the flow
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
+  --value "<client-id-from-user>" \
+  --description "Application client ID"
+
+# AuthenticationType, RedirectUri, ExternalLogoutEnabled — same as OIDC above
+```
+
+**SAML2** — create settings for the provider:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/SAML2/{ProviderName}/MetadataAddress" \
+  --value "<metadata-url-from-user>" \
+  --description "SAML IdP metadata URL"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/SAML2/{ProviderName}/AuthenticationType" \
+  --value "<site-url>" \
+  --description "Provider identifier for ExternalLogin"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/SAML2/{ProviderName}/ServiceProviderRealm" \
+  --value "<site-url>" \
+  --description "SP entity ID"
+```
+
+**WS-Federation** — create settings for the provider:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/WsFederation/{ProviderName}/MetadataAddress" \
+  --value "<metadata-url-from-user>" \
+  --description "WS-Fed metadata URL"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/WsFederation/{ProviderName}/AuthenticationType" \
+  --value "<provider-realm-or-identifier>" \
+  --description "Provider identifier for ExternalLogin"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/WsFederation/{ProviderName}/Wtrealm" \
+  --value "<site-url>" \
+  --description "Relying party realm"
+```
+
+> **Note:** The `AuthenticationType` value must match what `resolveProviderIdentifier()` returns in the auth service.
+
 **Local Authentication**:
 
-```yaml
-# authentication-registration-localloginenabled.yml
-id: <UUID>
-name: Authentication/Registration/LocalLoginEnabled
-value: true
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/LocalLoginEnabled" \
+  --value "true" \
+  --description "Enable local username/password login" \
+  --type boolean
 
-# authentication-registration-localloginbyemail.yml
-id: <UUID>
-name: Authentication/Registration/LocalLoginByEmail
-value: true
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/LocalLoginByEmail" \
+  --value "true" \
+  --description "Allow login by email instead of username" \
+  --type boolean
 ```
 
-**Social OAuth** — create settings for each selected social provider. Note: Facebook uses `AppId`/`AppSecret` while other providers use `ClientId`/`ClientSecret`:
+**Social OAuth** — for each selected social provider, ask the user for the ClientId/AppId. Secrets are handled via environment variables.
 
-**Facebook:**
+For each social provider the user selected, ask: "What is the App ID / Client ID for {provider}?"
 
-```yaml
-# authentication-openauth-facebook-appid.yml
-id: <UUID>
-name: Authentication/OpenAuth/Facebook/AppId
-value: <to-be-configured>
+```powershell
+# Facebook — uses AppId (not ClientId)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/Facebook/AppId" \
+  --value "<app-id-from-user>" \
+  --description "Facebook App ID"
 
-# authentication-openauth-facebook-appsecret.yml
-id: <UUID>
-name: Authentication/OpenAuth/Facebook/AppSecret
-value: <to-be-configured>
+# Google
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/Google/ClientId" \
+  --value "<client-id-from-user>" \
+  --description "Google Client ID"
+
+# Microsoft Account
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/MicrosoftAccount/ClientId" \
+  --value "<client-id-from-user>" \
+  --description "Microsoft Account Client ID"
 ```
 
-**Google:**
+#### 8.1.1 Handle Secrets via Environment Variables
 
-```yaml
-# authentication-openauth-google-clientid.yml
-id: <UUID>
-name: Authentication/OpenAuth/Google/ClientId
-value: <to-be-configured>
+For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YAML files**. Instead, use environment variables backed by Dataverse:
 
-# authentication-openauth-google-clientsecret.yml
-id: <UUID>
-name: Authentication/OpenAuth/Google/ClientSecret
-value: <to-be-configured>
+```powershell
+# Create environment variable with placeholder
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "<prefix_ProviderClientSecret>" \
+  --displayName "<Provider> Client Secret" \
+  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+
+# Create site setting that references the environment variable
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/ClientSecret" \
+  --envVarSchema "<prefix_ProviderClientSecret>"
 ```
 
-**Microsoft Account:**
+For Social OAuth secrets, use the same pattern:
+- Facebook: env var for `AppSecret`, site setting `Authentication/OpenAuth/Facebook/AppSecret` with `--envVarSchema`
+- Google: env var for `ClientSecret`, site setting `Authentication/OpenAuth/Google/ClientSecret` with `--envVarSchema`
+- Microsoft Account: env var for `ClientSecret`, site setting `Authentication/OpenAuth/MicrosoftAccount/ClientSecret` with `--envVarSchema`
 
-```yaml
-# authentication-openauth-microsoftaccount-clientid.yml
-id: <UUID>
-name: Authentication/OpenAuth/MicrosoftAccount/ClientId
-value: <to-be-configured>
+After creating the environment variables, tell the user to update each placeholder with the real secret value via:
+- **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
 
-# authentication-openauth-microsoftaccount-clientsecret.yml
-id: <UUID>
-name: Authentication/OpenAuth/MicrosoftAccount/ClientSecret
-value: <to-be-configured>
+Present the list of environment variables that need updating (display name and schema name for each).
+
+**Invitation-Based Registration** — when invitation-based registration is requested:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/InvitationEnabled" \
+  --value "true" \
+  --description "Enable invitation-based registration" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/RequireInvitationCode" \
+  --value "true" \
+  --description "Require invitation code to register" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/OpenRegistrationEnabled" \
+  --value "false" \
+  --description "Disable open registration (invitation-only)" \
+  --type boolean
 ```
 
-> **Security Warning:** Never commit `ClientSecret` or `AppSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values.
+> **Note:** Setting `RequireInvitationCode` to `true` and `OpenRegistrationEnabled` to `false` enforces invitation-only registration.
 
-**Invitation-Based Registration** — when invitation-based registration is requested, create these additional settings:
+**Two-Factor Authentication** — when 2FA is requested:
 
-```yaml
-# authentication-registration-invitationenabled.yml
-id: <UUID>
-name: Authentication/Registration/InvitationEnabled
-value: true
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/TwoFactorEnabled" \
+  --value "true" \
+  --description "Enable two-factor authentication" \
+  --type boolean
 
-# authentication-registration-requireinvitationcode.yml
-id: <UUID>
-name: Authentication/Registration/RequireInvitationCode
-value: true
-
-# authentication-registration-openregistrationenabled.yml
-id: <UUID>
-name: Authentication/Registration/OpenRegistrationEnabled
-value: false
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/RememberBrowserEnabled" \
+  --value "true" \
+  --description "Allow remembering browser to skip 2FA" \
+  --type boolean
 ```
-
-> **Note:** Setting `RequireInvitationCode` to `true` and `OpenRegistrationEnabled` to `false` enforces invitation-only registration — users without a valid invitation code cannot register.
-
-**Two-Factor Authentication** — when 2FA is requested, create these additional settings:
-
-```yaml
-# authentication-registration-twofactorenabled.yml
-id: <UUID>
-name: Authentication/Registration/TwoFactorEnabled
-value: true
-
-# authentication-registration-remembermebrowserenabled.yml
-id: <UUID>
-name: Authentication/Registration/RememberBrowserEnabled
-value: true
-```
-
-Remind the user to fill in placeholder values (`<to-be-configured>`) with actual credentials from their identity provider's application registration.
 
 #### 8.2 Record Skill Usage
 
@@ -806,7 +821,7 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
   - **Social OAuth**: Register an application with each social provider (e.g., Facebook Developer Console, Google Cloud Console) and update the credential site settings. Facebook uses `AppId`/`AppSecret`; Google and Microsoft Account use `ClientId`/`ClientSecret`. Configure these values in the Power Pages admin center -- do not commit secrets to source control
-  - **Azure AD B2C**: Configure user flow policies (sign-up/sign-in, password reset, profile edit) in the Azure AD B2C tenant. Register the application and update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The server automatically handles B2C error codes for password reset (`AADB2C90118`) and user cancellation (`AADB2C90091`)
+  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL uses `{tenant}.ciamlogin.com`
 - **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
 - **Invitation-based registration**: If invitations are enabled (`Authentication/Registration/InvitationEnabled = true`), share invitation links in the format `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl=/`. The invitation code is threaded through the entire auth flow including 2FA
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center

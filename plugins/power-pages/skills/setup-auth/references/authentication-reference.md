@@ -9,7 +9,7 @@ Power Pages supports the following authentication mechanisms:
 | Provider Type | Description | Login Endpoint | Provider Identifier |
 |---------------|-------------|----------------|---------------------|
 | **Microsoft Entra ID** | Azure AD / Entra ID via OpenID Connect | `/Account/Login/ExternalLogin` | `https://login.windows.net/{tenantId}/` |
-| **Azure AD B2C** | Azure AD B2C with user flow policies | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
+| **Entra External ID** | Customer-facing identity with self-service sign-up (CIAM) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **OpenID Connect (Generic)** | Any OIDC-compliant provider (Okta, Auth0, Ping, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **SAML2** | SAML 2.0 identity providers (ADFS, Shibboleth, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/SAML2/{name}/AuthenticationType` |
 | **WS-Federation** | WS-Federation identity providers | `/Account/Login/ExternalLogin` | Site setting `Authentication/WsFederation/{name}/AuthenticationType` |
@@ -122,7 +122,7 @@ export type AuthProviderType =
   | 'ws-federation'
   | 'local'
   | 'social'
-  | 'azure-ad-b2c';
+  | 'entra-external-id';
 
 export interface AuthProviderConfig {
   type: AuthProviderType;
@@ -224,10 +224,10 @@ function resolveProviderIdentifier(): string {
       }
       return `https://login.windows.net/${tenantId}/`;
     }
-    case 'azure-ad-b2c':
+    case 'entra-external-id':
       throw new Error(
-        'providerIdentifier must be set in AUTH_PROVIDER config for Azure AD B2C. ' +
-        'Use the AuthenticationType value from your B2C site settings.'
+        'providerIdentifier must be set in AUTH_PROVIDER config for Entra External ID. ' +
+        'Use the AuthenticationType value from your External ID site settings.'
       );
     default:
       throw new Error(
@@ -566,13 +566,13 @@ export function AuthButton() {
 }
 ```
 
-### Azure AD B2C
+### Entra External ID
 
 ```typescript
 const AUTH_PROVIDER: AuthProviderConfig = {
-  type: 'azure-ad-b2c',
-  providerIdentifier: 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/v2.0/', // Must match AuthenticationType site setting
-  displayName: 'Sign in with Azure AD B2C',
+  type: 'entra-external-id',
+  providerIdentifier: 'https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/', // Must match AuthenticationType site setting
+  displayName: 'Sign in with External ID',
 };
 ```
 
@@ -986,17 +986,11 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 | `RegistrationClaimsMapping` | JSON mapping of OIDC claims to contact fields on registration |
 | `LoginClaimsMapping` | JSON mapping of OIDC claims to contact fields on login |
 
-### Azure AD B2C Provider Settings
+### Entra External ID Provider Settings
 
-B2C uses the same `Authentication/OpenIdConnect/{ProviderName}/{SettingName}` path as generic OIDC but with additional policy-related settings:
+Entra External ID uses the same `Authentication/OpenIdConnect/{ProviderName}/{SettingName}` path as generic OIDC. The authority URL uses the `ciamlogin.com` domain instead of `login.microsoftonline.com`.
 
-| Setting | Description |
-|---------|-------------|
-| `DefaultPolicyId` | The sign-up/sign-in user flow policy name (e.g., `B2C_1_signupsignin`) |
-| `PasswordResetPolicyId` | The password reset user flow policy name (e.g., `B2C_1_passwordreset`) |
-| `ProfileEditPolicyId` | The profile editing user flow policy name (e.g., `B2C_1_profileedit`) |
-
-All other settings from the OpenID Connect section above also apply to B2C providers.
+All settings from the OpenID Connect section above apply to Entra External ID providers.
 
 ### SAML2 Provider Settings
 
@@ -1080,11 +1074,11 @@ Social providers use the `Authentication/OpenAuth/{ProviderName}/` site setting 
 
 ---
 
-## Azure AD B2C Provider
+## Entra External ID Provider
 
-Azure AD B2C is a distinct provider type that uses OpenID Connect underneath but requires additional configuration for user flow policies: sign-up/sign-in, password reset, and profile editing.
+Entra External ID (formerly Azure AD B2C) is Microsoft's customer identity and access management (CIAM) solution. It uses OpenID Connect underneath with the `ciamlogin.com` authority domain.
 
-### B2C Provider Type
+### External ID Provider Type
 
 ```typescript
 export type AuthProviderType =
@@ -1094,59 +1088,33 @@ export type AuthProviderType =
   | 'ws-federation'
   | 'local'
   | 'social'
-  | 'azure-ad-b2c';
+  | 'entra-external-id';
 ```
 
-### B2C AUTH_PROVIDER Configuration
+### External ID AUTH_PROVIDER Configuration
 
 ```typescript
 const AUTH_PROVIDER: AuthProviderConfig = {
-  type: 'azure-ad-b2c',
-  providerIdentifier: 'https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/', // Must match AuthenticationType site setting
-  displayName: 'Sign in with Azure AD B2C',
+  type: 'entra-external-id',
+  providerIdentifier: 'https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/', // Must match AuthenticationType site setting
+  displayName: 'Sign in with External ID',
 };
 ```
 
-### B2C Site Settings
+### External ID Site Settings
 
 Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 
-B2C uses the same OpenID Connect site setting path but with additional policy settings:
+Entra External ID uses the same OpenID Connect site setting path:
 
 | Setting | Description |
 |---------|-------------|
-| `Authority` | B2C authority URL (e.g., `https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/`) |
-| `ClientId` | Application (client) ID from the B2C app registration |
+| `Authority` | External ID authority URL (e.g., `https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/`) |
+| `ClientId` | Application (client) ID from the External ID app registration |
 | `AuthenticationType` | Unique identifier for this provider (typically the authority URL) |
 | `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{provider}`) |
-| `MetadataAddress` | B2C metadata URL including policy (e.g., `https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/.well-known/openid-configuration?p={sign-up-sign-in-policy}`) |
-| `DefaultPolicyId` | The sign-up/sign-in user flow policy name (e.g., `B2C_1_signupsignin`) |
-| `PasswordResetPolicyId` | The password reset user flow policy name (e.g., `B2C_1_passwordreset`) |
-| `ProfileEditPolicyId` | The profile editing user flow policy name (e.g., `B2C_1_profileedit`) |
-| `ExternalLogoutEnabled` | `true` to sign out of B2C on logout |
+| `ExternalLogoutEnabled` | `true` to sign out of External ID on logout |
 | `Caption` | Display name shown on the login button |
-
-### B2C Error Handling
-
-The server handles two specific B2C error codes in the `AuthenticationFailed` notification:
-
-- **`AADB2C90118`** -- User clicked "Forgot password?" on the sign-in page. The server redirects to the `ExternalPasswordReset` action with the `PasswordResetPolicyId`. The client-side auth service does not need to handle this directly; it is managed by the server middleware.
-- **`AADB2C90091`** -- User cancelled the sign-up, password reset, or profile edit flow. The server redirects back to the login page without error.
-
-### B2C Password Reset Flow
-
-1. User clicks "Forgot password?" on the B2C sign-up/sign-in policy page
-2. B2C returns error code `AADB2C90118`
-3. Server middleware catches the error and redirects to `/Account/Login/ExternalPasswordReset?passwordResetPolicyId={policy}&provider={provider}`
-4. The `ExternalPasswordReset` action sets the policy in the OWIN context and challenges the provider with the password reset policy
-5. After password reset, the user is redirected back to the login page
-
-### B2C Profile Editing
-
-The server exposes an `ExternalProfileEdit` action at `/Account/Login/ExternalProfileEdit` that:
-1. Sets the `ProfileEditPolicyId` in the OWIN context
-2. Challenges the provider to initiate the profile edit flow
-3. On completion, maps updated claims back to the contact record
 
 ---
 
@@ -1253,5 +1221,5 @@ await login('/dashboard', { username: email, password, rememberMe: true }, invit
 - **Auth only works on deployed sites**: The `/_layout/tokenhtml` endpoint and `window.Microsoft.Dynamic365.Portal` object are only available when the site is served from Power Pages, not during local `npm run dev`.
 - **Mock data for development**: The auth service includes a mock user pattern for local development. The mock user has configurable roles so developers can test role-based UI locally.
 - **Security**: Always validate permissions server-side via table permissions. Client-side auth checks are for UX only -- a direct API call bypasses all client-side checks. Never commit secrets (`ClientSecret`, `AppSecret`) to source control -- use the Power Pages admin center for sensitive values.
-- **Provider configuration**: The identity provider must be configured in the Power Pages admin center (for Entra ID) or via site settings (for OIDC, SAML2, WS-Fed, Social, B2C). This skill creates the client-side code and site settings but does not configure the external identity provider itself.
+- **Provider configuration**: The identity provider must be configured in the Power Pages admin center (for Entra ID) or via site settings (for OIDC, SAML2, WS-Fed, Social, Entra External ID). This skill creates the client-side code and site settings but does not configure the external identity provider itself.
 - **Multiple providers**: Power Pages supports multiple identity providers simultaneously. Users see all configured providers on the login page. To configure multiple providers, create separate site settings for each and update the auth service to support provider selection.
