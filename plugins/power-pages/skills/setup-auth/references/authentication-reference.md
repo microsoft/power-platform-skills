@@ -616,7 +616,7 @@ export async function loginWithProvider(
 
 **Multi-Provider Login Page Component (React):**
 
-When multiple providers are configured (including mixed external + local), render external provider buttons alongside a local login form:
+When multiple providers are configured (including mixed external + local), all providers appear as buttons. External providers redirect immediately on click. The local provider button expands an inline credential form for username/email and password input.
 
 ```tsx
 import { useState } from 'react';
@@ -626,6 +626,7 @@ import './AuthButton.css';
 
 export function AuthButton() {
   const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth();
+  const [showLocalForm, setShowLocalForm] = useState(false);
   const [credential, setCredential] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -649,7 +650,7 @@ export function AuthButton() {
 
   return (
     <div className="auth-button auth-providers">
-      {/* External provider buttons */}
+      {/* External provider buttons — clicking redirects to the identity provider */}
       {externalProviders.map((provider) => (
         <button
           key={provider.providerIdentifier}
@@ -660,24 +661,35 @@ export function AuthButton() {
         </button>
       ))}
 
-      {/* Local login form (if local auth is configured) */}
-      {localProvider && (
-        <>
-          {externalProviders.length > 0 && <div className="auth-divider">or</div>}
-          <form className="auth-local-form" onSubmit={async (e) => {
-            e.preventDefault();
-            await loginWithProvider('local', undefined, { username: credential, password, rememberMe });
-          }}>
-            <input
-              type={localProvider.loginByEmail ? 'email' : 'text'}
-              placeholder={localProvider.loginByEmail ? 'Email' : 'Username'}
-              value={credential} onChange={(e) => setCredential(e.target.value)} required
-            />
-            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <label><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember me</label>
+      {/* Local login — button that expands to show credential form on click */}
+      {localProvider && !showLocalForm && (
+        <button
+          className="auth-sign-in auth-local-btn"
+          onClick={() => setShowLocalForm(true)}
+        >
+          {localProvider.displayName}
+        </button>
+      )}
+
+      {localProvider && showLocalForm && (
+        <form className="auth-local-form" onSubmit={async (e) => {
+          e.preventDefault();
+          await loginWithProvider('local', undefined, { username: credential, password, rememberMe });
+        }}>
+          <input
+            type={localProvider.loginByEmail ? 'email' : 'text'}
+            placeholder={localProvider.loginByEmail ? 'Email' : 'Username'}
+            value={credential} onChange={(e) => setCredential(e.target.value)} required
+            autoFocus
+          />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <label><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember me</label>
+          <div className="auth-local-actions">
             <button type="submit">{localProvider.displayName}</button>
-          </form>
-        </>
+            <button type="button" className="auth-back-btn" onClick={() => setShowLocalForm(false)}>Back</button>
+          </div>
+          <a href="/Account/Login/ForgotPassword" className="auth-forgot-password">Forgot password?</a>
+        </form>
       )}
     </div>
   );
