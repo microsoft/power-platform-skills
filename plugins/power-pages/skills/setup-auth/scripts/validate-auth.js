@@ -48,10 +48,15 @@ runValidation((cwd) => {
     }
   }
 
-  // Check for authorization utilities
+  // Check for authorization utilities — only if auth service references role-checking
+  // (skip for "Login & Logout only" scope where authorization utils are not created)
   const authzUtils = findAuthorizationUtils(projectRoot);
-  if (!authzUtils) {
-    errors.push('Missing authorization utilities (src/utils/authorization.ts or equivalent)');
+  if (!authzUtils && authServiceExists) {
+    const authContent = fs.readFileSync(authServiceExists, 'utf8');
+    // Only flag missing authz utils if the auth service imports or references them
+    if (authContent.includes('authorization') || authContent.includes('hasRole') || authContent.includes('getUserRoles')) {
+      errors.push('Missing authorization utilities (src/utils/authorization.ts or equivalent)');
+    }
   }
 
   // Check for auth UI component

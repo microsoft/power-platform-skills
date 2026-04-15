@@ -85,9 +85,21 @@ try {
 
 // --- Helpers ---
 
+function needsQuoting(value) {
+  if (typeof value !== 'string') return false;
+  // Quote strings containing YAML-special characters: : # { } [ ] , & * ? | - < > = ! % @ ` or leading/trailing whitespace
+  return /[:#{}[\],&*?|<>=!%@`]/.test(value) || value !== value.trim() || value === '' || value === 'true' || value === 'false' || value === 'null';
+}
+
+function yamlValue(value) {
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  if (needsQuoting(value)) return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return String(value);
+}
+
 function writeYaml(fields) {
   const keys = Object.keys(fields).sort();
-  return keys.map(k => `${k}: ${fields[k]}`).join('\n') + '\n';
+  return keys.map(k => `${k}: ${yamlValue(fields[k])}`).join('\n') + '\n';
 }
 
 // --- Create site setting ---

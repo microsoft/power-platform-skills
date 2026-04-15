@@ -9,12 +9,14 @@ Power Pages supports the following authentication mechanisms:
 | Provider Type | Description | Login Endpoint | Provider Identifier |
 |---------------|-------------|----------------|---------------------|
 | **Microsoft Entra ID** | Azure AD / Entra ID via OpenID Connect | `/Account/Login/ExternalLogin` | `https://login.windows.net/{tenantId}/` |
-| **Entra External ID** | Customer-facing identity with self-service sign-up (CIAM) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
+| **Entra External ID** | Customer identity (CIAM) with self-service sign-up. Uses OIDC with `ciamlogin.com` domain. **This is NOT Microsoft Account** — it is a separate OIDC provider for customer-facing apps. | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **OpenID Connect (Generic)** | Any OIDC-compliant provider (Okta, Auth0, Ping, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **SAML2** | SAML 2.0 identity providers (ADFS, Shibboleth, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/SAML2/{name}/AuthenticationType` |
 | **WS-Federation** | WS-Federation identity providers | `/Account/Login/ExternalLogin` | Site setting `Authentication/WsFederation/{name}/AuthenticationType` |
 | **Local Authentication** | Username/password login without external provider | `/Account/Login/Login` | N/A (direct credential POST) |
-| **Social OAuth** | Microsoft Account, Facebook, Google | `/Account/Login/ExternalLogin` | Provider-specific (e.g., `urn:microsoft:account`, `Facebook`, `Google`) |
+| **Microsoft Account** | Microsoft personal/work account (social OAuth). **Not the same as Entra External ID.** | `/Account/Login/ExternalLogin` | `urn:microsoft:account` |
+| **Facebook** | Facebook social login | `/Account/Login/ExternalLogin` | `Facebook` |
+| **Google** | Google social login | `/Account/Login/ExternalLogin` | `Google` |
 
 ## How Power Pages Authentication Works
 
@@ -152,6 +154,9 @@ const MOCK_USER: PowerPagesUser = {
   userRoles: ['Authenticated Users', 'Administrators'],
 };
 
+// Track mock sign-out state in dev mode (persists across page reloads via sessionStorage)
+const DEV_SIGNEDOUT_KEY = '__pp_dev_signedout__';
+
 /**
  * Returns the configured authentication provider.
  */
@@ -163,7 +168,12 @@ export function getAuthProvider(): AuthProviderConfig {
  * Returns the currently logged-in user, or undefined if not authenticated.
  */
 export function getCurrentUser(): PowerPagesUser | undefined {
-  if (isDevelopment) return MOCK_USER;
+  if (typeof window === 'undefined') return undefined; // SSR guard (Astro)
+  if (isDevelopment) {
+    // In dev mode, respect mock sign-out state
+    if (sessionStorage.getItem(DEV_SIGNEDOUT_KEY)) return undefined;
+    return MOCK_USER;
+  }
   return window.Microsoft?.Dynamic365?.Portal?.User;
 }
 
@@ -255,7 +265,8 @@ export async function login(
   invitationCode?: string
 ): Promise<void> {
   if (isDevelopment) {
-    console.warn('[Auth] Login is not available in local development. Using mock user.');
+    // Clear sign-out state so mock user comes back
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
     window.location.reload();
     return;
   }
@@ -341,7 +352,7 @@ export async function login(
  */
 export function logout(returnUrl?: string): void {
   if (isDevelopment) {
-    console.warn('[Auth] Logout is not available in local development.');
+    sessionStorage.setItem(DEV_SIGNEDOUT_KEY, '1');
     window.location.reload();
     return;
   }
@@ -492,7 +503,7 @@ export async function loginWithProvider(
   invitationCode?: string
 ): Promise<void> {
   if (isDevelopment) {
-    console.warn('[Auth] Login is not available in local development. Using mock user.');
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
     window.location.reload();
     return;
   }
@@ -1054,7 +1065,7 @@ Social providers use the `Authentication/OpenAuth/{ProviderName}/` site setting 
 | `Authentication/OpenAuth/Google/ClientId` | Google Client ID from the Google Cloud Console |
 | `Authentication/OpenAuth/Google/ClientSecret` | Google Client Secret from the Google Cloud Console |
 
-> **Security Warning:** Never commit `ClientSecret` or `AppSecret` values to source control. Use the Power Pages admin center to configure sensitive credential values. Site setting YAML files with placeholder values (e.g., `<to-be-configured>`) are acceptable for tracking which settings are needed, but actual secrets must be managed through the admin center or environment variables.
+> **Security Warning:** Never commit `ClientSecret` or `AppSecret` values to source control. Secrets must be stored as Dataverse environment variables using `create-environment-variable.js`, then linked to site settings via `create-site-setting.js --envVarSchema`. Do NOT create site setting YAML files with placeholder secret values — use the environment variable pattern exclusively. The user updates actual secret values through the Power Apps maker portal (make.powerapps.com).
 
 ### Two-Factor Cookie Settings
 

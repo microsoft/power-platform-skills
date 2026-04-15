@@ -7,14 +7,18 @@ description: >
   "add role-based access", "add authorization", "protect routes",
   "add auth to my site", "configure identity provider", "set up SAML",
   "add SAML authentication", "configure OpenID Connect", "add OIDC",
-  "set up local login", "add username password login", "add social login",
-  "configure Facebook login", "add Google sign in", "set up WS-Federation",
+  "set up local login", "add username password login",
+  "configure Facebook login", "add Facebook auth",
+  "add Google sign in", "configure Google login",
+  "add Microsoft Account login", "configure Microsoft login",
+  "set up WS-Federation",
   "configure Entra External ID", "set up External ID auth", "add External ID login",
   "enable two-factor authentication", "add 2FA", "set up invitation login",
   or wants to set up authentication (login/logout) and role-based
   authorization for their Power Pages code site using any supported
   identity provider (Microsoft Entra ID, Entra External ID, OpenID Connect,
-  SAML2, WS-Federation, local authentication, or social OAuth providers).
+  SAML2, WS-Federation, local authentication, Microsoft Account, Facebook,
+  or Google).
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
@@ -24,7 +28,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), and social OAuth providers (Microsoft Account, Facebook, Google). It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -144,29 +148,67 @@ If auth files already exist, present them to the user and ask whether to overwri
 
 #### 2.1 Gather Requirements
 
-Use `AskUserQuestion` to determine the identity provider:
+**IMPORTANT: Multiple providers are supported.** The user may want more than one identity provider (e.g., Entra External ID + Local Authentication, or Google + Facebook). If the user's initial prompt mentions multiple providers, skip the provider selection question and proceed directly to collecting details for each mentioned provider.
+
+If the user has NOT specified which provider(s) they want, use `AskUserQuestion` to determine the identity provider(s). **This is a multi-select question** — the user can choose one or more:
 
 | Question | Options |
 |----------|---------|
-| Which identity provider do you want to use for authentication? | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Entra External ID — Customer-facing identity with self-service sign-up (CIAM), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Social OAuth — Microsoft Account, Facebook, or Google |
+| Which identity provider(s) do you want to use? (select all that apply) | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Entra External ID — Customer-facing identity with self-service sign-up (CIAM), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
-**If "Social OAuth"**, follow up — ask the user which specific provider(s) they want. Do NOT assume or pre-select providers:
+**Then, for EACH selected provider, ask the mandatory follow-up questions below.** Do not skip any provider — every selected provider needs its configuration collected before proceeding.
 
-| Question | Options |
-|----------|---------|
-| Which social provider(s) do you want to configure? (select all that apply) | Microsoft Account, Facebook, Google |
-
-**If "OpenID Connect (Generic)"**, ask for the provider details:
+**For "Microsoft Account"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Authority URL (metadata endpoint) for your OpenID Connect provider? (e.g., https://login.microsoftonline.com/{tenant}/v2.0) | *(free text)* |
+| What is the Client ID from your Microsoft app registration? | *(free text)* |
 
-**If "SAML2"**, ask for the provider details:
+**For "Facebook"**:
+
+| Question | Options |
+|----------|---------|
+| What is the App ID from the Facebook Developer Console? | *(free text)* |
+
+**For "Google"**:
+
+| Question | Options |
+|----------|---------|
+| What is the Client ID from the Google Cloud Console? | *(free text)* |
+
+**For "OpenID Connect (Generic)"**:
+
+| Question | Options |
+|----------|---------|
+| What is the Authority URL for your OpenID Connect provider? (e.g., https://login.microsoftonline.com/{tenant}/v2.0) | *(free text)* |
+| What is the Client ID (Application ID) from your provider's app registration? | *(free text)* |
+| What display name should the login button show? (e.g., "Sign in with Okta") | *(free text)* |
+
+**For "Entra External ID"**:
+
+| Question | Options |
+|----------|---------|
+| What is your Entra External ID tenant name? (e.g., contoso — the part before .ciamlogin.com) | *(free text)* |
+| What is the Client ID (Application ID) from the External ID app registration? | *(free text)* |
+
+**For "SAML2"**:
 
 | Question | Options |
 |----------|---------|
 | What is the metadata endpoint URL for your SAML2 identity provider? (e.g., https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml) | *(free text)* |
+| What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
+
+**For "WS-Federation"**:
+
+| Question | Options |
+|----------|---------|
+| What is the metadata endpoint URL for your WS-Federation provider? (e.g., https://adfs.contoso.com/federationmetadata/2007-06/federationmetadata.xml) | *(free text)* |
+| What is the provider realm or identifier? (the AuthenticationType value) | *(free text)* |
+| What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
+
+**For "Local Authentication"**: No additional configuration needed — boolean site settings are created automatically.
+
+**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
 
 Then determine the scope:
 
@@ -174,11 +216,129 @@ Then determine the scope:
 |----------|---------|
 | Which authentication features do you need? | Login & Logout + Role-based access control (Recommended), Login & Logout only, Role-based access control only (auth service already exists) |
 
+Then ask about optional features:
+
+| Question | Options |
+|----------|---------|
+| Would you like to enable any of these optional features? | None (Recommended), Two-factor authentication (2FA) — users verify with a code after login, Invitation-based registration — only users with invitation codes can register |
+
+> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select invitation-based registration, Phase 8.1 will create `InvitationEnabled`, `RequireInvitationCode`, and `OpenRegistrationEnabled` site settings.
+
 If web roles were found in Phase 1.4, also ask:
 
 | Question | Options |
 |----------|---------|
 | Which web roles should have access to protected areas of the site? | *(List discovered web role names as options)* |
+
+#### 2.1.1 Optional Advanced Settings
+
+After collecting the required provider details, ask if the user wants to configure advanced settings:
+
+| Question | Options |
+|----------|---------|
+| Would you like to configure advanced authentication settings? (claims mapping, session timeout, scopes, etc.) | No, use defaults (Recommended), Yes, show me the options |
+
+**If "Yes, show me the options"**, present the optional settings table relevant to the selected provider. Only show settings that apply to their provider type. For each setting the user wants to configure, collect the value.
+
+**OpenID Connect / Entra External ID optional settings:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Scope` | Space-separated OAuth scopes (e.g., `openid profile email`) | `openid` |
+| `ResponseType` | OAuth response type (`code`, `id_token`, `code id_token`) | `code id_token` |
+| `RedirectUri` | Override the callback URL | `{site-url}/signin-{provider}` |
+| `PostLogoutRedirectUri` | URL to redirect to after external logout | Site root |
+| `RegistrationClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on registration (e.g., `{"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": "firstname"}`) | None |
+| `LoginClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on every login | None |
+| `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out of Power Pages | `true` |
+| `RegistrationEnabled` | Allow new users to register via this provider | `true` |
+| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `UseTokenLifetime` | Use the IdP token lifetime for the session cookie | Not set (uses Power Pages default) |
+| `BackchannelTimeout` | Timeout for backchannel HTTP calls to the IdP (e.g., `00:01:00`) | `00:01:00` |
+| `NonceEnabled` | Enable nonce validation on OIDC tokens | `true` |
+| `NonceLifetime` | Lifetime of the OIDC nonce (e.g., `00:10:00`) | `00:10:00` |
+| `AcrValues` | Authentication Context Class Reference values to request from the IdP | None |
+| `Prompt` | OIDC prompt parameter (`login`, `consent`, `none`) | None |
+| `Resource` | Resource parameter for the token request | None |
+| `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
+| `EmailClaimIdentifier` | Custom claim type to use as the user's email | Standard email claim |
+| `IssuerFilter` | Wildcard pattern to match issuers across tenants (for multi-tenant apps) | None |
+| `UseUserInfoEndpointforClaims` | Fetch additional claims from the UserInfo endpoint | `false` |
+| `UserInfoEndpoint` | Custom UserInfo endpoint URL (if not in metadata) | From metadata |
+
+**SAML2 optional settings:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{provider}`) | Derived from site URL |
+| `RegistrationClaimsMapping` | JSON mapping of SAML assertions to contact fields on registration | None |
+| `LoginClaimsMapping` | JSON mapping of SAML assertions to contact fields on every login | None |
+| `ExternalLogoutEnabled` | Enable SAML Single Logout (SLO) | `true` |
+| `RegistrationEnabled` | Allow new users to register via this provider | `true` |
+| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `AllowCreateNameIdPolicy` | Include AllowCreate in NameIdPolicy | `true` |
+| `DefaultSignatureAlgorithm` | Signature algorithm for SAML requests | Provider default |
+| `SigningCertificateFindType` | X509 certificate find type for signing requests | None |
+| `SigningCertificateFindValue` | Certificate find value (e.g., thumbprint) | None |
+| `ExternalLogoutCertThumbprint` | Certificate thumbprint for SLO response signing | None |
+| `SingleLogoutServiceRequestPath` | Custom path for SLO request | Default |
+| `SingleLogoutServiceResponsePath` | Custom path for SLO response | Default |
+| `Comparison` | AuthnContextComparison type (`exact`, `minimum`, `maximum`, `better`) | None |
+| `BackchannelTimeout` | Timeout for metadata retrieval | `00:01:00` |
+| `UseTokenLifetime` | Use IdP token lifetime for session | Not set |
+| `EmailClaimIdentifier` | Custom claim type for user's email | Standard email claim |
+| `IssuerFilter` | Wildcard pattern for multi-tenant issuer matching | None |
+
+**WS-Federation optional settings:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Wreply` | Reply URL for the WS-Fed response | Same as Wtrealm |
+| `Whr` | Home realm discovery hint (e.g., a domain name) | None |
+| `SignOutWreply` | URL for post-logout redirect | Site root |
+| `RegistrationClaimsMapping` | JSON mapping of WS-Fed claims to contact fields on registration | None |
+| `LoginClaimsMapping` | JSON mapping of WS-Fed claims to contact fields on every login | None |
+| `ExternalLogoutEnabled` | Enable federated sign-out | `true` |
+| `RegistrationEnabled` | Allow new users to register via this provider | `true` |
+| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `BackchannelTimeout` | Timeout for metadata retrieval | `00:01:00` |
+| `UseTokenLifetime` | Use IdP token lifetime for session | Not set |
+| `IssuerFilter` | Wildcard pattern for multi-tenant issuer matching | None |
+
+**Social OAuth optional settings** (Microsoft Account, Facebook, Google):
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Caption` | Display name on the login button | Provider name |
+| `Scope` | OAuth scopes to request (space-separated) | Provider defaults |
+| `RegistrationClaimsMapping` | JSON mapping of social claims to contact fields on registration | None |
+| `LoginClaimsMapping` | JSON mapping of social claims to contact fields on every login | None |
+| `ExternalLogoutEnabled` | Sign out of social provider on logout | `true` |
+| `RegistrationEnabled` | Allow new users to register via this provider | `true` |
+| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `BackchannelTimeout` | Timeout for OAuth token exchange | `00:01:00` |
+
+**Local Authentication optional settings:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Authentication/Registration/OpenRegistrationEnabled` | Allow self-registration | `true` |
+| `Authentication/Registration/EmailConfirmationEnabled` | Require email confirmation on registration | `false` |
+| `Authentication/Registration/RememberMeEnabled` | Show "Remember me" checkbox on login form | `false` |
+| `Authentication/Registration/TermsAgreementEnabled` | Require terms agreement on registration | `false` |
+| `Authentication/Registration/DenyMinors` | Deny registration for users identified as minors | `false` |
+
+**Session / Cookie settings** (all providers):
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Authentication/ApplicationCookie/ExpireTimeSpan` | Session timeout duration (e.g., `01:00:00` for 1 hour) | `01:00:00` |
+| `Authentication/ApplicationCookie/SlidingExpiration` | Renew cookie on each request | `true` |
+| `Authentication/ApplicationCookie/CookieName` | Custom session cookie name | Power Pages default |
+| `Authentication/ApplicationCookie/CookieDomain` | Cookie domain scope | Current domain |
+| `Authentication/Registration/LoginButtonAuthenticationType` | Default provider for the login button | None (shows all) |
+
+For each setting the user wants to configure, create the site setting using `create-site-setting.js` during Phase 8.1 alongside the required settings.
 
 #### 2.2 Present Plan for Approval
 
@@ -246,7 +406,9 @@ Create the auth service file based on the detected framework and selected identi
 - **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
 - **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
 - **Local Authentication**: Form POST to `/Account/Login/Login` with credentials, `Password`, anti-forgery token, and optionally `RememberMe`. When the `Authentication/Registration/LocalLoginByEmail` site setting is `true`, send the `Email` field; otherwise send the `Username` field. Does NOT use the ExternalLogin endpoint.
-- **Social OAuth**: Form POST to `/Account/Login/ExternalLogin` with provider set to the social provider's `AuthenticationType` (e.g., `urn:microsoft:account`, `Facebook`, `Google`)
+- **Microsoft Account**: Form POST to `/Account/Login/ExternalLogin` with provider `urn:microsoft:account`
+- **Facebook**: Form POST to `/Account/Login/ExternalLogin` with provider `Facebook`
+- **Google**: Form POST to `/Account/Login/ExternalLogin` with provider `Google`
 
 **CRITICAL**: Power Pages authentication is **server-side** (session cookies). External login flows post a form to the server which redirects to the identity provider. Local login posts credentials directly to the server. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
 
@@ -529,10 +691,18 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "<description>"
 ```
 
+**`{ProviderName}` naming convention:** Replace `{ProviderName}` with the protocol followed by an incrementing number:
+- OpenID Connect: `OpenIdConnect_1`, `OpenIdConnect_2`, etc.
+- Entra External ID: `OpenIdConnect_1` (uses OIDC path)
+- SAML2: `SAML2_1`, `SAML2_2`, etc.
+- WS-Federation: `WsFederation_1`, `WsFederation_2`, etc.
+
+**Handling re-runs:** If `create-site-setting.js` exits with code 1 because a setting already exists, skip that setting and continue. The existing setting is already configured from a previous run. Do not treat this as a fatal error.
+
 **How values are sourced:**
 - **Non-secret values** (authority URL, site URL, redirect URIs, AuthenticationType) → filled automatically from information gathered during the flow. The user should NOT need to edit any files.
-- **ClientId** → ask the user for this value during the flow using `AskUserQuestion` ("What is the Client ID / Application ID from your identity provider's app registration?"). Then pass it to the script.
-- **Secrets** (`ClientSecret`, `AppSecret`) → use environment variables via `create-environment-variable.js`. Never ask for or store secret values directly. See the secrets section below.
+- **ClientId / AppId** → collected from the user in Phase 2.1 (each provider's follow-up question). Use the collected value when creating the site setting.
+- **Secrets** (`ClientSecret`, `AppSecret`) → use environment variables via `create-environment-variable.js`. Never ask for or store secret values directly. See Phase 8.1.1 below.
 
 **Always create** — ProfileRedirectEnabled:
 
@@ -545,11 +715,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
-**Provider-specific settings** — create additional site settings based on the selected identity provider:
+**Provider-specific settings** — create site settings for **EACH** provider selected in Phase 2.1. If the user selected multiple providers (e.g., Entra External ID + Local Authentication), create settings for ALL of them:
 
 **Microsoft Entra ID** (no additional settings needed — configured via Power Pages admin center).
 
-**OpenID Connect (Generic)** — create settings for the provider. Ask the user for their ClientId:
+**OpenID Connect (Generic)** — create settings for the provider (ClientId was collected in Phase 2.1):
 
 ```powershell
 # Authority
@@ -559,7 +729,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<authority-url-from-user>" \
   --description "OIDC authority URL"
 
-# ClientId — ask user for this value during the flow
+# ClientId — use value collected in Phase 2.1
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
@@ -601,15 +771,37 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
   --description "Entra External ID authority URL"
 
-# ClientId — ask user for this value during the flow
+# ClientId — use value collected in Phase 2.1
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
   --value "<client-id-from-user>" \
   --description "Application client ID"
 
-# AuthenticationType, RedirectUri, ExternalLogoutEnabled — same as OIDC above
+# AuthenticationType — same as authority URL
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
+  --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
+  --description "Provider identifier for ExternalLogin"
+
+# RedirectUri
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
+  --value "<site-url>/signin-{provider}" \
+  --description "OAuth callback URL"
+
+# ExternalLogoutEnabled
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
+  --value "true" \
+  --description "Sign out of External ID on logout" \
+  --type boolean
 ```
+
+> **ClientSecret for Entra External ID:** Use the same environment variable pattern as OIDC (see Phase 8.1.1). Create an env var for `ClientSecret` and link it via `--envVarSchema`.
 
 **SAML2** — create settings for the provider:
 
@@ -675,26 +867,29 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
-**Social OAuth** — for each selected social provider, ask the user for the ClientId/AppId. Secrets are handled via environment variables.
-
-For each social provider the user selected, ask: "What is the App ID / Client ID for {provider}?"
+**Facebook** — uses `AppId` (not `ClientId`). The App ID was collected in Phase 2.1:
 
 ```powershell
-# Facebook — uses AppId (not ClientId)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/Facebook/AppId" \
   --value "<app-id-from-user>" \
   --description "Facebook App ID"
+```
 
-# Google
+**Google** — the Client ID was collected in Phase 2.1:
+
+```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/Google/ClientId" \
   --value "<client-id-from-user>" \
   --description "Google Client ID"
+```
 
-# Microsoft Account
+**Microsoft Account** — the Client ID was collected in Phase 2.1:
+
+```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenAuth/MicrosoftAccount/ClientId" \
@@ -720,10 +915,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --envVarSchema "<prefix_ProviderClientSecret>"
 ```
 
-For Social OAuth secrets, use the same pattern:
-- Facebook: env var for `AppSecret`, site setting `Authentication/OpenAuth/Facebook/AppSecret` with `--envVarSchema`
-- Google: env var for `ClientSecret`, site setting `Authentication/OpenAuth/Google/ClientSecret` with `--envVarSchema`
-- Microsoft Account: env var for `ClientSecret`, site setting `Authentication/OpenAuth/MicrosoftAccount/ClientSecret` with `--envVarSchema`
+For Facebook, Google, and Microsoft Account secrets, use the same pattern:
+- **Facebook**: env var schema `{prefix}_FacebookAppSecret`, site setting `Authentication/OpenAuth/Facebook/AppSecret` with `--envVarSchema`
+- **Google**: env var schema `{prefix}_GoogleClientSecret`, site setting `Authentication/OpenAuth/Google/ClientSecret` with `--envVarSchema`
+- **Microsoft Account**: env var schema `{prefix}_MicrosoftClientSecret`, site setting `Authentication/OpenAuth/MicrosoftAccount/ClientSecret` with `--envVarSchema`
 
 After creating the environment variables, tell the user to update each placeholder with the real secret value via:
 - **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
@@ -820,7 +1015,9 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **SAML2**: Register the site as a service provider (SP) with the SAML IdP. The `ServiceProviderRealm` and `AssertionConsumerServiceUrl` must match the site URL
   - **WS-Federation**: Register the site as a relying party with the WS-Fed provider
   - **Local Authentication**: No external provider needed — users register and log in with username/password directly on the site
-  - **Social OAuth**: Register an application with each social provider (e.g., Facebook Developer Console, Google Cloud Console) and update the credential site settings. Facebook uses `AppId`/`AppSecret`; Google and Microsoft Account use `ClientId`/`ClientSecret`. Configure these values in the Power Pages admin center -- do not commit secrets to source control
+  - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
+  - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
+  - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL uses `{tenant}.ciamlogin.com`
 - **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
 - **Invitation-based registration**: If invitations are enabled (`Authentication/Registration/InvitationEnabled = true`), share invitation links in the format `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl=/`. The invitation code is threaded through the entire auth flow including 2FA

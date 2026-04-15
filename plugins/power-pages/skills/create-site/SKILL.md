@@ -241,6 +241,8 @@ Immediately after the dev server starts, verify the scaffold is working:
    > - "Partner Hub" + Internal → Document Library, Partner Directory, Deal Tracker, Notifications
    >
    > Always generate options that make sense for the specific site — never reuse a fixed list.
+   >
+   > **If you include an Authentication feature option**, describe it generically as "Login/signup for tracking application status" or similar. Do NOT mention a specific identity provider (e.g., "Entra ID", "SAML", "Google") in the feature description — the `/power-pages:setup-auth` skill will ask the user which provider they want.
 
 3. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
 4. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
