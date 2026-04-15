@@ -180,7 +180,7 @@ Before asking the user which providers they want, analyze the site context from 
 
 **IMPORTANT: Multiple providers are supported.** The user may want more than one identity provider (e.g., Entra External ID + Google). If the user's initial prompt mentions specific providers, skip the provider selection question and proceed directly to collecting details for each mentioned provider.
 
-> **Note on Local Authentication:** Do NOT present Local Authentication as a choice in the provider list. Only configure local login if the user explicitly asks for it (e.g., "I want username/password login", "set up local login"). Local auth is a legacy pattern — external identity providers are preferred.
+> **IMPORTANT — Local Authentication:** NEVER set up local authentication by default. Do NOT include it in the provider selection list, do NOT recommend it in smart inference, and do NOT configure it unless the user explicitly and specifically asks for it (e.g., "I want username/password login", "set up local login", "add local auth"). External identity providers (Entra External ID, Entra ID, OIDC, etc.) are always preferred. If the user says something ambiguous like "add login", default to an external provider — never to local auth.
 
 If the user has NOT specified which provider(s) they want, use `AskUserQuestion` to determine the identity provider(s). **This is a multi-select question** — the user can choose one or more:
 
