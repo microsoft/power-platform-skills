@@ -254,7 +254,13 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/ws-federation-settings
 
-**For "Local Authentication"** (only if user explicitly requested it): No additional configuration needed — boolean site settings are created automatically.
+**For "Local Authentication"** (only if user explicitly requested it): Ask the user how they want users to identify themselves when logging in:
+
+| Question | Options |
+|----------|---------|
+| How should users log in with their local account? | Login by email (Recommended) — Users sign in with their email address, Login by username — Users sign in with a chosen username |
+
+This choice determines the `Authentication/Registration/LocalLoginByEmail` site setting (`true` for email, `false` for username) and affects every form field in the login, registration, and auth service code. When **email** is chosen, the login and registration forms show an `Email` field (type `email`). When **username** is chosen, the forms show a `Username` field (type `text`) and `Email` becomes a separate required field on the registration form (the server needs it for the contact record). Store this choice — it will be used in Phase 3 (auth service), Phase 5 (sign-in and registration pages), and Phase 8.1 (site settings).
 
 **For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
 
@@ -477,7 +483,7 @@ Create the auth service file based on the detected framework and selected identi
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
 - `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message
-- `register(fields, returnUrl?, invitationCode?)` — for local auth: POSTs registration form to `/Account/Login/Register` with email/username, password, confirmPassword. Throws if neither email nor username is provided.
+- `register(fields, returnUrl?, invitationCode?)` — **Required when local auth is configured.** POSTs registration form to `/Account/Login/Register` with anti-forgery token, email or username (based on `LocalLoginByEmail` choice from Phase 2.1), password, confirmPassword, and optional invitationCode. When `LocalLoginByEmail` is `true`, sends `Email` field. When `false`, sends `Username` field. See `authentication-reference.md` for the full implementation.
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
 
@@ -615,7 +621,7 @@ The component should:
 **If more than one auth provider is configured**, create a dedicated `/signin` page that shows all provider options. This page:
 
 - Lists all external provider buttons (e.g., "Sign in with External ID", "Sign in with Google")
-- If local auth is also configured, shows a local login form (expand on click) with email/password fields, "Forgot password?" link, and conditional "Create an account" link
+- If local auth is also configured, shows a local login form (expand on click) with the appropriate credential field — an `Email` field (type `email`) when `LocalLoginByEmail` is `true`, or a `Username` field (type `text`) when `false`. Include a "Forgot password?" link and a "Create an account" link (the "Create an account" link should point to `/register` and should only be shown when `OpenRegistrationEnabled` is `true` — omit it for invitation-only registration)
 - Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`) and session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`). Both should be checked on mount and displayed at the top of the page.
 - Is styled to match the site's design (centered card layout with provider buttons)
 
@@ -624,6 +630,33 @@ See the multi-provider AuthButton component pattern in `authentication-reference
 For single-provider sites, the AuthButton component in the nav bar is sufficient — no separate page needed.
 
 When the `/signin` page exists, the "Sign In" button in the nav bar should navigate to `/signin` instead of directly calling `login()`.
+
+#### 5.1.2 Create Registration Page (Local Auth Only)
+
+**If local authentication is configured AND `OpenRegistrationEnabled` is `true`**, create a dedicated `/register` page for self-service user registration. This is essential — without it, users have no way to create a local account.
+
+The registration page must:
+
+- Post to `/Account/Login/Register` using the `register()` function from authService (which handles anti-forgery token, form fields, and form submission)
+- Show the correct credential field based on the `LocalLoginByEmail` choice from Phase 2.1:
+  - **Email mode** (`LocalLoginByEmail = true`): Show an `Email` field (type `email`). This is both the login identifier and email address.
+  - **Username mode** (`LocalLoginByEmail = false`): Show a `Username` field (type `text`) AND a separate `Email` field (type `email`). Both are required — Username is the login identifier, Email is needed for the contact record.
+- Include `Password` and `Confirm Password` fields (both type `password`)
+- Validate that passwords match client-side before submitting
+- Display server-side registration errors parsed from `?message=` query params (via `getAuthError()`)
+- Parse and pass through `invitationCode` from the URL query string (for invitation-based registration flows where the user arrives via `?invitationCode=...`)
+- Include an "Already have an account? Sign in" link back to `/signin` (or `/` for single-provider sites)
+- Redirect authenticated users away from the registration page (if already logged in, navigate to `/`)
+- Be styled to match the site's existing sign-in page design (centered card layout)
+
+**Framework-specific implementation:**
+
+- **React**: Create `src/pages/Register.tsx` and add `<Route path="/register" element={<Register />} />` to the router. See the `RegisterForm` component in `authentication-reference.md` for the implementation pattern — adapt it to match the site's existing styling patterns (inline styles, CSS variables, etc.)
+- **Vue**: Create `src/pages/Register.vue` and add the route to `src/router/index.ts`
+- **Angular**: Create `src/app/pages/register/register.component.ts` and add the route to the router config
+- **Astro**: Create `src/pages/register.astro`
+
+**If `OpenRegistrationEnabled` is `false`** (invitation-only registration), skip the registration page — users register via invitation links (`{site-url}/Account/Login/RedeemInvitation?InvitationCode={code}`) handled entirely server-side.
 
 #### 5.2 Integrate into Navigation
 
@@ -650,6 +683,7 @@ git commit -m "Add authentication service and auth UI component"
 
 - Auth button component created for the detected framework
 - Auth button integrated into the site's navigation
+- Registration page created (when local auth with open registration is configured)
 - Changes committed to git
 
 ---
@@ -733,10 +767,11 @@ Confirm the following files were created:
 - `src/utils/authorization.ts` — Role-checking utilities
 - Framework-specific authorization components (e.g., `RequireAuth.tsx`, `RequireRole.tsx` for React)
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
+- Registration page (e.g., `src/pages/Register.tsx` for React) — only when local auth with open registration is configured
 
 Read each file and verify it contains the expected exports and functions:
 
-- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`
+- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, and `register` (when local auth is configured)
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
 
 #### 7.2 Verify Build
@@ -989,7 +1024,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Note:** The `AuthenticationType` value must match what `resolveProviderIdentifier()` returns in the auth service.
 
-**Local Authentication**:
+**Local Authentication** — use the user's email-vs-username choice from Phase 2.1 for the `LocalLoginByEmail` value:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -999,11 +1034,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable local username/password login" \
   --type boolean
 
+# Set to "true" if the user chose email login, "false" if they chose username login (Phase 2.1)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/LocalLoginByEmail" \
-  --value "true" \
-  --description "Allow login by email instead of username" \
+  --value "<true-or-false-from-user-choice>" \
+  --description "Login by email (true) or username (false)" \
   --type boolean
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1020,8 +1056,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable forgot password flow for local accounts" \
   --type boolean
 ```
-
-When local authentication is configured, also create a `/register` route in the site with the `RegisterForm` component (see authentication-reference.md). This page handles new user self-registration with email/username and password.
 
 **Facebook** — uses `AppId` (not `ClientId`). The App ID was collected in Phase 2.1:
 
@@ -1238,6 +1272,7 @@ Present a summary of everything created:
 | Authorization Utils | `src/utils/authorization.ts` | Created |
 | Auth Components | `RequireAuth`, `RequireRole` (or framework equivalent) | Created |
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
+| Registration Page | `src/pages/Register.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy
