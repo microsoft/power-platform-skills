@@ -83,6 +83,81 @@ When local authentication is configured, add a "Forgot password?" link in the `L
 5. For other providers with `ExternalLogoutEnabled`, the server signs out of the provider's authentication type
 6. Finally, redirects to the `returnUrl` or site root
 
+> **`ExternalLogoutEnabled` vs `RPInitiatedLogout`**: These are mutually exclusive. When `RPInitiatedLogout` is `true`, the server forces `ExternalLogoutEnabled` to `false`. RP-initiated logout is the newer, preferred approach for OIDC providers — it sends an `id_token_hint` to the provider's `end_session_endpoint`. Use `ExternalLogoutEnabled` only for providers that don't support RP-initiated logout.
+
+### Terms & Conditions Flow
+
+If `Authentication/Registration/TermsAgreementEnabled` is `true`, after successful authentication (before the session is fully established), the server redirects new users to `/Account/Login/TermsAndConditions`. The user must accept the terms before proceeding. This is a server-rendered page — no client-side code is needed.
+
+### External Password Reset Flow (OIDC Providers with PasswordResetPolicyId)
+
+For OIDC providers that have a `PasswordResetPolicyId` configured (e.g., Azure AD B2C):
+
+1. User clicks "Forgot password?" on the IdP's sign-in page
+2. The IdP returns an error (e.g., `AADB2C90118` for B2C)
+3. Server catches the error and redirects to `/Account/Login/ExternalPasswordReset?passwordResetPolicyId={policy}&provider={provider}`
+4. The server challenges the provider with the password reset policy
+5. After reset, user is redirected back to the login page
+
+This is entirely server-managed — no client-side code is needed.
+
+### External Profile Edit Flow (OIDC Providers with ProfileEditPolicyId)
+
+For OIDC providers that have a `ProfileEditPolicyId` configured:
+
+1. User navigates to `/Account/Login/ExternalProfileEdit`
+2. Server challenges the provider with the profile edit policy
+3. Provider shows the profile edit form (e.g., B2C profile edit flow)
+4. After edit completes, `LoginClaimsMapping` is applied to sync updated claims back to the contact record
+
+This is entirely server-managed. The client can link to `/Account/Login/ExternalProfileEdit` to trigger it.
+
+### Invitation Redemption Flow
+
+For invitation-based registration:
+
+1. Admin creates an invitation in the Power Pages admin center and shares the invitation link
+2. Invitation link format: `{site-url}/Account/Login/RedeemInvitation?InvitationCode={code}&returnUrl=/`
+3. Server validates the invitation code and redirects to the login page with the code threaded through
+4. After authentication (local or external), the server links the user to the pre-created contact associated with the invitation
+
+The client-side `login()` and `register()` functions already support passing `invitationCode` through the auth flow.
+
+### Session Expiry Re-Authentication
+
+When a user's session expires while they are on a page:
+
+1. The server redirects to the login page with `?sessionExpired=true`
+2. The login action clears all authentication cookies
+3. For OIDC providers, the server can pass `prompt=login` to force re-authentication at the IdP (bypassing SSO)
+
+To support this in the client-side auth service, check for `sessionExpired` in the URL and show a session-expired message:
+
+```typescript
+export function getSessionExpiredMessage(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('sessionExpired') === 'true' ? 'Your session has expired. Please sign in again.' : undefined;
+}
+```
+
+### Account Management Endpoints (Server-Side)
+
+Power Pages provides server-rendered account management pages. These are NOT part of the client-side auth service — they are server-side ASP.NET views. The client can link to these URLs:
+
+| Endpoint | Purpose | When to use |
+|----------|---------|-------------|
+| `/Account/Login/ChangePassword` | Change password (local auth users) | User wants to update their password |
+| `/Account/Login/SetPassword` | Add password to external-only account | External user wants to add local login |
+| `/Account/Login/ChangeEmail` | Change email address | User wants to update their email |
+| `/Account/Login/LinkLogin` | Link additional external login | User wants to add Google to their Entra account |
+| `/Account/Login/RemoveLogin` | Remove a linked external login | User wants to unlink a social provider |
+| `/Account/Login/ConfirmEmail` | Email confirmation page | After registration with `EmailConfirmationEnabled` |
+| `/Account/Login/ChangeTwoFactor` | Manage 2FA settings | User wants to enable/disable 2FA |
+| `/Account/Login/ForgotPassword` | Password reset request | User forgot their password |
+
+These endpoints are available on deployed Power Pages sites. Add links to relevant pages in the site's user profile area as needed.
+
 ---
 
 ## Type Declarations
@@ -405,11 +480,21 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   access_denied: 'Access was denied by the identity provider.',
   missing_license: 'Your account does not have the required license.',
   invalid_login: 'Invalid login. Please try again.',
+  invalid_username_or_password: 'Invalid username or password.',
   user_locked: 'Your account has been locked due to too many failed attempts. Please try again later.',
+  too_many_attempts: 'Too many failed login attempts. Please try again later.',
   invalid_invitation: 'The invitation code is invalid or has expired.',
   duplicate_login: 'This external identity is already linked to another account.',
   registration_blocked: 'Registration is not available for this provider.',
   signin_failed: 'Sign-in failed. Please try again.',
+  email_required: 'An email address is required.',
+  username_required: 'A username is required.',
+  password_required: 'A password is required.',
+  password_confirmation_failure: 'Passwords do not match.',
+  invalid_two_factor_code: 'The verification code is invalid.',
+  duplicate_email: 'This email address is already in use.',
+  duplicate_username: 'This username is already taken.',
+  deny_minors: 'Registration is not available for users under the minimum age.',
 };
 
 /**

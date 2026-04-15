@@ -244,27 +244,37 @@ After collecting the required provider details, ask if the user wants to configu
 
 | Setting | Description | Default |
 |---------|-------------|---------|
+| `MetadataAddress` | Explicit OIDC metadata endpoint URL (alternative to `Authority` — use when provider needs a specific metadata URL) | Derived from Authority |
 | `Scope` | Space-separated OAuth scopes (e.g., `openid profile email`) | `openid` |
 | `ResponseType` | OAuth response type (`code`, `id_token`, `code id_token`) | `code id_token` |
+| `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
 | `RedirectUri` | Override the callback URL | `{site-url}/signin-{provider}` |
 | `PostLogoutRedirectUri` | URL to redirect to after external logout | Site root |
+| `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, `ExternalLogoutEnabled` is forced to `false` by the server. | `false` |
+| `Caption` | Display name shown on the login button | Provider name |
 | `RegistrationClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on registration (e.g., `{"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": "firstname"}`) | None |
 | `LoginClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on every login | None |
-| `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out of Power Pages | `true` |
+| `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out (legacy — prefer `RPInitiatedLogout` for OIDC) | `true` |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
 | `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
-| `UseTokenLifetime` | Use the IdP token lifetime for the session cookie | Not set (uses Power Pages default) |
+| `RequireUniqueEmail` | Enforce unique email addresses during registration | `false` |
+| `UseTokenLifetime` | Use the IdP token lifetime for the session cookie | Not set |
 | `BackchannelTimeout` | Timeout for backchannel HTTP calls to the IdP (e.g., `00:01:00`) | `00:01:00` |
+| `RefreshOnIssuerKeyNotFound` | Refresh provider metadata when issuer key not found | Default |
 | `NonceEnabled` | Enable nonce validation on OIDC tokens | `true` |
 | `NonceLifetime` | Lifetime of the OIDC nonce (e.g., `00:10:00`) | `00:10:00` |
 | `AcrValues` | Authentication Context Class Reference values to request from the IdP | None |
-| `Prompt` | OIDC prompt parameter (`login`, `consent`, `none`) | None |
+| `Prompt` | OIDC prompt parameter (`login`, `consent`, `none`). Use `login` to force re-authentication on session expiry. | None |
 | `Resource` | Resource parameter for the token request | None |
-| `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
 | `EmailClaimIdentifier` | Custom claim type to use as the user's email | Standard email claim |
-| `IssuerFilter` | Wildcard pattern to match issuers across tenants (for multi-tenant apps) | None |
+| `IssuerFilter` | Wildcard pattern to match issuers across tenants (e.g., `https://login.microsoftonline.com/*/v2.0`). Required for multi-tenant apps — without this, issuer validation fails for non-home tenants. | None |
 | `UseUserInfoEndpointforClaims` | Fetch additional claims from the UserInfo endpoint | `false` |
 | `UserInfoEndpoint` | Custom UserInfo endpoint URL (if not in metadata) | From metadata |
+| `PasswordResetPolicyId` | B2C/External ID password reset user flow policy name | None |
+| `ProfileEditPolicyId` | B2C/External ID profile editing user flow policy name | None |
+| `DefaultPolicyId` | B2C/External ID default sign-up/sign-in policy name | None |
+| `TokenEndPointAuthenticatedMethod` | Token endpoint auth method (`client_secret_post`, `client_secret_basic`, `private_key_jwt`). Use `private_key_jwt` for certificate-based auth in sovereign clouds. | `client_secret_post` |
+| `AllowedDynamicAuthorizationParameters` | Comma-separated OIDC parameters allowed to pass through dynamically | None |
 
 **SAML2 optional settings:**
 
@@ -325,8 +335,14 @@ After collecting the required provider details, ask if the user wants to configu
 | `Authentication/Registration/OpenRegistrationEnabled` | Allow self-registration | `true` |
 | `Authentication/Registration/EmailConfirmationEnabled` | Require email confirmation on registration | `false` |
 | `Authentication/Registration/RememberMeEnabled` | Show "Remember me" checkbox on login form | `false` |
-| `Authentication/Registration/TermsAgreementEnabled` | Require terms agreement on registration | `false` |
+| `Authentication/Registration/ResetPasswordEnabled` | Enable forgot password flow | `true` |
+| `Authentication/Registration/ResetPasswordRequiresConfirmedEmail` | Require confirmed email before allowing password reset | `false` |
+| `Authentication/Registration/RequireUniqueEmail` | Enforce unique email addresses | `false` |
+| `Authentication/Registration/TermsAgreementEnabled` | Require terms & conditions agreement on registration. The server redirects to a Terms page before completing registration. | `false` |
+| `Authentication/Registration/IsCaptchaEnabledForRegistration` | Show CAPTCHA on registration form | `false` |
+| `Authentication/Registration/TriggerLockoutOnFailedPassword` | Lock account after too many failed login attempts | `true` |
 | `Authentication/Registration/DenyMinors` | Deny registration for users identified as minors | `false` |
+| `Authentication/Registration/DenyMinorsWithoutParentalConsent` | Deny minors without parental consent (requires GDPR to be enabled) | `false` |
 
 **Session / Cookie settings** (all providers):
 
@@ -334,8 +350,23 @@ After collecting the required provider details, ask if the user wants to configu
 |---------|-------------|---------|
 | `Authentication/ApplicationCookie/ExpireTimeSpan` | Session timeout duration (e.g., `01:00:00` for 1 hour) | `01:00:00` |
 | `Authentication/ApplicationCookie/SlidingExpiration` | Renew cookie on each request | `true` |
+| `Authentication/ApplicationCookie/AbsoluteSlidingExpireTimeSpan` | Absolute maximum session lifetime regardless of activity | None |
 | `Authentication/ApplicationCookie/CookieName` | Custom session cookie name | Power Pages default |
 | `Authentication/ApplicationCookie/CookieDomain` | Cookie domain scope | Current domain |
+| `Authentication/ApplicationCookie/CookiePath` | Cookie path scope | `/` |
+| `Authentication/ApplicationCookie/CookieHttpOnly` | Prevent JavaScript access to the session cookie | `true` |
+| `Authentication/ApplicationCookie/CookieSecure` | Require HTTPS for the session cookie | `true` |
+| `Authentication/ApplicationCookie/LoginPath` | Custom login page path | `/Account/Login/Login` |
+| `Authentication/ApplicationCookie/SecurityStampValidator/ValidateInterval` | Interval to validate the user's security stamp (e.g., `00:30:00`) | Default |
+
+**Global auth toggles** (all providers):
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `Authentication/Registration/LoginButtonAuthenticationType` | Default provider for the login button | None (shows all) |
+| `Authentication/Registration/AzureADLoginEnabled` | Enable/disable Azure AD (Entra ID) login | `true` |
+| `Authentication/Registration/ExternalLoginEnabled` | Enable/disable all external identity provider login | `true` |
+| `Authentication/Registration/SignOutEverywhereEnabled` | On logout, invalidate all sessions across all devices by updating the user's security stamp | `false` |
 | `Authentication/Registration/LoginButtonAuthenticationType` | Default provider for the login button | None (shows all) |
 
 For each setting the user wants to configure, create the site setting using `create-site-setting.js` during Phase 8.1 alongside the required settings.
@@ -396,6 +427,7 @@ Create the auth service file based on the detected framework and selected identi
 - `login(returnUrl?)` — initiates login based on the configured provider (see below)
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
+- `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message
 - `register(fields, returnUrl?, invitationCode?)` — for local auth: POSTs registration form to `/Account/Login/Register` with email/username, password, confirmPassword. Throws if neither email nor username is provided.
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
@@ -706,7 +738,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 - **ClientId / AppId** → collected from the user in Phase 2.1 (each provider's follow-up question). Use the collected value when creating the site setting.
 - **Secrets** (`ClientSecret`, `AppSecret`) → use environment variables via `create-environment-variable.js`. Never ask for or store secret values directly. See Phase 8.1.1 below.
 
-**Always create** — ProfileRedirectEnabled:
+**Always create** — these settings are required for all provider types:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -714,6 +746,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --name "Authentication/Registration/ProfileRedirectEnabled" \
   --value "false" \
   --description "Disable profile redirect for code sites" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/Enabled" \
+  --value "true" \
+  --description "Enable user registration (global toggle)" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/ExternalLoginEnabled" \
+  --value "true" \
+  --description "Enable external identity provider login" \
   --type boolean
 ```
 
@@ -724,12 +770,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 **OpenID Connect (Generic)** — create settings for the provider (ClientId was collected in Phase 2.1):
 
 ```powershell
-# Authority
+# Authority (required — or use MetadataAddress as alternative)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
   --value "<authority-url-from-user>" \
   --description "OIDC authority URL"
+
+# MetadataAddress (optional — alternative to Authority for providers that need explicit metadata URL)
+# Create this if the user provides a metadata URL distinct from the authority
+# node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+#   --projectRoot "<PROJECT_ROOT>" \
+#   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
+#   --value "<metadata-url>" \
+#   --description "OIDC metadata endpoint URL"
 
 # ClientId — use value collected in Phase 2.1
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -752,12 +806,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<site-url>/signin-{provider}" \
   --description "OAuth callback URL"
 
-# ExternalLogoutEnabled
+# ExternalLogoutEnabled — set to false when using RPInitiatedLogout (they are mutually exclusive)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
+  --value "false" \
+  --description "Legacy logout — disabled when RPInitiatedLogout is used" \
+  --type boolean
+
+# RPInitiatedLogout — preferred for OIDC providers with end_session_endpoint
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
   --value "true" \
-  --description "Sign out of IdP on logout" \
+  --description "RP-initiated logout via end_session_endpoint with id_token_hint" \
   --type boolean
 ```
 
@@ -794,12 +856,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<site-url>/signin-{provider}" \
   --description "OAuth callback URL"
 
-# ExternalLogoutEnabled
+# ExternalLogoutEnabled — set to false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
+  --value "false" \
+  --description "Legacy logout — disabled when RPInitiatedLogout is used" \
+  --type boolean
+
+# RPInitiatedLogout — preferred for Entra External ID
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
   --value "true" \
-  --description "Sign out of External ID on logout" \
+  --description "RP-initiated logout via end_session_endpoint" \
   --type boolean
 ```
 
