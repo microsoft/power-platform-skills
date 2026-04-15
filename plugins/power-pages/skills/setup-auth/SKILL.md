@@ -196,53 +196,69 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 | Question | Options |
 |----------|---------|
-| What is the Client ID from your Microsoft app registration? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
+| What is the Client ID from your Microsoft app registration? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
 **For "Facebook"**:
 
 | Question | Options |
 |----------|---------|
-| What is the App ID from the Facebook Developer Console? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/facebook-settings) | *(free text)* |
+| What is the App ID from the Facebook Developer Console? (e.g., `1234567890123456`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/facebook-settings
 
 **For "Google"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Client ID from the Google Cloud Console? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
+| What is the Client ID from the Google Cloud Console? (e.g., `123456789-abc.apps.googleusercontent.com`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
 **For "OpenID Connect (Generic)"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Authority URL for your OpenID Connect provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
-| What is the Client ID (Application ID) from your provider's app registration? | *(free text)* |
-| What display name should the login button show? (e.g., "Sign in with Okta") | *(free text)* |
+| What is the Authority URL for your OpenID Connect provider? (e.g., `https://dev-12345.okta.com/oauth2/default` or `https://login.microsoftonline.com/{tenant}/v2.0`) | *(free text)* |
+| What is the Client ID (Application ID) from your provider's app registration? (e.g., `0oa1bcde2fGHIJklmn3o4`) | *(free text)* |
+| What display name should the login button show? (e.g., `Sign in with Okta`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
 **For "Entra External ID"**:
 
 | Question | Options |
 |----------|---------|
-| What is your Entra External ID tenant name? (e.g., contoso — the part before .ciamlogin.com) (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
-| What is the Client ID (Application ID) from the External ID app registration? | *(free text)* |
+| What is your Entra External ID tenant name? (e.g., `contoso` — the part before `.ciamlogin.com`) | *(free text)* |
+| What is the Client ID (Application ID) from the External ID app registration? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
 **For "SAML2"**:
 
 | Question | Options |
 |----------|---------|
-| What is the metadata endpoint URL for your SAML2 identity provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/saml2-settings) | *(free text)* |
-| What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
+| What is the metadata endpoint URL for your SAML2 identity provider? (e.g., `https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml`) | *(free text)* |
+| What display name should the login button show? (e.g., `Sign in with ADFS`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/saml2-settings
 
 **For "WS-Federation"**:
 
 | Question | Options |
 |----------|---------|
-| What is the metadata endpoint URL for your WS-Federation provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/ws-federation-settings) | *(free text)* |
-| What is the provider realm or identifier? (the AuthenticationType value) | *(free text)* |
-| What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
+| What is the metadata endpoint URL for your WS-Federation provider? (e.g., `https://adfs.contoso.com/federationmetadata/2007-06/federationmetadata.xml`) | *(free text)* |
+| What is the provider realm or identifier? (e.g., `https://adfs.contoso.com/adfs/services/trust`) | *(free text)* |
+| What display name should the login button show? (e.g., `Sign in with ADFS`) | *(free text)* |
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/ws-federation-settings
 
 **For "Local Authentication"** (only if user explicitly requested it): No additional configuration needed — boolean site settings are created automatically.
 
-**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center. (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings)
+**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
+
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
 Then determine the scope:
 
