@@ -146,41 +146,75 @@ If auth files already exist, present them to the user and ask whether to overwri
 
 ### Actions
 
+#### 2.0 Smart Auth Inference (Before Asking)
+
+Before asking the user which providers they want, analyze the site context from Phase 1 (site name, purpose, audience type) and try to infer appropriate auth settings automatically:
+
+**Inference rules:**
+
+| Site Type | Inferred Auth Settings | Rationale |
+|-----------|----------------------|-----------|
+| Internal/employee portal (HR, dashboard, admin) | Entra ID + invitation-only registration (`OpenRegistrationEnabled=false`, `InvitationEnabled=true`) | Internal sites should restrict access to invited employees only |
+| Customer-facing portal (support, self-service) | Entra External ID + open registration | Customer portals need self-service sign-up for customers |
+| Partner portal (B2B, vendor) | Entra ID + invitation-only registration | Partners are pre-vetted; open registration is a security risk |
+| Public site with protected features (e-commerce, community) | Entra External ID + open registration + optional Google/Facebook | Public sites benefit from social login for frictionless sign-up |
+| Loan/financial/banking portal | Entra External ID + invitation-only registration | Financial sites require controlled access for compliance |
+
+**If you can infer with confidence**, present the recommendation with rationale:
+
+> "Based on your site purpose ({purpose}), I recommend:
+> - **{provider}** for authentication
+> - **{registration mode}** because {rationale}
+>
+> Would you like to proceed with this configuration, or choose different providers?"
+
+| Question | Options |
+|----------|---------|
+| Would you like to proceed with this recommended configuration? | Yes, proceed with recommendation, No, let me choose providers |
+
+**If "Yes"**: Skip Phase 2.1 provider selection and proceed directly to collecting provider-specific details (ClientId, tenant name, etc.) for the recommended provider(s).
+
+**If "No"** or **if you cannot infer with confidence**: Fall back to Phase 2.1 below.
+
 #### 2.1 Gather Requirements
 
-**IMPORTANT: Multiple providers are supported.** The user may want more than one identity provider (e.g., Entra External ID + Local Authentication, or Google + Facebook). If the user's initial prompt mentions multiple providers, skip the provider selection question and proceed directly to collecting details for each mentioned provider.
+**IMPORTANT: Multiple providers are supported.** The user may want more than one identity provider (e.g., Entra External ID + Google). If the user's initial prompt mentions specific providers, skip the provider selection question and proceed directly to collecting details for each mentioned provider.
+
+> **Note on Local Authentication:** Do NOT present Local Authentication as a choice in the provider list. Only configure local login if the user explicitly asks for it (e.g., "I want username/password login", "set up local login"). Local auth is a legacy pattern — external identity providers are preferred.
 
 If the user has NOT specified which provider(s) they want, use `AskUserQuestion` to determine the identity provider(s). **This is a multi-select question** — the user can choose one or more:
 
 | Question | Options |
 |----------|---------|
-| Which identity provider(s) do you want to use? (select all that apply) | Microsoft Entra ID (Recommended) — Azure AD / Entra ID via OpenID Connect, Entra External ID — Customer-facing identity with self-service sign-up (CIAM), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Local Authentication — Username/password login without an external provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
+| Which identity provider(s) do you want to use? (select all that apply) | Microsoft Entra ID (Recommended for internal/employee sites) — Azure AD / Entra ID via OpenID Connect, Entra External ID (Recommended for customer-facing sites) — Customer identity with self-service sign-up (CIAM), OpenID Connect (Generic) — Any OIDC-compliant provider (Okta, Auth0, Ping Identity, etc.), SAML2 — SAML 2.0 identity provider (ADFS, Shibboleth, etc.), WS-Federation — WS-Federation identity provider, Microsoft Account — Sign in with Microsoft personal/work account, Facebook — Sign in with Facebook, Google — Sign in with Google |
 
 **Then, for EACH selected provider, ask the mandatory follow-up questions below.** Do not skip any provider — every selected provider needs its configuration collected before proceeding.
+
+For each provider, also share the relevant Microsoft Learn documentation link so the user knows where to get the values:
 
 **For "Microsoft Account"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Client ID from your Microsoft app registration? | *(free text)* |
+| What is the Client ID from your Microsoft app registration? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
 
 **For "Facebook"**:
 
 | Question | Options |
 |----------|---------|
-| What is the App ID from the Facebook Developer Console? | *(free text)* |
+| What is the App ID from the Facebook Developer Console? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/facebook-settings) | *(free text)* |
 
 **For "Google"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Client ID from the Google Cloud Console? | *(free text)* |
+| What is the Client ID from the Google Cloud Console? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
 
 **For "OpenID Connect (Generic)"**:
 
 | Question | Options |
 |----------|---------|
-| What is the Authority URL for your OpenID Connect provider? (e.g., https://login.microsoftonline.com/{tenant}/v2.0) | *(free text)* |
+| What is the Authority URL for your OpenID Connect provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
 | What is the Client ID (Application ID) from your provider's app registration? | *(free text)* |
 | What display name should the login button show? (e.g., "Sign in with Okta") | *(free text)* |
 
@@ -188,27 +222,27 @@ If the user has NOT specified which provider(s) they want, use `AskUserQuestion`
 
 | Question | Options |
 |----------|---------|
-| What is your Entra External ID tenant name? (e.g., contoso — the part before .ciamlogin.com) | *(free text)* |
+| What is your Entra External ID tenant name? (e.g., contoso — the part before .ciamlogin.com) (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings) | *(free text)* |
 | What is the Client ID (Application ID) from the External ID app registration? | *(free text)* |
 
 **For "SAML2"**:
 
 | Question | Options |
 |----------|---------|
-| What is the metadata endpoint URL for your SAML2 identity provider? (e.g., https://adfs.contoso.com/FederationMetadata/2007-06/FederationMetadata.xml) | *(free text)* |
+| What is the metadata endpoint URL for your SAML2 identity provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/saml2-settings) | *(free text)* |
 | What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
 
 **For "WS-Federation"**:
 
 | Question | Options |
 |----------|---------|
-| What is the metadata endpoint URL for your WS-Federation provider? (e.g., https://adfs.contoso.com/federationmetadata/2007-06/federationmetadata.xml) | *(free text)* |
+| What is the metadata endpoint URL for your WS-Federation provider? (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/ws-federation-settings) | *(free text)* |
 | What is the provider realm or identifier? (the AuthenticationType value) | *(free text)* |
 | What display name should the login button show? (e.g., "Sign in with ADFS") | *(free text)* |
 
-**For "Local Authentication"**: No additional configuration needed — boolean site settings are created automatically.
+**For "Local Authentication"** (only if user explicitly requested it): No additional configuration needed — boolean site settings are created automatically.
 
-**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
+**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center. (See: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings)
 
 Then determine the scope:
 
@@ -561,6 +595,22 @@ The component should:
 - Include a loading state while checking auth status
 - Be styled to match the site's existing design (read existing CSS variables/theme)
 
+#### 5.1.1 Create Sign-In Page (Multi-Provider Only)
+
+**If more than one auth provider is configured**, create a dedicated `/signin` page that shows all provider options. This page:
+
+- Lists all external provider buttons (e.g., "Sign in with External ID", "Sign in with Google")
+- If local auth is also configured, shows a local login form (expand on click) with email/password fields, "Forgot password?" link, and conditional "Create an account" link
+- Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`)
+- Displays session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`)
+- Is styled to match the site's design (centered card layout with provider buttons)
+
+See the multi-provider AuthButton component pattern in `authentication-reference.md` for the implementation.
+
+For single-provider sites, the AuthButton component in the nav bar is sufficient — no separate page needed.
+
+When the `/signin` page exists, the "Sign In" button in the nav bar should navigate to `/signin` instead of directly calling `login()`.
+
 #### 5.2 Integrate into Navigation
 
 Find the site's navigation component and integrate the auth button:
@@ -568,6 +618,8 @@ Find the site's navigation component and integrate the auth button:
 1. Search for the nav/header component in the site's source code
 2. Import the AuthButton component
 3. Add it to the navigation bar (typically in the top-right area)
+4. **If multiple providers are configured**: The "Sign In" button should navigate to `/signin` page
+5. **If single provider**: The "Sign In" button should call `login()` directly
 
 **Do NOT replace the existing navigation** — add the auth button alongside existing nav items.
 
