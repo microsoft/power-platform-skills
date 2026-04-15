@@ -395,6 +395,8 @@ Create the auth service file based on the detected framework and selected identi
 - `fetchAntiForgeryToken()` — fetches from `/_layout/tokenhtml` and parses HTML response
 - `login(returnUrl?)` — initiates login based on the configured provider (see below)
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
+- `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
+- `register(fields, returnUrl?, invitationCode?)` — for local auth: POSTs registration form to `/Account/Login/Register` with email/username, password, confirmPassword. Throws if neither email nor username is provided.
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
 
@@ -867,7 +869,23 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "true" \
   --description "Allow login by email instead of username" \
   --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/OpenRegistrationEnabled" \
+  --value "true" \
+  --description "Allow self-registration for local accounts" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/ResetPasswordEnabled" \
+  --value "true" \
+  --description "Enable forgot password flow for local accounts" \
+  --type boolean
 ```
+
+When local authentication is configured, also create a `/register` route in the site with the `RegisterForm` component (see authentication-reference.md). This page handles new user self-registration with email/username and password.
 
 **Facebook** — uses `AppId` (not `ClientId`). The App ID was collected in Phase 2.1:
 

@@ -395,6 +395,91 @@ export function logout(returnUrl?: string): void {
   window.location.href = `/Account/Login/LogOff?returnUrl=${encodeURIComponent(target)}`;
 }
 
+// --- Auth Error Handling ---
+
+/**
+ * Error codes returned by the Power Pages server via query string parameters.
+ * The server redirects back to the login page with ?message=<code> or ?error=<code>.
+ */
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: 'Access was denied by the identity provider.',
+  missing_license: 'Your account does not have the required license.',
+  invalid_login: 'Invalid login. Please try again.',
+  user_locked: 'Your account has been locked due to too many failed attempts. Please try again later.',
+  invalid_invitation: 'The invitation code is invalid or has expired.',
+  duplicate_login: 'This external identity is already linked to another account.',
+  registration_blocked: 'Registration is not available for this provider.',
+  signin_failed: 'Sign-in failed. Please try again.',
+};
+
+/**
+ * Parses authentication error from the current page URL.
+ * The Power Pages server passes errors via ?message= or ?error= query parameters
+ * when redirecting back to the login page after a failed authentication attempt.
+ *
+ * @returns The user-friendly error message, or undefined if no error.
+ */
+export function getAuthError(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const params = new URLSearchParams(window.location.search);
+  const message = params.get('message') || params.get('error');
+  if (!message) return undefined;
+  return AUTH_ERROR_MESSAGES[message] || 'An authentication error occurred. Please try again.';
+}
+
+// --- Local Registration ---
+
+/**
+ * Registers a new local user by POSTing to /Account/Login/Register.
+ * This creates a new contact in Dataverse with username/email and password.
+ *
+ * @param fields - Registration fields: email or username, password, confirmPassword
+ * @param invitationCode - Optional invitation code for invitation-based registration
+ */
+export async function register(
+  fields: { email?: string; username?: string; password: string; confirmPassword: string },
+  returnUrl?: string,
+  invitationCode?: string
+): Promise<void> {
+  if (!fields.email && !fields.username) {
+    throw new Error('Registration requires either an email or username.');
+  }
+
+  if (isDevelopment) {
+    sessionStorage.removeItem(DEV_SIGNEDOUT_KEY);
+    window.location.reload();
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/Account/Login/Register';
+
+  const formFields: Record<string, string> = {
+    __RequestVerificationToken: token,
+    Password: fields.password,
+    ConfirmPassword: fields.confirmPassword,
+    ReturnUrl: returnUrl || window.location.pathname,
+  };
+
+  if (fields.email) formFields.Email = fields.email;
+  if (fields.username) formFields.Username = fields.username;
+  if (invitationCode) formFields.InvitationCode = invitationCode;
+
+  for (const [name, value] of Object.entries(formFields)) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
+  document.body.appendChild(form);
+  form.submit();
+}
+
 /**
  * Returns the user's display name (full name if available, otherwise userName).
  */
@@ -619,8 +704,8 @@ export async function loginWithProvider(
 When multiple providers are configured (including mixed external + local), all providers appear as buttons. External providers redirect immediately on click. The local provider button expands an inline credential form for username/email and password input.
 
 ```tsx
-import { useState } from 'react';
-import { AUTH_PROVIDERS, loginWithProvider } from '../services/authService';
+import { useState, useEffect } from 'react';
+import { AUTH_PROVIDERS, loginWithProvider, getAuthError } from '../services/authService';
 import { useAuth } from '../hooks/useAuth';
 import './AuthButton.css';
 
@@ -630,6 +715,13 @@ export function AuthButton() {
   const [credential, setCredential] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [error, setError] = useState('');
+
+  // Check for server-side auth errors (e.g., after failed external login redirect)
+  useEffect(() => {
+    const serverError = getAuthError();
+    if (serverError) setError(serverError);
+  }, []);
 
   if (isLoading) {
     return <div className="auth-button auth-loading"><span className="auth-spinner" /></div>;
@@ -650,6 +742,9 @@ export function AuthButton() {
 
   return (
     <div className="auth-button auth-providers">
+      {/* Server-side auth error display */}
+      {error && <div className="form-error" role="alert">{error}</div>}
+
       {/* External provider buttons — clicking redirects to the identity provider */}
       {externalProviders.map((provider) => (
         <button
@@ -689,6 +784,7 @@ export function AuthButton() {
             <button type="button" className="auth-back-btn" onClick={() => setShowLocalForm(false)}>Back</button>
           </div>
           <a href="/Account/Login/ForgotPassword" className="auth-forgot-password">Forgot password?</a>
+          {/* Only show registration link when OpenRegistrationEnabled is true */}
         </form>
       )}
     </div>
@@ -807,11 +903,15 @@ export function AuthButton() {
 
 ### React: LocalLoginForm Component (Local Auth Only)
 
-When the provider type is `local`, also create `src/components/LocalLoginForm.tsx`:
+When the provider type is `local`, also create `src/components/LocalLoginForm.tsx`. This component handles:
+- Login with email or username (based on `loginByEmail` setting)
+- Server-side auth error display (parsed from `?message=` query params)
+- Link to forgot password page
+- Link to registration page (when `OpenRegistrationEnabled` is true)
 
 ```tsx
-import { useState } from 'react';
-import { login, getAuthProvider } from '../services/authService';
+import { useState, useEffect } from 'react';
+import { login, getAuthProvider, getAuthError } from '../services/authService';
 import './LocalLoginForm.css';
 
 export function LocalLoginForm() {
@@ -824,6 +924,12 @@ export function LocalLoginForm() {
   const provider = getAuthProvider();
   const isEmailMode = provider.loginByEmail ?? true;
 
+  // Check for server-side auth errors passed via URL query params
+  useEffect(() => {
+    const serverError = getAuthError();
+    if (serverError) setError(serverError);
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -831,13 +937,15 @@ export function LocalLoginForm() {
     try {
       await login(undefined, { username: credential, password, rememberMe });
     } catch (err) {
-      setError('Login failed. Please check your credentials.');
+      setError(err instanceof Error ? err.message : 'Login failed. Please check your credentials.');
+    } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
     <form className="local-login-form" onSubmit={handleSubmit}>
+      {error && <div className="form-error" role="alert">{error}</div>}
       <div className="form-field">
         <label htmlFor="credential">{isEmailMode ? 'Email' : 'Username'}</label>
         <input
@@ -870,10 +978,116 @@ export function LocalLoginForm() {
           Remember me
         </label>
       </div>
-      {error && <div className="form-error">{error}</div>}
       <button type="submit" disabled={isSubmitting}>
         {isSubmitting ? 'Signing in...' : 'Sign In'}
       </button>
+      <div className="form-links">
+        <a href="/Account/Login/ForgotPassword">Forgot password?</a>
+      </div>
+    </form>
+  );
+}
+```
+
+> **Note on "Create an account" link:** Only add a registration link (`<a href="/register">Create an account</a>`) to the login form when `OpenRegistrationEnabled` is `true`. Since this is a server-side setting, the skill should include the link when it creates the `LocalLoginForm` and the `OpenRegistrationEnabled` site setting is being set to `true`. If the user chose invitation-only registration (where `OpenRegistrationEnabled` is `false`), omit the link — users register via invitation links instead.
+
+### React: RegisterForm Component (Local Auth Only)
+
+When local authentication is configured, also create `src/components/RegisterForm.tsx` and a `/register` route. This component handles new user registration with email/username and password.
+
+```tsx
+import { useState, useEffect } from 'react';
+import { register, getAuthProvider, getAuthError } from '../services/authService';
+import './LocalLoginForm.css';
+
+export function RegisterForm() {
+  const [credential, setCredential] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const provider = getAuthProvider();
+  const isEmailMode = provider.loginByEmail ?? true;
+
+  // Check for server-side registration errors passed via URL query params
+  useEffect(() => {
+    const serverError = getAuthError();
+    if (serverError) setError(serverError);
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Parse invitation code from URL if present
+      const params = new URLSearchParams(window.location.search);
+      const invitationCode = params.get('invitationCode') || undefined;
+
+      await register(
+        isEmailMode
+          ? { email: credential, password, confirmPassword }
+          : { username: credential, password, confirmPassword },
+        '/',
+        invitationCode
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="local-login-form" onSubmit={handleSubmit}>
+      <h2>Create an Account</h2>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-field">
+        <label htmlFor="credential">{isEmailMode ? 'Email' : 'Username'}</label>
+        <input
+          id="credential"
+          type={isEmailMode ? 'email' : 'text'}
+          value={credential}
+          onChange={(e) => setCredential(e.target.value)}
+          required
+          autoComplete={isEmailMode ? 'email' : 'username'}
+        />
+      </div>
+      <div className="form-field">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          autoComplete="new-password"
+        />
+      </div>
+      <div className="form-field">
+        <label htmlFor="confirmPassword">Confirm Password</label>
+        <input
+          id="confirmPassword"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          required
+          autoComplete="new-password"
+        />
+      </div>
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Creating account...' : 'Create Account'}
+      </button>
+      <div className="form-links">
+        <a href="/signin">Already have an account? Sign in</a>
+      </div>
     </form>
   );
 }
