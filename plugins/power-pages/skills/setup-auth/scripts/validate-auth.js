@@ -9,13 +9,13 @@ const { approve, block, runValidation, findProjectRoot } = require('../../../scr
 
 runValidation((cwd) => {
   const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project, skip
+  if (!projectRoot) return approve(); // Not a Power Pages project, skip
 
   // Check if any auth files exist — if none, this wasn't an auth session
   const authServiceExists = findAuthService(projectRoot);
   const typeDeclarationsExist = findTypeDeclarations(projectRoot);
 
-  if (!authServiceExists && !typeDeclarationsExist) approve();
+  if (!authServiceExists && !typeDeclarationsExist) return approve();
 
   const errors = [];
 

@@ -417,7 +417,6 @@ After collecting the required provider details, ask if the user wants to configu
 | `Authentication/Registration/AzureADLoginEnabled` | Enable/disable Azure AD (Entra ID) login | `true` |
 | `Authentication/Registration/ExternalLoginEnabled` | Enable/disable all external identity provider login | `true` |
 | `Authentication/Registration/SignOutEverywhereEnabled` | On logout, invalidate all sessions across all devices by updating the user's security stamp | `false` |
-| `Authentication/Registration/LoginButtonAuthenticationType` | Default provider for the login button | None (shows all) |
 
 For each setting the user wants to configure, create the site setting using `create-site-setting.js` during Phase 8.1 alongside the required settings.
 
@@ -617,8 +616,7 @@ The component should:
 
 - Lists all external provider buttons (e.g., "Sign in with External ID", "Sign in with Google")
 - If local auth is also configured, shows a local login form (expand on click) with email/password fields, "Forgot password?" link, and conditional "Create an account" link
-- Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`)
-- Displays session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`)
+- Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`) and session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`). Both should be checked on mount and displayed at the top of the page.
 - Is styled to match the site's design (centered card layout with provider buttons)
 
 See the multi-provider AuthButton component pattern in `authentication-reference.md` for the implementation.
