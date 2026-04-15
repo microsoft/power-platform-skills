@@ -1637,8 +1637,9 @@ await login('/dashboard', { username: email, password, rememberMe: true }, invit
 
 ### Best Practices
 
-- **Secrets must use environment variables** — create a Dataverse environment variable via `create-environment-variable.js`, then link to a site setting via `create-site-setting.js --envVarSchema`. Do NOT create site setting YAML files with secret values (even as placeholders).
-- **Update secret values** through the Power Apps maker portal ([make.powerapps.com](https://make.powerapps.com)) → Solutions → Default Solution → Environment variables.
+- **Use Azure Key Vault (recommended)** — store secrets in Key Vault, then create a Dataverse environment variable with `--type secret` referencing the Key Vault secret URI. Link the env var to a site setting via `create-site-setting.js --envVarSchema`. This ensures secrets are never stored in YAML files, conversation history, or Dataverse as plain text.
+- **Fallback: plain environment variables** — if Key Vault is not available, create Dataverse environment variables with placeholder values and update them via the Power Apps maker portal ([make.powerapps.com](https://make.powerapps.com)) → Solutions → Default Solution → Environment variables.
+- **Never ask for secret values** in the conversation — secret values must never pass through the chat. Instruct the user to store secrets via Azure CLI or the Azure Portal, then share only the Key Vault secret URI.
 - **Never store secrets** in `authService.ts`, environment files (`.env`), site setting YAML files, or any file tracked by version control.
 - **Review before committing**: Always verify that no actual `ClientSecret`, `AppSecret`, API key, or certificate values are included in your commits.
 - **The `providerIdentifier` field** in `AUTH_PROVIDER` is NOT a secret -- it is a public identifier (like a URL or provider name) that identifies which identity provider to use.

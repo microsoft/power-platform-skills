@@ -987,67 +987,117 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Microsoft Account Client ID"
 ```
 
-#### 8.1.1 Handle Secrets via Environment Variables
+#### 8.1.1 Handle Secrets via Azure Key Vault
 
-For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YAML files**. Instead, use environment variables backed by Dataverse:
+For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YAML files or as plain-text environment variables**. Use Azure Key Vault to store secrets, then reference them via Dataverse environment variables with `--type secret`.
+
+**Step 1 — List available Key Vaults:**
 
 ```powershell
-# Create environment variable with placeholder
+node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
+```
+
+**Step 2 — Select or create a Key Vault:**
+
+If Key Vaults were found, ask which one to use:
+
+| Question | Context |
+|----------|---------|
+| Which Azure Key Vault would you like to use for storing auth secrets? | Present the names from the script output |
+
+If **no Key Vaults are found**:
+
+| Question | Options |
+|----------|---------|
+| No Azure Key Vaults were found. Would you like to create one? | Create a new Key Vault (Recommended), Skip Key Vault — I'll configure secrets later |
+
+**If "Create a new Key Vault"**: Ask for vault name, resource group, and location:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
+  --name "<vault-name>" \
+  --resourceGroup "<resource-group>" \
+  --location "<location>"
+```
+
+**If "Skip Key Vault"**: Skip to "Fallback" below.
+
+**Step 3 — Instruct the user to store each secret in Key Vault:**
+
+Do **not** ask for secret values — they must never pass through the conversation. Present **both** options:
+
+**Option A — Azure CLI (recommended):**
+
+```
+For each secret, run the following command (replacing <YOUR_SECRET_VALUE> with the actual value):
+
+1. <Provider> Client Secret:
+   printf '%s' '<YOUR_SECRET_VALUE>' | node "${CLAUDE_PLUGIN_ROOT}/scripts/store-keyvault-secret.js" \
+     --vaultName "<selected-vault>" \
+     --secretName "<provider>-client-secret"
+```
+
+Tell the user each command outputs a JSON object with a `secretUri` and to share the output so the workflow can continue.
+
+**Option B — Azure Portal:**
+
+```
+1. Go to https://portal.azure.com → Key vaults → <selected-vault> → Secrets
+2. Click "+ Generate/Import"
+3. Name: <provider>-client-secret, Value: paste your secret
+4. Click "Create", then click the secret → current version → copy "Secret Identifier" URI
+5. Share the URI here so the workflow can continue
+```
+
+**Step 4 — Create environment variable in Dataverse (type: secret):**
+
+After the user shares the `secretUri`, create an environment variable that references the Key Vault secret:
+
+```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_ProviderClientSecret>" \
   --displayName "<Provider> Client Secret" \
-  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+  --type "secret" \
+  --value "<secretUri-from-step-3>"
+```
 
-# Create site setting that references the environment variable
+**Step 5 — Create site setting for the environment variable:**
+
+```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientSecret" \
   --envVarSchema "<prefix_ProviderClientSecret>"
 ```
 
-**Facebook AppSecret:**
+This creates a site setting with `envvar_schema` and `source: 1`, which tells Power Pages to resolve the value from the Dataverse environment variable (backed by Key Vault).
+
+**Repeat Steps 3-5 for each secret required by the selected providers:**
+
+| Provider | Secret Name | Site Setting | Env Var Schema |
+|----------|-------------|--------------|----------------|
+| OIDC / Entra External ID | `{provider}-client-secret` | `Authentication/OpenIdConnect/{ProviderName}/ClientSecret` | `{prefix}_ProviderClientSecret` |
+| Facebook | `facebook-app-secret` | `Authentication/OpenAuth/Facebook/AppSecret` | `{prefix}_FacebookAppSecret` |
+| Google | `google-client-secret` | `Authentication/OpenAuth/Google/ClientSecret` | `{prefix}_GoogleClientSecret` |
+| Microsoft Account | `microsoft-client-secret` | `Authentication/OpenAuth/MicrosoftAccount/ClientSecret` | `{prefix}_MicrosoftClientSecret` |
+
+**Fallback — if user skipped Key Vault:**
+
+If the user chose not to use Key Vault, create environment variables with placeholder values (plain string type, not secret type). The user updates them later via the Power Apps maker portal:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
-  --schemaName "{prefix}_FacebookAppSecret" \
-  --displayName "Facebook App Secret" \
+  --schemaName "<prefix_ProviderClientSecret>" \
+  --displayName "<Provider> Client Secret" \
   --value "PLACEHOLDER_SET_ACTUAL_VALUE"
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenAuth/Facebook/AppSecret" \
-  --envVarSchema "{prefix}_FacebookAppSecret"
+  --name "<site-setting-name-from-table-above>" \
+  --envVarSchema "<prefix_ProviderClientSecret>"
 ```
 
-**Google ClientSecret:**
-
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
-  --schemaName "{prefix}_GoogleClientSecret" \
-  --displayName "Google Client Secret" \
-  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenAuth/Google/ClientSecret" \
-  --envVarSchema "{prefix}_GoogleClientSecret"
-```
-
-**Microsoft Account ClientSecret:**
-
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
-  --schemaName "{prefix}_MicrosoftClientSecret" \
-  --displayName "Microsoft Account Client Secret" \
-  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenAuth/MicrosoftAccount/ClientSecret" \
-  --envVarSchema "{prefix}_MicrosoftClientSecret"
-```
-
-After creating the environment variables, tell the user to update each placeholder with the real secret value via:
+Tell the user to update each placeholder via:
 - **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
 
 Present the list of environment variables that need updating (display name and schema name for each).
