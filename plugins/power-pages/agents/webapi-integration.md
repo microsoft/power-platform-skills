@@ -235,7 +235,7 @@ Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see
 
 ## Step 5: Create Service Layer
 
-Create a service module with CRUD operations for the target table. Place it following project conventions. Default: `src/shared/services/<tableName>Service.ts`. Implement list (paginated with `$top` + `@odata.nextLink`), get by ID, create (POST with `Prefer: return=representation` + Location header fallback), update (PATCH with `If-Match: *`), delete, and optionally M:N sync, count, aggregation, and file/image column operations.
+Create a service module with CRUD operations for the target table. Place it following project conventions. Default: `src/shared/services/<tableName>Service.ts`. Implement list (paginated with `Prefer: odata.maxpagesize=N` + `@odata.nextLink`), get by ID, create (POST with `Prefer: return=representation` + Location header fallback), update (PATCH with `If-Match: *`), delete, and optionally M:N sync, count, aggregation, and file/image column operations.
 
 Reference: `${CLAUDE_PLUGIN_ROOT}/references/webapi-service-patterns.md` — see "Service Layer (Step 5)" section. If the table has lookup or one-to-many relationships, implement `$expand` using the `buildExpandClause` helper from the core API client — see "Related Entities ($expand)" section for expand patterns, nested expand, collection paging, and when to fetch related records separately.
 
@@ -545,7 +545,7 @@ Only create this if the site's UI shows/hides controls based on user roles.
 1. **`/_api/` prefix** — Always use `/_api/` for Power Pages Web API URLs. Never use the Dataverse environment URL directly.
 2. **Anti-forgery token required on mutations** — The `__RequestVerificationToken` header must be set on POST, PATCH, PUT, and DELETE requests. The server only validates the anti-forgery token on mutating requests — GET requests do not require it. However, the shared client sends it on all requests for simplicity, which is harmless. Fetch the token from `/_layout/tokenhtml` and parse the value from the returned HTML. No `Authorization` bearer header is needed — Power Pages uses cookie-based session auth for authenticated users (JWT bearer tokens are also supported via middleware, but cookie auth is the standard client-side pattern).
 3. **No wildcard `$select`** — Always list specific columns. Wildcards expose unnecessary data and degrade performance.
-4. **Always paginate** — Every list/query MUST include `$top`. Use `$top`/`$count` for the first page and `@odata.nextLink` cursors for subsequent pages. Dataverse does **not** support `$skip` — never use it. Use `fetchAllPages` only when all records are genuinely needed (dropdowns, lookups, exports). Never fetch unbounded data.
+4. **Always paginate** — Every list/query MUST use the `Prefer: odata.maxpagesize=N` request header to control page size (e.g., `odata.maxpagesize=20`). Do NOT use `$top` for pagination — `$top` caps the total result set and prevents `@odata.nextLink` from being returned. Include `$count=true` on every list query to get the total record count via `@odata.count` (returned on all pages, including cursor pages). Use `@odata.nextLink` cursors (which contain `$skiptoken`) for subsequent pages. Power Pages does **not** support `$skip` — it returns error `9004010B: QueryParamNotSupported`. Use `$top` only as a safety cap when you genuinely want to limit total results (e.g., "top 5 recent items" for a dashboard widget), not for page-by-page navigation. If you include both `$top` and `Prefer: odata.maxpagesize`, `$top` is ignored. Use `fetchAllPages` only when all records are genuinely needed (dropdowns, lookups, exports) — it follows `@odata.nextLink` cursors internally with a safety cap of 100 iterations. Never fetch unbounded data.
 5. **Use `$count=true`** — Include on every list query to get total record count efficiently in `@odata.count` without fetching all rows. For count-only queries, combine with `$top=0`.
 6. **`@odata.bind` for lookups** — Set lookup relationships using `NavigationProperty@odata.bind` annotation with the target entity set path, not raw GUID values. The Navigation Property name is **case-sensitive** and must match the schema name (typically PascalCase like `cr4fc_Category`). Using the logical name (all lowercase) causes "Undeclared Property" errors.
 7. **Handle 204 responses** — PATCH and DELETE return empty bodies. Do not attempt to parse them.
@@ -600,7 +600,7 @@ Before confirming that work is done, verify every item below. Do not skip any ch
 - [ ] OneToMany relationship navigation properties are from the API's `ReferencedEntityNavigationPropertyName` (case-sensitive) — if expanding collection-valued properties
 
 ### Code Correctness
-- [ ] All list/query operations include `$top` — no unbounded fetches
+- [ ] All list/query operations use `Prefer: odata.maxpagesize=N` header for pagination — no `$top` for page-by-page navigation, no unbounded fetches
 - [ ] All queries use explicit `$select` with specific columns — no wildcards
 - [ ] All queries include `$count=true` for total record count
 - [ ] Lookups on POST/PATCH use `NavigationProperty@odata.bind` — not raw GUID writes to `_value` properties
