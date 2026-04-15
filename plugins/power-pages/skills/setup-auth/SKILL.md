@@ -816,7 +816,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/SAML2/{ProviderName}/AuthenticationType" \
   --value "<site-url>" \
-  --description "Provider identifier for ExternalLogin"
+  --description "Provider identifier for ExternalLogin — MUST match providerIdentifier in authService exactly"
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
@@ -824,6 +824,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<site-url>" \
   --description "SP entity ID"
 ```
+
+> **CRITICAL for SAML2:** The `AuthenticationType` site setting value and the `providerIdentifier` in the auth service code MUST be character-for-character identical — including protocol (`https://` vs `http://`), trailing slashes, and casing. A mismatch causes login to silently fail. Use the exact same `<site-url>` value in both places.
 
 **WS-Federation** — create settings for the provider:
 
@@ -915,10 +917,47 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --envVarSchema "<prefix_ProviderClientSecret>"
 ```
 
-For Facebook, Google, and Microsoft Account secrets, use the same pattern:
-- **Facebook**: env var schema `{prefix}_FacebookAppSecret`, site setting `Authentication/OpenAuth/Facebook/AppSecret` with `--envVarSchema`
-- **Google**: env var schema `{prefix}_GoogleClientSecret`, site setting `Authentication/OpenAuth/Google/ClientSecret` with `--envVarSchema`
-- **Microsoft Account**: env var schema `{prefix}_MicrosoftClientSecret`, site setting `Authentication/OpenAuth/MicrosoftAccount/ClientSecret` with `--envVarSchema`
+**Facebook AppSecret:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "{prefix}_FacebookAppSecret" \
+  --displayName "Facebook App Secret" \
+  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/Facebook/AppSecret" \
+  --envVarSchema "{prefix}_FacebookAppSecret"
+```
+
+**Google ClientSecret:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "{prefix}_GoogleClientSecret" \
+  --displayName "Google Client Secret" \
+  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/Google/ClientSecret" \
+  --envVarSchema "{prefix}_GoogleClientSecret"
+```
+
+**Microsoft Account ClientSecret:**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
+  --schemaName "{prefix}_MicrosoftClientSecret" \
+  --displayName "Microsoft Account Client Secret" \
+  --value "PLACEHOLDER_SET_ACTUAL_VALUE"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenAuth/MicrosoftAccount/ClientSecret" \
+  --envVarSchema "{prefix}_MicrosoftClientSecret"
+```
 
 After creating the environment variables, tell the user to update each placeholder with the real secret value via:
 - **Power Apps maker portal** ([make.powerapps.com](https://make.powerapps.com)) → **Solutions** → **Default Solution** → **Environment variables** → find by display name → update the value
@@ -960,6 +999,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --name "Authentication/Registration/TwoFactorEnabled" \
   --value "true" \
   --description "Enable two-factor authentication" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/RememberMeEnabled" \
+  --value "true" \
+  --description "Show Remember Me checkbox on login form" \
   --type boolean
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \

@@ -42,12 +42,46 @@ Power Pages authentication is **server-side** using session cookies. There is no
 5. On success, the session is established via cookies
 6. User information becomes available in `window.Microsoft.Dynamic365.Portal.User`
 
+### Registration Flow (External Providers)
+
+After external authentication, if the user does not already exist in Dataverse:
+
+1. The server shows the `ExternalLoginConfirmation` view for the user to complete registration
+2. Registration is controlled by multiple site settings: `RegistrationEnabled` (per-provider), `OpenRegistrationEnabled` (global), `InvitationEnabled`
+3. Claims from the external provider are mapped to the contact record using `RegistrationClaimsMapping`
+4. Email is auto-confirmed for external providers (no manual verification needed)
+5. If an invitation code is present, the user is linked to the pre-created contact
+
+No client-side code is needed — the server handles the entire registration flow.
+
+### Password Reset Flow (Local Authentication)
+
+Power Pages provides a server-side password reset flow for local authentication:
+
+1. User navigates to `/Account/Login/ForgotPassword` (server-rendered form)
+2. User enters their email address
+3. Server generates a reset token and sends an email via the `adx_SendPasswordResetToContact` process
+4. User clicks the email link → navigates to `/Account/Login/ResetPassword` with the token
+5. User enters a new password → server validates the token and updates the password
+
+This flow is entirely server-rendered — no client-side code is needed. It is controlled by:
+- `Authentication/Registration/ResetPasswordEnabled` — enable/disable password reset (`true`/`false`)
+- `Authentication/Registration/ResetPasswordRequiresConfirmedEmail` — require confirmed email before allowing reset
+
+When local authentication is configured, add a "Forgot password?" link in the `LocalLoginForm` component pointing to `/Account/Login/ForgotPassword`.
+
 ### Logout Flow (All Providers)
 
 1. Redirect the user to `/Account/Login/LogOff`
-2. Power Pages clears the session cookies
+2. Power Pages server:
+   - Clears session cookies (`ApplicationCookie`, `ExternalCookie`, `TwoFactorCookie`)
+   - If `SignOutEverywhereEnabled` is true, updates the security stamp to invalidate all sessions across devices
+   - Clears the `DeferredLocalLoginCookie` if present
+   - Sends `Clear-Site-Data: "cache"` header
 3. `window.Microsoft.Dynamic365.Portal.User` becomes `undefined`
-4. For providers with external logout enabled, the user may also be signed out of the identity provider
+4. For OIDC providers with `RPInitiatedLogout` enabled, the server redirects to the provider's `end_session_endpoint` with an `id_token_hint` for federated single sign-out
+5. For other providers with `ExternalLogoutEnabled`, the server signs out of the provider's authentication type
+6. Finally, redirects to the `returnUrl` or site root
 
 ---
 
@@ -466,40 +500,48 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 };
 ```
 
-### Social OAuth Providers (Multiple Providers)
+### Multiple Providers (Any Combination)
 
-When the user selects multiple social providers (e.g., Google AND Facebook), use the `AUTH_PROVIDERS` array pattern instead of the single `AUTH_PROVIDER` constant:
+When the user selects multiple providers (e.g., Google + Facebook, or Entra External ID + Local Auth), use the `AUTH_PROVIDERS` array pattern. This works for **any combination** of provider types — social, external, or mixed with local.
 
 ```typescript
-export interface SocialProviderConfig {
-  providerIdentifier: string;
+export interface ProviderConfig {
+  type: AuthProviderType;
+  providerIdentifier?: string;
   displayName: string;
-  icon?: string;
+  loginByEmail?: boolean; // Only for local providers
 }
 
 /**
- * Multiple social providers configuration.
- * Each entry maps to a separate ExternalLogin form POST with the given provider identifier.
+ * Multiple providers configuration.
+ * Each entry maps to a login method — external providers use ExternalLogin,
+ * local providers use the credential form.
  */
-export const AUTH_PROVIDERS: SocialProviderConfig[] = [
-  { providerIdentifier: 'Google', displayName: 'Sign in with Google', icon: 'google' },
-  { providerIdentifier: 'Facebook', displayName: 'Sign in with Facebook', icon: 'facebook' },
+export const AUTH_PROVIDERS: ProviderConfig[] = [
+  { type: 'entra-external-id', providerIdentifier: 'https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/', displayName: 'Sign in with External ID' },
+  { type: 'local', displayName: 'Sign in with Email', loginByEmail: true },
 ];
 
-// Keep AUTH_PROVIDER for backward compatibility — defaults to first provider
+// Default AUTH_PROVIDER for single-provider code paths — uses first provider
+if (AUTH_PROVIDERS.length === 0) {
+  throw new Error('AUTH_PROVIDERS array is empty. Configure at least one authentication provider.');
+}
 const AUTH_PROVIDER: AuthProviderConfig = {
-  type: 'social',
+  type: AUTH_PROVIDERS[0].type,
   providerIdentifier: AUTH_PROVIDERS[0].providerIdentifier,
   displayName: AUTH_PROVIDERS[0].displayName,
+  loginByEmail: AUTH_PROVIDERS[0].loginByEmail,
 };
 
 /**
- * Initiates login with a specific social provider.
- * Use this instead of login() when multiple social providers are configured.
+ * Initiates login with a specific provider from the AUTH_PROVIDERS array.
+ * Handles both external providers (ExternalLogin) and local providers (Login).
+ * Use this instead of login() when multiple providers are configured.
  */
 export async function loginWithProvider(
   providerIdentifier: string,
   returnUrl?: string,
+  credentials?: { username: string; password: string; rememberMe?: boolean },
   invitationCode?: string
 ): Promise<void> {
   if (isDevelopment) {
@@ -510,6 +552,43 @@ export async function loginWithProvider(
 
   const token = await fetchAntiForgeryToken();
 
+  // Find the provider config to determine if it's local or external
+  const providerConfig = AUTH_PROVIDERS.find(p =>
+    p.type === 'local' ? providerIdentifier === 'local' : p.providerIdentifier === providerIdentifier
+  );
+
+  // Local provider: POST credentials to /Account/Login/Login
+  if (providerConfig?.type === 'local') {
+    if (!credentials) {
+      throw new Error('Local login requires username and password credentials.');
+    }
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/Account/Login/Login';
+
+    const credentialFieldName = providerConfig.loginByEmail ? 'Email' : 'Username';
+    const fields: Record<string, string> = {
+      __RequestVerificationToken: token,
+      [credentialFieldName]: credentials.username,
+      Password: credentials.password,
+      ReturnUrl: returnUrl || window.location.pathname,
+    };
+    if (credentials.rememberMe) fields.RememberMe = 'true';
+    if (invitationCode) fields.InvitationCode = invitationCode;
+
+    for (const [name, value] of Object.entries(fields)) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    form.submit();
+    return;
+  }
+
+  // External provider: POST to /Account/Login/ExternalLogin
   const form = document.createElement('form');
   form.method = 'POST';
   form.action = invitationCode
@@ -535,43 +614,71 @@ export async function loginWithProvider(
 }
 ```
 
-**Multi-Provider AuthButton Component (React):**
+**Multi-Provider Login Page Component (React):**
+
+When multiple providers are configured (including mixed external + local), render external provider buttons alongside a local login form:
 
 ```tsx
+import { useState } from 'react';
 import { AUTH_PROVIDERS, loginWithProvider } from '../services/authService';
 import { useAuth } from '../hooks/useAuth';
 import './AuthButton.css';
 
 export function AuthButton() {
   const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth();
+  const [credential, setCredential] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
 
   if (isLoading) {
     return <div className="auth-button auth-loading"><span className="auth-spinner" /></div>;
   }
 
-  if (!isAuthenticated) {
+  if (isAuthenticated) {
     return (
-      <div className="auth-button auth-providers">
-        {AUTH_PROVIDERS.map((provider) => (
-          <button
-            key={provider.providerIdentifier}
-            className="auth-sign-in auth-social-btn"
-            onClick={() => loginWithProvider(provider.providerIdentifier)}
-          >
-            {provider.displayName}
-          </button>
-        ))}
+      <div className="auth-button auth-signed-in">
+        <span className="auth-avatar">{initials}</span>
+        <span className="auth-name">{displayName}</span>
+        <button className="auth-sign-out" onClick={() => logout()}>Sign Out</button>
       </div>
     );
   }
 
+  const externalProviders = AUTH_PROVIDERS.filter(p => p.type !== 'local');
+  const localProvider = AUTH_PROVIDERS.find(p => p.type === 'local');
+
   return (
-    <div className="auth-button auth-signed-in">
-      <span className="auth-avatar">{initials}</span>
-      <span className="auth-name">{displayName}</span>
-      <button className="auth-sign-out" onClick={() => logout()}>
-        Sign Out
-      </button>
+    <div className="auth-button auth-providers">
+      {/* External provider buttons */}
+      {externalProviders.map((provider) => (
+        <button
+          key={provider.providerIdentifier}
+          className="auth-sign-in auth-external-btn"
+          onClick={() => loginWithProvider(provider.providerIdentifier!)}
+        >
+          {provider.displayName}
+        </button>
+      ))}
+
+      {/* Local login form (if local auth is configured) */}
+      {localProvider && (
+        <>
+          {externalProviders.length > 0 && <div className="auth-divider">or</div>}
+          <form className="auth-local-form" onSubmit={async (e) => {
+            e.preventDefault();
+            await loginWithProvider('local', undefined, { username: credential, password, rememberMe });
+          }}>
+            <input
+              type={localProvider.loginByEmail ? 'email' : 'text'}
+              placeholder={localProvider.loginByEmail ? 'Email' : 'Username'}
+              value={credential} onChange={(e) => setCredential(e.target.value)} required
+            />
+            <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <label><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember me</label>
+            <button type="submit">{localProvider.displayName}</button>
+          </form>
+        </>
+      )}
     </div>
   );
 }
@@ -1087,7 +1194,7 @@ Social providers use the `Authentication/OpenAuth/{ProviderName}/` site setting 
 
 ## Entra External ID Provider
 
-Entra External ID (formerly Azure AD B2C) is Microsoft's customer identity and access management (CIAM) solution. It uses OpenID Connect underneath with the `ciamlogin.com` authority domain.
+Entra External ID is Microsoft's customer identity and access management (CIAM) solution for customer-facing applications. It is a separate product from Azure AD B2C — do not conflate the two. It uses OpenID Connect underneath with the `ciamlogin.com` authority domain.
 
 ### External ID Provider Type
 
@@ -1219,9 +1326,9 @@ await login('/dashboard', { username: email, password, rememberMe: true }, invit
 
 ### Best Practices
 
-- **Site setting YAML files** created by this skill use placeholder values (e.g., `<to-be-configured>`) for secrets. These placeholders are safe to commit -- they indicate which settings need to be configured but do not contain actual credentials.
-- **Configure actual secrets** through the Power Pages admin center, which stores values securely in Dataverse.
-- **Never store secrets** in `authService.ts`, environment files (`.env`), or any file tracked by version control.
+- **Secrets must use environment variables** — create a Dataverse environment variable via `create-environment-variable.js`, then link to a site setting via `create-site-setting.js --envVarSchema`. Do NOT create site setting YAML files with secret values (even as placeholders).
+- **Update secret values** through the Power Apps maker portal ([make.powerapps.com](https://make.powerapps.com)) → Solutions → Default Solution → Environment variables.
+- **Never store secrets** in `authService.ts`, environment files (`.env`), site setting YAML files, or any file tracked by version control.
 - **Review before committing**: Always verify that no actual `ClientSecret`, `AppSecret`, API key, or certificate values are included in your commits.
 - **The `providerIdentifier` field** in `AUTH_PROVIDER` is NOT a secret -- it is a public identifier (like a URL or provider name) that identifies which identity provider to use.
 

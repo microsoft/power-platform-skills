@@ -274,6 +274,28 @@
         "Sets the ProfileRedirectEnabled site setting to false",
         "Prompts the user to deploy the updated site"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "Set up authentication for my Power Pages React site with both Entra External ID and local email/password login. Our External ID tenant is contoso.ciamlogin.com. Users should be able to choose between signing in with External ID or creating a local account.",
+      "expected_output": "Auth setup for a React site with both Entra External ID (OIDC) and Local Authentication. Auth service uses AUTH_PROVIDERS array with loginWithProvider() supporting both external and local flows. Login page shows External ID button and a local login form. Site settings created for both providers.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Recognizes user wants both Entra External ID and Local Authentication",
+        "Asks for Entra External ID tenant name and Client ID",
+        "Creates auth service with AUTH_PROVIDERS array containing both providers",
+        "Auth service includes loginWithProvider() that handles both external (ExternalLogin) and local (Login) endpoints",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/Authority with ciamlogin.com URL",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/ClientId with collected value",
+        "Creates site settings for Authentication/Registration/LocalLoginEnabled set to true",
+        "Creates site settings for Authentication/Registration/LocalLoginByEmail set to true",
+        "Handles Entra External ID ClientSecret via environment variable",
+        "Creates login UI with both External ID button and local email/password form",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
     }
   ]
 }
