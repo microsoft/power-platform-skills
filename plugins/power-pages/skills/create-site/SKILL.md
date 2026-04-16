@@ -1,6 +1,10 @@
 ---
 name: create-site
-description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
+description: >-
+  Creates a new Power Pages code site (SPA) using React, Angular, Vue, or Astro. Guides through
+  the full process from initial concept to deployed site: requirements discovery, scaffolding,
+  component planning, design, implementation, validation, and deployment. Use when the user
+  wants to create, build, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click

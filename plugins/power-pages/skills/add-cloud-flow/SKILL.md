@@ -1,16 +1,11 @@
 ---
 name: add-cloud-flow
-description: >
-  Use this skill when the user wants to "add a cloud flow", "connect a Power Automate flow",
-  "register a flow", "link a flow to the site", "add automation", "integrate a flow",
-  "wire up a Power Automate workflow", "use this flow on another page", "add the flow to the
-  support page too", or wants to allow site users to trigger one or more Power Automate cloud
-  flows from a Power Pages site. This skill lists available flows (including already-registered
-  ones that can be integrated into additional pages), suggests the most relevant flows based on
-  the user's intent, identifies scenarios and web roles, creates the metadata files, generates
-  client-side code to call the flows, and presents an HTML plan showing roles and reasoning
-  for each flow. Already-registered flows can be selected for frontend-only integration into
-  new pages or components without re-creating metadata.
+description: >-
+  Integrates Power Automate cloud flows into a Power Pages site. Lists available flows,
+  suggests relevant ones based on intent, identifies scenarios and web roles, creates metadata
+  files, and generates client-side code to call flows. Handles both new flow registration and
+  adding already-registered flows to additional pages without re-creating metadata. Use when
+  the user wants to add, connect, register, or link a Power Automate cloud flow to their site.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
 model: opus

@@ -1,15 +1,11 @@
 ---
 name: add-server-logic
-description: >
-  This skill should be used when the user asks to "create server logic", "add server-side code",
-  "write server logic", "add server endpoint", "create API endpoint", "add backend logic",
-  "write server-side JavaScript", "integrate server logic", "add server logic function",
-  "add server-side processing", "create serverlogic", "add serverlogics", or wants to create,
-  edit, or manage Power Pages Server Logic files — server-side JavaScript that runs securely
-  on the Power Pages runtime. This skill orchestrates the full lifecycle: understanding
-  requirements, fetching latest documentation, implementing the server logic code, configuring
-  site settings, and deploying. Use this skill whenever the user mentions "server logic",
-  "server-side code", or wants to move logic from the browser to the server in their Power Pages site.
+description: >-
+  Creates, edits, and manages Power Pages Server Logic files — server-side JavaScript that
+  runs securely on the Power Pages runtime. Orchestrates the full lifecycle: gathering
+  requirements, fetching documentation, implementing code, configuring site settings, and
+  deploying. Use when the user wants to add server-side code, create API endpoints, or move
+  logic from the browser to the server in their Power Pages site.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus

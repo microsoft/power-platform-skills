@@ -1,15 +1,10 @@
 ---
 name: integrate-backend
-description: >
-  Use this skill when the user asks to "add backend integration", "connect to data",
-  "set up backend", "integrate backend", "how should I access data", "add data access",
-  "add an API", "server-side processing", "cloud flow or web api or server logic",
-  "which backend approach", "integrate with an external service", "add business logic",
-  "backend for my site", or wants help deciding between Web API, Server Logic, and
-  Cloud Flows for their Power Pages site. This skill analyzes the user's business
-  problem, identifies the right backend integration approach (or combination), and
-  routes to the appropriate skill. Use this instead of jumping directly to a specific
-  backend skill when the user's request doesn't clearly map to one approach.
+description: >-
+  Analyzes the user's business problem and recommends the right backend integration approach
+  — Web API, Server Logic, Cloud Flows, or a combination — for a Power Pages site, then routes
+  to the appropriate specialized skill. Use when the user wants to add backend integration,
+  connect to data, or needs help deciding which backend approach to use.
 user-invocable: true
 argument-hint: describe what your backend needs to do
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList

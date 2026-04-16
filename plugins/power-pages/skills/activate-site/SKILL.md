@@ -1,11 +1,9 @@
 ---
 name: activate-site
-description: >
-  This skill should be used when the user asks to "activate site",
-  "provision website", "activate a Power Pages website", "activate portal",
-  "provision portal", "turn on my site", "enable website",
-  or wants to activate/provision a Power Pages website in their
-  Power Platform environment via the Power Platform REST API.
+description: >-
+  Activates and provisions a Power Pages website in a Power Platform environment
+  via the Power Platform REST API. Use when the user wants to activate, provision,
+  turn on, or enable a Power Pages website or portal.
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
