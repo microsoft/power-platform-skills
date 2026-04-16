@@ -32,15 +32,36 @@ Power Pages authentication is **server-side** using session cookies. There is no
 
 ### Local Login Flow
 
+> **Important:** The login form field names differ from other auth endpoints. The password field is `PasswordValue` (not `Password`), and the form posts to `/SignIn` (not `/Account/Login/Login`). These names match the server-rendered login form.
+
 1. Fetch an anti-forgery token from `/_layout/tokenhtml`
-2. POST a form to `/Account/Login/Login` with the token, credentials, and password:
+2. POST a form to `/SignIn` with the token, credentials, and password:
    - When `Authentication/Registration/LocalLoginByEmail` is `true`: send the `Email` field
    - When `Authentication/Registration/LocalLoginByEmail` is `false`: send the `Username` field
+   - Password field name is `PasswordValue` (NOT `Password`)
    - Optionally include `RememberMe` field (when `Authentication/Registration/RememberMeEnabled` is `true`)
+   - Include `ReturnUrl` field with the SPA path to redirect back to (e.g., `/`)
 3. Power Pages validates credentials against the contact record in Dataverse
 4. If 2FA is enabled and required for the user, the server redirects to `SendCode` action instead of completing sign-in
-5. On success, the session is established via cookies
+5. On success, the session is established via cookies and the server redirects to `ReturnUrl`
 6. User information becomes available in `window.Microsoft.Dynamic365.Portal.User`
+
+### Local Registration Flow
+
+> **Important:** The registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action like login. It requires `__VIEWSTATE` and uses fully-qualified control names (e.g., `ctl00$...$EmailTextBox`). A simple form POST with flat field names will silently fail.
+
+1. Fetch the server-rendered registration page: GET `/Account/Login/Register`
+2. Parse the HTML response with `DOMParser` to extract:
+   - `__VIEWSTATE`, `__VIEWSTATEGENERATOR`, `__VIEWSTATEENCRYPTED` hidden fields
+   - `__RequestVerificationToken` hidden field
+   - The form `action` URL (includes correlation IDs as query params)
+   - Input control names by their IDs: `EmailTextBox`, `UsernameTextBox`, `PasswordTextBox`, `ConfirmPasswordTextBox`, `SubmitButton`
+3. Resolve the form action URL relative to `/Account/Login/` (not relative to the SPA's current path)
+4. POST a form with the parsed ViewState, anti-forgery token, and user values mapped to the correct control names
+5. On success, the server creates a contact in Dataverse and either:
+   - Redirects to `ReturnUrl` (if `EmailConfirmationEnabled` is `false`)
+   - Redirects to email confirmation page (if `EmailConfirmationEnabled` is `true`)
+6. On failure, the server returns a 200 with the registration page HTML containing validation errors
 
 ### Registration Flow (External Providers)
 
@@ -390,17 +411,19 @@ export async function login(
 
     const form = document.createElement('form');
     form.method = 'POST';
-    form.action = '/Account/Login/Login';
+    form.action = '/SignIn';
 
     // When LocalLoginByEmail is true, send the Email field; otherwise send Username.
     // The server checks ViewBag.Settings.LocalLoginByEmail to determine which field to read.
     const credentialFieldName = AUTH_PROVIDER.loginByEmail ? 'Email' : 'Username';
 
+    // IMPORTANT: The password field is PasswordValue (not Password) — this matches the
+    // server-rendered login form's actual field name.
     const fields: Record<string, string> = {
       __RequestVerificationToken: token,
       [credentialFieldName]: credentials.username,
-      Password: credentials.password,
-      ReturnUrl: returnUrl || window.location.pathname,
+      PasswordValue: credentials.password,
+      ReturnUrl: returnUrl || '/',
     };
 
     // Include RememberMe if enabled and requested
@@ -515,11 +538,14 @@ export function getAuthError(): string | undefined {
 // --- Local Registration ---
 
 /**
- * Registers a new local user by POSTing to /Account/Login/Register.
- * This creates a new contact in Dataverse with username/email and password.
+ * Registers a new local user via the server-rendered /Account/Login/Register page.
  *
- * @param fields - Registration fields: email or username, password, confirmPassword
- * @param invitationCode - Optional invitation code for invitation-based registration
+ * IMPORTANT: The registration page is an ASP.NET Web Forms page (not MVC like login).
+ * It requires __VIEWSTATE and uses fully-qualified control names (e.g., ctl00$...$EmailTextBox).
+ * This function fetches the server page first, parses the ViewState and control names,
+ * then POSTs back with the user's data — the same flow a browser performs when submitting the form.
+ *
+ * This differs from login, which is an MVC action accepting simple field names.
  */
 export async function register(
   fields: { email?: string; username?: string; password: string; confirmPassword: string },
@@ -536,22 +562,74 @@ export async function register(
     return;
   }
 
-  const token = await fetchAntiForgeryToken();
+  // Step 1: Fetch the server-rendered registration page to get ViewState and field names
+  const params = new URLSearchParams();
+  if (returnUrl) params.set('returnUrl', returnUrl);
+  if (invitationCode) params.set('invitationCode', invitationCode);
+  const qs = params.toString();
+  const regUrl = `/Account/Login/Register${qs ? `?${qs}` : ''}`;
 
+  const pageResponse = await fetch(regUrl, { credentials: 'same-origin' });
+  if (!pageResponse.ok) {
+    throw new Error(`Failed to load registration page: ${pageResponse.status}`);
+  }
+
+  const pageHtml = await pageResponse.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(pageHtml, 'text/html');
+
+  // Step 2: Extract the form element and resolve the action URL
+  const serverForm = doc.getElementById('Register') as HTMLFormElement | null;
+  if (!serverForm) {
+    throw new Error('Registration form not found on the server page.');
+  }
+
+  // The server form has a relative action like "./Register?msCorrelationId=..."
+  // Resolve it relative to /Account/Login/ (the server page's path), NOT the SPA's current URL.
+  const rawAction = serverForm.getAttribute('action') || '';
+  let formAction: string;
+  if (rawAction.startsWith('http') || rawAction.startsWith('/')) {
+    formAction = rawAction;
+  } else {
+    const base = new URL('/Account/Login/', window.location.origin);
+    formAction = new URL(rawAction, base).pathname + new URL(rawAction, base).search;
+  }
+
+  // Step 3: Extract ViewState, anti-forgery token, and other hidden fields
+  const viewState = (doc.getElementById('__VIEWSTATE') as HTMLInputElement)?.value || '';
+  const viewStateGenerator = (doc.getElementById('__VIEWSTATEGENERATOR') as HTMLInputElement)?.value || '';
+  const eventValidation = (doc.querySelector('input[name="__EVENTVALIDATION"]') as HTMLInputElement)?.value || '';
+  const antiForgeryToken = (doc.querySelector('input[name="__RequestVerificationToken"]') as HTMLInputElement)?.value || '';
+
+  // Step 4: Find the correct Web Forms control names by their IDs
+  const emailInput = doc.getElementById('EmailTextBox') as HTMLInputElement | null;
+  const usernameInput = doc.getElementById('UsernameTextBox') as HTMLInputElement | null;
+  const passwordInput = doc.getElementById('PasswordTextBox') as HTMLInputElement | null;
+  const confirmInput = doc.getElementById('ConfirmPasswordTextBox') as HTMLInputElement | null;
+  const submitBtn = doc.getElementById('SubmitButton') as HTMLInputElement | null;
+
+  // Step 5: Build the form POST with Web Forms field names
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = '/Account/Login/Register';
+  form.action = formAction;
 
   const formFields: Record<string, string> = {
-    __RequestVerificationToken: token,
-    Password: fields.password,
-    ConfirmPassword: fields.confirmPassword,
-    ReturnUrl: returnUrl || window.location.pathname,
+    __VIEWSTATE: viewState,
+    __VIEWSTATEGENERATOR: viewStateGenerator,
+    __EVENTTARGET: '',
+    __EVENTARGUMENT: '',
+    __VIEWSTATEENCRYPTED: '',
   };
 
-  if (fields.email) formFields.Email = fields.email;
-  if (fields.username) formFields.Username = fields.username;
-  if (invitationCode) formFields.InvitationCode = invitationCode;
+  if (eventValidation) formFields.__EVENTVALIDATION = eventValidation;
+  if (antiForgeryToken) formFields.__RequestVerificationToken = antiForgeryToken;
+
+  // Map user values to the actual Web Forms control names
+  if (fields.email && emailInput) formFields[emailInput.name] = fields.email;
+  if (fields.username && usernameInput) formFields[usernameInput.name] = fields.username;
+  if (passwordInput) formFields[passwordInput.name] = fields.password;
+  if (confirmInput) formFields[confirmInput.name] = fields.confirmPassword;
+  if (submitBtn) formFields[submitBtn.name] = submitBtn.value || 'Register';
 
   for (const [name, value] of Object.entries(formFields)) {
     const input = document.createElement('input');
@@ -734,14 +812,14 @@ export async function loginWithProvider(
     }
     const form = document.createElement('form');
     form.method = 'POST';
-    form.action = '/Account/Login/Login';
+    form.action = '/SignIn';
 
     const credentialFieldName = providerConfig.loginByEmail ? 'Email' : 'Username';
     const fields: Record<string, string> = {
       __RequestVerificationToken: token,
       [credentialFieldName]: credentials.username,
-      Password: credentials.password,
-      ReturnUrl: returnUrl || window.location.pathname,
+      PasswordValue: credentials.password, // Server uses PasswordValue, not Password
+      ReturnUrl: returnUrl || '/',
     };
     if (credentials.rememberMe) fields.RememberMe = 'true';
     if (invitationCode) fields.InvitationCode = invitationCode;
@@ -1074,11 +1152,13 @@ export function LocalLoginForm() {
 }
 ```
 
-> **Note on "Create an account" link:** Only add a registration link (`<a href="/register">Create an account</a>`) to the login form when `OpenRegistrationEnabled` is `true`. Since this is a server-side setting, the skill should include the link when it creates the `LocalLoginForm` and the `OpenRegistrationEnabled` site setting is being set to `true`. If the user chose invitation-only registration (where `OpenRegistrationEnabled` is `false`), omit the link — users register via invitation links instead.
+> **Note on "Create an account" link:** Only add a registration link (`<a href="/registration">Create an account</a>`) to the login form when `OpenRegistrationEnabled` is `true`. Since this is a server-side setting, the skill should include the link when it creates the `LocalLoginForm` and the `OpenRegistrationEnabled` site setting is being set to `true`. If the user chose invitation-only registration (where `OpenRegistrationEnabled` is `false`), omit the link — users register via invitation links instead.
 
 ### React: RegisterForm Component (Local Auth Only)
 
-When local authentication is configured, also create `src/components/RegisterForm.tsx` and a `/register` route. This component handles new user registration with email/username and password.
+When local authentication is configured, create `src/pages/Registration.tsx` and a `/registration` route (NOT `/register` — that path conflicts with the server's `/Register` route). This component handles new user registration with email/username and password. It calls the `register()` function from authService, which handles the Web Forms ViewState pattern internally.
+
+> **Dev mode:** The registration page should skip the auth redirect when running on localhost, because the mock user is always "authenticated" and would prevent testing the form. Add: `const isDev = window.location.hostname === 'localhost'` and only redirect if `isAuthenticated && !isDev`.
 
 ```tsx
 import { useState, useEffect } from 'react';
@@ -1171,7 +1251,7 @@ export function RegisterForm() {
         {isSubmitting ? 'Creating account...' : 'Create Account'}
       </button>
       <div className="form-links">
-        <a href="/signin">Already have an account? Sign in</a>
+        <a href="/login">Already have an account? Sign in</a>
       </div>
     </form>
   );

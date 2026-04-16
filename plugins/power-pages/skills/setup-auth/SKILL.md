@@ -494,7 +494,7 @@ Create the auth service file based on the detected framework and selected identi
 - **OpenID Connect (Generic)**: Form POST to `/Account/Login/ExternalLogin` with provider set to the OIDC `AuthenticationType` (configured via site settings `Authentication/OpenIdConnect/{provider}/AuthenticationType`)
 - **SAML2**: Form POST to `/Account/Login/ExternalLogin` with provider set to the SAML2 `AuthenticationType` (configured via site settings `Authentication/SAML2/{provider}/AuthenticationType`)
 - **WS-Federation**: Form POST to `/Account/Login/ExternalLogin` with provider set to the WS-Federation `AuthenticationType` (configured via site settings `Authentication/WsFederation/{provider}/AuthenticationType`)
-- **Local Authentication**: Form POST to `/Account/Login/Login` with credentials, `Password`, anti-forgery token, and optionally `RememberMe`. When the `Authentication/Registration/LocalLoginByEmail` site setting is `true`, send the `Email` field; otherwise send the `Username` field. Does NOT use the ExternalLogin endpoint.
+- **Local Authentication**: Form POST to `/SignIn` with `PasswordValue` (not `Password`), anti-forgery token from `/_layout/tokenhtml`, and optionally `RememberMe`. When `LocalLoginByEmail` is `true`, send the `Email` field; otherwise send the `Username` field. Note: the login endpoint uses `/SignIn` and `PasswordValue` — these differ from the registration endpoint which uses `/Account/Login/Register` and `Password`. Does NOT use the ExternalLogin endpoint.
 - **Microsoft Account**: Form POST to `/Account/Login/ExternalLogin` with provider `urn:microsoft:account`
 - **Facebook**: Form POST to `/Account/Login/ExternalLogin` with provider `Facebook`
 - **Google**: Form POST to `/Account/Login/ExternalLogin` with provider `Google`
@@ -618,10 +618,12 @@ The component should:
 
 #### 5.1.1 Create Sign-In Page (Multi-Provider Only)
 
-**If more than one auth provider is configured**, create a dedicated `/signin` page that shows all provider options. This page:
+> **Route naming — avoid server conflicts:** Power Pages reserves `/SignIn`, `/Register`, and all `/Account/Login/*` paths for server-rendered auth pages. SPA routes MUST NOT collide with these. Use `/login` for the sign-in page and `/registration` for the registration page.
+
+**If more than one auth provider is configured**, create a dedicated `/login` page that shows all provider options. This page:
 
 - Lists all external provider buttons (e.g., "Sign in with External ID", "Sign in with Google")
-- If local auth is also configured, shows a local login form (expand on click) with the appropriate credential field — an `Email` field (type `email`) when `LocalLoginByEmail` is `true`, or a `Username` field (type `text`) when `false`. Include a "Forgot password?" link and a "Create an account" link (the "Create an account" link should point to `/register` and should only be shown when `OpenRegistrationEnabled` is `true` — omit it for invitation-only registration)
+- If local auth is also configured, shows a local login form (expand on click) with the appropriate credential field — an `Email` field (type `email`) when `LocalLoginByEmail` is `true`, or a `Username` field (type `text`) when `false`. Include a "Forgot password?" link pointing to `/Account/Login/ForgotPassword` and a "Create an account" link (the "Create an account" link should point to `/registration` and should only be shown when `OpenRegistrationEnabled` is `true` — omit it for invitation-only registration)
 - Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`) and session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`). Both should be checked on mount and displayed at the top of the page.
 - Is styled to match the site's design (centered card layout with provider buttons)
 
@@ -629,15 +631,17 @@ See the multi-provider AuthButton component pattern in `authentication-reference
 
 For single-provider sites, the AuthButton component in the nav bar is sufficient — no separate page needed.
 
-When the `/signin` page exists, the "Sign In" button in the nav bar should navigate to `/signin` instead of directly calling `login()`.
+When the `/login` page exists, the "Sign In" button in the nav bar should navigate to `/login` instead of directly calling `login()`.
 
 #### 5.1.2 Create Registration Page (Local Auth Only)
 
-**If local authentication is configured AND `OpenRegistrationEnabled` is `true`**, create a dedicated `/register` page for self-service user registration. This is essential — without it, users have no way to create a local account.
+**If local authentication is configured AND `OpenRegistrationEnabled` is `true`**, create a dedicated `/registration` page for self-service user registration. This is essential — without it, users have no way to create a local account.
+
+> **Important architectural note:** The server-side registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action. This means it requires `__VIEWSTATE` and uses fully-qualified control names (e.g., `ctl00$...$EmailTextBox`). The `register()` function in authService handles this by first fetching the server page (GET), parsing the ViewState and control names, then POSTing with the correct payload. This is different from login, which is a simple MVC form POST.
 
 The registration page must:
 
-- Post to `/Account/Login/Register` using the `register()` function from authService (which handles anti-forgery token, form fields, and form submission)
+- Call the `register()` function from authService, which handles the Web Forms ViewState pattern (fetch server page → parse → POST with correct control names)
 - Show the correct credential field based on the `LocalLoginByEmail` choice from Phase 2.1:
   - **Email mode** (`LocalLoginByEmail = true`): Show an `Email` field (type `email`). This is both the login identifier and email address.
   - **Username mode** (`LocalLoginByEmail = false`): Show a `Username` field (type `text`) AND a separate `Email` field (type `email`). Both are required — Username is the login identifier, Email is needed for the contact record.
@@ -645,16 +649,16 @@ The registration page must:
 - Validate that passwords match client-side before submitting
 - Display server-side registration errors parsed from `?message=` query params (via `getAuthError()`)
 - Parse and pass through `invitationCode` from the URL query string (for invitation-based registration flows where the user arrives via `?invitationCode=...`)
-- Include an "Already have an account? Sign in" link back to `/signin` (or `/` for single-provider sites)
-- Redirect authenticated users away from the registration page (if already logged in, navigate to `/`)
+- Include an "Already have an account? Sign in" link back to `/login`
+- **Skip the auth redirect in development mode** — in dev mode the mock user is always "authenticated", which would block testing the registration form. Add: `const isDev = window.location.hostname === 'localhost'` and only redirect if `isAuthenticated && !isDev`.
 - Be styled to match the site's existing sign-in page design (centered card layout)
 
 **Framework-specific implementation:**
 
-- **React**: Create `src/pages/Register.tsx` and add `<Route path="/register" element={<Register />} />` to the router. See the `RegisterForm` component in `authentication-reference.md` for the implementation pattern — adapt it to match the site's existing styling patterns (inline styles, CSS variables, etc.)
-- **Vue**: Create `src/pages/Register.vue` and add the route to `src/router/index.ts`
-- **Angular**: Create `src/app/pages/register/register.component.ts` and add the route to the router config
-- **Astro**: Create `src/pages/register.astro`
+- **React**: Create `src/pages/Registration.tsx` and add `<Route path="/registration" element={<Registration />} />` to the router. See the `RegisterForm` component in `authentication-reference.md` for the implementation pattern — adapt it to match the site's existing styling patterns (inline styles, CSS variables, etc.)
+- **Vue**: Create `src/pages/Registration.vue` and add the route to `src/router/index.ts`
+- **Angular**: Create `src/app/pages/registration/registration.component.ts` and add the route to the router config
+- **Astro**: Create `src/pages/registration.astro`
 
 **If `OpenRegistrationEnabled` is `false`** (invitation-only registration), skip the registration page — users register via invitation links (`{site-url}/Account/Login/RedeemInvitation?InvitationCode={code}`) handled entirely server-side.
 
@@ -664,11 +668,10 @@ Find the site's navigation component and integrate the auth button:
 
 1. Search for the nav/header component in the site's source code
 2. Import the AuthButton component
-3. Add it to the navigation bar (typically in the top-right area)
-4. **If multiple providers are configured**: The "Sign In" button should navigate to `/signin` page
-5. **If single provider**: The "Sign In" button should call `login()` directly
-
-**Do NOT replace the existing navigation** — add the auth button alongside existing nav items.
+3. **Replace any existing hardcoded sign-in link** (e.g., `<Link to="/login">Sign In</Link>` or `<a href="/signin">`) with the AuthButton component. The AuthButton reads `window.Microsoft.Dynamic365.Portal.User` to dynamically show either "Sign In" (when not authenticated) or the user's name + avatar + "Sign Out" button (when authenticated). A hardcoded link does not react to auth state.
+4. **If multiple providers are configured**: The AuthButton's "Sign In" action should navigate to `/login` page
+5. **If single provider**: The AuthButton's "Sign In" action should call `login()` directly
+6. **Verify** after integration that the Navbar does NOT have both a hardcoded sign-in link AND the AuthButton — there must be exactly one auth entry point in the navigation.
 
 #### 5.3 Git Commit
 
@@ -840,6 +843,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 - **Secrets** (`ClientSecret`, `AppSecret`) → use environment variables via `create-environment-variable.js`. Never ask for or store secret values directly. See Phase 8.1.1 below.
 
 **Always create** — these settings are required for all provider types:
+
+> **ProfileRedirectEnabled MUST be `false` for code sites.** If `create-site-setting.js` reports this setting already exists, read the YAML file and check its value. If it is `true`, edit the file to set `value: false`. When this is `true`, the server redirects users to `/profile` after login/registration instead of respecting the `ReturnUrl` — which breaks the SPA flow.
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1054,6 +1059,22 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --name "Authentication/Registration/ResetPasswordEnabled" \
   --value "true" \
   --description "Enable forgot password flow for local accounts" \
+  --type boolean
+
+# Disable CAPTCHA — required for code sites because the SPA registration form cannot render
+# the server-side CAPTCHA widget. Without this, registration silently fails.
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/CaptchaEnabled" \
+  --value "false" \
+  --description "Disable CAPTCHA for SPA registration" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/IsCaptchaEnabledForRegistration" \
+  --value "false" \
+  --description "Disable CAPTCHA for SPA registration form" \
   --type boolean
 ```
 
