@@ -483,9 +483,13 @@ Create the auth service file based on the detected framework and selected identi
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
 - `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message
+- `parseServerErrors(html)` — **Required for local auth.** Parses validation errors from server HTML responses (`.validation-summary-errors li`, `.alert-danger li`, `.field-validation-error`). Used by login and register to show server errors in the SPA.
 - `register(fields, returnUrl?, invitationCode?)` — **Required when local auth is configured.** POSTs registration form to `/Account/Login/Register` with anti-forgery token, email or username (based on `LocalLoginByEmail` choice from Phase 2.1), password, confirmPassword, and optional invitationCode. When `LocalLoginByEmail` is `true`, sends `Email` field. When `false`, sends `Username` field. See `authentication-reference.md` for the full implementation.
+- `forgotPassword(email)` — **Required when local auth is configured.** MVC form POST to `/Account/Login/ForgotPassword` with `Email` + anti-forgery token. Server sends a password reset email. Uses `fetch()` like login.
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
+
+> **CRITICAL — Use `fetch()` not `form.submit()` for local login and registration.** Using `form.submit()` causes a full-page navigation — if the server returns an error, the user leaves the SPA and sees the server-rendered error page. Using `fetch()` instead keeps the user in the SPA: on success (redirect), navigate via `window.location.href`; on failure (200 with HTML), parse errors with `parseServerErrors()` and throw them so the page component can display them inline. See `authentication-reference.md` for the full implementation.
 
 **Login flow varies by provider type:**
 
@@ -662,6 +666,49 @@ The registration page must:
 
 **If `OpenRegistrationEnabled` is `false`** (invitation-only registration), skip the registration page — users register via invitation links (`{site-url}/Account/Login/RedeemInvitation?InvitationCode={code}`) handled entirely server-side.
 
+#### 5.1.3 Create Forgot Password Page (Local Auth Only)
+
+**If local authentication is configured AND `ResetPasswordEnabled` is `true`**, create a `/forgot-password` page. This is a simple form that collects the user's email and POSTs to the server, which sends a password reset link via email.
+
+> **Note:** The forgot password endpoint (`/Account/Login/ForgotPassword`) is an MVC form (like login), NOT a Web Forms page (like registration). A simple `fetch()` POST with `Email` + `__RequestVerificationToken` works. The `forgotPassword()` function in authService handles this.
+
+The forgot password page must:
+
+- Show an email input field
+- Call `forgotPassword(email)` from authService on submit
+- Display server errors inline (the `forgotPassword()` function uses fetch and throws parsed errors)
+- Include a "Back to sign in" link to `/login`
+- Use the same validate-on-blur pattern as login and registration (validate email format on blur, clear on change)
+
+The login page's "Forgot password?" link should point to `/forgot-password` (SPA route), NOT `/Account/Login/ForgotPassword` (server URL).
+
+After the server processes the request, it sends a reset email. The reset link in the email goes to the server-rendered `/Account/Login/ResetPassword` page — this step stays server-side since the user arrives from their email client, not from the SPA.
+
+#### 5.1.4 Validation Pattern for All Auth Pages (Local Auth Only)
+
+All local auth pages (login, registration, forgot password) must implement **validate-on-blur, clear-on-change** for real-time field validation. This is the modern UX pattern — errors appear when the user leaves a field and disappear as they correct it.
+
+**Implementation pattern:**
+
+1. Track `touched` state per field (which fields the user has interacted with)
+2. **On blur** (`onBlur`): mark field as touched, run validation, show error immediately
+3. **On change** (`onChange`): if the field was already touched, re-validate and clear the error as soon as the value becomes valid. Also clear server errors on any change.
+4. **On submit**: mark ALL fields as touched, validate everything, show all errors at once
+5. `showError(field)` helper: only return the error if the field has been touched
+
+**Validation rules:**
+
+| Page | Field | Validation |
+|------|-------|-----------|
+| Login | Email | Required + valid email format |
+| Login | Password | Required |
+| Registration | Email | Required + valid email format |
+| Registration | Password | Required + min 8 chars + characters from at least 3 of 4 categories (lowercase, uppercase, digit, special character) |
+| Registration | Confirm Password | Required + must match Password |
+| Forgot Password | Email | Required + valid email format |
+
+The password strength validation matches the default Power Pages password policy (`EnforcePasswordPolicy`). If the site creator customizes the password policy via `Authentication/UserManager/PasswordValidator/*` site settings, the client-side validation should match.
+
 #### 5.2 Integrate into Navigation
 
 Find the site's navigation component and integrate the auth button:
@@ -770,12 +817,14 @@ Confirm the following files were created:
 - `src/utils/authorization.ts` — Role-checking utilities
 - Framework-specific authorization components (e.g., `RequireAuth.tsx`, `RequireRole.tsx` for React)
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
-- Registration page (e.g., `src/pages/Register.tsx` for React) — only when local auth with open registration is configured
+- Registration page (e.g., `src/pages/Registration.tsx` for React) — only when local auth with open registration is configured
+- Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) — only when local auth with reset password is configured
 
 Read each file and verify it contains the expected exports and functions:
 
-- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, and `register` (when local auth is configured)
+- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, and `register`, `forgotPassword` (when local auth is configured)
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
+- Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper
 
 #### 7.2 Verify Build
 
@@ -1293,7 +1342,8 @@ Present a summary of everything created:
 | Authorization Utils | `src/utils/authorization.ts` | Created |
 | Auth Components | `RequireAuth`, `RequireRole` (or framework equivalent) | Created |
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
-| Registration Page | `src/pages/Register.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| Registration Page | `src/pages/Registration.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| Forgot Password Page | `src/pages/ForgotPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy

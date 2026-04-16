@@ -404,49 +404,44 @@ export async function login(
   const token = await fetchAntiForgeryToken();
 
   if (AUTH_PROVIDER.type === 'local') {
-    // Local login: POST credentials directly to the login endpoint
+    // Local login: use fetch() to POST credentials so we can parse server errors
+    // and keep the user in the SPA. Do NOT use form.submit() — it navigates away.
     if (!credentials) {
       throw new Error('Local login requires username and password credentials.');
     }
 
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/SignIn';
-
-    // When LocalLoginByEmail is true, send the Email field; otherwise send Username.
-    // The server checks ViewBag.Settings.LocalLoginByEmail to determine which field to read.
     const credentialFieldName = AUTH_PROVIDER.loginByEmail ? 'Email' : 'Username';
 
-    // IMPORTANT: The password field is PasswordValue (not Password) — this matches the
-    // server-rendered login form's actual field name.
-    const fields: Record<string, string> = {
-      __RequestVerificationToken: token,
-      [credentialFieldName]: credentials.username,
-      PasswordValue: credentials.password,
-      ReturnUrl: returnUrl || '/',
-    };
+    const body = new URLSearchParams();
+    body.set('__RequestVerificationToken', token);
+    body.set(credentialFieldName, credentials.username);
+    body.set('PasswordValue', credentials.password); // Server uses PasswordValue, not Password
+    body.set('ReturnUrl', returnUrl || '/');
+    if (credentials.rememberMe) body.set('RememberMe', 'true');
+    if (invitationCode) body.set('InvitationCode', invitationCode);
 
-    // Include RememberMe if enabled and requested
-    if (credentials.rememberMe) {
-      fields.RememberMe = 'true';
+    const response = await fetch('/SignIn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      credentials: 'same-origin',
+      redirect: 'follow',
+    });
+
+    // If the fetch followed a redirect to our ReturnUrl, login succeeded — reload to pick up session
+    if (response.redirected || response.url.endsWith(returnUrl || '/')) {
+      window.location.href = returnUrl || '/';
+      return;
     }
 
-    // Include invitation code if present (for invitation-based registration)
-    if (invitationCode) {
-      fields.InvitationCode = invitationCode;
+    // If we got a 200, the server returned the login page with errors — parse them
+    const html = await response.text();
+    const errors = parseServerErrors(html);
+    if (errors.length > 0) {
+      throw new Error(errors.join(' '));
     }
 
-    for (const [name, value] of Object.entries(fields)) {
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = name;
-      input.value = value;
-      form.appendChild(input);
-    }
-
-    document.body.appendChild(form);
-    form.submit();
-    return;
+    throw new Error('Invalid email or password. Please try again.');
   }
 
   // External login: POST to ExternalLogin endpoint with provider identifier
@@ -535,6 +530,37 @@ export function getAuthError(): string | undefined {
   return AUTH_ERROR_MESSAGES[message] || 'An authentication error occurred. Please try again.';
 }
 
+// --- Server Error Parsing ---
+// When the server rejects a login/registration POST, it returns 200 with HTML containing
+// validation errors. This helper parses those errors from the response HTML so they can
+// be shown inline in the SPA instead of the user seeing the server-rendered error page.
+
+function parseServerErrors(html: string): string[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const errors: string[] = [];
+
+  // MVC validation summary (login, forgot password)
+  doc.querySelectorAll('.validation-summary-errors li').forEach(li => {
+    const text = li.textContent?.trim();
+    if (text) errors.push(text);
+  });
+
+  // Web Forms validation summary (registration)
+  doc.querySelectorAll('.alert-danger li').forEach(li => {
+    const text = li.textContent?.trim();
+    if (text && !errors.includes(text)) errors.push(text);
+  });
+
+  // Individual field errors
+  doc.querySelectorAll('.field-validation-error').forEach(el => {
+    const text = el.textContent?.trim();
+    if (text && !errors.includes(text)) errors.push(text);
+  });
+
+  return errors;
+}
+
 // --- Local Registration ---
 
 /**
@@ -608,39 +634,88 @@ export async function register(
   const confirmInput = doc.getElementById('ConfirmPasswordTextBox') as HTMLInputElement | null;
   const submitBtn = doc.getElementById('SubmitButton') as HTMLInputElement | null;
 
-  // Step 5: Build the form POST with Web Forms field names
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = formAction;
+  // Step 5: Build the POST body with Web Forms field names
+  const body = new URLSearchParams();
+  body.set('__VIEWSTATE', viewState);
+  body.set('__VIEWSTATEGENERATOR', viewStateGenerator);
+  body.set('__EVENTTARGET', '');
+  body.set('__EVENTARGUMENT', '');
+  body.set('__VIEWSTATEENCRYPTED', '');
 
-  const formFields: Record<string, string> = {
-    __VIEWSTATE: viewState,
-    __VIEWSTATEGENERATOR: viewStateGenerator,
-    __EVENTTARGET: '',
-    __EVENTARGUMENT: '',
-    __VIEWSTATEENCRYPTED: '',
-  };
+  if (eventValidation) body.set('__EVENTVALIDATION', eventValidation);
+  if (antiForgeryToken) body.set('__RequestVerificationToken', antiForgeryToken);
 
-  if (eventValidation) formFields.__EVENTVALIDATION = eventValidation;
-  if (antiForgeryToken) formFields.__RequestVerificationToken = antiForgeryToken;
+  if (fields.email && emailInput) body.set(emailInput.name, fields.email);
+  if (fields.username && usernameInput) body.set(usernameInput.name, fields.username);
+  if (passwordInput) body.set(passwordInput.name, fields.password);
+  if (confirmInput) body.set(confirmInput.name, fields.confirmPassword);
+  if (submitBtn) body.set(submitBtn.name, submitBtn.value || 'Register');
 
-  // Map user values to the actual Web Forms control names
-  if (fields.email && emailInput) formFields[emailInput.name] = fields.email;
-  if (fields.username && usernameInput) formFields[usernameInput.name] = fields.username;
-  if (passwordInput) formFields[passwordInput.name] = fields.password;
-  if (confirmInput) formFields[confirmInput.name] = fields.confirmPassword;
-  if (submitBtn) formFields[submitBtn.name] = submitBtn.value || 'Register';
+  // Step 6: POST via fetch() to stay in the SPA and parse server errors
+  const response = await fetch(formAction, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
 
-  for (const [name, value] of Object.entries(formFields)) {
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = name;
-    input.value = value;
-    form.appendChild(input);
+  // If the fetch followed a redirect, registration succeeded
+  if (response.redirected) {
+    window.location.href = response.url;
+    return;
   }
 
-  document.body.appendChild(form);
-  form.submit();
+  // If we got a 200, the server returned the page with errors — parse them
+  const responseHtml = await response.text();
+  const errors = parseServerErrors(responseHtml);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  if (response.url !== window.location.href) {
+    window.location.href = response.url;
+    return;
+  }
+
+  throw new Error('Registration failed. Please try again.');
+}
+
+// --- Forgot Password ---
+// MVC form POST (like login, not Web Forms like registration).
+// Posts Email + anti-forgery token to /Account/Login/ForgotPassword.
+// Server sends a reset email. The reset link goes to the server-rendered
+// /Account/Login/ResetPassword page (stays server-side since user arrives from email).
+
+export async function forgotPassword(email: string): Promise<void> {
+  if (isDevelopment) {
+    alert('Dev mode: Password reset email would be sent to ' + email);
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', token);
+  body.set('Email', email);
+
+  const response = await fetch('/Account/Login/ForgotPassword', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  // The server always returns 200 with a confirmation page (even if the email doesn't exist,
+  // for security — it doesn't reveal whether an account exists). Parse for errors just in case.
+  const html = await response.text();
+  const errors = parseServerErrors(html);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  // No errors = success. The server sent the email.
 }
 
 /**
@@ -810,29 +885,33 @@ export async function loginWithProvider(
     if (!credentials) {
       throw new Error('Local login requires username and password credentials.');
     }
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/SignIn';
-
+    // Use fetch() to stay in the SPA and parse server errors
     const credentialFieldName = providerConfig.loginByEmail ? 'Email' : 'Username';
-    const fields: Record<string, string> = {
-      __RequestVerificationToken: token,
-      [credentialFieldName]: credentials.username,
-      PasswordValue: credentials.password, // Server uses PasswordValue, not Password
-      ReturnUrl: returnUrl || '/',
-    };
-    if (credentials.rememberMe) fields.RememberMe = 'true';
-    if (invitationCode) fields.InvitationCode = invitationCode;
+    const body = new URLSearchParams();
+    body.set('__RequestVerificationToken', token);
+    body.set(credentialFieldName, credentials.username);
+    body.set('PasswordValue', credentials.password);
+    body.set('ReturnUrl', returnUrl || '/');
+    if (credentials.rememberMe) body.set('RememberMe', 'true');
+    if (invitationCode) body.set('InvitationCode', invitationCode);
 
-    for (const [name, value] of Object.entries(fields)) {
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = name;
-      input.value = value;
-      form.appendChild(input);
+    const response = await fetch('/SignIn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      credentials: 'same-origin',
+      redirect: 'follow',
+    });
+
+    if (response.redirected || response.url.endsWith(returnUrl || '/')) {
+      window.location.href = returnUrl || '/';
+      return;
     }
-    document.body.appendChild(form);
-    form.submit();
+
+    const html = await response.text();
+    const errors = parseServerErrors(html);
+    if (errors.length > 0) throw new Error(errors.join(' '));
+    throw new Error('Invalid credentials. Please try again.');
     return;
   }
 
