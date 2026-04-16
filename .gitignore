@@ -48,3 +48,4 @@ ENV/
 Thumbs.db
 
 .playwright-mcp/
+.omx/
