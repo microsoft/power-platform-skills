@@ -11,9 +11,6 @@ description: >
   client-side code to call the flows, and presents an HTML plan showing roles and reasoning
   for each flow. Already-registered flows can be selected for frontend-only integration into
   new pages or components without re-creating metadata.
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

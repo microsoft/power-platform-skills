@@ -1,6 +1,6 @@
 # AGENTS.md — Model Apps Plugin
 
-This file provides guidance to AI Agents when working with the **model-apps** plugin.
+This file provides guidance to AI agents when working with the **model-apps** plugin as Codex skills.
 
 ## What This Plugin Is
 
@@ -10,7 +10,7 @@ Single-session workflow — each `/genpage` invocation completes the full cycle:
 
 ## Local Development
 
-Test this plugin locally:
+For Codex, symlink or copy the relevant `skills/*` folder into `$CODEX_HOME/skills`. For the legacy packaging, you can still test the plugin locally with:
 
 ```bash
 claude --plugin-dir /path/to/plugins/model-apps
@@ -19,7 +19,7 @@ claude --plugin-dir /path/to/plugins/model-apps
 ## Architecture
 
 ```
-.claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+.claude-plugin/plugin.json     ← Legacy plugin metadata
 .mcp.json                      ← MCP server config (Playwright for browser verification)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
@@ -31,14 +31,14 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
 skills/
   genpage/
-    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
+    SKILL.md                   ← Skill definition
 ```
 
 ## Skills
 
 | Skill | Description |
 |-------|-------------|
-| `/genpage` | Build and deploy a generative page for a model-driven Power App |
+| `genpage` | Build and deploy a generative page for a model-driven Power App |
 
 ## Key Concepts
 
@@ -65,20 +65,20 @@ TypeScript type definitions generated from Dataverse metadata. Contains entity t
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
 
-## Skill Authoring Guidelines
+## Codex Translation Layer
 
-- Keep SKILL.md under 500 lines
-- Use short, descriptive `name` field (e.g., `genpage`)
-- Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
-- Use progressive disclosure: SKILL.md for workflow, reference files for details
-- Link to references inline: `See [troubleshooting.md](../../references/troubleshooting.md)`
+Some skill bodies still use Claude-era terms. Interpret them this way in Codex:
+
+- `AskUserQuestion` means ask the user directly in a short plain-text message
+- `TaskCreate` / `TaskUpdate` / `TaskList` mean maintain progress with `update_plan`
+- `/genpage` means the `genpage` skill
 
 ## Testing Changes
 
 After modifying this plugin:
 
-1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/genpage`
+1. For legacy packaging, run `claude --debug` to see plugin loading details
+2. Test the `genpage` workflow from Codex or the legacy `/genpage` entrypoint
 3. Verify tool restrictions work (should only allow pac, powershell, node commands)
 4. Test with both Dataverse entity pages and mock data pages
 5. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)

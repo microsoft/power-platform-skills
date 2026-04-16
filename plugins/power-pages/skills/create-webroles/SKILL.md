@@ -5,9 +5,6 @@ description: >
   "set up web roles", "add roles", "create roles for my site", "manage web roles",
   "add authenticated role", "add anonymous role", or wants to create web roles for
   their Power Pages code site. Web roles control access and permissions for site users.
-user-invocable: true
-allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

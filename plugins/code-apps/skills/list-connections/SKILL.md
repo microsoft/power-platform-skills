@@ -1,12 +1,9 @@
 ---
 name: list-connections
 description: Lists Power Platform connections in the current environment. Use when you need a connection ID before adding a connector to a code app.
-user-invocable: true
-allowed-tools: Bash
-model: haiku
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
 
 # List Connections
 

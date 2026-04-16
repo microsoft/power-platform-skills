@@ -1,12 +1,6 @@
 ---
 name: genpage
-version: 1.0.0
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Completes workflow from requirements to deployment. Uses PAC CLI to deploy the page code. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
-author: Microsoft Corporation
-argument-hint: "[optional: page description or 'deploy' or 'update']"
-user-invocable: true
-model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 ---
 
 # Power Apps Generative Pages Builder

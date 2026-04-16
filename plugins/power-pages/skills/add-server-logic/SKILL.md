@@ -10,9 +10,6 @@ description: >
   requirements, fetching latest documentation, implementing the server logic code, configuring
   site settings, and deploying. Use this skill whenever the user mentions "server logic",
   "server-side code", or wants to move logic from the browser to the server in their Power Pages site.
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

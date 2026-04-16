@@ -1,15 +1,11 @@
 ---
 name: configure-canvas-mcp
-version: 1.0.0
-description: Configure the Canvas Authoring MCP server for Claude Code, VS Code Copilot, or GitHub Copilot CLI. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
-author: Microsoft Corporation
-user-invocable: true
-allowed-tools: Bash, AskUserQuestion, Read, Edit, Write
+description: Configure the Canvas Authoring MCP server for Codex, Claude Code, VS Code Copilot, or GitHub Copilot CLI. Use when the user asks to configure MCP, set up the canvas-authoring server, or troubleshoot Canvas Apps MCP access. Do not use when prerequisites are missing.
 ---
 
 # Configure the Canvas Authoring MCP Server
 
-This skill registers the Canvas Authoring MCP server with Claude Code, VS Code Copilot, or GitHub Copilot CLI using the user's Power Platform environment ID.
+This skill registers the Canvas Authoring MCP server using the user's Power Platform environment ID. When the target tool is Codex, reuse the same server command and environment variables in the user's Codex MCP configuration.
 
 ## Instructions
 
@@ -29,17 +25,18 @@ Then wait for the user to install it before continuing. If they say it's install
 
 ### 1. Determine which tool to configure
 
-Determine whether the user needs to configure MCP for VS Code Copilot, GitHub Copilot CLI, or Claude Code:
+Determine whether the user needs to configure MCP for Codex, VS Code Copilot, GitHub Copilot CLI, or Claude Code:
 - If explicitly mentioned in prompt, use that.
 - Otherwise, determine which tool the user is running from the context.
 - Only if choosing based on the context is impossible, ask the user:
 
 > Which tool would you like to configure the Canvas Authoring (canvas-authoring) MCP server for?
-> 1. **VS Code Copilot**
-> 2. **GitHub Copilot CLI**
-> 3. **Claude**
+> 1. **Codex**
+> 2. **VS Code Copilot**
+> 3. **GitHub Copilot CLI**
+> 4. **Claude**
 
-Based on the result, set the `TOOL_TYPE` variable to `vscode-copilot`, `copilot`, or `claude`. Store this for use in all subsequent steps.
+Based on the result, set the `TOOL_TYPE` variable to `codex`, `vscode-copilot`, `copilot`, or `claude`. Store this for use in all subsequent steps.
 
 ### 2. Determine the MCP scope
 

@@ -6,9 +6,6 @@ description: >
   "provision portal", "turn on my site", "enable website",
   or wants to activate/provision a Power Pages website in their
   Power Platform environment via the Power Platform REST API.
-user-invocable: true
-allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
-model: sonnet
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

@@ -1,12 +1,9 @@
 ---
 name: deploy
 description: Builds and deploys a Power Apps code app to Power Platform. Use when deploying changes, redeploying an existing app, or pushing updates.
-user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash
-model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Deploy
 

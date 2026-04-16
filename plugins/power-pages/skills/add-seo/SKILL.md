@@ -6,9 +6,6 @@ description: >
   "add open graph tags", "add favicon", "make site searchable",
   or wants to add SEO essentials (robots.txt, sitemap.xml, meta tags) to their
   Power Pages code site after creating it with /create-site.
-user-invocable: true
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close
-model: sonnet
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

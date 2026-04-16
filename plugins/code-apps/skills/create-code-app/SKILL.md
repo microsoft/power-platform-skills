@@ -1,12 +1,9 @@
 ---
 name: create-code-app
 description: Creates Power Apps code apps using React and Vite. Use when building code apps, scaffolding projects, or deploying to Power Platform.
-user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, Skill, EnterPlanMode, ExitPlanMode
-model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -23,7 +20,7 @@ model: opus
 
 ### Step 0: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md). Skip completed steps.
 
 ### Step 1: Validate Prerequisites
 
@@ -103,7 +100,7 @@ After clearing, there is no need to run `auth create`. The tool picks up the sys
 - **Environment matches user's target**: Confirm and proceed.
 - **On a different environment or no target set**: Run `pwsh -NoProfile -Command "pac env list"`, show up to 10 options, let the user pick, and run `pwsh -NoProfile -Command "pac env select --environment <id>"`.
 
-See [preferred-environment.md](${CLAUDE_PLUGIN_ROOT}/shared/preferred-environment.md) for details.
+See [preferred-environment.md](../../shared/preferred-environment.md) for details.
 
 **Critical:** Capture the environment ID for Step 7.
 
@@ -194,7 +191,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 
 **This is the core step.** Build the actual app features described in the plan from Step 3.
 
-1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
+1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](../../shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
 2. **Build components**: Create React components for each screen/feature in the plan
 3. **Connect data**: Wire components to generated services (use `*Service.getAll()`, `*Service.create()`, etc.)
 4. **Apply theme**: Use the user's theme preference (default: dark theme per development standards)
@@ -204,7 +201,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 **Key rules:**
 
 - Use generated services for all data access -- never use fetch/axios directly
-- Read [dataverse-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
+- Read [dataverse-reference.md](../../skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
 - Remove unused imports before building (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 

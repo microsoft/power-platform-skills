@@ -1,14 +1,39 @@
 # Power Platform Skills
 
-Official agent skills/plugins for Power Platform development by Microsoft.
+Official Power Platform development skills by Microsoft. The repository started as a Claude Code/GitHub Copilot plugin marketplace and is now being adapted so the same workflows can be used as Codex skills.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository contains Power Platform workflows for Power Pages, Power Apps code apps, model-driven generative pages, and canvas apps. The source tree still groups content by plugin, but the primary unit for Codex is each `skills/*/SKILL.md` folder.
 
 ## Installation
 
-### Quick Install (Recommended)
+### Codex
+
+Codex discovers skills from folders that contain a `SKILL.md`. This repo keeps those folders under each plugin:
+
+- `plugins/power-pages/skills/*`
+- `plugins/code-apps/skills/*`
+- `plugins/model-apps/skills/*`
+- `plugins/canvas-apps/skills/*`
+
+To use selected skills with Codex, symlink or copy the skill folders you want into `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset).
+
+Example:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -s /path/to/power-platform-skills/plugins/power-pages/skills/create-site \
+  "${CODEX_HOME:-$HOME/.codex}/skills/power-pages-create-site"
+```
+
+The plugin-level `AGENTS.md` files describe how to interpret older Claude-specific terms that still appear inside some workflow documents.
+
+### Claude Code / GitHub Copilot
+
+The original plugin packaging is still present in `.claude-plugin/` for repositories that still consume this format.
+
+#### Quick Install (Recommended)
 
 Run the installer to set up all plugins with auto-update enabled:
 
@@ -78,10 +103,11 @@ Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 
 ## Local Development
 
-To develop and test plugins locally, follow these steps:
+To develop and test locally, follow these steps:
 
 1. Clone this repository
-1. Launch Claude Code with plugin path:
+1. For Codex, link the skill folder you want into `$CODEX_HOME/skills`
+1. For Claude Code, launch with plugin path:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
@@ -92,7 +118,7 @@ To develop and test plugins locally, follow these steps:
 
 ## Running Without Interruption
 
-Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
+The workflows in this repo may invoke multiple tools during a session, which can result in frequent approval prompts. The options below apply to the original Claude Code and GitHub Copilot plugin packaging.
 
 > **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
 
@@ -156,16 +182,16 @@ See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilo
 ```text
 power-platform-skills/
 ├── .claude-plugin/
-│   └── marketplace.json      # Marketplace manifest (lists all plugins)
+│   └── marketplace.json      # Legacy marketplace manifest for Claude Code / Copilot
 ├── .claude/
 │   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
 ├── plugins/
 │   ├── power-pages/          # Power Pages plugin
 │   │   ├── .claude-plugin/
-│   │   │   └── plugin.json
+│   │   │   └── plugin.json  # Legacy plugin packaging metadata
 │   │   ├── commands/
 │   │   ├── shared/
-│   │   └── skills/
+│   │   └── skills/          # Codex-compatible skill folders live here
 │   ├── model-apps/           # Model Apps plugin
 │   |   ├── .claude-plugin/
 │   │   └── plugin.json

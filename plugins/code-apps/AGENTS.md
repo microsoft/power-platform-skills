@@ -1,6 +1,6 @@
 # AGENTS.md — Power Apps Plugin
 
-This file provides guidance to AI Agents when working with the **power-apps** plugin.
+This file provides guidance to AI agents when working with the **code-apps** plugin as Codex skills.
 
 ## What This Plugin Is
 
@@ -8,7 +8,7 @@ A plugin for building and deploying Power Apps code apps using React + Vite + Ty
 
 ## Local Development
 
-Test this plugin locally:
+For Codex, symlink or copy the relevant `skills/*` folder into `$CODEX_HOME/skills`. For the legacy packaging, you can still test the plugin locally with:
 
 ```bash
 claude --plugin-dir /path/to/plugins/power-apps
@@ -17,7 +17,7 @@ claude --plugin-dir /path/to/plugins/power-apps
 ## Architecture
 
 ```
-.claude-plugin/plugin.json        <- Plugin metadata (name, version, keywords)
+.claude-plugin/plugin.json        <- Legacy plugin metadata
 AGENTS.md                         <- Plugin guidance for AI agents (this file)
 agents/
   code-app-architect.md           <- Agent persona for architecture decisions
@@ -67,19 +67,29 @@ skills/
 
 | Skill | Description |
 |-------|-------------|
-| `/create-code-app` | Scaffold, configure, and deploy a new Power Apps code app |
-| `/deploy` | Build and deploy an existing code app |
-| `/list-connections` | List Power Platform connections to find connection IDs |
-| `/add-datasource` | Add a data source (routes to the appropriate add-* skill) |
-| `/add-dataverse` | Add Dataverse tables with generated TypeScript models and services |
-| `/add-sharepoint` | Add SharePoint Online connector |
-| `/add-azuredevops` | Add Azure DevOps connector |
-| `/add-teams` | Add Microsoft Teams connector |
-| `/add-excel` | Add Excel Online (Business) connector |
-| `/add-onedrive` | Add OneDrive for Business connector |
-| `/add-office365` | Add Office 365 Outlook connector |
-| `/add-mcscopilot` | Add Copilot Studio agent connector |
-| `/add-connector` | Add any other Power Platform connector |
+| `create-code-app` | Scaffold, configure, and deploy a new Power Apps code app |
+| `deploy` | Build and deploy an existing code app |
+| `list-connections` | List Power Platform connections to find connection IDs |
+| `add-datasource` | Add a data source and route to the appropriate add-* workflow |
+| `add-dataverse` | Add Dataverse tables with generated TypeScript models and services |
+| `add-sharepoint` | Add SharePoint Online connector |
+| `add-azuredevops` | Add Azure DevOps connector |
+| `add-teams` | Add Microsoft Teams connector |
+| `add-excel` | Add Excel Online (Business) connector |
+| `add-onedrive` | Add OneDrive for Business connector |
+| `add-office365` | Add Office 365 Outlook connector |
+| `add-mcscopilot` | Add Copilot Studio agent connector |
+| `add-connector` | Add any other Power Platform connector |
+
+## Codex Translation Layer
+
+Some skill bodies still use Claude-era terms. Interpret them this way in Codex:
+
+- `${CLAUDE_PLUGIN_ROOT}` means the `plugins/code-apps` directory
+- `AskUserQuestion` means ask a short plain-text question directly
+- `TaskCreate` / `TaskUpdate` / `TaskList` mean maintain progress with `update_plan`
+- `EnterPlanMode` / `ExitPlanMode` mean enter or leave a normal Codex planning step
+- `/add-*` means open the sibling skill folder and follow that workflow
 
 ## Key Concepts
 
@@ -115,7 +125,7 @@ npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 
 After modifying this plugin:
 
-1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/create-code-app`
+1. For legacy packaging, run `claude --debug` to see plugin loading details
+2. Test the `create-code-app` workflow from Codex or the legacy `/create-code-app` entrypoint
 3. Verify connector-first guardrails are enforced
 4. Test Windows CLI compatibility (`pac` via `pwsh`)

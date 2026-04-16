@@ -1,12 +1,9 @@
 ---
 name: add-dataverse
 description: Adds Dataverse tables to a Power Apps code app with generated TypeScript models and services. Can also create new Dataverse tables. Use when connecting to Dataverse, adding tables, creating schema, or querying Dataverse data.
-user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, Skill, EnterPlanMode, ExitPlanMode
-model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 

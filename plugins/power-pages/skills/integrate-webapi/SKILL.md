@@ -8,9 +8,6 @@ description: >
   Power Pages Web API into their site's frontend code with proper permissions
   and deployment. This skill orchestrates the full integration lifecycle:
   code integration, permissions setup, and deployment.
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

@@ -1,9 +1,6 @@
 ---
 name: deploy-site
 description: This skill should be used when the user asks to "deploy to power pages", "upload site", "publish site", "deploy site", "push to power pages", "upload code site", or wants to deploy/upload an existing Power Pages code site to a Power Pages environment using PAC CLI.
-user-invocable: true
-allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, TaskList
-model: sonnet
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

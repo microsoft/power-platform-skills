@@ -4,7 +4,7 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 ## What This Repo Is
 
-A **plugin marketplace** for Power Platform development by Microsoft. The marketplace manifest (`.claude-plugin/marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
+A repository of Power Platform development workflows grouped by plugin. The legacy Claude marketplace metadata still exists, but Codex should treat each `plugins/*/skills/<skill>/` directory as an individual skill package. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
 
 ## Repository Structure
 
@@ -27,7 +27,7 @@ power-platform-skills/
 
 ## Local Development
 
-Test a plugin locally by launching your AI agent with the plugin path:
+For Codex, symlink or copy the skill folder you want into `$CODEX_HOME/skills` (or `~/.codex/skills`). For the legacy packaging, you can still launch Claude Code with a plugin path:
 
 ```bash
 claude --plugin-dir /path/to/plugins/<plugin-name>
@@ -39,14 +39,23 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 
 Each plugin follows this structure:
 
-- `.claude-plugin/plugin.json` — Plugin metadata (name, version, keywords)
+- `.claude-plugin/plugin.json` — Legacy plugin metadata (name, version, keywords)
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
 - `scripts/` — Shared utility scripts referenced by skills and agents
 - `references/` — Shared reference documents used by multiple skills
 
-Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks). The `allowed-tools` field must use a **comma-separated list** (e.g., `allowed-tools: Read, Write, Edit, Bash, Glob, Grep`) — not JSON array syntax (`["Read", "Write"]`) or YAML list syntax. Each skill may include validation scripts in a `scripts/` subdirectory, run as Stop hooks when the skill session ends.
+For Codex, `SKILL.md` frontmatter should stay minimal and focus on `name` and `description`. Some skills still contain Claude-era terminology in the body; when adapting or extending them, prefer Codex-native wording and keep the frontmatter lean.
+
+When a legacy workflow mentions Claude-specific concepts, translate them as follows:
+
+- `${CLAUDE_PLUGIN_ROOT}`: the plugin root directory that contains the current skill
+- `AskUserQuestion`: ask the user directly in a short plain-text message
+- `TaskCreate` / `TaskUpdate` / `TaskList`: maintain progress with `update_plan`
+- `EnterPlanMode` / `ExitPlanMode`: present a concise plan in normal Codex conversation flow
+- `Task` tool or specialist agents: do the work in the main Codex agent unless the user explicitly asks for delegation
+- `/skill-name`: open the corresponding sibling skill folder and follow that workflow directly
 
 ## Code Conventions
 

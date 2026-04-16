@@ -10,10 +10,6 @@ description: >
   problem, identifies the right backend integration approach (or combination), and
   routes to the appropriate skill. Use this instead of jumping directly to a specific
   backend skill when the user's request doesn't clearly map to one approach.
-user-invocable: true
-argument-hint: describe what your backend needs to do
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

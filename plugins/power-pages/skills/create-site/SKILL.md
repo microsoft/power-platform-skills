@@ -1,10 +1,6 @@
 ---
 name: create-site
 description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
-user-invocable: true
-argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

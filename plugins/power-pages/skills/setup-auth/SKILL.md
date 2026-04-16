@@ -8,9 +8,6 @@ description: >
   "add auth to my site", "configure identity provider", or wants to set up
   authentication (login/logout via Microsoft Entra ID) and role-based
   authorization for their Power Pages code site.
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

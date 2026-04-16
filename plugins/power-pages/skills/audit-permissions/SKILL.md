@@ -8,10 +8,6 @@ description: >-
   This skill analyzes existing table permissions against the site code and Dataverse metadata,
   generates an HTML audit report with findings grouped by severity (critical, warning, info, pass),
   and suggests fixes for any issues found.
-user-invocable: true
-argument-hint: "[optional: specific table or concern]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent
-model: opus
 ---
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.

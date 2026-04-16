@@ -1,10 +1,6 @@
 ---
 name: generate-canvas-app
-version: 2.0.0
 description: Generate a complete, visually distinctive Power Apps canvas app with YAML. USE WHEN the user wants to create, build, or generate a Canvas App or pa.yaml files.
-author: Microsoft Corporation
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__compile_canvas
 ---
 
 # Generate a Canvas App
@@ -15,15 +11,8 @@ $ARGUMENTS
 
 ## Overview
 
-This skill orchestrates two specialist agents:
-
-1. **`canvas-app-planner`** — discovers available controls and data sources, designs the app,
-   presents a screen plan for your approval, then writes a shared plan document
-2. **`canvas-screen-builder`** — writes exactly one screen's YAML; multiple builders run in
-   parallel after the plan is approved
-
-You (the skill) coordinate the agents and own the compilation + error-fixing loop after all
-screens are written.
+This skill runs as a single Codex workflow. Plan the app, write the `.pa.yaml` files directly,
+compile them with `compile_canvas`, and iterate until the app validates cleanly.
 
 ---
 
@@ -36,74 +25,50 @@ Before planning, derive a short folder name from the user's requirements:
 3. Create the folder using `Bash`: `mkdir -p <folder-name>`
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
-Pass this absolute path as the working directory in every agent prompt below.
-
 ---
 
 ## Phase 1 — Plan
 
-Invoke the `canvas-app-planner` agent using the `Task` tool.
+Read these references before planning:
 
-Pass a prompt that includes:
+- `plugins/canvas-apps/references/TechnicalGuide.md`
+- `plugins/canvas-apps/references/DesignGuide.md`
 
-- The user's requirements: `$ARGUMENTS`
-- The working directory (the absolute path resolved in Phase 0)
-- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
+Then do the planning work directly:
 
-Example prompt:
+1. Inspect available building blocks with MCP tools as needed:
+   - `list_controls` for control availability
+   - `list_data_sources` and `list_apis` for available data
+   - `describe_control`, `describe_api`, or `get_data_source_schema` for anything you intend to use
+2. Create a short implementation plan with `update_plan`
+3. Produce a concrete screen plan in the conversation:
+   - screen name
+   - purpose
+   - important controls
+   - data sources or collections
+   - notable formulas or interactions
+4. If the requirements are ambiguous or the app has meaningful product choices, ask the user to approve or adjust the screen plan before writing files
+5. Write `App.pa.yaml` and one `.pa.yaml` file per screen into the working directory
 
-> You are the canvas-app-planner agent. Plan a Canvas App for the following requirements:
->
-> [paste $ARGUMENTS here]
->
-> Working directory: [absolute path from Phase 0]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
->
-> Follow the instructions in your agent file. Write canvas-app-plan.md and App.pa.yaml to
-> the working directory. Return the screen list and plan document path when complete.
-
-**Wait for the planner to finish.** The planner will present the screen plan to the user via
-plan mode and wait for approval before returning. Do not proceed to Phase 2 until the planner
-task completes successfully.
+Do not depend on planner or builder sub-agents.
 
 ---
 
 ## Phase 2 — Build
 
-After the planner completes, read `canvas-app-plan.md` from the working directory.
+Implement the app directly in the working directory:
 
-Extract the screen list from the `## Screens` table — collect each screen name and its
-target file name.
-
-Invoke one `canvas-screen-builder` agent per screen. **Fire all invocations in a single
-message** (parallel execution) — do not wait for one screen to finish before starting the next.
-
-For each screen, pass a prompt that includes:
-
-- Screen name (e.g., "Home")
-- Target file name (e.g., "Home.pa.yaml")
-- Absolute path to `canvas-app-plan.md`
-- Working directory
-
-Example prompt per screen:
-
-> You are the canvas-screen-builder agent. Implement the **[Screen Name]** screen.
->
-> - Target file: [ScreenName].pa.yaml
-> - Plan document: [absolute path to canvas-app-plan.md]
-> - Working directory: [absolute path from Phase 0]
->
-> Follow the instructions in your agent file. Write [ScreenName].pa.yaml and return your
-> result when done. Do not call compile_canvas — validation is handled by the skill.
-
-Wait for all screen-builder tasks to complete before proceeding.
+1. Create `App.pa.yaml`
+2. Create the planned screen files
+3. Keep formulas, control names, and properties consistent with the technical reference
+4. Reuse a small number of layout patterns instead of inventing incompatible YAML shapes
+5. If the user asked for a distinctive visual treatment, reflect it with control hierarchy, spacing, color, and typography choices that are valid for Canvas Apps
 
 ---
 
 ## Phase 3 — Validate and Fix
 
-After all screen-builders have finished writing their files, call `compile_canvas` on the
-working directory.
+After writing the app files, call `compile_canvas` on the working directory.
 
 **On success:** Proceed to Phase 4.
 
@@ -122,9 +87,6 @@ Track how many `compile_canvas` passes were needed.
 ---
 
 ## Phase 4 — Summary
-
-Delete `canvas-app-plan.md` from the working directory using `Bash`:
-`rm <working-directory>/canvas-app-plan.md`
 
 Present a final summary:
 

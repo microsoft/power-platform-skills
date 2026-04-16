@@ -1,10 +1,6 @@
 ---
 name: edit-canvas-app
-version: 2.0.0
 description: Edit an existing Power Apps canvas app. USE WHEN the user wants to modify, update, change, or edit an existing Canvas App or pa.yaml files.
-author: Microsoft Corporation
-user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas
 ---
 
 # Edit a Canvas App
@@ -19,7 +15,7 @@ This skill uses two paths depending on edit complexity:
 
 - **Simple edits** (single control/property changes, formula tweaks) — handled inline
 - **Complex edits** (multiple screens, new screens, structural changes, new data sources) —
-  orchestrated via specialist agents: `canvas-edit-planner` + parallel `canvas-screen-editor`
+  planned and implemented directly by the main Codex agent
 
 ---
 
@@ -99,7 +95,7 @@ change the navigation flow across the app.
 
 ## Phase 3a — Simple: Direct Edit
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md` before making changes.
+Read `plugins/canvas-apps/references/TechnicalGuide.md` before making changes.
 
 Apply the changes directly:
 
@@ -116,65 +112,25 @@ Apply the changes directly:
 
 ## Phase 3b — Complex: Plan
 
-Invoke the `canvas-edit-planner` agent using the `Task` tool.
+Plan the edits directly in the main Codex agent:
 
-Pass a prompt that includes:
-
-- The user's edit requirements: `$ARGUMENTS`
-- The working directory (absolute path where `.pa.yaml` files were synced)
-- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
-- The list of synced `.pa.yaml` files found in the working directory
-
-Example prompt:
-
-> You are the canvas-edit-planner agent. Plan the following edits to an existing Canvas App:
->
-> [paste $ARGUMENTS here]
->
-> Working directory: [absolute working directory path]
-> Plugin root: ${CLAUDE_PLUGIN_ROOT}
-> Synced files: [list of .pa.yaml filenames]
->
-> Follow the instructions in your agent file. Write canvas-edit-plan.md to the working
-> directory. Return the list of screens to modify/add and the plan document path when complete.
-
-**Wait for the planner to finish.** The planner will present the edit plan to the user via
-plan mode and wait for approval before returning. Do not proceed to Phase 4 until the planner
-task completes successfully.
+1. Read `plugins/canvas-apps/references/TechnicalGuide.md`
+2. Review the synced `.pa.yaml` files
+3. Create a concise plan with `update_plan`
+4. Present the edit plan to the user when the request is ambiguous, high-impact, or changes multiple screens
+5. Once the plan is settled, move to implementation
 
 ---
 
 ## Phase 4 — Edit (Complex path only)
 
-After the planner completes, read `canvas-edit-plan.md` from the working directory.
+Implement the planned edits directly:
 
-Extract the list of screens to modify and screens to add from the plan's tables.
-
-Invoke one `canvas-screen-editor` agent per affected screen. **Fire all invocations in a
-single message** (parallel execution) — do not wait for one editor to finish before starting
-the next.
-
-For each screen, pass a prompt that includes:
-
-- Screen name (e.g., "Home")
-- Target file name (e.g., "Home.pa.yaml")
-- Action: "Modify" (existing screen) or "Add" (new screen)
-- Absolute path to `canvas-edit-plan.md`
-- Working directory
-
-Example prompt per screen:
-
-> You are the canvas-screen-editor agent. [Modify / Add] the **[Screen Name]** screen.
->
-> - Action: [Modify / Add]
-> - Target file: [ScreenName].pa.yaml
-> - Plan document: [absolute path to canvas-edit-plan.md]
-> - Working directory: [absolute working directory path]
->
-> Follow the instructions in your agent file. [Edit / Write] [ScreenName].pa.yaml and return
-> your result when done. Do not call compile_canvas — validation is handled by the skill.
-
-Wait for all screen-editor tasks to complete before proceeding.
+1. Modify existing screen files in place
+2. Create any new screen files that are required
+3. Keep `App.pa.yaml` in sync with screen additions or navigation changes
+4. When a new data source is required, pause and direct the user to the `add-data-source` workflow before continuing
+5. Keep edits grouped so the next compile pass validates the full batch of related changes
 
 ---
 
@@ -199,9 +155,6 @@ Track how many `compile_canvas` passes were needed.
 ---
 
 ## Phase 6 — Summary
-
-Delete `canvas-edit-plan.md` from the working directory using `Bash`:
-`rm <working-directory>/canvas-edit-plan.md`
 
 Present a final summary:
 
