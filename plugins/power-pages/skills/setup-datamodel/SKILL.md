@@ -8,16 +8,23 @@ description: >
   Power Pages site based on a data model proposal.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Set Up Dataverse Data Model
 
 Guide the user through creating Dataverse tables, columns, and relationships for their Power Pages site. Follow a systematic approach: verify prerequisites, obtain a data model (via AI analysis or user-provided diagram), review and approve, then create all schema objects via OData API.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
+- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Do the analysis in the main Codex agent wherever this skill mentions the `Task` tool or a specialist architect agent.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
+
 ## Core Principles
 
 - **Never create without approval**: Always present the full data model proposal and get explicit user confirmation before making any Dataverse changes.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 - **Resilient execution**: Refresh tokens proactively, check for existing tables before creating, and report failures without automated rollback.
 
 **Initial request:** $ARGUMENTS
@@ -30,8 +37,8 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 
 **Actions**:
 
-1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+1. Create a plan with all 8 phases (see [Progress Tracking](#progress-tracking) table)
+2. Follow the prerequisite steps in `../../references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
 
 **Output**: Verified PAC CLI auth, valid Azure CLI token, confirmed API access, `$envUrl` stored
 
@@ -43,7 +50,7 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 
 **Actions**:
 
-1. Ask the user how they want to define the data model using the `AskUserQuestion` tool:
+1. Ask the user directly how they want to define the data model:
 
    **Question**: "How would you like to define the data model for your site?"
 
@@ -63,7 +70,7 @@ If the user chooses to upload an existing diagram:
    - **Mermaid syntax** — The user can paste Mermaid ER diagram text directly in chat
    - **Text description** — A structured list of tables, columns, and relationships
 
-2. Parse the diagram into the same structured format used by the data-model-architect agent:
+2. Parse the diagram into the same structured format used by the legacy data-model-architect workflow:
    - Publisher prefix (ask the user, or retrieve from the environment via `pac env who`)
    - Table definitions: `logicalName`, `displayName`, `status` (new/modified/reused), `columns`, `relationships`
    - Column definitions: `logicalName`, `displayName`, `type`, `required`
@@ -75,46 +82,32 @@ If the user chooses to upload an existing diagram:
 
 5. Proceed directly to **Phase 4: Review Proposal** with the parsed data model.
 
-### Path B: Let the Data Model Architect Figure It Out
+### Path B: Let Codex Analyze The Site
 
-If the user chooses to let the Data Model Architect figure it out, proceed to **Phase 3: Invoke Data Model Architect** (the existing automated flow).
+If the user chooses to let Codex infer the model, proceed to **Phase 3: Analyze Site And Propose Data Model**.
 
 **Output**: Data model source chosen and, for Path A, parsed data model ready for review
 
 ---
 
-## Phase 3: Invoke Data Model Architect
+## Phase 3: Analyze Site And Propose Data Model
 
-**Goal**: Spawn the data-model-architect agent to autonomously analyze the site and propose a data model
+**Goal**: Analyze the site in the main Codex agent and propose a complete data model
 
 **Actions**:
 
-1. Use the `Task` tool to spawn the `data-model-architect` agent. This agent autonomously:
-   - Analyzes the site's source code to infer data requirements
-   - Queries existing Dataverse tables via OData GET requests
-   - Identifies reuse opportunities (reuse, extend, or create new)
-   - Proposes a complete data model with an ER diagram
+1. Read `plugins/power-pages/agents/data-model-architect.md` as a reference for the expected proposal shape and checks.
+2. Analyze the current project and Dataverse environment directly:
+   - inspect the site's source code to infer data requirements
+   - query existing Dataverse tables via OData `GET` requests
+   - identify reuse opportunities (reuse, extend, or create new)
+   - propose a complete data model with an ER diagram
+3. Produce the same structured output the old architect agent would have returned:
+   - publisher prefix
+   - table definitions (`logicalName`, `displayName`, `status`, `columns`, `relationships`)
+   - Mermaid ER diagram
 
-2. Spawn the agent:
-
-   ```
-   Task tool:
-     subagent_type: general-purpose
-     prompt: |
-       You are the data-model-architect agent. Follow the instructions in
-       the agent definition file at:
-       ${CLAUDE_PLUGIN_ROOT}/agents/data-model-architect.md
-
-       Analyze the current project and Dataverse environment, then propose
-       a complete data model. Return:
-       1. Publisher prefix
-       2. Table definitions (logicalName, displayName, status, columns, relationships)
-       3. Mermaid ER diagram
-   ```
-
-3. Wait for the agent to return its structured proposal before proceeding.
-
-**Output**: Structured data model proposal from the agent (publisher prefix, table definitions, ER diagram)
+**Output**: Structured data model proposal (publisher prefix, table definitions, ER diagram)
 
 ---
 
@@ -136,7 +129,7 @@ Present the data model proposal directly to the user as a formatted message, inc
 
 ### 4.2 Get User Approval
 
-Use `AskUserQuestion` to get approval:
+Ask the user directly to get approval:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -371,7 +364,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 |-------------|------------|-------------|
 | Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
 | Choose data model source | Choosing data model source | Ask user to upload ER diagram or let AI analyze the site |
-| Invoke data model architect | Invoking data model architect | Spawn agent to analyze site and propose data model |
+| Analyze site and propose data model | Analyzing site and proposing data model | Inspect the project and Dataverse environment directly, then propose a data model |
 | Review and approve proposal | Reviewing proposal | Present data model proposal to user, get explicit approval |
 | Pre-creation checks | Running pre-creation checks | Refresh token, query existing tables, build creation plan |
 | Create tables and columns | Creating tables and columns | POST to OData API to create tables and columns |

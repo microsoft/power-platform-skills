@@ -3,16 +3,22 @@ name: deploy-site
 description: This skill should be used when the user asks to "deploy to power pages", "upload site", "publish site", "deploy site", "push to power pages", "upload code site", or wants to deploy/upload an existing Power Pages code site to a Power Pages environment using PAC CLI.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Deploy Power Pages Code Site
 
 Guide the user through deploying an existing Power Pages code site to a Power Pages environment using PAC CLI. Follow a systematic approach: verify tooling, authenticate, confirm the target environment, build and upload the site, and handle any blockers.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
+- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Treat sibling slash commands such as `/audit-permissions` or `/activate-site` as references to the corresponding skill folders in `plugins/power-pages/skills/`.
+
 ## Core Principles
 
 - **Verify before acting**: Always confirm PAC CLI availability, authentication status, and the target environment before attempting any deployment.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 - **Never change environment settings without consent**: If deployment requires modifying environment configuration (e.g., unblocking JavaScript attachments), always explain the change and get explicit user permission first.
 
 **Initial request:** $ARGUMENTS
@@ -25,7 +31,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
 **Actions**:
 
-1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
+1. Create a plan with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
    ```powershell
@@ -75,7 +81,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 3. **If not authenticated**:
 
    1. Inform the user they are not authenticated with PAC CLI.
-   2. Use `AskUserQuestion` to ask for the environment URL:
+   2. Ask the user directly for the environment URL:
 
       | Question | Header | Options |
       |----------|--------|---------|
@@ -109,7 +115,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
 1. Present the current environment information to the user and ask them to confirm.
 
-   Use `AskUserQuestion` with the following structure:
+   Ask the user directly with the following structure:
 
    | Question | Header | Options |
    |----------|--------|---------|
@@ -126,7 +132,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
       ```
 
    2. Parse the output to extract environment names and URLs.
-   3. Use `AskUserQuestion` to present the available environments as options (pick up to 4 most relevant, or let user specify).
+   3. Ask the user directly to choose from the available environments (pick up to 4 most relevant, or let the user specify).
    4. Once the user selects an environment, switch to it:
 
       ```powershell
@@ -153,7 +159,7 @@ Determine the project root directory. The project root is the directory containi
 **/powerpages.config.json
 ```
 
-If found in the current working directory or a subdirectory, use that directory as `PROJECT_ROOT`. If multiple are found, ask the user which one to deploy using `AskUserQuestion`.
+If found in the current working directory or a subdirectory, use that directory as `PROJECT_ROOT`. If multiple are found, ask the user directly which one to deploy.
 
 If not found, ask the user to provide the path to the project root.
 
@@ -161,7 +167,7 @@ If not found, ask the user to provide the path to the project root.
 
 If `.powerpages-site` already exists (i.e., this is not the first deployment), table permissions and site settings may have drifted from the code since the last deployment. Offer to audit before deploying.
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -215,7 +221,7 @@ Confirm `.powerpages-site` exists and list its contents (`web-roles/`, `site-set
 
 ### 5.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `../../references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeploySite"`.
 
@@ -237,7 +243,7 @@ git commit -m "Deploy site to Power Pages"
 Run the activation status check:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
+node "../../scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Evaluate the JSON result:

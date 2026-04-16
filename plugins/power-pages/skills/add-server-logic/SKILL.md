@@ -12,11 +12,18 @@ description: >
   "server-side code", or wants to move logic from the browser to the server in their Power Pages site.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Add Server Logic
 
 Create and manage one or more Power Pages Server Logic files — server-side JavaScript that runs securely on the Power Pages runtime, hidden from the browser and protected by web roles and table permissions. Server Logic enables secure external API integrations, Dataverse operations, and custom business logic without exposing sensitive code or credentials to the client.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
+- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Do the analysis in the main Codex agent wherever this skill mentions the `Task` tool, an explore agent, or an architect agent.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -24,7 +31,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 - **No browser APIs, no dependencies**: Server Logic runs in a sandboxed server environment with ECMAScript 2023 support. There is no `fetch`, `XMLHttpRequest`, `setTimeout`, or any DOM API. No npm packages are available.
 - **Five functions only**: A server logic file can only export these top-level functions: `get`, `post`, `put`, `patch`, `del`. The name `delete` is a reserved word in JavaScript and cannot be used.
 - **Always return a string**: Every function must return a string. Use `JSON.stringify()` when returning objects or arrays.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 
 > **Prerequisites:**
 > - An existing Power Pages code site created
@@ -56,7 +63,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 
 **Actions**:
 
-1. Create todo list with all 11 phases (see [Progress Tracking](#progress-tracking) table)
+1. Create a plan with all 11 phases (see [Progress Tracking](#progress-tracking) table)
 
 ### 1.1 Locate Project
 
@@ -70,13 +77,13 @@ Read `powerpages.config.json` to get the site name and configuration:
 
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the frontend framework (React, Vue, Angular, or Astro). This is needed for Phase 8 (client-side integration guidance). See `../../references/framework-conventions.md` for the full framework detection mapping.
 
 ### 1.4 Explore Existing Server Logic and Frontend Code
 
-Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to analyze the site for existing server logic patterns and frontend code that may call or need to call server logic endpoints.
+Analyze the site directly in the main Codex agent for existing server logic patterns and frontend code that may call or need to call server logic endpoints.
 
-**Prompt for the Explore agent:**
+Use this checklist while analyzing:
 
 > "Analyze this Power Pages code site for server logic context. Check:
 > 1. Does `.powerpages-site/server-logic/` exist? If yes, list all subdirectories and their .js files. Summarize what each server logic does (which functions it implements, what SDK features it uses). Also read the corresponding .serverlogic.yml files to check web role assignments.
@@ -89,7 +96,7 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 > 8. For each existing server logic, assess whether it can be reused or safely extended for the requested capability instead of creating a brand-new server logic file. Call out any strong reuse candidates and explain why.
 > Report all findings so we can avoid duplicating work and match existing patterns."
 
-From the Explore agent's findings, note:
+From your findings, note:
 - **Existing server logic files** — what's already implemented, and which ones are candidates for reuse or extension
 - **Frontend calling patterns** — how the site makes API calls (match this pattern in Phase 9)
 - **Existing service/utility files** — reuse these when adding client-side integration
@@ -104,7 +111,7 @@ Look for the `.powerpages-site` folder:
 
 > "The `.powerpages-site` folder was not found. Server logic files are stored inside this folder, so the site must be deployed at least once before creating server logic. Would you like to deploy now?"
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -1029,7 +1036,7 @@ Use the reference below for the frontend integration approach, examples, and fra
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md`
 
-Based on the Explore agent's findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
+Based on the findings from Phase 1.4 and the approved plan, choose the integration approach from that reference and apply it consistently across all server logic endpoints being wired into the frontend.
 
 ### 9.3 Create or Update Frontend Integration
 

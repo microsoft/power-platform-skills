@@ -10,18 +10,25 @@ description: >
   code integration, permissions setup, and deployment.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Integrate Web API
 
 Integrate Power Pages Web API into a code site's frontend. This skill orchestrates the full lifecycle: analyzing where integrations are needed, implementing API client code for each table, configuring permissions and site settings, and deploying the site.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
+- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Do the analysis and implementation in the main Codex agent wherever this skill mentions the `Task` tool, an explore agent, or an architect agent.
+- Treat sibling slash commands such as `/deploy-site` as references to the corresponding skill folders in `plugins/power-pages/skills/`.
+
 ## Core Principles
 
 - **First table sequential, then parallel**: The first table must be processed alone because it creates the shared `powerPagesApi.ts` client. Once that exists, remaining tables can be processed in parallel since each creates independent files (types, service, hooks).
-- **Parallelize independent agents**: The `table-permissions-architect` and `webapi-settings-architect` agents are independent — invoke them in parallel rather than sequentially.
+- **Parallelize independent work conceptually**: permissions analysis and site-setting analysis are independent, but in Codex they should normally be done directly in the main agent unless the user explicitly asks for delegation.
 - **Permissions require deployment**: The `.powerpages-site` folder must exist before table permissions and site settings can be configured. Integration code can be written without it, but permissions cannot.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 
 > **Prerequisites:**
 >
@@ -38,9 +45,9 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 1. **Verify Site Exists** — Locate the Power Pages project and verify prerequisites
 2. **Explore Integration Points** — Analyze site code and data model to identify tables needing Web API integration
 3. **Review Integration Plan** — Present findings to the user and confirm which tables to integrate
-4. **Implement Integrations** — Use the `webapi-integration` agent for each table
+4. **Implement Integrations** — Implement the integration for each table directly in Codex
 5. **Verify Integrations** — Validate all expected files exist and the project builds successfully
-6. **Setup Permissions & Settings** — Choose permissions source (upload diagram or let the architects analyze), then configure table permissions and Web API site settings with case-sensitive validated column names
+6. **Setup Permissions & Settings** — Choose permissions source (upload diagram or let Codex analyze), then configure table permissions and Web API site settings with case-sensitive validated column names
 7. **Review & Deploy** — Ask the user to deploy the site and invoke `/deploy-site` if confirmed
 
 ---
@@ -71,7 +78,7 @@ Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
 
 ### 1.3 Detect Framework
 
-Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework detection mapping.
+Read `package.json` to determine the framework (React, Vue, Angular, or Astro). See `../../references/framework-conventions.md` for the full framework detection mapping.
 
 ### 1.4 Check for Data Model
 
@@ -103,11 +110,11 @@ Look for the `.powerpages-site` folder:
 
 **Actions**:
 
-Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to analyze the site code and data model. The Explore agent should answer these questions:
+Analyze the site code and data model directly in the main Codex agent. Answer these questions:
 
 ### 2.1 Discover Tables
 
-Ask the Explore agent to identify all Dataverse tables that need Web API integration by examining:
+Identify all Dataverse tables that need Web API integration by examining:
 
 - `.datamodel-manifest.json` — List of tables and their columns
 - `src/**/*.{ts,tsx,js,jsx,vue,astro}` — Source code files that reference table data, mock data, or placeholder API calls
@@ -117,13 +124,13 @@ Ask the Explore agent to identify all Dataverse tables that need Web API integra
 - Mock data files or hardcoded arrays that should be replaced with API calls
 - `TODO` or `FIXME` comments mentioning API integration
 
-**Prompt for the Explore agent:**
+Use this checklist while analyzing:
 
 > "Analyze this Power Pages code site and identify all Dataverse tables that need Web API integration. Check `.datamodel-manifest.json` for the data model, then search the source code for: mock data arrays, hardcoded data, placeholder fetch calls to `/_api/`, TypeScript interfaces matching Dataverse column patterns (publisher prefix like `cr*_`), TODO/FIXME comments about API integration, and components that display table data. For each table found, report: the table logical name, the entity set name (plural), which source files reference it, what operations are needed (read/create/update/delete), and whether an existing API client or service already exists in `src/shared/` or `src/services/`. Also check if `src/shared/powerPagesApi.ts` already exists."
 
 ### 2.2 Identify Existing Integration Code
 
-The Explore agent should also report:
+Also capture:
 
 - Whether `src/shared/powerPagesApi.ts` (or equivalent API client) already exists
 - Which tables already have service files in `src/shared/services/` or `src/services/`
@@ -134,7 +141,7 @@ This avoids duplicating work that was already done.
 
 ### 2.3 Compile Integration Manifest
 
-From the Explore agent's findings, compile a list of tables needing integration:
+From your findings, compile a list of tables needing integration:
 
 | Table | Logical Name | Entity Set | Operations | Files Referencing | Existing Service |
 |-------|-------------|-----------|------------|-------------------|-----------------|
@@ -162,7 +169,7 @@ Show the user:
 
 ### 3.2 Confirm Tables
 
-Use `AskUserQuestion` to confirm:
+Ask the user directly to confirm:
 
 | Question | Options |
 |----------|---------|
@@ -176,15 +183,15 @@ If the user selects specific tables or adds more, update the integration manifes
 
 ## Phase 4: Implement Integrations
 
-**Goal**: Create Web API integration code for each confirmed table using the `webapi-integration` agent
+**Goal**: Create Web API integration code for each confirmed table directly in the main Codex agent
 
 **Actions**:
 
-### 4.1 Invoke Agent Per Table
+### 4.1 Implement Per Table
 
-For each table, use the `Task` tool to invoke the `webapi-integration` agent at `${CLAUDE_PLUGIN_ROOT}/agents/webapi-integration.md`:
+For each table, follow the guidance in `plugins/power-pages/agents/webapi-integration.md` but do the implementation directly in the main Codex agent.
 
-**Prompt template for the agent:**
+Use this table checklist:
 
 > "Integrate Power Pages Web API for the **[Table Display Name]** table.
 >
@@ -198,18 +205,18 @@ For each table, use the `Task` tool to invoke the `webapi-integration` agent at 
 >
 > Create the TypeScript types, CRUD service layer, and framework-specific hooks/composables. Replace any mock data or placeholder API calls in the referencing source files with the new service."
 
-### 4.2 Process First Table, Then Parallelize Remaining
+### 4.2 Process First Table, Then Continue Remaining
 
 The **first table** must be processed alone — it creates the shared `powerPagesApi.ts` client that all other tables depend on. After the first table completes and the shared client exists:
 
 - **Verify** the shared API client was created at `src/shared/powerPagesApi.ts`
-- **Then invoke all remaining tables in parallel** using multiple `Task` calls — each table creates independent files (its own types in `src/types/`, service in `src/shared/services/`, and hook/composable), so there are no conflicts
+- **Then implement all remaining tables** — each table creates independent files (its own types in `src/types/`, service in `src/shared/services/`, and hook/composable), so they can be handled in any order
 
 If there is only one table, this step is simply sequential.
 
 ### 4.3 Verify Each Integration
 
-After each agent completes (or after all parallel agents complete), verify the output:
+After each table integration is complete, verify the output:
 
 - Check that the expected files were created (types, service, hook/composable)
 - Confirm the shared API client exists after the first table is processed
@@ -537,9 +544,9 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify site exists | Verifying site prerequisites | Locate project root, detect framework, check data model and deployment status |
-| Explore integration points | Analyzing code for integration points | Use Explore agent to discover tables, existing services, and compile integration manifest |
+| Explore integration points | Analyzing code for integration points | Discover tables, existing services, and compile the integration manifest directly in Codex |
 | Review integration plan | Reviewing integration plan with user | Present findings and confirm which tables to integrate |
-| Implement integrations | Implementing Web API integrations | Invoke webapi-integration agent for first table (creates shared client), then remaining tables in parallel, verify output, git commit |
+| Implement integrations | Implementing Web API integrations | Implement the first table to create the shared client, then finish the remaining tables and verify output before committing |
 | Verify integrations | Verifying integrations | Validate all expected files exist, check imports and API references, run project build |
 | Setup permissions and settings | Configuring permissions and site settings | Choose permissions source (upload diagram or architects), invoke table-permissions-architect and webapi-settings-architect agents in parallel, create YAML files with case-sensitive validated column names, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |

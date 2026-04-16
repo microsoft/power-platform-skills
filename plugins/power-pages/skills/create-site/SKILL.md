@@ -3,19 +3,26 @@ name: create-site
 description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Create Power Pages Code Site
 
 Guide the user through creating a complete, production-quality Power Pages code site from initial concept to deployed site. Follow a systematic approach: discover requirements, scaffold and launch immediately, plan components and design, implement with design applied, validate, review, and deploy.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
+- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
+- Use web search only when you actually need fresh external assets or current documentation.
+
 ## Core Principles
 
 - **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
 - **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
-- **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
+- **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via web search. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
@@ -34,7 +41,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 2. If site purpose is clear from arguments:
    - Summarize understanding
    - Identify site type (portal, dashboard, landing page, blog, etc.)
-3. If site purpose is unclear, use `AskUserQuestion`:
+3. If site purpose is unclear, ask the user directly:
 
    | Question | Header | Options |
    |----------|--------|---------|
@@ -74,22 +81,22 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 > **The scaffold is a temporary branded loading screen** — it shows a Power Pages animated "Building your site" experience with orbiting elements, status messages, and feature cards. Its only purpose is to get the dev server running quickly so the user has something to look at while you plan and build. **During Phase 5 (Implementation), the entire scaffold — including theme.css, Layout, Home page, and all placeholder components — is completely replaced** with the user's actual site: their chosen typography, color palette, pages, components, and navigation. Do NOT try to build on top of the loading screen; replace it entirely.
 
-> See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
+> See `../../references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
 
 **Actions**:
 
 ### 2.1 Copy Template
 
-> `${CLAUDE_PLUGIN_ROOT}` is already resolved to the plugin's absolute path at runtime. Use it directly in Glob/Read paths — do NOT search for the plugin directory.
+> Resolve template paths from the `plugins/power-pages` directory. Do not search the filesystem if you already know the plugin root.
 
 Read and copy all files from the matching asset template to the project directory:
 
 | Framework | Asset Directory |
 |-----------|----------------|
-| React | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/react/` |
-| Vue | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/vue/` |
-| Angular | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/angular/` |
-| Astro | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/astro/` |
+| React | `plugins/power-pages/skills/create-site/assets/react/` |
+| Vue | `plugins/power-pages/skills/create-site/assets/vue/` |
+| Angular | `plugins/power-pages/skills/create-site/assets/angular/` |
+| Astro | `plugins/power-pages/skills/create-site/assets/astro/` |
 
 Use `Glob` to discover all files in the asset directory, `Read` each file, then `Write` to the project directory preserving the relative path structure.
 
@@ -167,7 +174,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 **Actions**:
 
-1. Use `AskUserQuestion` to collect feature and design requirements:
+1. Ask the user directly to collect feature and design requirements:
 
    | Question | Header | Options |
    |----------|--------|---------|
@@ -182,7 +189,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    >
    > Always generate options that make sense for the specific site — never reuse a fixed list.
 
-2. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+2. Read the design aesthetics reference: `./references/design-aesthetics.md`
 3. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
 4. Analyze requirements and determine needed components. Present component plan to user as a table:
 
@@ -216,7 +223,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 **Actions**:
 
-1. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+1. Read the design aesthetics reference: `./references/design-aesthetics.md`
 2. Present the implementation plan directly to the user as a formatted message. **The plan MUST have ALL of the following sections:**
 
    **Section A — Design & Pages**
