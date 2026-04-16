@@ -7,6 +7,11 @@ description: Adds any Power Platform connector to a Power Apps code app. Generic
 
 # Add Connector (Generic)
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/add-*` references as sibling skill workflows in this plugin.
+
 Fallback skill for any connector not covered by a specific `/add-*` skill. For common connectors, prefer the dedicated skills:
 
 - `/add-dataverse` -- Dataverse tables

@@ -7,6 +7,11 @@ description: Adds Azure DevOps connector to a Power Apps code app. Use when quer
 
 # Add Azure DevOps
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/list-connections` as the sibling skill workflow in this plugin.
+
 ## Workflow
 
 1. Check Memory Bank → 2. Add Connector → 3. Apply HttpRequest Fix → 4. Configure → 5. Build → 6. Update Memory Bank

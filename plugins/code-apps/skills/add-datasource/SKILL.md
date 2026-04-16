@@ -7,6 +7,11 @@ description: Adds a data source or connector to a Power Apps code app. Asks what
 
 # Add Data Source
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/add-*` references as sibling skill workflows in this plugin.
+
 Router skill that understands the user's goal and connects them to the right data source -- without requiring them to know Power Platform terminology.
 
 ## Workflow

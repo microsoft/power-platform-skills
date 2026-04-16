@@ -7,6 +7,10 @@ description: Builds and deploys a Power Apps code app to Power Platform. Use whe
 
 # Deploy
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+
 Builds and deploys the app in the current directory to Power Platform.
 
 ## Workflow

@@ -3,6 +3,8 @@ name: add-sharepoint
 description: Adds SharePoint Online connector to a Power Apps code app. Use when reading lists, managing documents, or integrating with SharePoint sites. Can also create new SharePoint lists.
 ---
 
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
@@ -12,6 +14,12 @@ description: Adds SharePoint Online connector to a Power Apps code app. Use when
 - [list-management-reference.md](./references/list-management-reference.md) - Query, create, extend lists and columns
 
 # Add SharePoint
+
+## Codex Notes
+
+- Use `update_plan` to track the major workflow phases for this skill.
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Present plans in normal chat and get approval there instead of relying on legacy plan-mode wording.
 
 Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
@@ -38,8 +46,8 @@ Ask the user:
 
 - Ask about the data they need and design an appropriate schema
 - Reuse existing lists when possible (don't duplicate)
-- Enter plan mode with `EnterPlanMode`, present the list designs with columns and types
-- Get approval with `ExitPlanMode`
+- Present the list designs in chat with columns and types
+- Get approval before continuing
 
 ### Step 3: Setup Graph API Auth (if creating lists)
 
@@ -65,7 +73,7 @@ $existingLists = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/sites/
 
 See [list-management-reference.md](./references/list-management-reference.md) for `Find-SimilarLists`, `Compare-ListSchemas`, and `Get-ListSchema` functions.
 
-Present findings to user with `AskUserQuestion`:
+Present findings to the user directly and confirm which path to take:
 
 - Lists that can be **reused** (already exist with matching columns)
 - Lists that need **extension** (exist but missing columns)

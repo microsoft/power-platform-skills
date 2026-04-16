@@ -7,6 +7,11 @@ description: Adds OneDrive for Business connector to a Power Apps code app. Use 
 
 # Add OneDrive for Business
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/list-connections` as the sibling skill workflow in this plugin.
+
 ## Workflow
 
 1. Check Memory Bank → 2. Add Connector → 3. Configure → 4. Build → 5. Update Memory Bank

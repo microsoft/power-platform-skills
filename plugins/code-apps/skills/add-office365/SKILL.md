@@ -7,6 +7,11 @@ description: Adds Office 365 Outlook connector to a Power Apps code app. Use whe
 
 # Add Office 365 Outlook
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/list-connections` as the sibling skill workflow in this plugin.
+
 ## Workflow
 
 1. Check Memory Bank -> 2. Add Connector -> 3. Review Generated Service -> 4. Configure -> 5. Build -> 6. Update Memory Bank

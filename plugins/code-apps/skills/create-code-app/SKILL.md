@@ -3,6 +3,8 @@ name: create-code-app
 description: Creates Power Apps code apps using React and Vite. Use when building code apps, scaffolding projects, or deploying to Power Platform.
 ---
 
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
@@ -11,6 +13,13 @@ description: Creates Power Apps code apps using React and Vite. Use when buildin
 - [troubleshooting.md](./references/troubleshooting.md) - Common issues, npm scripts, resources
 
 # Create Power Apps Code App
+
+## Codex Notes
+
+- Use `update_plan` to track the major workflow phases for this skill.
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/add-*` references as the sibling skill workflows in this plugin.
+- Present implementation plans in normal chat and get approval there instead of relying on legacy plan-mode wording.
 
 ## Workflow
 
@@ -71,13 +80,12 @@ Once you have their description:
 
 ### Step 3: Plan
 
-1. Enter plan mode with `EnterPlanMode`
-2. Design the full implementation approach:
+1. Summarize the full implementation approach in chat:
    - Which `/add-*` skills to run for data sources
    - App architecture: components, pages, state management
    - Feature list with priority order
-3. Present plan for approval, include `allowedPrompts` from [prerequisites-reference.md](./references/prerequisites-reference.md)
-4. Exit plan mode with `ExitPlanMode` when approved
+2. Present the plan for approval, including the `allowedPrompts` guidance from [prerequisites-reference.md](./references/prerequisites-reference.md)
+3. Revise if needed, then continue once approved
 
 ### Step 4: Auth & Select Environment
 
@@ -118,7 +126,7 @@ npm install
 
 **Notes:**
 
-- Use `--force` to overwrite if the directory already has files (e.g., `.claude` from a planning session)
+- Use `--force` to overwrite if the directory already has files (for example `.codex`, `.claude`, or other local planning artifacts)
 - If targeting an existing directory, use `.` as the folder name: `npx degit microsoft/PowerAppsCodeApps/templates/vite . --force`
 - If `npx degit` fails (network issues, npm not found), retry once, then ask the user to run manually
 
@@ -169,7 +177,7 @@ This ensures progress is saved even if the session ends unexpectedly.
 
 ### Step 8: Add Data Sources
 
-Invoke the `/add-*` skills identified in the plan (Step 3). Run each in sequence. **Pass context as arguments** so sub-skills skip redundant questions (project path, connector name, etc.):
+Run the sibling `add-*` skill workflows identified in the plan (Step 3), one at a time. **Pass context as arguments** so follow-on skill runs skip redundant questions (project path, connector name, etc.):
 
 | App needs to...                            | Invoke             |
 | ------------------------------------------ | ------------------ |

@@ -7,6 +7,11 @@ description: Adds Excel Online (Business) connector to a Power Apps code app. Us
 
 # Add Excel Online
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/list-connections` as the sibling skill workflow in this plugin.
+
 ## Workflow
 
 1. Check Memory Bank → 2. Gather → 3. Add Connector → 4. Configure → 5. Build → 6. Update Memory Bank

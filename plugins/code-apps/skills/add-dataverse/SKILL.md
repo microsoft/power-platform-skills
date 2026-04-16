@@ -3,6 +3,8 @@ name: add-dataverse
 description: Adds Dataverse tables to a Power Apps code app with generated TypeScript models and services. Can also create new Dataverse tables. Use when connecting to Dataverse, adding tables, creating schema, or querying Dataverse data.
 ---
 
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
@@ -13,6 +15,12 @@ description: Adds Dataverse tables to a Power Apps code app with generated TypeS
 - [data-architecture-reference.md](./references/data-architecture-reference.md) - Relationship types, dependency tiers
 
 # Add Dataverse
+
+## Codex Notes
+
+- Use `update_plan` to track the major workflow phases for this skill.
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Present plans in normal chat and get approval there; do not rely on legacy plan-mode wording.
 
 Two paths: **existing tables** (skip to Step 5) or **new tables** (full workflow).
 
@@ -36,8 +44,8 @@ Check memory bank for project context. Ask the user:
 - Ask about the data they need and design an appropriate schema
 - Use standard Dataverse tables when appropriate (`contact` for people, `account` for organizations)
 - Build a dependency graph -- see [data-architecture-reference.md](./references/data-architecture-reference.md) for tier classification
-- Enter plan mode with `EnterPlanMode`, present ER model with tables, columns, relationships, and creation order
-- Get approval with `ExitPlanMode`
+- Present the ER model in chat with tables, columns, relationships, and creation order
+- Get approval before continuing
 
 ### Step 2: Setup API Auth (if creating tables)
 
@@ -65,7 +73,7 @@ $existingTables = Invoke-RestMethod -Uri "$baseUrl/EntityDefinitions?`$filter=Is
 
 See [table-management-reference.md](./references/table-management-reference.md) for `Find-SimilarTables`, `Compare-TableSchemas`, and `Build-TableNameMapping` functions.
 
-Present findings to user with `AskUserQuestion`:
+Present findings to the user directly and confirm which path to take:
 
 - Tables that can be **reused** (already exist with matching columns)
 - Tables that need **extension** (exist but missing columns)

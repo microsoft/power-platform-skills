@@ -7,6 +7,10 @@ description: Lists Power Platform connections in the current environment. Use wh
 
 # List Connections
 
+## Codex Notes
+
+- Present the results directly in chat and call out the connection IDs the user is likely to need next.
+
 Lists all Power Platform connections in the default environment using the Power Platform CLI (`pac`).
 
 ## Workflow
