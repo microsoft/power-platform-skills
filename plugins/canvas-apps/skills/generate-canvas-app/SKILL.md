@@ -5,6 +5,11 @@ description: Generate a complete, visually distinctive Power Apps canvas app wit
 
 # Generate a Canvas App
 
+## Codex Notes
+
+- Use `update_plan` for the main phases of planning, generation, validation, and iteration.
+- Keep the implementation in the main Codex agent unless the user explicitly asks for delegation.
+
 Generate a complete Power Apps canvas app for the following requirements:
 
 $ARGUMENTS

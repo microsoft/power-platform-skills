@@ -26,6 +26,12 @@ description: Creates, updates, and deploys Power Apps generative pages for model
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
 
+## Codex Notes
+
+- Use `update_plan` to track the major workflow phases for this skill.
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- Treat `/genpage` as this skill's normal invocation name in Codex.
+
 ---
 
 ## Instructions
@@ -89,17 +95,17 @@ Note the output. If multiple languages are configured (or any non-English langua
 
 Ask these questions one at a time:
 
-1. **"Create a new generative page or edit an existing one?"** (use `AskUserQuestion`)
+1. **"Create a new generative page or edit an existing one?"**
    - If new: continue to next question
    - If edit: ask for the app and page to edit, download it with `pac model genpage download --app-id <app-id> --page-id <page-id> --output-directory ./output-dir`, then ask what changes to make
-2. **"Describe the page you'd like to build"** (use `AskUserQuestion`) — present two example descriptions as options and let the user type their own via the "Other" option:
+2. **"Describe the page you'd like to build"** — present two example descriptions as options and let the user type their own via the "Other" option:
    - **Option 1:** "Build a page showing Account records as a gallery of cards using modern look & feel. All cards should have fixed size and tall enough to fit 4 lines of titles. Include name, entityimage on the top and, website, email, phone number. Make the component fill 100% of the space. Make the gallery scrollable. Use data from the Account table. Make each card clickable to open the Account record in a new window. The target URL should be current location path with following query string parameters: pagetype=entityrecord&etn=[entityname]&id=[recordid] where entityname is account and id is accountid."
    - **Option 2:** "Design a vertically scrollable checklist interface for Task records using a clean, flat layout. Each task should be a row with a left-aligned checkbox, subject in bold and right-aligned due date and priority. Use neutral tones for background and soft color tags for priority (e.g., red for High, gray for Low). Completed tasks should show a strikethrough and reduced opacity. Allow inline editing of due date with a date picker. On hover, rows should highlight with another background. Clicking a task opens the Task record in a new window using: pagetype=entityrecord&etn=[entityname]&id=[recordid] where entityname is task and id is related record id."
    - **Other (Recommended):** User types their own description
-3. **"Will the page use Dataverse entities or mock data?"** (use `AskUserQuestion`)
+3. **"Will the page use Dataverse entities or mock data?"**
    - If entities: ask which entities and fields (use logical names — singular, lowercase)
    - If mock data: confirm you'll generate realistic sample data
-4. **"Any specific requirements?"** (use `AskUserQuestion`) — styling, features (search, filtering, sorting), accessibility, responsive behavior, interactions
+4. **"Any specific requirements?"** — styling, features (search, filtering, sorting), accessibility, responsive behavior, interactions
 
 If the user provided a description with the `/genpage` command, acknowledge it and skip question 2. If the selected description already specifies a data source (e.g., Option 1 mentions Account table, Option 2 mentions Task records), skip question 3 as well.
 
@@ -310,7 +316,7 @@ pac model genpage upload `
 
 ### Step 9: Verify in Browser
 
-After successful deployment, ask the user (use `AskUserQuestion`):
+After successful deployment, ask the user directly:
 > "Would you like to verify the page in the browser using Playwright? This will open the page and test interactive elements."
 
 Options: **Yes, verify in browser** / **Skip verification**

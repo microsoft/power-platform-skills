@@ -3,6 +3,11 @@ name: add-data-source
 description: Guide the user to add a data source, connection, or API connector to a Canvas App via Power Apps Studio, then verify and continue. USE WHEN the user asks to add a data source, add a connection, add an API, add a connector, connect to SharePoint / Dataverse / SQL / Excel / OneDrive / Teams / Office 365, or any similar request to make new data available to the app. DO NOT USE WHEN the user is asking to list or describe existing data sources — call list_data_sources or list_apis directly instead.
 ---
 
+## Codex Notes
+
+- Ask the user directly in chat whenever you are waiting for them to complete Studio steps.
+- Keep the workflow in the main Codex agent; this skill is primarily a guide-and-verify loop.
+
 Data sources, connections, and API connectors cannot be added by the coding agent — they must be added through the Power Apps Studio interface. This skill informs the user, guides them to add the connection in their Studio session, verifies it is available via the MCP server, and then continues with any pending work.
 
 ## Phase 0 — Identify the Connection Type

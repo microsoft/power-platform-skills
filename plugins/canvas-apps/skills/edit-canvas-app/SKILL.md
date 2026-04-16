@@ -5,6 +5,11 @@ description: Edit an existing Power Apps canvas app. USE WHEN the user wants to 
 
 # Edit a Canvas App
 
+## Codex Notes
+
+- Use `update_plan` when the requested edit spans multiple phases or multiple screens.
+- Keep the implementation in the main Codex agent unless the user explicitly asks for delegation.
+
 Make the following changes to the existing Canvas App:
 
 $ARGUMENTS

@@ -5,6 +5,11 @@ description: Configure the Canvas Authoring MCP server for Codex, Claude Code, V
 
 # Configure the Canvas Authoring MCP Server
 
+## Codex Notes
+
+- Ask the user directly in chat whenever the workflow needs clarification or approval.
+- When the target tool is Codex, prioritize the Codex-specific registration path; the Claude/Copilot branches remain only for multi-tool support.
+
 This skill registers the Canvas Authoring MCP server using the user's Power Platform environment ID. When the target tool is Codex, reuse the same server command and environment variables in the user's Codex MCP configuration.
 
 ## Instructions
