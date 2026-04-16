@@ -8,16 +8,22 @@ description: >
   so they can test and demo their Power Pages site.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Add Sample Data
 
 Populate Dataverse tables with sample records via OData API so users can test and demo their Power Pages sites.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
+
 ## Core Principles
 
 - **Respect insertion order**: Always insert parent/referenced tables before child/referencing tables so lookup IDs are available when needed.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases -- create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 - **Fail gracefully**: On insertion failure, log the error and continue with remaining records -- never attempt automated rollback.
 
 **Initial request:** $ARGUMENTS
@@ -84,11 +90,11 @@ Show the user the list of discovered tables with their columns so they can choos
 
 ### 3.1 Select Tables
 
-Use `AskUserQuestion` to ask which tables they want to populate (use `multiSelect: true`). List all discovered tables as options.
+Ask the user directly which tables they want to populate (multi-select is fine). List all discovered tables as options.
 
 ### 3.2 Select Record Count
 
-Use `AskUserQuestion` to ask how many sample records per table:
+Ask the user directly how many sample records per table:
 
 | Option | Description |
 |--------|-------------|
@@ -268,7 +274,7 @@ After the summary, suggest:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
 - **Respect insertion order** -- always insert parent tables before child tables
 - **Fail gracefully** -- log errors and continue, never rollback automatically
@@ -282,7 +288,7 @@ After the summary, suggest:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -293,7 +299,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Insert sample data | Inserting records | Execute OData POST calls with relationship handling and token refresh |
 | Verify and summarize | Verifying results | Confirm record counts, present summary, suggest next steps |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

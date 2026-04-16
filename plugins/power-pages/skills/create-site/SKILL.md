@@ -11,8 +11,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 ## Codex Notes
 
-- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
-- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
 - Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 - Use web search only when you actually need fresh external assets or current documentation.
 
@@ -242,7 +242,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
    > **CRITICAL:** The plan is written for the user — do NOT reference internal phase numbers, tool names, or implementation details. Describe what will be built and what it will look like. The scaffold is already running — this plan covers what will be built on top of it.
 
-3. Use `AskUserQuestion` to get approval:
+3. Ask the user directly for approval:
 
    | Question | Header | Options |
    |----------|--------|---------|
@@ -267,7 +267,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 ### 5.1 Create Todos for All Work
 
-**Before writing any code**, use `TaskCreate` to create a todo for every piece of work. This gives the user full visibility into what will be built:
+**Before writing any code**, use `update_plan` to create a plan for every major piece of work. This gives the user full visibility into what will be built:
 
 - **One todo per page** — e.g., "Create Contact page (`/contact`)", "Create Dashboard page (`/dashboard`)"
 - **One todo per shared component** — e.g., "Create ContactForm component", "Create DataTable component"
@@ -449,7 +449,7 @@ Present a summary table to the user:
    ```
 
 3. Share the dev server URL with the user and list all available routes
-4. Ask the user to review using `AskUserQuestion`:
+4. Ask the user to review directly in chat:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
 5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
 
@@ -471,7 +471,7 @@ Present a summary table to the user:
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
 
-2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
+2. Ask the user directly whether to **Deploy now (Recommended)** or **Skip for now**:
    > "Would you like to deploy your site to Power Pages now?"
 3. If the user chooses to deploy, invoke the `/deploy-site` skill.
 4. Mark all todos complete
@@ -494,7 +494,7 @@ Present a summary table to the user:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
 - **Use best judgement** for design details — make confident, creative choices based on the user's aesthetic + mood selection without asking for every specific font, color, or layout decision
 - **Apply design from the start** — never build neutral then restyle
@@ -511,7 +511,7 @@ Present a summary table to the user:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -524,7 +524,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ### Quality Standards
 
@@ -575,7 +575,7 @@ Every site must meet these standards before completion:
 ### Phase 4: Plan Approval
 
 - Plan presented inline with design & pages + review & deployment sections
-- User approved via AskUserQuestion
+- User approved in chat
 
 ### Phase 5: Implementation
 

@@ -13,7 +13,7 @@ description: >
   new pages or components without re-creating metadata.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Add Cloud Flow
 
@@ -24,13 +24,19 @@ Connect one or more Power Automate cloud flows to a Power Pages code site, or wi
 
 For already-registered flows, the skill skips metadata and role creation and goes straight to client-side integration — wiring the existing flow into new UI locations.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
+
 ## Core Principles
 
 - **Multiple flows in one run**: The user can add several flows at once. All flows are planned together and implemented together before asking for deployment.
 - **Ask before acting**: Present a full HTML plan (all flows, roles, reasoning) before creating any files.
 - **Web roles drive access**: Every flow must have at least one web role. Anonymous Users role is valid but must be confirmed.
 - **Scenario determines roles**: Understand what each flow does and who triggers it before picking roles.
-- **Use TaskCreate/TaskUpdate**: Track all phases upfront before starting any work.
+- **Use `update_plan`**: Track all phases upfront before starting any work.
 
 > **Prerequisites:**
 > - An existing Power Pages code site with `.powerpages-site` deployed
@@ -78,7 +84,7 @@ Look for the `.powerpages-site` folder in the project root.
 
 **If not found**:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -192,7 +198,7 @@ Already registered (available for additional frontend integration):
   3. Support Ticket Handler — Already connected, can be wired into more pages
 ```
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -220,7 +226,7 @@ For each selected flow, identify its scenario from the name and description:
 | **Admin action** | Bulk processing, content approval, data export | Admins / specific roles only |
 | **Background / system** | Scheduled sync, enrichment | Not triggered by portal users directly |
 
-If a flow's scenario is unclear, use `AskUserQuestion` per flow:
+If a flow's scenario is unclear, ask the user directly per flow:
 
 | Question | Context |
 |----------|---------|
@@ -345,7 +351,7 @@ Open the rendered file in the default browser (`open` on macOS, `start` on Windo
 
 Give a brief CLI summary: number of flows, scenarios, role count, any anonymous-role warnings.
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -585,13 +591,13 @@ Use `--skillName "AddCloudFlow"`.
 
 ### 8.4 Ask to Deploy
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
 | Everything is ready. Deploy the site to make the flows live? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes"**: Invoke `/deploy-site`. After it succeeds, use `AskUserQuestion`:
+**If "Yes"**: Invoke `/deploy-site`. After it succeeds, ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -636,7 +642,7 @@ Use `AskUserQuestion`:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -649,7 +655,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Client-side integration | Generating client-side code | Create typed service functions and wire into UI |
 | Verify and summarize | Validating and summarizing | Validate YAMLs, record skill usage, present summary, offer deployment |
 
-Mark each task `in_progress` when starting and `completed` when done via `TaskUpdate`.
+Mark each phase `in_progress` when starting and `completed` when done via `update_plan`.
 
 ---
 

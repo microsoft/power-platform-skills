@@ -10,11 +10,17 @@ description: >-
   and suggests fixes for any issues found.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Audit Permissions
 
 Audit existing table permissions on a Power Pages code site. Analyze permissions against the site code and Dataverse metadata, then generate a visual HTML audit report with findings, reasoning, and suggested fixes.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Workflow
 
@@ -30,7 +36,7 @@ Audit existing table permissions on a Power Pages code site. Analyze permissions
 
 ## Task Tracking
 
-At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each task `in_progress` when starting and `completed` when done.
+At the start of Step 1, create the full plan in `update_plan`. Mark each phase `in_progress` when starting and `completed` when done.
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -184,22 +190,22 @@ The union of these two sets is the complete audit scope. Each table will be audi
 For each table in the audit inventory, create a task:
 
 ```
-TaskCreate:
-  subject: "Audit <table_logical_name>"
-  activeForm: "Auditing <table_display_name> permissions"
+update_plan step:
+  step: "Audit <table_logical_name>"
+  status: "in_progress"
   description: "Run all audit checks for <table_logical_name>"
 ```
 
 Also create a summary task:
 
 ```
-TaskCreate:
-  subject: "Compile audit findings"
-  activeForm: "Compiling audit findings"
+update_plan step:
+  step: "Compile audit findings"
+  status: "pending"
   description: "Combine all per-table findings into the final report"
 ```
 
-Use `TaskList` at any point to review progress and see which tables still need auditing.
+Use the current plan at any point to review progress and see which tables still need auditing.
 
 ### 4.3 Per-Table Audit Checklist
 
@@ -381,7 +387,7 @@ Is this table fetched via `$expand` on another table's query?
 
 **K. Record Findings & Complete**
 
-After all checks, mark the table's task as `completed` via `TaskUpdate`.
+After all checks, mark the table's step as `completed` in `update_plan`.
 
 ### 4.4 Cross-Table Validation
 
@@ -392,7 +398,7 @@ After all per-table audits are complete, run these cross-table checks:
 3. **Parent chain completeness:** For every Parent scope permission, verify the parent permission exists and is valid
 4. **Web role consistency:** If two related tables (e.g., parent and child) are accessed by the same feature, verify they share the same web role assignment
 
-Use `TaskList` to review all completed audits, then mark the "Compile audit findings" task as `in_progress` and proceed to Step 5.
+Review the current plan, then mark the "Compile audit findings" step as `in_progress` and proceed to Step 5.
 
 ---
 
@@ -493,7 +499,7 @@ Present a summary to the user:
 1. **Critical findings count** — these need immediate attention
 2. **Warning findings count** — should be addressed
 3. **Report location** — where the HTML file was saved
-4. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
+4. **Ask the user directly**: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
 If the user wants fixes applied:
 

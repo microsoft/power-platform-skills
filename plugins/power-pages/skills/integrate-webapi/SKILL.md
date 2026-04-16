@@ -18,8 +18,8 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 
 ## Codex Notes
 
-- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
-- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
 - Do the analysis and implementation in the main Codex agent wherever this skill mentions the `Task` tool, an explore agent, or an architect agent.
 - Treat sibling slash commands such as `/deploy-site` as references to the corresponding skill folders in `plugins/power-pages/skills/`.
 
@@ -294,7 +294,7 @@ Present a table summarizing the verification:
 
 Both agents require the `.powerpages-site` folder. If it doesn't exist:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -306,7 +306,7 @@ Use `AskUserQuestion`:
 
 ### 6.2 Choose Permissions Source
 
-Ask the user how they want to define the permissions using the `AskUserQuestion` tool:
+Ask the user directly how they want to define the permissions:
 
 **Question**: "How would you like to define the Web API permissions and settings for your site?"
 
@@ -337,7 +337,7 @@ If the user chooses to upload an existing diagram:
 
 5. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
 
-6. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
+6. Present the parsed permissions plan to the user for approval directly in chat:
 
    | Question | Options |
    |----------|---------|
@@ -493,7 +493,7 @@ Present a summary of everything that was done:
 
 ### 7.3 Ask to Deploy
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -522,7 +522,7 @@ After deployment (or if skipped), remind the user:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
 - **First table sequential, then parallel** — the first table creates the shared API client; after that, remaining tables can be processed in parallel since each creates independent files
 - **Commit at milestones** — after integration code and after permission files
@@ -539,7 +539,7 @@ After deployment (or if skipped), remind the user:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -551,7 +551,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Setup permissions and settings | Configuring permissions and site settings | Choose permissions source (upload diagram or architects), invoke table-permissions-architect and webapi-settings-architect agents in parallel, create YAML files with case-sensitive validated column names, git commit |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

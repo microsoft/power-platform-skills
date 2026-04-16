@@ -10,11 +10,17 @@ description: >
   authorization for their Power Pages code site.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Set Up Authentication & Authorization
 
 Configure authentication (login/logout via Microsoft Entra ID) and role-based authorization for a Power Pages code site. This skill creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -75,7 +81,7 @@ Look for the `.powerpages-site` folder:
 
 > "The `.powerpages-site` folder was not found. The site needs to be deployed at least once before authentication can be configured."
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -134,7 +140,7 @@ If auth files already exist, present them to the user and ask whether to overwri
 
 #### 2.1 Gather Requirements
 
-Use `AskUserQuestion` to determine the scope:
+Ask the user directly to determine the scope:
 
 | Question | Options |
 |----------|---------|
@@ -155,7 +161,7 @@ Present the implementation plan inline:
 - Which routes/components will be protected and with which roles
 - The site setting that needs to be configured (`Authentication/Registration/ProfileRedirectEnabled = false`)
 
-Use `AskUserQuestion` to get approval:
+Ask the user directly for approval:
 
 | Question | Options |
 |----------|---------|
@@ -514,7 +520,7 @@ Present a summary of everything created:
 
 #### 8.4 Ask to Deploy
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -549,7 +555,7 @@ After deployment (or if skipped), remind the user:
 
 ### Progress Tracking
 
-Use `TaskCreate` at the start to track each phase:
+Use `update_plan` at the start to track each phase:
 
 | Task | Description |
 |------|-------------|
@@ -562,7 +568,7 @@ Use `TaskCreate` at the start to track each phase:
 | Phase 7 | Verify Auth Setup — validate files exist, build succeeds, auth UI renders |
 | Phase 8 | Review & Deploy — site setting, summary, deployment prompt |
 
-Update each task with `TaskUpdate` as phases are completed.
+Update each phase in `update_plan` as phases are completed.
 
 ### Key Decision Points
 

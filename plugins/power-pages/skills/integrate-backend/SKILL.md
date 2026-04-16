@@ -12,11 +12,17 @@ description: >
   backend skill when the user's request doesn't clearly map to one approach.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Backend Integration
 
 Analyze the user's business problem and recommend the right backend integration approach — **Web API**, **Server Logic**, **Cloud Flows**, or a combination — then route to the appropriate skill(s) to implement the solution.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -102,7 +108,7 @@ From the user's request and the existing site state, determine:
 
 ### 2.2 Clarify if Ambiguous
 
-If the request could map to multiple approaches and the right choice isn't clear, use `AskUserQuestion` to clarify:
+If the request could map to multiple approaches and the right choice isn't clear, ask the user directly to clarify:
 
 | Question | When to ask |
 |----------|-------------|
@@ -297,7 +303,7 @@ In the CLI, give only a brief summary:
 
 ### 3.4 Confirm with User
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -495,7 +501,7 @@ NOTE: The Web API item must NOT include the status field in its Update
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -504,7 +510,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Recommend integration approach | Evaluating approaches | Apply decision framework, present recommendation |
 | Route to implementation skill(s) | Implementing backend integration | Invoke the approved skill(s) and summarize results |
 
-Mark each task `in_progress` when starting and `completed` when done via `TaskUpdate`.
+Mark each phase `in_progress` when starting and `completed` when done via `update_plan`.
 
 ---
 

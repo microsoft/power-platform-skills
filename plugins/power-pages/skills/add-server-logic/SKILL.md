@@ -20,8 +20,8 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 
 ## Codex Notes
 
-- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
-- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
 - Do the analysis in the main Codex agent wherever this skill mentions the `Task` tool, an explore agent, or an architect agent.
 - Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
@@ -190,7 +190,7 @@ Each entry includes: `name`, `displayName`, `description`, `type` (`action` or `
 
 If custom actions are found (`total > 0`), present a summary to the user grouped by binding type (unbound vs. entity-bound) and ask whether any should be used:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -204,7 +204,7 @@ If the user says **No**, skip to Phase 2.2.
 
 If the user says **Yes**, for each server logic item being created, ask which custom action (if any) it should wrap:
 
-Use `AskUserQuestion` for each server logic item:
+Ask the user directly for each server logic item:
 
 | Question | Context |
 |----------|---------|
@@ -256,7 +256,7 @@ These values will be used in Phase 7 to create the environment variables and sit
 
 If secrets were identified in Phase 2.3, ask the user now whether they want to use Azure Key Vault. This decision must happen before Phase 4 so the implementation plan can show the chosen secret management approach.
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -266,7 +266,7 @@ Record the user's choice — it will be shown in the HTML plan (Phase 4) and exe
 
 ### 2.4 Confirm with User
 
-If the requirements are ambiguous, use `AskUserQuestion` to clarify:
+If the requirements are ambiguous, ask the user directly to clarify:
 
 | Question | Context |
 |----------|---------|
@@ -375,7 +375,7 @@ Do not restate the per-server-logic breakdown, rationale, role assignments, or f
 
 ### 4.4 Confirm with User
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -828,7 +828,7 @@ The script outputs a JSON array of Key Vaults (`name`, `resourceGroup`, `locatio
 
 If Key Vaults were found, present the list and ask which one to use:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Context |
 |----------|---------|
@@ -836,7 +836,7 @@ Use `AskUserQuestion`:
 
 If **no Key Vaults are found**, ask the user how to proceed:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -844,7 +844,7 @@ Use `AskUserQuestion`:
 
 **If "Create a new Key Vault"**: Ask for a vault name, resource group, and location, then create it:
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Context |
 |----------|---------|
@@ -1022,7 +1022,7 @@ Server logic creates the backend — but without frontend code to call it, the e
 
 ### 9.1 Ask User About Integration Scope
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -1149,7 +1149,7 @@ Present a summary of everything that was done:
 
 ### 11.3 Ask to Deploy
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -1157,7 +1157,7 @@ Use `AskUserQuestion`:
 
 **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 
-After deployment succeeds, use `AskUserQuestion`:
+After deployment succeeds, ask the user directly:
 
 | Question | Options |
 |----------|---------|
@@ -1192,7 +1192,7 @@ After deployment (or if skipped), remind the user:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Always fetch Microsoft Learn docs** in Phase 3 before writing code — the docs are the source of truth
 - **Ask for user confirmation** at key decision points
 - **Commit at milestones** — after server logic code, table permissions (if any), secrets/environment variables (if any), site settings, and frontend integration (if any)
@@ -1216,7 +1216,7 @@ Do not treat this skill file as the canonical SDK reference. The Phase 3 Microso
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -1232,7 +1232,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify and test guidance | Validating and providing test guidance | Final validation, API URLs, CSRF token instructions, testing guide |
 | Review and deploy | Reviewing summary and deploying | Present summary, ask about deployment, provide post-deploy guidance |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. Use `TaskList` between phase transitions and before the final summary to confirm there are no incomplete work items left.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. Review the current plan between phase transitions and before the final summary to confirm there are no incomplete work items left.
 
 ---
 

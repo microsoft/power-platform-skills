@@ -8,13 +8,19 @@ description: >
   browser-based navigation, page crawling, and API request verification.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Test Power Pages Site
 
 Test a deployed, activated Power Pages site at runtime. Navigate the site in a browser, crawl all discoverable links, verify pages load correctly, capture network traffic to test API requests, and generate a comprehensive test report.
 
 > **Prerequisite:** This skill expects a deployed and activated Power Pages site. Run `/deploy-site` and `/activate-site` first if the site is not yet live.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -67,7 +73,7 @@ If no URL was provided, attempt auto-detection:
 
 #### 1.4 Ask the User
 
-If auto-detection failed or was inconclusive, use `AskUserQuestion`:
+If auto-detection failed or was inconclusive, ask the user directly:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -148,7 +154,7 @@ Review the browser snapshot from Phase 2.4 and the current browser URL for signs
 
 #### 3.2 Handle Private Site Gate
 
-If a private site gate is detected, use `AskUserQuestion`:
+If a private site gate is detected, ask the user directly:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -158,7 +164,7 @@ If a private site gate is detected, use `AskUserQuestion`:
 
 1. Use `browser_snapshot` to verify the user is now on the actual site (site content visible, navigation present, URL is back on the `SITE_URL` domain).
 2. If still on the identity provider login page:
-   - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
+   - Ask the user directly again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 3. Once confirmed, re-run Phase 2.5 and 2.6 (capture console errors and network requests on the now-loaded homepage).
 4. Continue to step 3.3 to check for site-level authentication.
@@ -184,7 +190,7 @@ If neither a private site gate nor site-level authentication indicators are foun
 
 #### 3.5 Handle Site-Level Authentication
 
-If site-level authentication indicators are detected (login links in navigation, etc.), use `AskUserQuestion`:
+If site-level authentication indicators are detected (login links in navigation, etc.), ask the user directly:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -194,9 +200,9 @@ If site-level authentication indicators are detected (login links in navigation,
 
 1. Use `browser_snapshot` to verify the user is now logged in (login link replaced with user name/profile, or authenticated content is visible).
 2. If the login form is still showing:
-   - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
+   - Ask the user directly again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
-3. Create an additional task for testing authenticated scenarios using `TaskCreate`:
+3. Add an additional `update_plan` step for testing authenticated scenarios:
 
    | Task subject | activeForm | Description |
    |-------------|------------|-------------|
@@ -533,7 +539,7 @@ Based on the test results, suggest relevant skills:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **This skill is read-only** — it does not modify any files or data
 - **Never attempt to log in** on behalf of the user — always ask them to log in via the browser window
 - **Present errors clearly** — when a page or API fails, include the specific URL and error details
@@ -549,7 +555,7 @@ Based on the test results, suggest relevant skills:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -560,7 +566,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Test API requests | Testing API endpoints | Capture network requests, verify API responses, analyze errors |
 | Generate test report | Generating test report | Present summary of all pages and APIs tested, suggest next steps |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`.
 
 ---
 

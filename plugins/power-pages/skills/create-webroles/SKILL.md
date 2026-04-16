@@ -7,15 +7,21 @@ description: >
   their Power Pages code site. Web roles control access and permissions for site users.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Create Web Roles
 
 Create web roles for a Power Pages code site. Web roles define the permissions and access levels for different types of site users.
 
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
+
 ## Core Principles
 
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use `update_plan`**: Track all progress throughout all phases — create the plan upfront with all phases before starting any work.
 - **Always use the UUID script**: Never generate UUIDs manually — always use `${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
 - **Preserve uniqueness constraints**: Only one role can have `anonymoususersrole: true` and only one can have `authenticatedusersrole: true`. Always check existing roles before setting these flags.
 
@@ -44,7 +50,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 1. Locate the project root (`**/powerpages.config.json`) and check for `.powerpages-site/web-roles/`.
 
-2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
+2. **If `.powerpages-site` does NOT exist:** Ask the user directly whether to deploy first (`Yes, deploy now (Recommended)` / `No, I'll do it later`). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
 3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create it:
 
@@ -95,7 +101,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 **Actions**:
 
-1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
+1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Ask the user directly to confirm.
 
    Common web roles for Power Pages sites include:
    - **Administrators** — Full access to site management
@@ -233,7 +239,7 @@ name: <Role Name>
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -244,7 +250,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify web roles | Verifying web roles | Validate all files exist, have valid UUIDs, and uniqueness constraints are satisfied |
 | Review and deploy | Reviewing and deploying | Present summary of created roles and offer deployment |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

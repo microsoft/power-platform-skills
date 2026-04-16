@@ -16,8 +16,8 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 
 ## Codex Notes
 
-- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
-- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
 - Do the analysis in the main Codex agent wherever this skill mentions the `Task` tool or a specialist architect agent.
 - Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
@@ -344,7 +344,7 @@ After the summary, suggest:
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
 - **Token refresh is automatic** — the `dataverse-request.js` script handles 401 token refresh and 429/5xx retry internally
 - **Report failures without rollback** — track each creation attempt and continue with remaining items on failure
@@ -358,7 +358,7 @@ After the summary, suggest:
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -371,7 +371,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Create relationships | Creating relationships | POST to OData API to create 1:N and M:N relationships |
 | Publish and verify | Publishing and verifying | Publish customizations, verify tables, write manifest, present summary |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

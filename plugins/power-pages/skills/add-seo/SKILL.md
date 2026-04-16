@@ -8,13 +8,19 @@ description: >
   Power Pages code site after creating it with /create-site.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Add SEO
 
 Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`, and meta tags.
 
 > **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -81,7 +87,7 @@ Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
 ### Actions
 
-Use `AskUserQuestion` to collect SEO preferences:
+Ask the user directly to collect SEO preferences:
 
 #### Call 1
 
@@ -119,7 +125,7 @@ Present the SEO additions that will be made as a clear, inline summary:
 3. **Meta tags to add to index.html** — title, description, viewport, charset, Open Graph, Twitter Card
 4. **Favicon** — link tag and placeholder SVG
 
-After presenting the plan, use `AskUserQuestion` to get approval:
+After presenting the plan, ask for approval directly in chat:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -353,7 +359,7 @@ After the summary, suggest:
 
 ### Progress Tracking
 
-Use `TaskCreate` at the start to track each phase:
+Use `update_plan` at the start to track each phase:
 
 | Task | Description |
 |------|-------------|
@@ -365,7 +371,7 @@ Use `TaskCreate` at the start to track each phase:
 | Phase 6 | Add meta tags, Open Graph, and favicon |
 | Phase 7 | Verify via Playwright and commit |
 
-Update each task with `TaskUpdate` as it is completed.
+Update each phase in `update_plan` as it is completed.
 
 ### Key Decision Points
 

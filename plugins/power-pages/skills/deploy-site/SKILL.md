@@ -11,8 +11,8 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
 ## Codex Notes
 
-- Use `update_plan` for phase tracking wherever this skill mentions `TaskCreate`, `TaskUpdate`, or `TaskList`.
-- Ask the user directly in normal chat wherever this skill mentions `AskUserQuestion`.
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
 - Treat sibling slash commands such as `/audit-permissions` or `/activate-site` as references to the corresponding skill folders in `plugins/power-pages/skills/`.
 
 ## Core Principles
@@ -254,7 +254,7 @@ Evaluate the JSON result:
 
 #### 5.5.1 Ask About Activation (only if site is NOT already activated)
 
-Ask the user if they want to activate the site using `AskUserQuestion`:
+Ask the user directly if they want to activate the site:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -269,7 +269,7 @@ After confirming the site is activated (either it was already activated in step 
 
 **Prerequisites**: The site must be activated and the project root must be known (from Phase 4.1).
 
-Use `AskUserQuestion` to confirm before proceeding:
+Ask the user directly to confirm before proceeding:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -307,7 +307,7 @@ Tell the user:
 
 ### 6.2 Ask for Permission
 
-Use `AskUserQuestion`:
+Ask the user directly:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -409,7 +409,7 @@ Always use `pac pages upload-code-site` — **never** use `pac pages upload`. Th
 
 ### Throughout All Phases
 
-- **Use TaskCreate/TaskUpdate** to track progress at every phase
+- **Use `update_plan`** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
 - **Present errors clearly** — when a command fails, show the user the relevant error output and explain what went wrong before suggesting fixes
 
@@ -424,7 +424,7 @@ Always use `pac pages upload-code-site` — **never** use `pac pages upload`. Th
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create a plan with all phases using `update_plan`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
@@ -435,7 +435,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify deployment | Verifying deployment | Confirm .powerpages-site folder exists, review upload output, commit changes, offer activation |
 | Handle blocked JavaScript | Resolving JS block | If upload fails due to blocked JS, offer to unblock and retry |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. Phase 6 may be marked `completed` immediately if no JavaScript blocking issue is encountered. This gives the user visibility into progress and keeps the workflow deterministic.
+Mark each phase `in_progress` when starting it and `completed` when done via `update_plan`. Phase 6 may be marked `completed` immediately if no JavaScript blocking issue is encountered. This gives the user visibility into progress and keeps the workflow deterministic.
 
 ---
 

@@ -8,13 +8,19 @@ description: >
   Power Platform environment via the Power Platform REST API.
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "../../scripts/check-version.js"` from the plugin root — if it outputs a message, show it to the user before proceeding.
 
 # Activate Power Pages Site
 
 Provision a new Power Pages website in a Power Platform environment via the Power Platform REST API.
 
 > **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
+
+## Codex Notes
+
+- Use `update_plan` for phase tracking throughout this skill.
+- Ask the user directly in normal chat whenever the workflow needs clarification or approval.
+- Treat `${CLAUDE_PLUGIN_ROOT}` references as paths rooted at `plugins/power-pages`.
 
 ## Core Principles
 
@@ -123,7 +129,7 @@ Look for `powerpages.config.json` in the current directory or one level of subdi
 **/powerpages.config.json
 ```
 
-Read the file and extract the `siteName` field. If not found, ask the user for the site name using `AskUserQuestion`.
+Read the file and extract the `siteName` field. If not found, ask the user directly for the site name.
 
 #### 2.2 Generate Subdomain Suggestion
 
@@ -145,7 +151,7 @@ This outputs a string like `site-a3f2b1`. Resolve the correct site URL domain fr
 | `UsGovDod` | `appsplatform.us` |
 | `China` | `powerappsportals.cn` |
 
-Present the generated subdomain to the user and ask them to accept or enter their own using `AskUserQuestion`:
+Present the generated subdomain to the user and ask them directly to accept it or enter their own:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -177,7 +183,7 @@ Parse the output to find the website record that matches the site name. Extract 
 
 ### Actions
 
-Present all activation parameters to the user using `AskUserQuestion`:
+Present all activation parameters to the user and ask for explicit approval in chat:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -282,7 +288,7 @@ After the summary, suggest:
 
 ### Progress Tracking
 
-Use `TaskCreate` at the start to track progress through each phase:
+Use `update_plan` at the start to track progress through each phase:
 
 | Task | Description |
 |------|-------------|
@@ -292,7 +298,7 @@ Use `TaskCreate` at the start to track progress through each phase:
 | Phase 4 | Activate & Poll — run activation script, handle result |
 | Phase 5 | Present Summary — show site URL and next steps |
 
-Mark each task complete with `TaskUpdate` as you finish each phase.
+Mark each phase complete in `update_plan` as you finish it.
 
 ### Key Decision Points
 
