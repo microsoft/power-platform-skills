@@ -9,7 +9,7 @@ Power Pages supports the following authentication mechanisms:
 | Provider Type | Description | Login Endpoint | Provider Identifier |
 |---------------|-------------|----------------|---------------------|
 | **Microsoft Entra ID** | Azure AD / Entra ID via OpenID Connect | `/Account/Login/ExternalLogin` | `https://login.windows.net/{tenantId}/` |
-| **Entra External ID** | Customer identity (CIAM) with self-service sign-up. Uses OIDC with `ciamlogin.com` domain. **This is NOT Microsoft Account** — it is a separate OIDC provider for customer-facing apps. | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
+| **Entra External ID** | Customer identity (CIAM) with self-service sign-up. Uses OIDC — authority may be `ciamlogin.com` or a custom domain. **This is NOT Microsoft Account** — it is a separate OIDC provider for customer-facing apps. | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **OpenID Connect (Generic)** | Any OIDC-compliant provider (Okta, Auth0, Ping, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/OpenIdConnect/{name}/AuthenticationType` |
 | **SAML2** | SAML 2.0 identity providers (ADFS, Shibboleth, etc.) | `/Account/Login/ExternalLogin` | Site setting `Authentication/SAML2/{name}/AuthenticationType` |
 | **WS-Federation** | WS-Federation identity providers | `/Account/Login/ExternalLogin` | Site setting `Authentication/WsFederation/{name}/AuthenticationType` |
@@ -1576,7 +1576,7 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 
 ### Entra External ID Provider Settings
 
-Entra External ID uses the same `Authentication/OpenIdConnect/{ProviderName}/{SettingName}` path as generic OIDC. The authority URL uses the `ciamlogin.com` domain instead of `login.microsoftonline.com`.
+Entra External ID uses the same `Authentication/OpenIdConnect/{ProviderName}/{SettingName}` path as generic OIDC. The authority URL may use `ciamlogin.com` (default) or a custom domain configured for the tenant.
 
 All settings from the OpenID Connect section above apply to Entra External ID providers.
 
@@ -1664,7 +1664,7 @@ Social providers use the `Authentication/OpenAuth/{ProviderName}/` site setting 
 
 ## Entra External ID Provider
 
-Entra External ID is Microsoft's customer identity and access management (CIAM) solution for customer-facing applications. It is a separate product from Azure AD B2C — do not conflate the two. It uses OpenID Connect underneath with the `ciamlogin.com` authority domain.
+Entra External ID is Microsoft's customer identity and access management (CIAM) solution for customer-facing applications. It is a separate product from Azure AD B2C — do not conflate the two. It uses OpenID Connect underneath. The authority URL defaults to `{tenant}.ciamlogin.com` but may use a custom domain (e.g., `login.contoso.com`).
 
 ### External ID Provider Type
 
@@ -1697,7 +1697,7 @@ Entra External ID uses the same OpenID Connect site setting path:
 
 | Setting | Description |
 |---------|-------------|
-| `Authority` | External ID authority URL (e.g., `https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/`) |
+| `Authority` | External ID authority URL (e.g., `https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/` or custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) |
 | `ClientId` | Application (client) ID from the External ID app registration |
 | `AuthenticationType` | Unique identifier for this provider (typically the authority URL) |
 | `RedirectUri` | Callback URL (e.g., `{site-url}/signin-{provider}`) |

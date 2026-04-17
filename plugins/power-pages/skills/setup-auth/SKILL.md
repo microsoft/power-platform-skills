@@ -231,9 +231,9 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 | Question | Options |
 |----------|---------|
-| What is your Entra External ID tenant name? (e.g., `contoso` — the part before `.ciamlogin.com`) | *(free text)* |
+| What is the Authority URL for your Entra External ID tenant? (e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/` or a custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) | *(free text)* |
 | What is the Client ID (Application ID) from the External ID app registration? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
-| What is the Metadata Address URL? (e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/.well-known/openid-configuration`). Leave blank to auto-derive from authority. | *(free text, optional)* |
+| What is the Metadata Address URL? (Leave blank to auto-derive from authority. Only needed if metadata is at a non-standard path.) | *(free text, optional)* |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -992,14 +992,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. This value must match what `resolveProviderIdentifier()` returns in the auth service.
 
-**Entra External ID** — same as OIDC but with `ciamlogin.com` authority URL:
+**Entra External ID** — uses the authority URL collected in Phase 2.1 (may be `ciamlogin.com` or a custom domain):
 
 ```powershell
-# Authority — uses ciamlogin.com domain
+# Authority — use the exact URL from Phase 2.1 (do NOT hardcode ciamlogin.com)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
-  --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
+  --value "<authority-url-from-user>" \
   --description "Entra External ID authority URL"
 
 # MetadataAddress — create if user provided one, or if authority doesn't follow standard convention
@@ -1021,8 +1021,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
-  --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
-  --description "Provider identifier for ExternalLogin"
+  --value "<authority-url-from-user>" \
+  --description "Provider identifier for ExternalLogin — must match authority URL exactly"
 
 # RedirectUri
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1394,7 +1394,7 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **Microsoft Account**: Register an application in the Azure portal and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Facebook**: Register an application in the Facebook Developer Console and update the `AppSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
   - **Google**: Register an application in the Google Cloud Console and update the `ClientSecret` environment variable via the Power Apps maker portal -- do not commit secrets to source control
-  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL uses `{tenant}.ciamlogin.com`
+  - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
 - **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
 - **Invitation-based registration**: If invitations are enabled (`Authentication/Registration/InvitationEnabled = true`), share invitation links in the format `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl=/`. The invitation code is threaded through the entire auth flow including 2FA
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
