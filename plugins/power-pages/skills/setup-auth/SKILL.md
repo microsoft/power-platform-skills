@@ -222,6 +222,7 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 |----------|---------|
 | What is the Authority URL for your OpenID Connect provider? (e.g., `https://dev-12345.okta.com/oauth2/default` or `https://login.microsoftonline.com/{tenant}/v2.0`) | *(free text)* |
 | What is the Client ID (Application ID) from your provider's app registration? (e.g., `0oa1bcde2fGHIJklmn3o4`) | *(free text)* |
+| What is the Metadata Address URL? (Only needed if your provider's metadata is NOT at `{authority}/.well-known/openid-configuration`). Leave blank to auto-derive. | *(free text, optional)* |
 | What display name should the login button show? (e.g., `Sign in with Okta`) | *(free text)* |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
@@ -232,6 +233,7 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 |----------|---------|
 | What is your Entra External ID tenant name? (e.g., `contoso` — the part before `.ciamlogin.com`) | *(free text)* |
 | What is the Client ID (Application ID) from the External ID app registration? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
+| What is the Metadata Address URL? (e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/.well-known/openid-configuration`). Leave blank to auto-derive from authority. | *(free text, optional)* |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -506,6 +508,16 @@ Create the auth service file based on the detected framework and selected identi
 **CRITICAL**: Power Pages authentication is **server-side** (session cookies). External login flows post a form to the server which redirects to the identity provider. Local login posts credentials directly to the server. There is no client-side token management. The `fetchAntiForgeryToken()` call gets a CSRF token for the form POST, not a bearer token.
 
 **SECRET MANAGEMENT**: Never include `ClientSecret`, `AppSecret`, or any credential values in the auth service code or any file committed to source control. The `providerIdentifier` field is a public identifier (URL or name), not a secret. Actual secrets must be configured through the Power Pages admin center.
+
+**SERVER-RENDERED PAGE HANDLING**: For external login flows, the Power Pages server may redirect to server-rendered pages during certain flows (e.g., first-time registration via `ExternalLoginConfirmation`, 2FA via `SendCode`/`VerifyCode`, terms acceptance via `TermsAndConditions`). These are server-side decisions that the SPA cannot intercept. To minimize these redirects:
+
+- Ensure `Authentication/Registration/OpenRegistrationEnabled` is configured correctly — when `true`, new external users are auto-registered without the `ExternalLoginConfirmation` page
+- Ensure `TermsAgreementEnabled` is `false` unless explicitly needed — otherwise every first login shows a server-rendered terms page
+- For 2FA flows, the server renders `SendCode` and `VerifyCode` pages — these cannot be replaced by SPA code
+- When the user returns from a server-rendered page, the SPA should check for auth state changes (`getCurrentUser()`) and update the UI accordingly
+- The auth service's `useAuth` hook should call `refresh()` on mount to pick up session changes that happened outside the SPA
+
+For **local auth**, all error handling is client-side — the `login()` and `register()` functions use `fetch()` (not `form.submit()`) so the user stays in the SPA. Server errors are parsed from HTML responses via `parseServerErrors()` and thrown for the UI to display inline.
 
 #### 3.3 Create Framework-Specific Auth Hook/Composable
 
@@ -989,6 +1001,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
   --value "https://{tenant}.ciamlogin.com/{tenant}.onmicrosoft.com/v2.0/" \
   --description "Entra External ID authority URL"
+
+# MetadataAddress — create if user provided one, or if authority doesn't follow standard convention
+# If blank, server auto-derives as {authority}/.well-known/openid-configuration
+# node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+#   --projectRoot "<PROJECT_ROOT>" \
+#   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
+#   --value "<metadata-address-from-user>" \
+#   --description "OIDC metadata endpoint URL"
 
 # ClientId — use value collected in Phase 2.1
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
