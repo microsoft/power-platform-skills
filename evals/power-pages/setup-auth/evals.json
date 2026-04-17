@@ -296,6 +296,120 @@
         "Sets the ProfileRedirectEnabled site setting to false",
         "Prompts the user to deploy the updated site"
       ]
+    },
+    {
+      "id": 15,
+      "prompt": "Add Microsoft Account login to my Power Pages Vue site.",
+      "expected_output": "Auth setup for a Vue site with Microsoft Account as a standalone social provider. Auth service configured with social type and urn:microsoft:account provider identifier. Site settings created for ClientId and ClientSecret (via Key Vault).",
+      "files": [],
+      "expectations": [
+        "Detects the site as a Vue framework project",
+        "Asks for the Client ID from Microsoft app registration",
+        "Creates an auth service with AUTH_PROVIDER configured for social type with providerIdentifier urn:microsoft:account",
+        "Creates site settings for Authentication/OpenAuth/MicrosoftAccount/ClientId with collected value",
+        "Handles ClientSecret via Azure Key Vault or environment variable (not in YAML)",
+        "Creates a Vue-specific composable for consuming auth state",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Set up authentication for my Power Pages React site. It's an internal HR dashboard for employees to check leave balances and submit requests.",
+      "expected_output": "Smart inference detects this is an internal/employee portal and recommends Entra ID with invitation-only registration. Explains rationale (internal sites should restrict access to invited employees). If user accepts, proceeds with Entra ID setup and invitation-only settings.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Analyzes the site purpose (HR dashboard, internal, employee-facing)",
+        "Recommends Microsoft Entra ID as the provider (not Entra External ID)",
+        "Recommends invitation-only registration (OpenRegistrationEnabled=false, InvitationEnabled=true)",
+        "Explains the rationale for the recommendation",
+        "Asks user to confirm or override the recommendation",
+        "Does NOT recommend Local Authentication",
+        "Does NOT present Local Authentication in provider choices",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Set up Entra External ID and Google login for my Power Pages Angular site. Our External ID uses a custom domain: login.contoso.com. The tenant ID is 12345678-abcd-efgh-ijkl-123456789012. We also need a registration page for local accounts.",
+      "expected_output": "Auth setup for an Angular site with Entra External ID (custom domain, not ciamlogin.com) and Google. Creates a dedicated /login page with both provider buttons. Asks for Client IDs. Does NOT hardcode ciamlogin.com — uses the custom authority URL provided.",
+      "files": [],
+      "expectations": [
+        "Detects the site as an Angular framework project",
+        "Recognizes both Entra External ID and Google as selected providers",
+        "Accepts the custom domain authority URL (login.contoso.com, not ciamlogin.com)",
+        "Asks for Entra External ID Client ID",
+        "Asks for Google Client ID",
+        "Creates site settings for Authentication/OpenIdConnect/{provider}/Authority with the custom domain URL",
+        "Does NOT hardcode ciamlogin.com in the authority URL",
+        "Creates site settings for Authentication/OpenAuth/Google/ClientId with collected value",
+        "Creates a dedicated /login page with both External ID and Google buttons",
+        "Handles secrets via Azure Key Vault or environment variables",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Set up local login with email/password for my Power Pages React site. Users should be able to register, reset their password, and see proper error messages if login fails.",
+      "expected_output": "Auth setup for a React site with local authentication including registration page at /registration, forgot password page, and inline error display. Auth service uses fetch() for login/register to keep user in SPA. Server errors parsed via parseServerErrors() and displayed inline.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Configures local authentication (user explicitly requested it)",
+        "Creates auth service with login() using fetch() not form.submit()",
+        "Auth service includes register() function that handles Web Forms ViewState pattern",
+        "Auth service includes forgotPassword() function",
+        "Auth service includes parseServerErrors() for parsing server HTML errors",
+        "Creates LocalLoginForm component with email field, password field, remember-me checkbox",
+        "Creates a registration page at /registration route",
+        "Creates a forgot password page or links to /Account/Login/ForgotPassword",
+        "Login form displays server errors inline (not redirect to server page)",
+        "Registration form displays server errors inline",
+        "Creates site settings for LocalLoginEnabled, LocalLoginByEmail, OpenRegistrationEnabled, ResetPasswordEnabled",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Set up Entra External ID authentication for my Power Pages Vue site. Our tenant is contoso.ciamlogin.com. Client ID is a1b2c3d4-e5f6-7890-abcd-ef1234567890. Store the client secret securely using Azure Key Vault.",
+      "expected_output": "Auth setup for a Vue site with Entra External ID. Client secret stored in Azure Key Vault — lists available vaults (or creates one), instructs user to store secret via CLI or portal, creates Dataverse env var with type=secret referencing Key Vault URI, links to site setting via envVarSchema.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a Vue framework project",
+        "Configures Entra External ID with the provided authority and Client ID",
+        "Lists available Azure Key Vaults or offers to create one",
+        "Instructs user to store ClientSecret in Key Vault (never asks for the secret value)",
+        "Creates Dataverse environment variable with --type secret referencing Key Vault secret URI",
+        "Creates site setting for ClientSecret using --envVarSchema (not --value)",
+        "Site setting YAML contains envvar_schema and source: 1",
+        "Secret value never appears in conversation, YAML files, or source control",
+        "Creates a powerPages.d.ts type declarations file",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "I already set up Entra External ID for my Power Pages React site but users are seeing an error page after login. The URL shows ?message=access_denied. How do I handle this?",
+      "expected_output": "The skill recognizes this is about auth error handling. The getAuthError() function in authService parses ?message= query params and maps them to user-friendly messages. The access_denied code maps to 'Access was denied by the identity provider.' The login page or AuthButton should call getAuthError() on mount and display the error inline.",
+      "files": [],
+      "expectations": [
+        "Recognizes this is about error handling for an existing auth setup",
+        "Explains that getAuthError() parses ?message= and ?error= query params",
+        "Shows the AUTH_ERROR_MESSAGES map or explains what access_denied maps to",
+        "Explains that the error should be displayed inline in the SPA (not on a server page)",
+        "Shows how to use getAuthError() in a React component (useEffect on mount)",
+        "Mentions getSessionExpiredMessage() for ?sessionExpired=true handling",
+        "Does NOT suggest redirecting to server-rendered error pages"
+      ]
     }
   ]
 }
