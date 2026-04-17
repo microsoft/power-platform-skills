@@ -19,7 +19,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
 
 ## What it does
 
-Describe the visual you want, paste your tool's JSON output, and get a self-contained HTML widget that uses the [MCP Apps protocol](https://modelcontextprotocol.io/extensions/apps/overview). The widget works in any MCP Apps host (Claude, ChatGPT, VS Code, BizChat).
+Describe the visual you want, paste your tool's JSON output, and get a self-contained HTML widget that uses the [MCP Apps protocol](https://modelcontextprotocol.io/extensions/apps/overview). The widget works in any MCP Apps host (Claude, ChatGPT, VS Code, Microsoft 365 Copilot).
 
 ## Usage
 
