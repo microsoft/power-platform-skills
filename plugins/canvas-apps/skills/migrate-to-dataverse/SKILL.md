@@ -2,7 +2,7 @@
 name: migrate-to-dataverse
 version: 1.0.0
 description: Read the YAML files of an existing Canvas App and replace Power FX data source calls with equivalent Dataverse table calls. USE WHEN the user wants to migrate, replace, or update data source references in pa.yaml files to point to Dataverse tables.
-author: Rui Santos
+author: Microsoft Corporation
 user-invocable: true
 ---
 
