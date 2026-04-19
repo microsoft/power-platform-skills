@@ -46,7 +46,7 @@ For each Dataverse table identified, call `get_data_source_schema` to retrieve t
 
 Read every `.pa.yaml` file produced by `sync_canvas`. For each file:
 
-- Identify every Power Fx formula that references a non-Dataverse data source (e.g. `SharePoint.GetItems`, `Filter('MyList', …)`, `Patch('MyList', …)`, `LookUp`, `Collect`, `ClearCollect`, etc.).
+- Identify every Power Fx formula that references a non-Dataverse data source (e.g. `Filter('MyList', …)`, `Patch('MyList', …)`, `LookUp('MyList', …)`, `Collect`, `ClearCollect`, etc.).
 - Note the source table/list name, the columns referenced, and the operation type (`Filter`, `Patch`, `LookUp`, `Collect`, etc.).
 
 ### 3. Build a Column Mapping Plan
