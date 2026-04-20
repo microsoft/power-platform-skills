@@ -1,0 +1,276 @@
+{
+  "SITE_NAME": "IdeaSphere",
+  "GENERATED_AT": "2026-04-20T08:57:27.502Z",
+  "STRATEGY": "pp-pipelines",
+  "EXPORT_TYPE": "managed",
+  "APPROVAL_MODE": "Staging auto-approve, production requires approval",
+  "GIT_STATUS": "yes",
+  "PLAN_STATUS": "Draft",
+  "APPROVED_BY": "",
+  "APPROVAL_DATE": "",
+  "stages": [
+    {
+      "label": "Dev",
+      "envUrl": "org1e98cc97.crm.dynamics.com",
+      "type": "source"
+    },
+    {
+      "label": "Staging",
+      "envUrl": "org60573626.crm4.dynamics.com",
+      "type": "target"
+    },
+    {
+      "label": "Production",
+      "envUrl": "(not yet configured)",
+      "type": "target"
+    }
+  ],
+  "steps": [
+    {
+      "name": "Setup solutions (Core + WebAssets)",
+      "status": "pending"
+    },
+    {
+      "name": "Setup pipelines (one per solution)",
+      "status": "pending"
+    },
+    {
+      "name": "Deploy IdeaSphere_Core to Staging",
+      "status": "pending"
+    },
+    {
+      "name": "Deploy IdeaSphere_WebAssets to Staging",
+      "status": "pending"
+    },
+    {
+      "name": "Activate site in Staging",
+      "status": "pending"
+    },
+    {
+      "name": "Deploy IdeaSphere_Core to Production",
+      "status": "pending"
+    },
+    {
+      "name": "Deploy IdeaSphere_WebAssets to Production",
+      "status": "pending"
+    },
+    {
+      "name": "Activate site in Production",
+      "status": "pending"
+    }
+  ],
+  "risks": [],
+  "envVars": [
+    {
+      "schemaName": "ids_SiteUrl",
+      "displayName": "IdeaSphere - Site URL",
+      "type": "String",
+      "siteSetting": "Site/BaseUrl",
+      "values": {
+        "Dev": "https://ideasphere-dev.powerappsportals.com",
+        "Staging": "https://site-p3ie2.powerappsportals.com",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_LocalLoginEnabled",
+      "displayName": "IdeaSphere - Local Login Enabled",
+      "type": "Boolean",
+      "siteSetting": "Authentication/Registration/LocalLoginEnabled",
+      "values": {
+        "Dev": "true",
+        "Staging": "false",
+        "Production": "false"
+      }
+    },
+    {
+      "schemaName": "ids_EntraClientId",
+      "displayName": "IdeaSphere - Entra ID Client ID",
+      "type": "String",
+      "siteSetting": "Authentication/OpenIdConnect/AzureAD/ClientId",
+      "values": {
+        "Dev": "dev-aaaa-1111-2222-cccc",
+        "Staging": "stg-bbbb-3333-4444-dddd",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_DataverseOrgUrl",
+      "displayName": "IdeaSphere - Dataverse Org URL",
+      "type": "String",
+      "siteSetting": "Site/DataverseOrgUrl",
+      "values": {
+        "Dev": "https://org1e98cc97.crm.dynamics.com",
+        "Staging": "https://org60573626.crm4.dynamics.com",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_NotificationEndpoint",
+      "displayName": "IdeaSphere - Notification Endpoint",
+      "type": "String",
+      "siteSetting": "Site/NotificationEndpoint",
+      "values": {
+        "Dev": "https://prod-01.westus.logic.azure.com:443/workflows/dev-abc123",
+        "Staging": "https://prod-02.westus.logic.azure.com:443/workflows/stg-def456",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_WebApiEnabled",
+      "displayName": "IdeaSphere - Web API Enabled",
+      "type": "Boolean",
+      "siteSetting": "Webapi/ids_idea/Enabled",
+      "values": {
+        "Dev": "true",
+        "Staging": "true",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_SearchEnabled",
+      "displayName": "IdeaSphere - Search Feature Enabled",
+      "type": "Boolean",
+      "siteSetting": "Search/Enabled",
+      "values": {
+        "Dev": "true",
+        "Staging": "false",
+        "Production": "(not set)"
+      }
+    }
+  ],
+  "breakdown": {
+    "tables": 2.1,
+    "webFiles": 92.1,
+    "siteSettings": 0.3,
+    "cloudFlows": 6.6,
+    "webRolesAndPermissions": 0.2,
+    "envVars": 0.01,
+    "otherMetadata": 27.1
+  },
+  "estimationMethod": "metadata-based",
+  "estimationAccuracyPct": 15,
+  "sizeAnalysis": {
+    "totalSizeMB": {
+      "value": 128.4,
+      "tier": "red"
+    },
+    "componentCount": {
+      "value": 2480,
+      "tier": "green"
+    },
+    "schemaAttrCount": {
+      "value": 180,
+      "tier": "green"
+    },
+    "tableCount": {
+      "value": 6,
+      "tier": "green"
+    },
+    "webFilesAggregateMB": {
+      "value": 92.1,
+      "tier": "red"
+    },
+    "envVarCount": {
+      "value": 7,
+      "tier": "green"
+    }
+  },
+  "assetAdvisory": {
+    "enabled": true,
+    "candidates": [
+      {
+        "name": "hero-banner-4k.png",
+        "sizeMB": 8.4,
+        "currentPath": "hero-banner-4k.png",
+        "classification": "image-media",
+        "recommendation": "azure-blob",
+        "suggestedUrlFormat": "https://{account}.blob.core.windows.net/{container}/hero-banner-4k.png",
+        "rationale": "Large image (8.4 MB). Private access via SAS preserves any auth requirements. Consider WebP conversion before upload (est. 30–70% reduction)."
+      },
+      {
+        "name": "product-tour.mp4",
+        "sizeMB": 24.6,
+        "currentPath": "product-tour.mp4",
+        "classification": "video",
+        "recommendation": "azure-blob",
+        "suggestedUrlFormat": "https://{account}.blob.core.windows.net/{container}/product-tour.mp4",
+        "rationale": "Large file (24.6 MB). Private access via SAS preserves any auth requirements."
+      },
+      {
+        "name": "ideasphere-demo.mp4",
+        "sizeMB": 18.2,
+        "currentPath": "ideasphere-demo.mp4",
+        "classification": "video",
+        "recommendation": "azure-blob",
+        "suggestedUrlFormat": "https://{account}.blob.core.windows.net/{container}/ideasphere-demo.mp4",
+        "rationale": "Large file (18.2 MB). Private access via SAS preserves any auth requirements."
+      },
+      {
+        "name": "team-photo-gallery.png",
+        "sizeMB": 3.1,
+        "currentPath": "team-photo-gallery.png",
+        "classification": "image-media",
+        "recommendation": "azure-blob",
+        "suggestedUrlFormat": "https://{account}.blob.core.windows.net/{container}/team-photo-gallery.png",
+        "rationale": "Large image (3.1 MB). Private access via SAS preserves any auth requirements. Consider WebP conversion before upload (est. 30–70% reduction)."
+      },
+      {
+        "name": "product-catalog.pdf",
+        "sizeMB": 2.8,
+        "currentPath": "product-catalog.pdf",
+        "classification": "document",
+        "recommendation": "azure-blob",
+        "suggestedUrlFormat": "https://{account}.blob.core.windows.net/{container}/product-catalog.pdf",
+        "rationale": "Large file (2.8 MB). Private access via SAS preserves any auth requirements."
+      }
+    ],
+    "recommendation": "externalize-media"
+  },
+  "splitStrategy": "strategy-1-layer",
+  "appliedStrategies": [
+    "strategy-1-layer"
+  ],
+  "proposedSolutions": [
+    {
+      "uniqueName": "IdeaSphere_Core",
+      "displayName": "IdeaSphere — Core",
+      "order": 1,
+      "componentTypes": [
+        "Table",
+        "Site Setting",
+        "Web Role",
+        "Table Permission",
+        "Cloud Flow",
+        "Environment Variable",
+        "Bot Component"
+      ],
+      "description": "Tables, security, integrations, site settings, environment variables. Low change frequency.",
+      "sizeMB": 36.3,
+      "componentCount": 310,
+      "components": []
+    },
+    {
+      "uniqueName": "IdeaSphere_WebAssets",
+      "displayName": "IdeaSphere — Web Assets",
+      "order": 2,
+      "componentTypes": [
+        "Web File"
+      ],
+      "description": "Web files (media, content uploads tracked in powerpagecomponent). High change frequency — deploy independently.",
+      "sizeMB": 92.1,
+      "componentCount": 2170,
+      "components": []
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "info",
+      "message": "Estimated total size (128.4 MB) exceeds the recommended 95 MB cap."
+    },
+    {
+      "type": "info",
+      "message": "Web files total 92.1 MB. Externalize large media to Azure Blob before import for reliability."
+    }
+  ]
+}

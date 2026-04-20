@@ -47,5 +47,21 @@ runValidation(async (cwd) => {
     );
   }
 
+  // Check that deploy history HTML was written
+  if (marker.deployHistoryFile) {
+    const historyPath = findPath(projectRoot, marker.deployHistoryFile)
+      || require('path').join(projectRoot, marker.deployHistoryFile);
+    if (!fs.existsSync(historyPath)) {
+      return block(
+        `Deploy history file not found: ${marker.deployHistoryFile}. ` +
+        'Phase 7.4 must write the deploy history HTML before the skill completes.'
+      );
+    }
+    const size = fs.statSync(historyPath).size;
+    if (size < 500) {
+      return block(`Deploy history file is too small (${size} bytes): ${marker.deployHistoryFile}`);
+    }
+  }
+
   return approve();
 });

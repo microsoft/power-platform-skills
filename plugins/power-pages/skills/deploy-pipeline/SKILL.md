@@ -64,13 +64,25 @@ Tasks to create:
 
 Steps:
 
-1. Locate `.last-pipeline.json` — if not found, stop and advise running `/power-pages:setup-pipeline` first.
+1. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   ```
+   Capture output as JSON; extract `.envUrl` (store as `devEnvUrl`) and `.token` (store as `DEV_TOKEN`). If the script exits non-zero, stop and surface the error — it will indicate whether `az login`, `pac auth`, or WhoAmI failed.
 
-   Read: `pipelineId`, `pipelineName`, `hostEnvUrl`, `sourceDeploymentEnvironmentId`, `solutionName`, and `stages[]`.
+2. Run `detect-project-context.js` to read project config and solution manifest:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   ```
+   Capture output as JSON; extract `.solutionManifest` (store as `solutionManifest`), `.siteName` (store as `siteName`), and `.websiteRecordId`. If `solutionManifest` is null, continue — the manifest is not strictly required at this step (solution info will come from `.last-pipeline.json`).
 
-2. Locate `.solution-manifest.json` — read `solution.solutionId`, `solution.uniqueName`. If not found, continue using `solutionName` from `.last-pipeline.json`.
+3. Locate `.last-pipeline.json` in the project root — if not found, stop and advise running `/power-pages:setup-pipeline` first.
 
-3. Run `az account show -o json 2>/dev/null` — if it fails, stop and advise the user to run `az login` first.
+   **Manifest version check:**
+   - If `schemaVersion === 2`, set `MULTI_PIPELINE_MODE = true` and store `pipelines[]` as `PIPELINES_LIST`. The skill will deploy all pipelines for the selected target stage, in `order`, one after the other (Core → WebAssets, etc.). A failure on any pipeline halts the chain for that stage.
+   - Otherwise read `pipelineId`, `pipelineName`, `hostEnvUrl`, `sourceDeploymentEnvironmentId`, `solutionName`, `stages[]` (single-pipeline mode — existing behavior).
+
+   **In `MULTI_PIPELINE_MODE`**, resolve `solutionName` per pipeline in the loop (not globally). All pipelines share the same `hostEnvUrl` and `sourceDeploymentEnvironmentId`.
 
 4. Acquire host environment token:
    ```bash
@@ -78,7 +90,9 @@ Steps:
    ```
    Where `hostEnvOrigin` = scheme + host of `hostEnvUrl`. Store as `HOST_TOKEN`. If acquisition fails, stop with instructions to check Azure CLI auth.
 
-5. Report: "Pipeline: `{pipelineName}`. Solution: `{solutionName}`. Available stages: `{stage names}`."
+5. If `solutionManifest` is available, read `solutionManifest.solution.solutionId` and `solutionManifest.solution.uniqueName` from the detected context. Otherwise, use `solutionName` from `.last-pipeline.json`.
+
+6. Report: "Pipeline: `{pipelineName}`. Solution: `{solutionName}`. Available stages: `{stage names}`."
 
 ### Phase 2 — Select Target Stage
 
@@ -92,6 +106,13 @@ Otherwise, ask via `AskUserQuestion`:
 > 2. Deploy to Production → {prodEnvUrl}}"
 
 Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploymentEnvironmentId`, `targetEnvironmentUrl`).
+
+**In `MULTI_PIPELINE_MODE`:** The selected stage label (e.g., "Staging") is matched against each pipeline's `stages[]` — each pipeline has its own `stageId` for the same target environment. All subsequent phases (validate, deploy, poll) are looped over `PIPELINES_LIST` in `order`:
+1. Loop iteration i: use `pipelines[i].stageId` where stage label matches `SELECTED_STAGE.name`, `pipelines[i].solutionName`, etc.
+2. If any iteration fails (validation or deployment), halt the loop and report which pipeline failed and which were already deployed.
+3. Write one `.last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
+
+> **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-pipeline `status` in `.last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all pipelines again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-pipeline deploy to production.
 
 Check `.last-deploy.json` — if the last deployment to this stage failed, warn the user:
 > "The last deployment to `{stageName}` had status: **Failed**. Would you like to retry? 1. Yes, retry / 2. No, cancel"
@@ -156,37 +177,24 @@ Parse stdout and evaluate `missing.*`:
 
 Use Node.js `https` module for all Dataverse calls (curl has encoding issues on Windows).
 
-**4.1 Create stage run** (note `$select` query param — required to return the ID):
+**4.1 Create stage run** using `create-stage-run.js`:
 
-```
-POST {hostEnvUrl}/api/data/v9.0/deploymentstageruns?$select=deploymentstagerunid
-Content-Type: application/json
-Authorization: Bearer {HOST_TOKEN}
-
-{
-  "deploymentstageid@odata.bind": "/deploymentstages({SELECTED_STAGE.stageId})",
-  "devdeploymentenvironment@odata.bind": "/deploymentenvironments({sourceDeploymentEnvironmentId})",
-  "artifactname": "{ARTIFACT_SOLUTION_NAME}",
-  "solutionid": "{ARTIFACT_SOLUTION_ID}",
-  "makerainoteslanguagecode": "en-US"
-}
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-stage-run.js" \
+  --hostEnvUrl "{hostEnvUrl}" \
+  --token "{HOST_TOKEN}" \
+  --pipelineId "{pipelineId}" \
+  --stageId "{SELECTED_STAGE.stageId}" \
+  --sourceDeploymentEnvironmentId "{sourceDeploymentEnvironmentId}" \
+  --solutionId "{ARTIFACT_SOLUTION_ID}" \
+  --artifactName "{ARTIFACT_SOLUTION_NAME}"
 ```
 
-> **Note**: `deploymentstageid` is the correct binding name (not `stageid`). `devdeploymentenvironment` binds to the source deployment environment record (not `artifactid`). `artifactname` is required — provide the solution unique name string.
+Capture stdout as JSON: `const result = JSON.parse(output)`. Extract `result.stageRunId` and store as `STAGE_RUN_ID`.
 
-```
-```
+If the script exits non-zero, surface the error — likely a pipeline configuration issue (400) or a conflict (409). Both include the Dataverse error body in the message.
 
-Response is **HTTP 201** (newer Pipelines package) or **HTTP 204** (older package) depending on host version.
-- **201**: JSON body contains `deploymentstagerunid` — extract directly.
-- **204**: Extract from `OData-EntityId` response header — parse the GUID from `deploymentstageruns({GUID})`.
-
-```js
-// Fallback for 204 response
-const entityId = res.headers['odata-entityid'] || '';
-const m = entityId.match(/deploymentstageruns\(([^)]+)\)/);
-stageRunId = m ? m[1] : null;
-```
+> **Note on field bindings**: The script uses the v9.2 API and `msdyn_` prefixed nav properties (`msdyn_pipelineid@odata.bind`, `msdyn_stageid@odata.bind`, `msdyn_sourceenvironmentid@odata.bind`). These are the HAR-confirmed names for the current Pipelines package. Older package versions used different field names (e.g., `deploymentstageid`); the script handles both 201 (JSON body) and 204 (OData-EntityId header) response codes.
 
 Store as `STAGE_RUN_ID`.
 
@@ -204,27 +212,33 @@ Treat HTTP 204 as success.
 
 > **If `ValidatePackageAsync` returns 404**: this Pipelines package version doesn't support the direct OData validation API. Set `VALIDATE_PACKAGE_UNAVAILABLE = true`. Skip Phase 4.2–4.3 and proceed directly to Phase 5 (deployment settings), then use the `pac pipeline deploy` CLI fallback in Phase 6.
 
-**4.3 Poll validation** — poll using single-entity GET, check `stagerunstatus`:
+**4.3 Poll validation** using `poll-validation-status.js`:
 
-```
-GET {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})?$select=deploymentstagerunid,stagerunstatus,errormessage,operation,operationdetails,operationstatus,scheduledtime,targetenvironmentid,validationresults,artifactname,deploymentsettingsjson
-Authorization: Bearer {HOST_TOKEN}
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/poll-validation-status.js" \
+  --hostEnvUrl "{hostEnvUrl}" \
+  --token "{HOST_TOKEN}" \
+  --stageRunId "{STAGE_RUN_ID}" \
+  --intervalMs 5000 \
+  --maxAttempts 36
 ```
 
-Poll every 20 seconds, max 30 attempts. In-progress while `stagerunstatus = 200000006` (Validating).
+Capture stdout as JSON: `const result = JSON.parse(output)`. On non-zero exit, the error message will include validation failure details or a timeout message.
+
+The script polls `msdyn_operation` on the stage run record. While it equals `200000201` the validation is still in progress; once it changes the script checks `msdyn_stagerunstatus` — if `200000003` (Failed) it throws with `msdyn_validationresults`; otherwise it returns `{ stageRunId, validationResults, stageRunStatus }`.
 
 Terminal validation values:
-- `200000007` (Validation Succeeded) → proceed to Phase 5
-- `200000003` (Failed) → stop, display `validationresults` error details
-- `200000004` (Canceled) → stop
+- `stageRunStatus 200000007` (Validation Succeeded) → proceed to Phase 5
+- Script throws on `200000003` (Failed) — stop, display the `validationresults` from the error message
+- Script throws on timeout — stop with the message
 
-> **Important**: `validationresults` is a **double-encoded JSON string** — call `JSON.parse()` on it twice (or once after `JSON.parse()` of the OData response body) to get the object. The object has shape: `{ ValidationStatus, SolutionValidationResults: [{ SolutionValidationResultType, Message, ErrorCode }], SolutionDetails, MissingDependencies }`.
+> **Important**: `validationresults` is a **double-encoded JSON string** — call `JSON.parse()` on it twice to get the object. The object has shape: `{ ValidationStatus, SolutionValidationResults: [{ SolutionValidationResultType, Message, ErrorCode }], SolutionDetails, MissingDependencies }`.
 
 Surface any `SolutionValidationResults` entries to the user as warnings. Pay special attention to:
 - `ErrorCode: -2147188672` — managed/unmanaged conflict: "The solution is already installed as unmanaged but this package is managed." The user must uninstall the existing solution from the target environment first, then retry.
 - Missing connection references or environment variable gaps
 
-If `stagerunstatus = 200000005` (Pending Approval): inform the user they need to approve in Power Platform (`make.powerapps.com` → Solutions → Pipelines → find this run → Approve). Ask via `AskUserQuestion`: "Have you approved the validation? 1. Yes, continue / 2. No, cancel"
+If `stageRunStatus = 200000005` (Pending Approval): inform the user they need to approve in Power Platform (`make.powerapps.com` → Solutions → Pipelines → find this run → Approve). Ask via `AskUserQuestion`: "Have you approved the validation? 1. Yes, continue / 2. No, cancel"
 
 **4.4 Fetch AI-generated deployment notes** (if `AI_NOTES_ENABLED = true`):
 
@@ -236,6 +250,32 @@ Authorization: Bearer {HOST_TOKEN}
 Store `aigenerateddeploymentnotes` as `AI_DEPLOY_NOTES`.
 
 ### Phase 5 — Configure Deployment Settings
+
+**5.0a Check for deployment-settings.json:**
+
+Check if `deployment-settings.json` exists in the project root:
+
+- **If it exists**: Read it and show a summary of configured stages and env var counts. Say: "Found existing `deployment-settings.json` with {N} stages configured." (Count top-level keys as stage names; count `EnvironmentVariables` entries per stage.)
+- **If it does NOT exist AND there are env var definitions in the solution manifest** (from `solutionManifest.envVars[]` if available, or from the query in 5.1): Generate a template file and inform the user. Template structure:
+  ```json
+  {
+    "{stageName}": {
+      "EnvironmentVariables": [
+        { "SchemaName": "{envVarSchemaName}", "Value": "" }
+      ],
+      "ConnectionReferences": []
+    }
+  }
+  ```
+  Use the stage name from `SELECTED_STAGE.name` and env var schema names from `.solution-manifest.json` (if available) or from the 5.1 query. Write to `deployment-settings.json` at the project root. Say: "Generated `deployment-settings.json` template. Fill in values before deploying, or provide them now when prompted."
+
+  > **Note**: If env vars are not yet known at this point (5.0a runs before 5.1), generate the template file after 5.1 completes and the env vars are discovered — then inform the user before continuing to the prompt in 5.1.
+
+- **If it does NOT exist AND there are no env vars in the solution**: Note "No env var overrides needed" and skip.
+
+**5.0b Surface the file path:**
+
+Always display the resolved path `{projectRoot}/deployment-settings.json` so the user knows where to find it, whether it was just created or already existed.
 
 **5.1 Discover env var definitions in the solution and resolve per-stage values:**
 
@@ -352,28 +392,33 @@ Authorization: Bearer {HOST_TOKEN}
 
 > **Note**: `DeployPackageAsync` also returns 404 on older Pipelines package versions. If this occurs, use the `pac pipeline deploy` CLI path above.
 
-**6.2 Poll stagerunstatus until terminal** — use filter GET pattern during deploy:
+**6.2 Poll stagerunstatus until terminal** using `poll-deployment-status.js`:
 
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/poll-deployment-status.js" \
+  --hostEnvUrl "{hostEnvUrl}" \
+  --token "{HOST_TOKEN}" \
+  --stageRunId "{STAGE_RUN_ID}" \
+  --intervalMs 8000 \
+  --maxAttempts 75
 ```
-GET {hostEnvUrl}/api/data/v9.0/deploymentstageruns?$filter=(deploymentstagerunid eq {STAGE_RUN_ID})&$select=_deploymentstageid_value,deploymentstagerunid,stagerunstatus,operation,operationstatus,suboperation,artifactname
-Authorization: Bearer {HOST_TOKEN}
-```
 
-Poll every 10 seconds, max 60 attempts (~10 min total). In-progress while `stagerunstatus = 200000010` (Deploying).
+Capture stdout as JSON: `const result = JSON.parse(output)`.
 
-`suboperation` field shows progress detail:
+The script polls `msdyn_stagerunstatus` until a terminal state:
+- `result.status === 'Succeeded'` → proceed to Phase 7
+- `result.status === 'Awaiting'` → approval gate (see below); do NOT treat as error
+- Script throws on `200000003` (Failed) or `200000004` (Canceled) — error message includes `msdyn_errordetails`
+- Script throws on timeout after ~10 minutes
+
+`suboperation` field (not polled by the script but visible in Power Platform) shows progress detail:
 - `200000100` = None (starting/finishing)
 - `200000105` = Deploying Artifact (actively installing solution)
 
-Terminal values:
-- `200000002` (Succeeded) ✓
-- `200000003` (Failed) ✗
-- `200000004` (Canceled) ✗
-
-**Approval gate handling**: If `stagerunstatus = 200000005` (Pending Approval):
+**Approval gate handling**: If `result.status === 'Awaiting'` (`msdyn_stagerunstatus = 200000005`):
 - Inform user: "This deployment is waiting for approval. Please approve it in Power Platform: `make.powerapps.com` → Solutions → Pipelines → find deployment for `{STAGE_RUN_ID}` → Approve."
 - Ask via `AskUserQuestion`: "Have you approved the deployment? 1. Yes, I approved it — continue polling / 2. Cancel deployment"
-- If Yes: continue polling.
+- If Yes: re-run `poll-deployment-status.js` to continue polling.
 - If Cancel: PATCH the stage run to cancel it:
   ```
   PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
@@ -381,7 +426,7 @@ Terminal values:
   ```
   Then record status as "Canceled".
 
-**Token refresh**: After every 10 poll cycles (~100 seconds), refresh `HOST_TOKEN` via `az account get-access-token`.
+**Token refresh**: After every 10 poll cycles (~80 seconds), refresh `HOST_TOKEN` via `az account get-access-token` and pass the updated token in a fresh `poll-deployment-status.js` invocation with reduced `--maxAttempts`.
 
 Report deployment progress updates as polling continues.
 
@@ -394,7 +439,31 @@ Report deployment progress updates as polling continues.
 - `200000005` → `"PendingApproval"` (if user cancelled waiting)
 - Poll timeout → `"Unknown"`
 
-**7.2 Write `.last-deploy.json`** to the project root:
+**7.2 Post-deployment warnings** (only if deployment **Succeeded**):
+
+Using `solutionManifest` captured in Phase 1 from `detect-project-context.js`, check for components that require manual follow-up in the target environment.
+
+**Connection reference warning** — if `solutionManifest.cloudFlows` is present and non-empty:
+
+> **⚠️ Connection references may need binding**
+> This solution includes cloud flow(s). If those flows use connection references (e.g. Dataverse, SharePoint), they must be bound to live connections in the target environment or the flows will remain disabled.
+>
+> To bind: Power Automate → target environment → each flow → Edit → bind connections.
+
+If `solutionManifest.cloudFlows` is absent or empty, skip this warning entirely.
+
+**Bot republish warning** — if `solutionManifest.botComponents` is present and non-empty:
+
+> **⚠️ Bot republish required**
+> This solution includes a Copilot Studio bot. After deployment, the bot must be republished in the target environment to complete provisioning.
+>
+> To republish: Power Pages Management → target environment → Edit site → Copilot → republish.
+
+If `solutionManifest.botComponents` is absent or empty, skip this warning entirely.
+
+These warnings are informational only — do not block the summary or use `AskUserQuestion`.
+
+**7.3 Write `.last-deploy.json`** to the project root:
 
 ```json
 {
@@ -408,11 +477,74 @@ Report deployment progress updates as polling continues.
   "status": "{final status string}",
   "deployedAt": "{ISO timestamp}",
   "hostEnvUrl": "{hostEnvUrl}",
-  "targetEnvironmentUrl": "{SELECTED_STAGE.targetEnvironmentUrl}"
+  "targetEnvironmentUrl": "{SELECTED_STAGE.targetEnvironmentUrl}",
+  "artifactVersion": "{artifactVersion from Phase 5.2 PATCH}",
+  "deployHistoryFile": "docs/deploy-history/{YYYY-MM-DD}-{stageName}-{artifactVersion}.html",
+  "activationStatus": null,
+  "siteUrl": null
 }
 ```
 
-**7.3 Run skill tracking silently:**
+`activationStatus` and `siteUrl` start as `null` and are patched at the end of Phase 7.7 once the activation outcome is known.
+
+Where `{YYYY-MM-DD}` is the date portion of `deployedAt` and `{stageName}` is the stage name with spaces replaced by hyphens (lowercased), e.g. `2026-04-06-staging-1.0.0.3.md`.
+
+**7.4 Write deployment history entry (HTML):**
+
+Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.html` (same derivation as `.last-deploy.json`'s `deployHistoryFile` field — replace spaces with hyphens, lowercase stage name).
+
+Create `docs/deploy-history/` if it does not already exist:
+```bash
+mkdir -p docs/deploy-history
+```
+
+Read the template at `${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/assets/deploy-history-template.html` and replace the following `__PLACEHOLDER__` tokens:
+
+**Overview tab:**
+
+| Placeholder | Value |
+|---|---|
+| `__SOLUTION_FRIENDLY_NAME__` | Solution friendly name (from `.solution-manifest.json`) or `{solutionUniqueName}` |
+| `__SOLUTION_NAME__` | `{ARTIFACT_SOLUTION_NAME}` |
+| `__STAGE_NAME__` | `{SELECTED_STAGE.name}` |
+| `__TARGET_ENV_URL__` | `{SELECTED_STAGE.targetEnvironmentUrl}` |
+| `__STAGE_RUN_ID__` | `{STAGE_RUN_ID}` |
+| `__PIPELINE_NAME__` | `{pipelineName}` |
+| `__DEPLOYED_AT__` | `{deployedAt ISO string}` |
+| `__ARTIFACT_VERSION__` | `{artifactVersion from Phase 5.2}` |
+| `__PREV_ARTIFACT_VERSION__` | `{artifactDevCurrentVersion}` — the version that was in dev before this deploy |
+| `__STATUS_CLASS__` | `succeeded` / `failed` / `pending-approval` |
+| `__STATUS_ICON__` | `✓` for Succeeded, `✗` for Failed, `⏳` for PendingApproval |
+| `__STATUS_LABEL__` | `Succeeded` / `Failed` / `Pending Approval` |
+| `__ACTIVATION_SECTION__` | Initially `''` — replaced in Phase 7.7 once activation outcome is known |
+
+**Solution tab** — read `.solution-manifest.json` to build these sections:
+
+| Placeholder | Value |
+|---|---|
+| `__SOLUTION_META_ROWS__` | `<tr>` rows for: Friendly Name, Unique Name, Version (new → previous), Type (Managed/Unmanaged), Publisher, Total Components. Source: manifest + `validationResults.SolutionDetails` from Phase 6. |
+| `__VALIDATION_SECTION__` | If validation passed: `<div class="note-box succeeded"><span class="validation-badge passed">✓ Validation Passed</span> — No missing dependencies.</div>`. If failed or deps present: `<div class="note-box warning">` listing each missing dependency name. |
+| `__SOLUTION_CONTENTS_SECTION__` | Build from `.solution-manifest.json`: a `<div class="contents-grid">` with two `<div class="contents-card">` blocks — **Dataverse Tables** (as `<span class="table-chip">` per table) and **Bot Components** (comma-separated names). Below the grid, add a `<div class="note-box neutral">` with: `{totalAdded} components added to solution` (from `components.totalAdded`). If manifest is unavailable, show a neutral note. |
+
+**Config & Notes tab:**
+
+| Placeholder | Value |
+|---|---|
+| `__ENV_VARS_SECTION__` | If `ENV_VAR_OVERRIDES` was non-empty: a `<div class="card"><h3>Environment Variable Overrides</h3>` table with schema name + override value columns. Otherwise: `<div class="note-box neutral">No environment variable overrides applied.</div>` |
+| `__DEPLOYMENT_NOTES_SECTION__` | If `AI_DEPLOY_NOTES` is available: `<div class="card"><h3>AI Deployment Notes</h3><p>…</p></div>`. Otherwise: `''` |
+| `__POST_DEPLOY_WARNINGS__` | One `<div class="note-box warning">` per post-deploy warning (connection refs, bot republish). Empty string if none. |
+
+Write the rendered HTML to `docs/deploy-history/{filename}.html`.
+
+Then add to the staging area:
+```bash
+git add .last-deploy.json docs/deploy-history/{filename}.html
+git commit -m "Deploy {solutionUniqueName} v{artifactVersion} to {stageName} ({status})"
+```
+
+If git is not initialized in the project root (i.e., `git rev-parse --git-dir` fails), skip the commit silently.
+
+**7.5 Run skill tracking silently:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
   --projectRoot "." \
@@ -420,7 +552,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
   --authoringTool "ClaudeCode"
 ```
 
-**7.4 Present summary:**
+**7.6 Present summary:**
 
 If **Succeeded**:
 ```
@@ -431,6 +563,7 @@ If **Succeeded**:
   Target:       {targetEnvironmentUrl}
   Completed at: {deployedAt}
   Stage run ID: {STAGE_RUN_ID}
+  Site URL:     {siteUrl from 7.7, or "— activation pending" if not yet activated, or "— checking…" before 7.7 runs}
 ```
 
 If **Failed**:
@@ -461,7 +594,7 @@ Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
 
-**7.5 Check site activation** (only if deployment **Succeeded** and solution has Power Pages components):
+**7.7 Check site activation** (only if deployment **Succeeded** and solution has Power Pages components):
 
 Query the source environment to check whether the solution contains a website component (componentType `10374`):
 ```
@@ -469,7 +602,7 @@ GET {sourceEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq
 Authorization: Bearer {SOURCE_TOKEN}
 ```
 
-If no results, skip the rest of 7.5.
+If no results, skip the rest of 7.7.
 
 If found, temporarily switch PAC CLI to the target environment so `check-activation-status.js` queries the correct env:
 ```bash
@@ -486,28 +619,92 @@ Then switch PAC CLI back to the source (dev) environment regardless of the resul
 pac env select --environment "{sourceEnvUrl}"
 ```
 
-Evaluate the result:
+Evaluate the result and take action based on the outcome. In all cases, **after the outcome is resolved**, update `.last-deploy.json` and the deploy history file (described below).
 
-- **`activated: true`**: Include `siteUrl` in the Phase 7.4 summary output.
+- **`activated: true`**: Site is already live. Set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{result.websiteUrl}" }`.
+
 - **`activated: false`**: Ask the user via `AskUserQuestion`:
 
   | Question | Header | Options |
   |---|---|---|
   | The Power Pages site was deployed to `{SELECTED_STAGE.targetEnvironmentUrl}` but is not yet activated (provisioned). Activate it now to make it publicly accessible. | Activate Site | Yes, activate now (Recommended), No, I'll activate later |
 
-  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill will handle subdomain selection, confirmation, and provisioning.
-  - **If "No"**: Note in the summary that activation is pending and remind the user to run `/power-pages:activate-site` (after switching PAC auth to the target env) when ready.
+  - **If "Yes"**: Invoke `/power-pages:activate-site`. The activate-site skill handles subdomain selection, confirmation, and provisioning. After it completes, set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{site URL from activate-site}" }`.
+  - **If "No"**: Set `ACTIVATION_OUTCOME = { status: "Pending", siteUrl: null }`.
 
-- **`error` present**: Skip silently — do not fail the deployment summary over an activation check error.
+- **`error` present**: Set `ACTIVATION_OUTCOME = null` — skip the update steps below silently.
+
+**After activation outcome is resolved**, patch `.last-deploy.json` (in-place `Edit`) with the actual values:
+- `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
+- `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
+
+Then update the deploy history HTML file (in-place `Edit`) — replace `__ACTIVATION_SECTION__` with the appropriate HTML:
+
+- **`status: "Activated"`**:
+  ```html
+  <div class="card">
+    <h2>Site Activation</h2>
+    <table><tbody>
+      <tr><td class="label-col">Status</td><td style="color:var(--succeeded);font-weight:600;">✓ Activated</td></tr>
+      <tr><td class="label-col">Site URL</td><td><a href="__SITE_URL__" style="color:var(--accent);">__SITE_URL__</a></td></tr>
+    </tbody></table>
+  </div>
+  ```
+  (Replace `__SITE_URL__` with `ACTIVATION_OUTCOME.siteUrl`)
+
+- **`status: "Pending"`**:
+  ```html
+  <div class="note-box neutral">
+    <strong>Site activation pending.</strong> The solution was deployed but the site has not yet been provisioned in this environment. Run <code>/power-pages:activate-site</code> (with PAC CLI authenticated to the target environment) to activate it.
+  </div>
+  ```
+
+If `ACTIVATION_OUTCOME` is null (error during check), leave the `__ACTIVATION_SECTION__` placeholder as an empty string (strip it from the file).
+
+**7.8 Detect and guide cloud flow registration** (only if deployment **Succeeded**):
+
+Query the solution components on the **host environment** for cloud flows (componenttype 29 = Workflow):
+
+```
+GET {hostEnvUrl}/api/data/v9.2/solutioncomponents?$filter=solutionid eq '{ARTIFACT_SOLUTION_ID}' and componenttype eq 29&$select=objectid,componenttype
+Authorization: Bearer {HOST_TOKEN}
+```
+
+- **If no results**: Skip this step entirely — the solution contains no cloud flows.
+
+- **If results found**:
+  1. Count the flows: store `N` = number of results.
+  2. For each `objectid`, attempt to resolve the flow name by querying `workflows({objectid})?$select=name` on the host environment. If any query fails or returns no name, fall back to displaying the raw object ID.
+  3. Inform the user:
+
+     > "The solution contains **{N} cloud flow(s)**. After deployment, cloud flows must be registered with the Power Pages site in the target environment to function correctly.
+     >
+     > Flows detected:
+     > {bulleted list of flow names or IDs}
+     >
+     > To register: open [Power Pages](https://make.powerpages.microsoft.com/) → select the **target environment** → open your site → **Set up** → **Cloud flows** → register each flow listed above."
+
+  4. Ask via `AskUserQuestion`:
+
+     | Question | Header | Options |
+     |---|---|---|
+     | Have you registered the cloud flow(s) in the target environment? | Cloud Flow Registration | Flows registered — continue, I'll register them later |
+
+  5. **Non-blocking**: regardless of the answer, continue with the summary step (Phase 7.6). Record the cloud flow registration status in the summary table:
+     - Answer "Flows registered — continue" → show **Registered** in summary
+     - Answer "I'll register them later" → show **Pending registration** in summary
+
+  > **Note**: Skipped or deferred registration does not indicate a failed deployment. It only affects live site functionality for pages that call registered flows.
 
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Target stage selection (which environment to deploy to)
 2. **Phase 2**: Retry confirmation if last deploy to this stage failed
 3. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-4. **Phase 5**: Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage in `deployment-settings.json`; offer to save values for future runs
+4. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
 5. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
-6. **Phase 7.5**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target
+6. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `.last-deploy.json` and the deploy history HTML.
+7. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
 
@@ -525,10 +722,10 @@ Evaluate the result:
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Read .last-pipeline.json for pipelineId/stages; read .solution-manifest.json; verify az login; acquire host env token |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read .last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from .last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
-| Configure deployment settings | Configuring deployment settings | Query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
+| Configure deployment settings | Configuring deployment settings | Check/display deployment-settings.json (5.0a: read or generate template; 5.0b: surface path); query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
-| Write deployment record | Writing deployment record | Write .last-deploy.json; run skill tracking; present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned |
+| Write deployment record | Writing deployment record | Write .last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show connection reference warning (if solutionManifest.cloudFlows non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |

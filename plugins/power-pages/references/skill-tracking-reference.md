@@ -40,6 +40,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
 | add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
+| plan-alm | PlanAlm | Site/AI/Skills/PlanAlm |
 
 ## YAML Format
 

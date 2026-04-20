@@ -49,9 +49,10 @@ Tasks to create:
 4. "Stage solution (dependency check)"
 5. "Import solution"
 6. "Verify import"
-7. "Present summary"
+7. "Detect cloud flows"
+8. "Present summary"
 
-> **Note**: If the import fails with an `AttachmentBlocked` error, a Phase 5b remediation flow runs inline — no additional task is needed (it continues within the "Import solution" task).
+> **Note**: If the import fails with an `AttachmentBlocked` error, a Phase 5b remediation flow runs inline — no additional task is needed (it continues within the "Import solution" task). The "Detect cloud flows" task is skipped automatically if no Workflows/*.json files are present in the solution zip.
 
 Steps:
 1. Run `pac env who` — extract `environmentUrl` (verify this is the **target** environment)
@@ -72,7 +73,32 @@ If any check fails, stop (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-
 4. If multiple valid zips found: ask user to choose via `AskUserQuestion`
 5. If no valid zip found: stop and explain — run `export-solution` first or provide the zip path
 
-Present the selected zip file details (name, size, path) and confirm with user.
+**Step 5a — Pre-import content inspection** (run after zip is confirmed, before presenting to user):
+
+Inspect the zip to surface post-import manual requirements. Run all checks in sequence:
+
+```bash
+# 1. Connection references (require user-binding post-import)
+unzip -p "{zipPath}" customizations.xml 2>/dev/null | grep -c '<connectionreference '
+
+# 2. Bots (require republishing in target environment)
+unzip -l "{zipPath}" 2>/dev/null | grep -qi "bots/" && echo "found" || echo "none"
+
+# 3. Cloud flows with hardcoded environment URLs (will silently fail in target)
+unzip -p "{zipPath}" "Workflows/*.json" 2>/dev/null | grep -o '"organization":\s*"https://[^"]*"' | head -5
+```
+
+Build a `postImportWarnings` list from the results:
+
+| Finding | Warning to surface |
+|---|---|
+| `connectionreference` count > 0 | "⚠️ **Connection references**: This solution includes N connection(s) (e.g. Dataverse connector). After import, you must bind each connection reference to a live connection in the target environment, or cloud flows that depend on them will be disabled." |
+| `bots/` folder present | "⚠️ **Copilot Studio bot**: This solution includes a bot. After import, the bot must be republished in the target environment to complete provisioning." |
+| Hardcoded org URL found | "⚠️ **Hardcoded environment URL**: The cloud flow contains a hardcoded environment URL (`{foundUrl}`). This will cause the flow to call the source environment after import. Edit the flow in the target environment to update the URL." |
+
+If `postImportWarnings` is non-empty, display all warnings inline (not via `AskUserQuestion`) before presenting the zip details. The user should see these before confirming.
+
+Present the selected zip file details (name, size, path), any pre-import warnings, and confirm with user.
 
 ### Phase 3 — Configure Import
 
@@ -253,7 +279,40 @@ POST {envUrl}/api/data/v9.2/environmentvariablevalues
 If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
 `https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`
 
-### Phase 6c — Check Site Activation (if Power Pages solution)
+### Phase 6c — Detect Cloud Flows (if any)
+
+After import succeeds, check whether the solution contains cloud flow JSON files. Use the zip path located in Phase 2.
+
+```bash
+unzip -l "{zipPath}" | grep -i "^.*Workflows/.*\.json"
+```
+
+If no matching files are found, skip this phase entirely.
+
+If cloud flow files are found:
+1. Extract the flow name from each path (pattern: `Workflows/FlowName-GUID.json` — strip the path prefix and GUID suffix to get the display name)
+2. Inform the user:
+
+   > "This solution contains **{N} cloud flow(s)**. Cloud flows must be registered with the Power Pages site in the target environment after import."
+   >
+   > Flows detected:
+   > - `{FlowName1}`
+   > - `{FlowName2}`
+   > ...
+   >
+   > To register: **Power Pages Management** → target environment → Edit site → **Set up** → **Cloud flows** → register each flow listed above.
+   >
+   > Direct link: `https://make.powerpages.microsoft.com/`
+
+3. Invoke `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Have you registered the cloud flow(s) listed above with the Power Pages site in `{targetEnvUrl}`? | Cloud Flow Registration | Flows registered — continue, I'll register them later |
+
+4. Record the user's response as `cloudFlowStatus`: `"Registered"` or `"Pending registration"`. This status is shown in the Phase 7 summary row — either answer allows the skill to continue.
+
+### Phase 6d — Check Site Activation (if Power Pages solution)
 
 Only run this phase if the solution contains Power Pages website components (componentType `10374`):
 
@@ -294,6 +353,7 @@ Display a summary table:
 | Managed | Yes / No |
 | Components imported | N success, N warning, N failure |
 | Env var values set | N of N |
+| Cloud flows | `{cloudFlowStatus}` (Registered / Pending registration / Not applicable) |
 | Site activation | Activated at `{siteUrl}` / Pending / Not applicable |
 | Import job | `{importJobId}` |
 
@@ -305,7 +365,8 @@ Display a summary table:
 4. **Phase 4**: Proceed despite missing dependencies
 5. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
 6. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
-7. **Phase 6c**: Site activation — only if Power Pages website components present and site not yet activated
+7. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
+8. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
 
 ## Error Handling
 
@@ -325,5 +386,6 @@ Display a summary table:
 | Stage solution (dependency check) | Staging solution | Run StageSolution to check for missing dependencies before committing |
 | Import solution | Importing solution | POST ImportSolutionAsync, poll until complete; if AttachmentBlocked: identify blocked types, get user consent, unblock via pac env update-settings, retry |
 | Verify import | Verifying import | Confirm solution version in target, parse component results, write .last-import.json |
+| Detect cloud flows | Detecting cloud flows | List Workflows/*.json entries in zip; if found, prompt user to register flows with Power Pages site; record status (Registered / Pending registration) |
 | Check site activation | Checking site activation | If solution has componentType 10374: run check-activation-status.js; if not activated, ask user and invoke /power-pages:activate-site |
-| Present summary | Presenting summary | Show component counts (success/warning/failure), site activation status, env var values set |
+| Present summary | Presenting summary | Show component counts (success/warning/failure), cloud flow registration status, site activation status, env var values set |
