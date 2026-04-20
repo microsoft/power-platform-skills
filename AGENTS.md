@@ -21,8 +21,6 @@ power-platform-skills/
 │       ├── commands/         # Command entry points
 │       ├── shared/           # Shared resources and documentation
 │       └── skills/           # Skill workflows (SKILL.md in subdirectories)
-├── scripts/                  # Repo-level utility scripts
-│   └── sync-shared-skills.js # Auto-generates SKILL.md wrappers in all plugins
 ├── shared/                   # Cross-plugin shared resources
 │   └── skills/               # Shared skill definitions
 │       └── <skill-name>/     # SKILL.template.md + workflow .md files
@@ -65,9 +63,7 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
   - `{ "plugins": ["power-pages", "code-apps"] }` — only listed plugins
 - `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Auto-generated from the template above
 
-This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/` — the per-plugin wrappers are auto-generated.
-
-**Auto-sync:** Run `node scripts/sync-shared-skills.js` locally to auto-generate missing SKILL.md wrappers in all plugins. A CI workflow runs this on PRs that touch `plugins/` or `shared/skills/` and commits any generated files back to the PR automatically.
+This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/` — then regenerate the per-plugin wrappers from the template (the frontmatter + reference pointing to the shared workflow, with `{{PLUGIN_NAME}}` substituted) and commit them alongside the shared change.
 
 ## Code Conventions
 
