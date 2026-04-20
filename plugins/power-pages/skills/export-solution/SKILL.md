@@ -71,6 +71,41 @@ If any check fails, stop and explain (reference `${CLAUDE_PLUGIN_ROOT}/reference
    ```
 5. Present solution details and confirm with user.
 
+### Phase 2.5 — Pre-export Completeness Check
+
+Before exporting, run the shared site-inventory helper to detect any components that exist on the site but are not in the solution. Catching this here avoids shipping an incomplete package to staging/prod.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{envUrl}" --token "{token}" \
+  --siteId "{websiteRecordId}" \
+  --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
+  --solutionId "{solutionId}"
+```
+
+Parse stdout and evaluate `missing`:
+
+- **All `missing.*` arrays empty** → report "Solution contents match the site — no gaps detected." Proceed to Phase 3.
+- **Any non-empty `missing.*` array** → present a concise summary:
+  > "The solution is **missing {N}** component(s) that exist on the site:
+  >
+  > - **{X}** site components (e.g. {first 3 names}, …)
+  > - **{Y}** cloud flows
+  > - **{Z}** environment variable definitions with your publisher prefix
+  > - **{W}** custom tables"
+
+  Then ask via `AskUserQuestion`:
+  > "How would you like to proceed?
+  > 1. **Run `/power-pages:setup-solution` in sync mode now** — adopts missing components, bumps the solution version, then resumes this export (Recommended)
+  > 2. **Export as-is** — ship what's currently in the solution; missing components won't travel
+  > 3. **Abort** — I want to investigate before exporting"
+
+  - Option 1: invoke `/power-pages:setup-solution` (auto-detects the existing manifest and enters sync mode). After it completes successfully, re-run the discovery helper to confirm `missing.*` are now empty and continue with Phase 3.
+  - Option 2: record the gap in the export manifest (see Phase 7 summary) so the user has an audit trail of what was intentionally left out.
+  - Option 3: stop the skill.
+
+> **Why this exists**: historically, components created after `setup-solution` (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` / `setup-auth`) were silently left out of the export zip and didn't travel to target environments. The ALM-aware-by-default principle in `AGENTS.md` requires this check at every export gate.
+
 ### Phase 3 — Configure Export
 
 Invoke `AskUserQuestion` immediately — do NOT describe this choice as chat text. The user must answer live before export proceeds.

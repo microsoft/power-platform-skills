@@ -303,3 +303,42 @@ their own contacts and create new ones, but cannot modify or delete existing rec
 > **Acceptance criterion:** Every skill must implement the three-point approval pattern. No approval-gated action may proceed without explicit user confirmation via `AskUserQuestion`. Skills must work autonomously between checkpoints — no mid-analysis questions.
 
 ---
+
+## ALM Checklist for New Skills
+
+Any skill that creates, modifies, or depends on Dataverse records that belong in a Power Pages site's solution (site components, env var definitions, web roles, site settings, server logic, cloud flow bindings, bot consumers, custom tables, etc.) **must** comply with the ALM-aware-by-default principle documented in `AGENTS.md`. Concretely, before merging:
+
+- [ ] **SKILL.md Phase 1** reads `.solution-manifest.json` if present; stores `solution.uniqueName` for downstream phases
+- [ ] Any `scripts/*.js` that writes to Dataverse accepts a `--solutionUniqueName` argument and imports `./lib/resolve-target-solution` to honor the [strict resolution order](AGENTS.md#alm-aware-by-default)
+- [ ] Records created by the skill are added to the resolved solution via `AddSolutionComponent` (never silently left in `Default`)
+- [ ] Any new `powerpagecomponenttype` values used in the skill are reflected in `scripts/lib/discover-site-components.js` (`PPC_TYPE_LABELS`). Discovery must never skip a type
+- [ ] Skills that create Dataverse artifacts but might not know the target solution (e.g. utility skills, skills that can run before `setup-solution`) end by prompting the user to run `/power-pages:setup-solution` in sync mode
+- [ ] `node scripts/lint-skills-alm.js` reports **zero findings** on the changed skill + scripts
+- [ ] A `node:test` suite covers the new component-creation script, including an assertion that `--solutionUniqueName` flows through to `AddSolutionComponent`
+
+### Solution Resolution Order
+
+When a skill or script needs "which solution?", resolve in this order and stop at the first match:
+
+1. **Explicit `--solutionUniqueName` CLI argument / skill argument** — always wins
+2. **`.solution-manifest.json` in project root** — the default path
+3. **Neither present** — interactive skill: prompt via `AskUserQuestion` with a list of candidate user solutions (publisher-prefix matches) + option to run `/power-pages:setup-solution` first. Non-interactive script: exit with `NoSolutionConfiguredError` and a clear hint. **Never silently fall back to `Default`.**
+
+### Lint Command
+
+Run locally before submitting a PR:
+
+```powershell
+node plugins/power-pages/scripts/lint-skills-alm.js
+```
+
+Exits 0 with `alm-lint: 0 findings` when clean; exits 1 and prints file/rule/message for each violation otherwise. Waive individual findings with an `alm-lint-ignore: <rule-name> — <short reason>` comment at the relevant line (prefer `<!-- … -->` in Markdown, `// …` in JS).
+
+### Related Helpers
+
+- `scripts/lib/resolve-target-solution.js` — implements the 3-step resolution order; use from every component-creation script
+- `scripts/lib/discover-site-components.js` — one-call site inventory (powerpagecomponents, flows, env vars, custom tables) + diff against an existing solution; use in Inventory / pre-export phases
+
+> **Acceptance criterion:** No component-creation skill may ship that leaves a Dataverse record orphaned in `Default`. The lint, the resolver, and the discovery module together make this the path of least resistance — please use them.
+
+---

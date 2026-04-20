@@ -57,10 +57,22 @@ Steps:
 3. Verify API access: `GET {environmentUrl}/api/data/v9.2/WhoAmI` — confirm 200 response
 4. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
 5. Confirm `.powerpages-site/` folder exists (required to find component records)
+6. **Detect sync mode** — check whether `.solution-manifest.json` exists in the project root.
+   - **If present**: read it and verify the `solutionId` still exists in the target environment via `GET {envUrl}/api/data/v9.2/solutions({solutionId})?$select=solutionid,uniquename,version,ismanaged`.
+     - If the solution is still present and unmanaged in this environment: set `syncMode = true` and store `existingSolution` = the manifest contents.
+     - If the solution was not found, is managed, or is in a different environment: treat as a **stale manifest**, inform the user, and ask via `AskUserQuestion`:
+       > "The existing `.solution-manifest.json` points to solution `{uniqueName}` v{version} which I could not find in the current environment. Would you like to: 1) Start fresh (back up the manifest and create a new solution), 2) Abort so you can investigate?"
+       Proceed only after an explicit choice.
+   - **If absent**: set `syncMode = false` — this is a fresh setup.
+7. **Report the chosen mode** to the user:
+   - `syncMode = true`: "Found existing solution `{uniqueName}` v{version}. Running in **sync mode** — I'll discover the current site inventory, diff against what's already in the solution, and only add missing components."
+   - `syncMode = false`: "No existing solution manifest found. Running a **fresh setup** — I'll create a publisher and solution, then add all site components."
 
 If any check fails, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 2 — Gather Solution Configuration
+
+> **Skip this entire phase when `syncMode = true`.** Use `existingSolution.publisher` and `existingSolution.solution` from the manifest instead. Jump to Phase 5.
 
 Ask user (via `AskUserQuestion`) for:
 
@@ -77,6 +89,8 @@ Present a confirmation summary of all values and wait for user approval before p
 
 ### Phase 3 — Check Existing State
 
+> **Skip this entire phase when `syncMode = true`.** The manifest guarantees the solution exists and we already validated it in Phase 1 Step 6.
+
 Before creating anything, check if publisher and solution already exist:
 
 1. Query publisher: `GET {envUrl}/api/data/v9.2/publishers?$filter=uniquename eq '{publisherUniqueName}'&$select=publisherid,uniquename,customizationprefix`
@@ -90,6 +104,16 @@ Report findings to user:
 Wait for user confirmation before proceeding.
 
 ### Phase 4 — Create Publisher and Solution
+
+> **Skip this entire phase when `syncMode = true`.** The publisher and solution already exist.
+>
+> **Version bump in sync mode**: before any add operations in Phase 5, PATCH the existing solution to the next revision so exports cleanly supersede the prior version:
+> ```
+> PATCH {envUrl}/api/data/v9.2/solutions({solutionId})
+> Headers: If-Match: *
+> Body: { "version": "{currentVersion with patch bumped}" }
+> ```
+> Where `currentVersion with patch bumped` increments the fourth segment (`1.0.0.2 → 1.0.0.3`). Update `existingSolution.solution.version` locally so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway.
 
 Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact request body templates.
 
@@ -108,6 +132,10 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
 ### Phase 5 — Add Site Components
 
 Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSolutionComponent` body templates and `powerpagecomponents` discovery patterns.
+
+> **Sync-mode behavior**: When `syncMode = true`, run the discovery helper with `--solutionId` populated and use the returned `missing.*` arrays as the candidate set. Everything else in this phase (dynamic component-type lookup in 5.1, categorization in 5.3, OAuth secret conversion in 5.4, orphan adoption in 5.4b, manifest summary in 5.5, bulk add in 5.6) runs the same way, just with a pre-filtered "only things that aren't already in the solution" list. The goal of sync mode is: a user who added a server logic, bot, flow, or env var *after* `setup-solution` last ran can re-invoke the skill and get those components adopted without any fresh-setup prompts.
+>
+> **Fresh-mode behavior** (`syncMode = false`): run the full discovery as documented below — every ppc, every site language, every custom table, every publisher-prefix env var becomes a candidate for inclusion.
 
 #### Step 5.1 — Discover Component Types Dynamically
 
@@ -216,6 +244,48 @@ For each secret the user selects to convert:
 
 OAuth secrets the user chose NOT to convert remain excluded — they are simply not added to the solution.
 
+#### Step 5.4b — Adopt Orphaned Env Var Definitions
+
+Separately from the OAuth-secret conversion above, other skills (notably `setup-auth`, `add-server-logic`, and `configure-env-variables`) may have previously created environment variable definitions that were never added to a user solution — they land in the `Default` solution and silently drift. This step discovers and adopts them.
+
+Run the shared discovery helper to get the complete site inventory in one call:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{envUrl}" --token "{token}" \
+  --siteId "{websiteRecordId}" \
+  --publisherPrefix "{publisherPrefix}" \
+  --solutionId "{solutionId}"
+```
+
+Parse stdout as JSON and read `missing.envVars` — env var definitions whose `schemaname` starts with the publisher prefix but are not already `solutioncomponents` of this solution.
+
+For each entry, also query which solution it currently belongs to (so the user can tell `Default`-only orphans apart from env vars that another user solution intentionally owns):
+
+```
+GET {envUrl}/api/data/v9.2/solutioncomponents
+  ?$filter=objectid eq {definitionId}&$select=_solutionid_value
+```
+
+Then fetch the solution's `uniquename` for each hit. Build per-env-var tags:
+- `DEFAULT-ONLY` — only the `Default` solution owns it (classic orphan from another skill).
+- `IN OTHER SOLUTION: <uniquename>` — owned by a user solution; the user may intentionally want it scoped there.
+
+If at least one env var has the `DEFAULT-ONLY` tag, prompt via `AskUserQuestion` with `multiSelect: true`:
+
+> "We found env var definitions with your publisher prefix (`{prefix}_`) that aren't in **{solutionUniqueName}** yet. Select the ones you want to include. Definitions only — values stay per-environment and won't travel.
+>
+> 1. `{schemaName}` ({displayName}) — type {type}, currently in: **{tag}**
+> 2. ...
+>
+> Plus: **Include all DEFAULT-ONLY orphans (Recommended)** / **Skip for now**"
+
+Collect selected entries into `adoptedEnvVars: [{ definitionId, schemaName, displayName, type }]`.
+
+If none are selected or the list is empty, `adoptedEnvVars` stays empty — the skill continues silently.
+
+> **Why this step exists**: before this check, env vars created by other skills were silently excluded from the site's solution and didn't travel to staging/prod. Surfacing them here is the cross-skill safety net required by the ALM-aware-by-default principle in `AGENTS.md`.
+
 #### Step 5.5 — Present Full Manifest and Get User Confirmation
 
 **This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
@@ -259,11 +329,17 @@ DATAVERSE TABLES (schema only — no data)
   ...
 
 ENV VAR DEFINITIONS (componenttype 380)
-  ✓ ids_auth_openauth_microsoft_clientsecret (Secret)
+  ✓ ids_auth_openauth_microsoft_clientsecret (Secret)     [converted from OAuth secret]
+  ✓ crd50_auth_openauth_microsoft_clientsecret (Secret)   [ADOPTED — was in Default only]
   ...
 
 Total to add: ~{N} components
 ```
+
+For clarity, use these tags after each env var entry in the manifest:
+- `[converted from OAuth secret]` — created in Step 5.4 from a site setting
+- `[ADOPTED — was in Default only]` — existed before this run; being pulled into the solution in Step 5.4b
+- `[ADOPTED — also in {otherSolutionName}]` — existed in another user solution; being additionally added here (user explicitly opted in)
 
 Ask via `AskUserQuestion`:
 > "Does this look right? You can proceed, or tell me which categories or tables to exclude."
@@ -279,7 +355,9 @@ Wait for explicit confirmation before Step 5.6.
 3. **All confirmed powerpagecomponent groups** — for each group, call `AddSolutionComponent` per component using `subComponentType`
    - Table Permissions (type 18) are standard powerpagecomponents — include by default
    - Exclude OAuth secret site settings that were not converted to env vars
-4. **Env var definitions** (for converted OAuth secrets) — `AddSolutionComponent` with `ComponentType: 380`
+4. **Env var definitions** — `AddSolutionComponent` with `ComponentType: 380` for:
+   - Every env var created in Step 5.4 (OAuth-secret conversion)
+   - Every entry in `adoptedEnvVars` from Step 5.4b (orphans the user chose to include)
 5. **Dataverse tables** — `AddSolutionComponent` with `ComponentType: 1` and entity `MetadataId`
 6. Refresh token every ~20 calls
 7. Track: success / skipped-duplicate / failed

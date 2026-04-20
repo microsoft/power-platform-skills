@@ -123,6 +123,35 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > ```
 > Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `.last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
 
+### Phase 3.5 — Pre-deploy Completeness Check
+
+A pipeline's `ValidatePackageAsync` confirms the solution zip is importable on the target, but it does **not** tell you whether the solution zip itself covers every component that exists on the source site. Components added after `setup-solution` last ran (server logic, cloud flows, bots, env vars, etc.) can be silently left behind.
+
+Run the shared site-inventory helper against the **source (dev) environment**:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{devEnvUrl}" --token "{DEV_TOKEN}" \
+  --siteId "{websiteRecordId from .solution-manifest.json}" \
+  --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
+  --solutionId "{solutionId from .solution-manifest.json}"
+```
+
+Parse stdout and evaluate `missing.*`:
+
+- **All empty** → proceed to Phase 4.
+- **Any non-empty** → report a short summary ("Solution is missing {N} components"). Ask via `AskUserQuestion`:
+  > "The source solution appears incomplete relative to the live site. What would you like to do?
+  > 1. **Run `/power-pages:setup-solution` now** (sync mode) — adopts missing components and bumps the version, then resume the deploy (Recommended)
+  > 2. **Deploy anyway** — the missing components will not reach the target
+  > 3. **Cancel** — I'll investigate first"
+
+  - Option 1: invoke the skill, wait for completion, then re-run the discovery helper to confirm all `missing.*` are empty. If any remain, repeat the prompt.
+  - Option 2: record the deliberate gap in `.last-deploy.json` under a `knownGaps` field so the audit trail is preserved.
+  - Option 3: stop.
+
+> **Why this exists**: the ALM-aware-by-default rule in `AGENTS.md` requires this check at every gate where a solution leaves its source environment.
+
 ### Phase 4 — Create Stage Run + Validate Package
 
 Use Node.js `https` module for all Dataverse calls (curl has encoding issues on Windows).

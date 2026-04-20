@@ -8,7 +8,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 
 ## Key Conventions
 
-- **DRY** — Never duplicate logic. Shared scripts live in `scripts/` (e.g., `generate-uuid.js`, `scripts/lib/validation-helpers.js`). Shared reference docs live in `references/`. Always check for existing helpers before writing new code.
+- **DRY** — Never duplicate logic. Shared scripts live in `scripts/` (e.g., `generate-uuid.js`, `scripts/lib/validation-helpers.js`, `scripts/lib/discover-site-components.js`). Shared reference docs live in `references/`. Always check for existing helpers before writing new code.
 - **Validation scripts** must import from `scripts/lib/validation-helpers.js` for boilerplate, path finders, auth helpers, and constants.
 - **UUID generation** must use the shared `scripts/generate-uuid.js` — never copy it into skill-specific directories.
 - **Power Pages config loading** must reuse `scripts/lib/powerpages-config.js` anywhere a script reads `.powerpages-site` table-permission or site-setting YAML. Keep that module focused on loading/parsing code-site config only; put validation or business rules in separate validator modules.
@@ -67,6 +67,18 @@ This runs a lightweight check comparing the local plugin version against `origin
 - **Agent spawning** — Process sequentially (not parallel), wait for completion, present output for approval.
 - **Skill tracking** — Every skill must record usage in its final phase via `> Reference: ${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` (pointer pattern, not hardcoded command). When adding a new skill, also add its entry to the skill name mapping table in `references/skill-tracking-reference.md`.
 - **Dataverse API calls** — Use deterministic Node.js scripts (in the skill's `scripts/` directory) for Dataverse API queries. Scripts should import `getAuthToken` and `makeRequest` from `scripts/lib/validation-helpers.js`. Never use inline PowerShell `Invoke-RestMethod` for API calls — scripts are more reliable, testable, and cross-platform.
+- **ALM-aware by default** — Any skill that creates, modifies, or depends on Dataverse records that belong in a Power Pages site's solution (site components, env var definitions, web roles, site settings, server logic, cloud flow bindings, bot consumers, custom tables/columns, etc.) MUST ensure those records land in the user's solution when `.solution-manifest.json` exists. Concrete rules:
+  - **Solution selection — strict resolution order.** When a skill or script needs "which solution?" for an `AddSolutionComponent` call, resolve in this order and stop at the first match:
+    1. **Explicit `--solutionUniqueName` CLI arg** (or `solutionName=…` skill argument). Always wins. Used by advanced flows and CI.
+    2. **`.solution-manifest.json` in the project root** — read `solution.uniqueName`. This is the default path for nearly every invocation.
+    3. **No manifest AND no explicit arg**:
+       - **Interactive skill**: query Dataverse for unmanaged solutions whose publisher prefix matches the site publisher, present them via `AskUserQuestion` alongside the option **"Run `/power-pages:setup-solution` first (recommended)"** and **"Leave in Default (not recommended)"**. Proceed only after explicit selection.
+       - **Non-interactive script**: exit with a clear error — `--solutionUniqueName not provided and no .solution-manifest.json found. Run /power-pages:setup-solution first, or pass --solutionUniqueName.` Never silently fall back to `Default`.
+    Skills must never auto-pick "the first solution that looks relevant" — auto-selection masks misconfigurations (wrong env, wrong branch, wrong project).
+  - **Component-creation scripts** must accept a `--solutionUniqueName` argument and, when provided, add the created record to that solution via `AddSolutionComponent`. Test that `solutionUniqueName` flows through end to end.
+  - **Skill workflows** must read `.solution-manifest.json` during prerequisite checks and pass the solution's `uniqueName` to any component-creation script they call. When no manifest is present, the skill should surface that gap to the user (per the resolution order above) rather than silently creating records in `Default`.
+  - **Skills that can leave Dataverse artifacts uncovered** (e.g. `setup-auth` writing OAuth secrets as env vars) must end by prompting the user to run `/power-pages:setup-solution` in sync mode so the discovery pass picks up any newly-created records.
+  - **New component types** added to Power Pages must be reflected in `scripts/lib/discover-site-components.js` (the single source of truth for site inventory) and, if applicable, in the `PPC_TYPE_LABELS` enum. Discovery should never silently skip a type.
 
 ## Common Review Pitfalls
 
