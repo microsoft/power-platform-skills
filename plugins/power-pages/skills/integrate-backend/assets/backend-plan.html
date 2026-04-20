@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __SITE_NAME__</title>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020; --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --webapi:#0078d4; --serverlogic:#5c2d91; --cloudflow:#ca5010;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.layout{display:flex;min-height:calc(100vh - 65px);}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;padding:32px 40px 72px;max-width:1060px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--webapi);}
+.stat-card:nth-child(2)::after{background:var(--serverlogic);}
+.stat-card:nth-child(3)::after{background:var(--cloudflow);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+.principle{display:flex;gap:16px;padding:16px 0;border-bottom:1px solid var(--border);}
+.principle:last-child{border-bottom:none;}
+.principle-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.principle-title{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:3px;}
+.principle-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+.approach-chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:700;display:inline-flex;align-items:center;gap:5px;}
+.approach-chip .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.approach-webapi{background:#0078d40a;border:1px solid #0078d425;color:var(--webapi);}
+.approach-webapi .dot{background:var(--webapi);}
+.approach-serverlogic{background:#5c2d910a;border:1px solid #5c2d9125;color:var(--serverlogic);}
+.approach-serverlogic .dot{background:var(--serverlogic);}
+.approach-cloudflow{background:#ca50100a;border:1px solid #ca501025;color:var(--cloudflow);}
+.approach-cloudflow .dot{background:var(--cloudflow);}
+.mono{font-family:var(--mono);}
+.reason-box{font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);line-height:1.8;}
+.reason-webapi{border-left:3px solid var(--webapi);}
+.reason-serverlogic{border-left:3px solid var(--serverlogic);}
+.reason-cloudflow{border-left:3px solid var(--cloudflow);}
+.item-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;}
+.item-name{font-size:15px;font-weight:700;color:var(--text-bright);}
+.item-desc{font-size:13px;color:var(--text-dim);margin-top:2px;}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+.detail-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;}
+.detail-item .field-label{margin-bottom:6px;}
+.flow-arrow{display:flex;align-items:center;justify-content:center;gap:12px;padding:16px 0;flex-wrap:wrap;}
+.flow-step{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 18px;text-align:center;min-width:140px;box-shadow:var(--shadow-4);}
+.flow-step-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.flow-step-name{font-size:13px;font-weight:700;color:var(--text-bright);}
+.flow-step-detail{font-size:11px;color:var(--text-dim);margin-top:2px;}
+.flow-connector{font-size:18px;color:var(--border-light);flex-shrink:0;}
+
+/* --- Concepts tab --- */
+.concept-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0;margin-bottom:18px;overflow:hidden;}
+.concept-header{display:flex;align-items:center;gap:14px;padding:20px 22px 0;}
+.concept-icon-box{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;}
+.concept-icon-webapi{background:#0078d412;color:var(--webapi);}
+.concept-icon-serverlogic{background:#5c2d9112;color:var(--serverlogic);}
+.concept-icon-cloudflow{background:#ca501012;color:var(--cloudflow);}
+.concept-title{font-size:16px;font-weight:800;color:var(--text-bright);}
+.concept-subtitle{font-size:12px;color:var(--text-dim);margin-top:1px;}
+.concept-body{padding:16px 22px 20px;font-size:13px;color:var(--text);line-height:1.75;}
+.concept-body p{margin-bottom:10px;}
+.concept-when{background:var(--surface2);border-top:1px solid var(--border);padding:14px 22px;font-size:12px;line-height:1.7;}
+.concept-when strong{color:var(--text-bright);}
+.concept-when-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-top:6px;}
+.concept-when-item{display:flex;align-items:baseline;gap:6px;}
+.concept-when-item::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:4px;}
+.concept-when-item.use::before{background:var(--pass);}
+.concept-when-item.avoid::before{background:#d13438;}
+.concept-link{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;padding:3px 10px;border:1px solid var(--accent-border);border-radius:var(--radius-sm);margin-top:4px;margin-right:6px;transition:background 0.15s;}
+.concept-link:hover{background:var(--accent-bg);}
+.concept-diagram{display:flex;align-items:center;justify-content:center;gap:10px;padding:18px 22px;flex-wrap:wrap;}
+.concept-diagram-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;text-align:center;min-width:100px;}
+.concept-diagram-box .cd-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;}
+.concept-diagram-box .cd-value{font-size:13px;font-weight:700;color:var(--text-bright);margin-top:2px;}
+.concept-diagram-arrow{font-size:16px;color:var(--border-light);}
+
+/* --- Implementation order --- */
+.phase-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden;}
+.phase-header{display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;}
+.phase-header:hover{background:var(--surface2);}
+.phase-num{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff;flex-shrink:0;}
+.phase-title{font-size:15px;font-weight:700;color:var(--text-bright);}
+.phase-subtitle{font-size:12px;color:var(--text-dim);margin-top:1px;}
+.phase-chevron{margin-left:auto;font-size:16px;color:var(--text-dim);transition:transform 0.2s;}
+.phase-card.open .phase-chevron{transform:rotate(180deg);}
+.phase-items{display:none;padding:0;}
+.phase-card.open .phase-items{display:block;}
+.phase-item{display:flex;align-items:flex-start;gap:14px;padding:14px 22px;border-bottom:1px solid var(--border);}
+.phase-item:last-child{border-bottom:none;}
+.phase-item-left{flex:1;}
+.phase-item-name{font-size:13px;font-weight:700;color:var(--text-bright);}
+.phase-item-desc{font-size:12px;color:var(--text-dim);margin-top:2px;}
+.phase-item-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;}
+
+/* --- Complexity badges --- */
+.complexity-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;}
+.complexity-low{background:#107c100a;border:1px solid #107c1025;color:#107c10;}
+.complexity-medium{background:#ca50100a;border:1px solid #ca501025;color:#ca5010;}
+.complexity-high{background:#d134380a;border:1px solid #d1343825;color:#d13438;}
+
+/* --- Status badges --- */
+.status-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;}
+.status-new{background:#0078d40a;border:1px solid #0078d425;color:#0078d4;}
+.status-existing{background:#107c100a;border:1px solid #107c1025;color:#107c10;}
+.status-extends{background:#8764b80a;border:1px solid #8764b825;color:#8764b8;}
+
+/* --- Implement action bar --- */
+.implement-bar{display:flex;align-items:center;gap:10px;margin-top:14px;padding:12px 16px;background:linear-gradient(135deg,#0078d406,#5c2d9106);border:1px solid var(--accent-border);border-radius:var(--radius);cursor:default;}
+.implement-bar.manual{background:linear-gradient(135deg,#ca50100a,#ca501006);border-color:#ca501025;}
+.implement-label{font-size:11px;color:var(--text-dim);flex-shrink:0;}
+.implement-cmd{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--accent);background:var(--surface);padding:5px 14px;border-radius:var(--radius-sm);border:1px solid var(--accent-border);}
+.implement-bar.manual .implement-cmd{color:var(--cloudflow);border-color:#ca501025;font-family:var(--sans);font-weight:600;}
+.implement-hint{font-size:11px;color:var(--text-dim);margin-left:auto;}
+
+/* --- Doc links row --- */
+.doc-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+
+/* --- Dependency tag --- */
+.dep-tag{font-size:11px;color:var(--text-dim);background:var(--surface2);padding:2px 8px;border-radius:3px;display:inline-flex;align-items:center;gap:4px;margin-top:6px;}
+.dep-tag::before{content:'Depends on:';font-weight:600;color:var(--text-dim);}
+
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px 72px;}
+  .stats-grid,.detail-grid{grid-template-columns:1fr;}
+  .flow-arrow,.concept-diagram{flex-direction:column;}
+  .flow-connector,.concept-diagram-arrow{transform:rotate(90deg);}
+  .concept-when-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PP</div>
+      <div>
+        <div class="topbar-title">__PLAN_TITLE__</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+    <div class="topbar-sub" id="topbarCount"></div>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar">
+      <div class="nav-group-label">Learn</div>
+      <button class="nav-btn active" data-tab="concepts"><span class="nav-icon">&#9672;</span> Key Concepts</button>
+      <div class="nav-group-label">Plan</div>
+      <button class="nav-btn" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="dataflow"><span class="nav-icon">&#8644;</span> Data Flow</button>
+      <div class="nav-group-label">Build</div>
+      <button class="nav-btn" data-tab="order"><span class="nav-icon">&#9654;</span> Implementation Order</button>
+      <button class="nav-btn" data-tab="items"><span class="nav-icon">&#9638;</span> Integration Items</button>
+    </div>
+
+    <div class="content">
+      <!-- Concepts Tab -->
+      <div class="section active" id="tab-concepts">
+        <h2>Key Concepts</h2>
+        <p class="section-desc">Power Pages offers three ways to add backend logic. Understanding when to use each is the key to a well-architected site.</p>
+        <div id="conceptsContainer"></div>
+      </div>
+
+      <!-- Overview Tab -->
+      <div class="section" id="tab-overview">
+        <h2>Integration Plan</h2>
+        <p class="section-desc">Backend integration strategy for <code>__SITE_NAME__</code></p>
+
+        <div class="summary-box">__SUMMARY__</div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--webapi)" id="statWebApi">0</div><div class="stat-label">Web API</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--serverlogic)" id="statServerLogic">0</div><div class="stat-label">Server Logic</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--cloudflow)" id="statCloudFlow">0</div><div class="stat-label">Cloud Flows</div></div>
+        </div>
+
+        <div class="card">
+          <div class="field-label">Approaches Used</div>
+          <div class="chip-row" id="approachesSummary"></div>
+        </div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+      </div>
+
+      <!-- Data Flow Tab -->
+      <div class="section" id="tab-dataflow">
+        <h2>Data Flow</h2>
+        <p class="section-desc">How data moves through the integration — from user action to backend and back</p>
+        <div id="dataflowContainer"></div>
+      </div>
+
+      <!-- Implementation Order Tab -->
+      <div class="section" id="tab-order">
+        <h2>Implementation Order</h2>
+        <p class="section-desc">Phases are ordered by dependency — complete each phase before moving to the next. Items within a phase can be implemented in parallel.</p>
+        <div id="orderContainer"></div>
+      </div>
+
+      <!-- Items Tab -->
+      <div class="section" id="tab-items">
+        <h2>Integration Items</h2>
+        <p class="section-desc" id="itemsDesc"></p>
+        <div id="itemsContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ITEMS = __ITEMS_DATA__;
+const RATIONALE = __RATIONALE_DATA__;
+const DATA_FLOWS = __DATA_FLOWS_DATA__;
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+const CONCEPTS = [
+  {
+    id: 'webapi',
+    icon: '&#8644;',
+    iconCls: 'concept-icon-webapi',
+    title: 'Web API',
+    subtitle: 'Browser-to-Dataverse CRUD',
+    body: '<p>The <strong>Power Pages Web API</strong> lets your frontend JavaScript talk directly to Dataverse \u2014 Microsoft\u2019s cloud database that stores your site\u2019s data. It supports standard operations: <strong>Create</strong>, <strong>Read</strong>, <strong>Update</strong>, and <strong>Delete</strong> (CRUD).</p><p>When a user fills out a form and clicks \u201cSave\u201d, your code sends an HTTP request (like <code>PATCH /api/data/v9.2/cr_table(...)</code>) that writes the data to Dataverse. <strong>Table Permissions</strong> control who can access which records.</p><p>Web API runs in the browser. This means the user\u2019s browser sends requests directly to Dataverse, and anyone with browser dev tools can see (and potentially tamper with) those requests. This is why business rules and validations should not rely on Web API alone.</p>',
+    diagram: [
+      { label: 'Browser', value: 'User clicks Save' },
+      { label: 'Web API', value: 'PATCH /api/data/...' },
+      { label: 'Table Permissions', value: 'Checks access rules' },
+      { label: 'Dataverse', value: 'Record updated' }
+    ],
+    whenUse: ['Reading and displaying data', 'Simple form submissions', 'CRUD with no complex rules', 'User-facing create/update/delete'],
+    whenAvoid: ['Sensitive business rule validation', 'Multi-table atomic operations', 'Background or scheduled tasks', 'Operations the user shouldn\'t wait for'],
+    docs: [
+      { label: 'Web API Overview', url: 'https://learn.microsoft.com/power-pages/configure/web-api-overview' },
+      { label: 'Table Permissions', url: 'https://learn.microsoft.com/power-pages/security/table-permissions' }
+    ]
+  },
+  {
+    id: 'serverlogic',
+    icon: '&#9881;',
+    iconCls: 'concept-icon-serverlogic',
+    title: 'Server Logic',
+    subtitle: 'Server-side business rules',
+    body: '<p><strong>Server Logic</strong> (also called server-side code) runs code on the Power Pages server \u2014 not in the user\u2019s browser. This is critical for business rules that must be tamper-proof.</p><p>For example, if a record can only move from \u201cDraft\u201d to \u201cSubmitted\u201d (never from \u201cDraft\u201d to \u201cApproved\u201d), that rule must be checked on the server. If you only checked it in the browser, a technical user could bypass it with dev tools.</p><p>Server Logic is also the right choice when you need to read or write multiple Dataverse tables in one operation (an atomic transaction), or when you want to batch multiple queries into a single call for performance.</p>',
+    diagram: [
+      { label: 'Browser', value: 'Calls /_api/serverlogics/...' },
+      { label: 'Power Pages Server', value: 'Runs your server code' },
+      { label: 'Dataverse', value: 'Reads/writes with full access' },
+      { label: 'Browser', value: 'Gets result back' }
+    ],
+    whenUse: ['Business rule enforcement', 'Multi-table transactions', 'Aggregation / batch queries', 'Logic that must be tamper-proof'],
+    whenAvoid: ['Simple CRUD (Web API is simpler)', 'Async / background work', 'Sending emails or notifications', 'Scheduled recurring tasks'],
+    docs: [
+      { label: 'Server Logic Overview', url: 'https://learn.microsoft.com/power-pages/configure/server-logic-overview' },
+      { label: 'Dataverse SDK', url: 'https://learn.microsoft.com/power-pages/configure/server-objects#dataverse' }
+    ]
+  },
+  {
+    id: 'cloudflow',
+    icon: '&#9729;',
+    iconCls: 'concept-icon-cloudflow',
+    title: 'Cloud Flows',
+    subtitle: 'Async background automation',
+    body: '<p><strong>Cloud Flows</strong> (built in Power Automate) run asynchronously in the background \u2014 meaning the user doesn\u2019t wait for them to finish. They are triggered by events (like a record status changing) or on a schedule (like \u201cevery day at 8 AM\u201d).</p><p>Cloud Flows are ideal for work that happens <em>after</em> the main operation: sending approval emails, notifying users, generating reports, or checking for expiring contracts. They have hundreds of built-in connectors to services like Outlook, Teams, SharePoint, and more.</p><p><strong>Important:</strong> Cloud Flows are built in the Power Automate visual designer, not in code. This plan provides the design specification for each flow, but they are created manually in the <a href="https://make.powerautomate.com" style="color:var(--accent);">Power Automate maker portal</a>.</p>',
+    diagram: [
+      { label: 'Trigger', value: 'Record status changes' },
+      { label: 'Cloud Flow', value: 'Runs in Power Automate' },
+      { label: 'Connectors', value: 'Outlook, Teams, etc.' },
+      { label: 'Result', value: 'Email sent, record updated' }
+    ],
+    whenUse: ['Email notifications', 'Approval workflows', 'Scheduled / recurring jobs', 'Integration with external services'],
+    whenAvoid: ['Real-time validation', 'Operations the user waits for', 'Complex data transformations', 'Anything needing instant response'],
+    docs: [
+      { label: 'Cloud Flows Overview', url: 'https://learn.microsoft.com/power-automate/overview-cloud' },
+      { label: 'Triggers & Actions', url: 'https://learn.microsoft.com/power-automate/triggers-introduction' }
+    ]
+  }
+];
+
+const APPROACH_META = {
+  webapi: { label: 'Web API', color: 'var(--webapi)', cls: 'webapi' },
+  serverlogic: { label: 'Server Logic', color: 'var(--serverlogic)', cls: 'serverlogic' },
+  cloudflow: { label: 'Cloud Flow', color: 'var(--cloudflow)', cls: 'cloudflow' },
+};
+
+// --- Navigation ---
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+function approachChip(approach) {
+  const m = APPROACH_META[approach] || { label: approach, cls: 'webapi' };
+  return `<span class="approach-chip approach-${m.cls}"><span class="dot"></span>${m.label}</span>`;
+}
+
+function complexityBadge(level) {
+  if (!level) return '';
+  return `<span class="complexity-badge complexity-${level}">${level}</span>`;
+}
+
+function statusBadge(status) {
+  if (!status) return '';
+  const labels = { 'new': 'New', 'existing': 'Existing', 'extends': 'Extends Existing' };
+  return `<span class="status-badge status-${status}">${labels[status] || status}</span>`;
+}
+
+function implementBar(approach) {
+  if (approach === 'webapi') {
+    return `<div class="implement-bar">
+      <span class="implement-label">Implement with:</span>
+      <span class="implement-cmd">/integrate-webapi</span>
+      <span class="implement-hint">Generates Web API service code + table permissions</span>
+    </div>`;
+  } else if (approach === 'serverlogic') {
+    return `<div class="implement-bar">
+      <span class="implement-label">Implement with:</span>
+      <span class="implement-cmd">/add-server-logic</span>
+      <span class="implement-hint">Generates server-side endpoint + SDK code</span>
+    </div>`;
+  } else if (approach === 'cloudflow') {
+    return `<div class="implement-bar manual">
+      <span class="implement-label">Build manually in:</span>
+      <span class="implement-cmd">Power Automate</span>
+      <span class="implement-hint">Cloud Flows are designed visually, not generated as code</span>
+    </div>`;
+  }
+  return '';
+}
+
+// --- Concepts Tab ---
+const conceptsContainer = document.getElementById('conceptsContainer');
+conceptsContainer.innerHTML = CONCEPTS.map(c => {
+  const diagramHtml = c.diagram.map((d, idx) => {
+    const arrow = idx < c.diagram.length - 1 ? '<span class="concept-diagram-arrow">&#10140;</span>' : '';
+    return `<div class="concept-diagram-box"><div class="cd-label">${d.label}</div><div class="cd-value">${d.value}</div></div>${arrow}`;
+  }).join('');
+
+  const whenGrid = `<div class="concept-when-grid">
+    ${c.whenUse.map(w => `<div class="concept-when-item use">${w}</div>`).join('')}
+    ${c.whenAvoid.map(w => `<div class="concept-when-item avoid">${w}</div>`).join('')}
+  </div>`;
+
+  const docsHtml = c.docs.map(d => `<a class="concept-link" href="${d.url}" target="_blank">&#128214; ${d.label}</a>`).join('');
+
+  return `<div class="concept-card">
+    <div class="concept-header">
+      <div class="concept-icon-box ${c.iconCls}">${c.icon}</div>
+      <div><div class="concept-title">${c.title}</div><div class="concept-subtitle">${c.subtitle}</div></div>
+    </div>
+    <div class="concept-body">${c.body}</div>
+    <div class="concept-diagram">${diagramHtml}</div>
+    <div class="concept-when">
+      <strong>When to use</strong> <span style="color:#107c10;">&#9679;</span> vs <strong>when to avoid</strong> <span style="color:#d13438;">&#9679;</span>
+      ${whenGrid}
+    </div>
+    <div style="padding:12px 22px;">${docsHtml}</div>
+  </div>`;
+}).join('');
+
+// --- Overview Tab ---
+const webApiCount = ITEMS.filter(i => i.approach === 'webapi').length;
+const serverLogicCount = ITEMS.filter(i => i.approach === 'serverlogic').length;
+const cloudFlowCount = ITEMS.filter(i => i.approach === 'cloudflow').length;
+
+document.getElementById('statWebApi').textContent = webApiCount;
+document.getElementById('statServerLogic').textContent = serverLogicCount;
+document.getElementById('statCloudFlow').textContent = cloudFlowCount;
+document.getElementById('topbarCount').textContent =
+  ITEMS.length + ' integration item' + (ITEMS.length !== 1 ? 's' : '');
+
+const summaryEl = document.getElementById('approachesSummary');
+const usedApproaches = [...new Set(ITEMS.map(i => i.approach))];
+summaryEl.innerHTML = usedApproaches.map(approach => {
+  const meta = APPROACH_META[approach] || APPROACH_META.webapi;
+  const count = ITEMS.filter(i => i.approach === approach).length;
+  return `<span class="approach-chip approach-${meta.cls}">
+    <span class="dot"></span>${meta.label} (${count})
+  </span>`;
+}).join('');
+
+document.getElementById('rationaleContainer').innerHTML = RATIONALE.map(r => `
+  <div class="principle">
+    <div class="principle-icon">${r.icon}</div>
+    <div>
+      <div class="principle-title">${r.title}</div>
+      <div class="principle-desc">${r.desc}</div>
+    </div>
+  </div>
+`).join('');
+
+// --- Data Flow Tab ---
+const dfContainer = document.getElementById('dataflowContainer');
+dfContainer.innerHTML = DATA_FLOWS.map(flow => {
+  const stepsHtml = flow.steps.map((step, idx) => {
+    const m = APPROACH_META[step.approach] || APPROACH_META.webapi;
+    const connector = idx < flow.steps.length - 1 ? '<span class="flow-connector">&#10140;</span>' : '';
+    return `<div class="flow-step" style="border-top:3px solid ${m.color}">
+      <div class="flow-step-label">${m.label}</div>
+      <div class="flow-step-name">${step.name}</div>
+      <div class="flow-step-detail">${step.detail || ''}</div>
+    </div>${connector}`;
+  }).join('');
+
+  return `<div class="card" style="margin-bottom:16px;">
+    <div style="font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;">${flow.trigger}</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;">${flow.description}</div>
+    <div class="flow-arrow">${stepsHtml}</div>
+  </div>`;
+}).join('');
+
+// --- Implementation Order Tab ---
+// Derive phases from items: group by approach in recommended build order
+// If items have explicit `phase` numbers, use those instead
+const orderContainer = document.getElementById('orderContainer');
+
+const PHASE_META = [
+  { approach: 'serverlogic', title: 'Server Logic', subtitle: 'Server-side validation and business rules', color: 'var(--serverlogic)' },
+  { approach: 'webapi', title: 'Web API', subtitle: 'Browser-to-Dataverse CRUD operations', color: 'var(--webapi)' },
+  { approach: 'cloudflow', title: 'Cloud Flows', subtitle: 'Async notifications and background automation', color: 'var(--cloudflow)' },
+];
+
+const hasExplicitPhases = ITEMS.some(i => typeof i.phase === 'number');
+
+let phases;
+if (hasExplicitPhases) {
+  // Group items by their explicit phase number
+  const phaseMap = {};
+  ITEMS.forEach(item => {
+    const p = item.phase || 1;
+    if (!phaseMap[p]) phaseMap[p] = [];
+    phaseMap[p].push(item);
+  });
+  phases = Object.keys(phaseMap).sort((a, b) => a - b).map((num, idx) => {
+    const items = phaseMap[num];
+    const dominant = items.reduce((acc, i) => { acc[i.approach] = (acc[i.approach] || 0) + 1; return acc; }, {});
+    const topApproach = Object.keys(dominant).sort((a, b) => dominant[b] - dominant[a])[0];
+    const meta = PHASE_META.find(m => m.approach === topApproach) || PHASE_META[0];
+    return { num: parseInt(num), title: `Phase ${num} — ${meta.title}`, subtitle: meta.subtitle, color: meta.color, items };
+  });
+} else {
+  // Auto-derive: group by approach in recommended order
+  phases = PHASE_META.map((meta, idx) => {
+    const items = ITEMS.filter(i => i.approach === meta.approach);
+    return items.length > 0 ? { num: idx + 1, title: `Phase ${idx + 1} — ${meta.title}`, subtitle: meta.subtitle, color: meta.color, items } : null;
+  }).filter(Boolean);
+}
+
+orderContainer.innerHTML = phases.map((phase, phaseIdx) => {
+  const itemsHtml = phase.items.map(item => {
+    const m = APPROACH_META[item.approach];
+    const depHtml = item.depends ? `<div class="dep-tag">${item.depends}</div>` : '';
+
+    return `<div class="phase-item">
+      <div class="phase-item-left">
+        <div class="phase-item-name">${item.name} ${approachChip(item.approach)}</div>
+        <div class="phase-item-desc">${item.description}</div>
+        ${depHtml}
+        ${implementBar(item.approach)}
+      </div>
+      <div class="phase-item-right">
+        ${complexityBadge(item.complexity)}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="phase-card${phaseIdx === 0 ? ' open' : ''}" onclick="this.classList.toggle('open')">
+    <div class="phase-header">
+      <div class="phase-num" style="background:${phase.color};">${phase.num}</div>
+      <div>
+        <div class="phase-title">${phase.title}</div>
+        <div class="phase-subtitle">${phase.subtitle}</div>
+      </div>
+      <span class="phase-chevron">&#9660;</span>
+    </div>
+    <div class="phase-items" onclick="event.stopPropagation()">
+      ${itemsHtml}
+    </div>
+  </div>`;
+}).join('');
+
+// --- Items Tab ---
+const itemParts = [];
+if (webApiCount) itemParts.push(webApiCount + ' Web API');
+if (serverLogicCount) itemParts.push(serverLogicCount + ' Server Logic');
+if (cloudFlowCount) itemParts.push(cloudFlowCount + ' Cloud Flow');
+document.getElementById('itemsDesc').textContent =
+  ITEMS.length + ' item' + (ITEMS.length !== 1 ? 's' : '') + ' \u2014 ' + itemParts.join(', ');
+
+const itemsContainer = document.getElementById('itemsContainer');
+itemsContainer.innerHTML = ITEMS.map(item => {
+  const m = APPROACH_META[item.approach] || APPROACH_META.webapi;
+
+  const detailsHtml = (item.details || []).map(d =>
+    `<div class="detail-item">
+      <div class="field-label">${d.label}</div>
+      <div style="font-size:13px;color:var(--text);">${d.value}</div>
+    </div>`
+  ).join('');
+
+  const depHtml = item.depends ? `<div class="dep-tag">${item.depends}</div>` : '';
+
+  const docsHtml = (item.docs || []).map(d =>
+    `<a class="concept-link" href="${d.url}" target="_blank">&#128214; ${d.label}</a>`
+  ).join('');
+
+  return `<div class="card" style="border-left:3px solid ${m.color};">
+    <div class="item-header">
+      <div>
+        <div class="item-name">${item.name} ${approachChip(item.approach)} ${complexityBadge(item.complexity)} ${statusBadge(item.status)}</div>
+        <div class="item-desc">${item.description}</div>
+      </div>
+    </div>
+    <div class="reason-box reason-${m.cls}"><strong>Why ${m.label}:</strong> ${item.reasoning}</div>
+    ${depHtml}
+    ${detailsHtml ? `<div class="detail-grid">${detailsHtml}</div>` : ''}
+    ${docsHtml ? `<div class="doc-links">${docsHtml}</div>` : ''}
+    ${implementBar(item.approach)}
+  </div>`;
+}).join('');
+</script>
+</body>
+</html>

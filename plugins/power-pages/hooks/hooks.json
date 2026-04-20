@@ -1,5 +1,4 @@
 {
-  "description": "Centralized Power Pages lifecycle hooks",
   "hooks": {
     "PostToolUse": [
       {
@@ -8,8 +7,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-skill-posttool-validation.js\"",
-            "timeout": 30,
-            "statusMessage": "Running Power Pages validator"
+            "timeout": 30
           }
         ]
       }

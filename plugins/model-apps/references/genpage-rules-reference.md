@@ -16,8 +16,9 @@ Comprehensive rules for generating generative page code. Read this file during c
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
 9. **Icons**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`)
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
-11. **No FluentProvider**: Already provided at root; don't add in components
+11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
+13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 
 ---
 
@@ -64,7 +65,7 @@ import type {
 // Sub-components as separate top-level functions
 
 const GeneratedComponent = (props: GeneratedComponentProps) => {
-  const { dataApi } = props;
+  const { dataApi, pageInput } = props;
   // Component implementation
 }
 
@@ -110,7 +111,7 @@ export default GeneratedComponent;
 ```
 
 ### Navigation
-- Multiple screens: Use Fluent UI V9 Tabs/Breadcrumbs
+- Multiple screens within a page: Use Fluent UI V9 Tabs/Breadcrumbs
 - Provide back/forward navigation for wizard flows
 - No React Router or hash/history API routing
 
@@ -287,7 +288,162 @@ const formatCurrency = (amount: number): string => {
 
 ---
 
+## Page Input
+
+The generated component may receive an optional `pageInput` prop for accepting context from the hosting page (e.g., a selected record or custom data).
+
+### PageInput Interface
+
+```typescript
+export interface PageInput {
+    /** The logical name of the entity associated with the current page context. */
+    entityName?: string;
+    /** The unique identifier (GUID) of the selected record. */
+    recordId?: string;
+    /**
+     * A key-value map of additional data passed from the page.
+     * Keys are strings, values are primitives of unknown type (string, number, boolean, etc.).
+     * No functions are allowed as values.
+     */
+    data?: Record<string, unknown>;
+}
+```
+
+`PageInput` is already part of `GeneratedComponentProps` — destructure it from props: `const { dataApi, pageInput } = props;`
+
+### Rules
+
+- Only use `pageInput` when the user specifically asks for it — do not assume what inputs are needed.
+- **CRITICAL:** Do not give default values for `pageInput` fields if they are not provided.
+- `entityName` is an entity's logical name, not display name.
+- The `data` object values are primitives of unknown type — never assume the type, always cast robustly.
+
+### Rendering Pattern for Pages with pageInput
+
+`pageInput` is available synchronously on the first render when opened via `Xrm.Navigation.navigateTo`. To avoid double-render flicker:
+
+- **Derive values synchronously from props** — use `const recordId = pageInput?.recordId` (not `useState`). State initialization triggers re-renders; prop derivation doesn't.
+- **Use early returns** — if `recordId` is missing, return immediately. Don't wrap the body in conditional blocks inside a wrapper div.
+- **No artificial delays** — never use `setTimeout` or a `pageInputReady` flag. A 500ms delay causes the platform to show the previous page as a fallback.
+- **Initialize `loading` as `true`** when `recordId` is present — so a spinner shows on frame 0, not a blank page that flips to a spinner after a delay.
+
+### Usage Examples
+
+**Using `dataApi` with `pageInput.entityName` and `pageInput.recordId`:**
+
+```typescript
+const { dataApi, pageInput } = props;
+const recordId = pageInput?.recordId;
+const entityName = pageInput?.entityName;
+
+const [selectedRowData, setSelectedRowData] = useState(undefined);
+
+useEffect(() => {
+    // Replace these example logical names with the exact verified names from your RuntimeTypes/TableRegistrations.
+    if (entityName === "account" && recordId && dataApi) {
+        (async () => {
+            const row = await dataApi.retrieveRow("account", {
+                id: recordId,
+                select: ["statuscode", "name", "_primarycontactid_value"],
+            });
+            setSelectedRowData(row);
+        })();
+    }
+}, [dataApi, entityName, recordId]);
+```
+
+**Using `pageInput.data` with safe type casting:**
+
+```typescript
+// IMPORTANT: Never assume the type of data values. Robustly handle type casting.
+function toNumberOrDefault(value: unknown, fallback: number): number {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
+}
+
+const { pageInput } = props;
+// Always handle pageInput, pageInput.data, or any value potentially being null or undefined
+const [latitude, setLatitude] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
+const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
+```
+
+---
+
 ## Special Patterns
+
+### Generative Page Navigation
+
+Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction (`window.location`, query strings) breaks the hosting context and must not be used — not even as a fallback.
+
+```typescript
+const xrm = (window as any).Xrm;
+
+// Entity record
+xrm.Navigation.navigateTo({ pageType: "entityrecord", entityName: "account", entityId: recordId });
+
+// Another generative page with record context (entityName and recordId arrive as props.pageInput)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId });
+
+// Another generative page with custom data (arrives as props.pageInput.data on the target)
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, data: { customParam1: "value1", customParam2: 42 } });
+
+// Combining record context with additional custom data
+xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId, data: { view: "summary" } });
+```
+
+### Dark Mode Toggle
+
+Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use a local `themeToVars` helper to apply theme tokens synchronously as CSS custom properties.
+
+**Implement `themeToVars` locally** — do not import it from `@fluentui/react-components`:
+
+```typescript
+function themeToVars(theme: Record<string, string>): React.CSSProperties {
+    const vars: Record<string, string> = {};
+    Object.entries(theme).forEach(([k, v]) => { vars[`--${k}`] = v; });
+    return vars as React.CSSProperties;
+}
+```
+
+**Use a two-div wrapper.** Applying both `style={themeToVars(...)}` and `className={styles.root}` to the same div causes a CSS variable self-reference flicker because `makeStyles` reads the same CSS custom properties that `themeToVars` is writing. Separate them: outer div sets the vars, inner div reads them via the class:
+
+```typescript
+import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
+
+// WRONG — style and className on the same div causes CSS variable self-reference flicker
+<div style={themeToVars(theme)} className={styles.root}>
+
+// CORRECT — outer div sets CSS vars only, inner div reads them via className
+<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
+    <div className={styles.root}>
+        {/* all Fluent descendants inherit the theme via CSS variables */}
+    </div>
+</div>
+```
+
+### Data Caching Across Navigations
+
+The genpage platform **re-evaluates the module script on every navigation** — including when the user navigates back to a page they've already visited. This means module-level variables (e.g., `let _cache = null`) are reset on each visit, causing the component to re-fetch data and show a loading spinner even on return visits.
+
+**Fix: initialize module-level variables from `window`, and write back to `window` on fetch.** The `window` object persists for the lifetime of the browser session regardless of module re-evaluation.
+
+Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions with other scripts.
+
+**Always use a single batched state object** (`{ records, loading, error }`) — multiple separate `setState` calls in an async function produce separate renders in React 17, each potentially showing an intermediate state.
+
+**Key rules:**
+- Initialize module-level variables from `window.__pp<EntityName>Cache` (naming convention to avoid collisions)
+- Write back to `window` after fetch so the data survives module re-evaluation
+- Use a single batched state object (`{ records, loading, error }`) — separate `setState` calls in async functions produce intermediate renders in React 17
+- For detail pages, use a `Map<string, MyRow>` on `window` keyed by `recordId`
+
+**When to apply:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit shows a spinner; return visits render instantly.
+
+See [9-data-caching.tsx](../../samples/9-data-caching.tsx) for complete list-page and detail-page caching examples.
 
 ### Charts and Visualization
 - Use D3.js for all charts
@@ -345,6 +501,16 @@ return (
 8. **Preserve API signatures** - Don't rename dataApi methods/parameters
 9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
 10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
+11. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
+
+```typescript
+// WRONG — causes runtime error
+select: ["subject", "regardingobjectidname"]
+
+// CORRECT — select FK column, read display name from annotation
+select: ["subject", "_regardingobjectid_value"]
+const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedValue"];
+```
 
 ### DataGrid Requirements
 - Import `createTableColumn` from Fluent UI V9

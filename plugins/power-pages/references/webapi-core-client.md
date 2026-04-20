@@ -376,7 +376,7 @@ export const getFormattedValue = (
 
 const MAX_PAGINATION_ITERATIONS = 100;
 
-export const fetchAllPages = async <T>(initialUrl: string): Promise<T[]> => {
+export const fetchAllPages = async <T>(initialUrl: string, pageSize = 100): Promise<T[]> => {
   let nextUrl: string | undefined = initialUrl;
   const results: T[] = [];
   let iterations = 0;
@@ -387,7 +387,13 @@ export const fetchAllPages = async <T>(initialUrl: string): Promise<T[]> => {
       break;
     }
 
-    const response = await powerPagesFetch<ODataCollectionResponse<T>>(nextUrl);
+    // Prefer: odata.maxpagesize is required on every request (including nextLink cursors)
+    // to ensure @odata.nextLink is returned for subsequent pages.
+    const response = await powerPagesFetch<ODataCollectionResponse<T>>(nextUrl, {
+      headers: {
+        'Prefer': `odata.include-annotations="OData.Community.Display.V1.FormattedValue",odata.maxpagesize=${pageSize}`,
+      },
+    });
     if (!response) break;
 
     results.push(...(response.value ?? []));

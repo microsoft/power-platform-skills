@@ -335,6 +335,8 @@ Include these rationale categories:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/data-model-plan.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `data-model-plan-support-tables.html`, `data-model-plan-apr-2026.html`. Pass the chosen name via `--output`.
+
 3. Delete the temporary data JSON file after the script succeeds.
 
 #### 4.5.4 Open in Browser

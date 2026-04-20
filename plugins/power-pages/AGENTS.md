@@ -44,7 +44,17 @@ model: opus
 ---
 ```
 
-Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML list syntax.
+Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML list syntax. Do not add `hooks` to skill frontmatter; Power Pages skills register lifecycle hooks centrally.
+
+### Plugin Version Check
+
+Every SKILL.md must include the following line immediately after the closing `---` of the frontmatter (before the `#` title):
+
+```markdown
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+```
+
+This runs a lightweight check comparing the local plugin version against `origin/main` and shows an update notice if a newer version is available.
 
 ### Key Patterns
 
@@ -57,6 +67,16 @@ Note: `allowed-tools` must be a comma-separated list, not JSON array or YAML lis
 - **Agent spawning** — Process sequentially (not parallel), wait for completion, present output for approval.
 - **Skill tracking** — Every skill must record usage in its final phase via `> Reference: ${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` (pointer pattern, not hardcoded command). When adding a new skill, also add its entry to the skill name mapping table in `references/skill-tracking-reference.md`.
 - **Dataverse API calls** — Use deterministic Node.js scripts (in the skill's `scripts/` directory) for Dataverse API queries. Scripts should import `getAuthToken` and `makeRequest` from `scripts/lib/validation-helpers.js`. Never use inline PowerShell `Invoke-RestMethod` for API calls — scripts are more reliable, testable, and cross-platform.
+
+## Common Review Pitfalls
+
+These patterns have caused repeated PR review feedback. Check for them before submitting changes to skills, validators, or hooks.
+
+- **Phase cross-references break silently** — When renumbering or reordering phases in a SKILL.md, also update: `references/` docs that mention phase numbers, the Key Decision Points section, and any other files that cross-reference this skill's phases. After any phase reorder, grep for the old phase number across the skill directory and its references.
+- **Validators must match the exact constraint** — If the rule is "no exports at all", block all `module.exports`/`exports` — don't just check if exported names are in an allowlist. If the rule is "try/catch required", verify both `try` AND `catch` exist. Re-read the exact constraint from SKILL.md and test the boundary cases.
+- **Hook scripts run on every Skill tool use** — The PostToolUse hook fires for all tracked skills, so unconditional `process.stderr.write` creates noise. Gate debug logging behind `process.env.DEBUG`. Only errors should go to stderr unconditionally.
+- **Template placeholders in `<script>` blocks need special care** — `render-template.js` injects string values as-is (no encoding), which is safe for HTML text contexts but risky inside JavaScript. Avoid declaring JS variables with `"__PLACEHOLDER__"` in script blocks; prefer reading from the DOM or using `JSON.stringify` for JS contexts.
+- **Guidance must be consistent within a skill** — If one section says "always use raw fetch", a framework-specific table in the same file must not recommend a different HTTP client without qualification. Reviewers will flag contradictions.
 
 ## Maintaining This File
 

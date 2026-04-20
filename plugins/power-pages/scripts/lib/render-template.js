@@ -12,25 +12,30 @@ const path = require('path');
 
 /**
  * @param {Object} options
- * @param {string} options.templatePath - Absolute path to the HTML template
- * @param {string} options.outputPath   - Absolute path for the rendered output
- * @param {string} options.dataPath     - Absolute path to the JSON data file
- * @param {string[]} options.requiredKeys - Keys that must be present in the data file
+ * @param {string} options.templatePath  - Absolute path to the HTML template
+ * @param {string} options.outputPath    - Absolute path for the rendered output
+ * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
+ * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
+ * @param {string[]} options.requiredKeys - Keys that must be present in the data
  */
-function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
     process.exit(1);
   }
-  if (!fs.existsSync(dataPath)) {
+  if (!dataObject && !dataPath) {
+    console.error('Either dataPath or dataObject must be provided');
+    process.exit(1);
+  }
+  if (dataPath && !fs.existsSync(dataPath)) {
     console.error(`Data file not found: ${dataPath}`);
     process.exit(1);
   }
 
   // Read template and data
   const template = fs.readFileSync(templatePath, 'utf8');
-  const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  const data = dataObject ?? JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
   // Validate required keys
   const missing = requiredKeys.filter((k) => !(k in data));
@@ -58,6 +63,15 @@ function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  // Never overwrite an existing file — the caller must choose a unique name
+  if (fs.existsSync(outputPath)) {
+    console.error(
+      `Error: Output file already exists: ${outputPath}\n` +
+      'Choose a different filename to avoid overwriting the previous plan.'
+    );
+    process.exit(1);
   }
 
   fs.writeFileSync(outputPath, result, 'utf8');

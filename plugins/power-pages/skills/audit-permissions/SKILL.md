@@ -1,18 +1,17 @@
 ---
 name: audit-permissions
 description: >-
-  Use this skill to audit existing table permissions on a Power Pages site.
-  Trigger examples: "audit permissions", "check permissions", "review table permissions",
-  "are my permissions correct", "permission security audit", "verify permissions setup",
-  "check for permission issues", "permission health check".
-  This skill analyzes existing table permissions against the site code and Dataverse metadata,
-  generates an HTML audit report with findings grouped by severity (critical, warning, info, pass),
-  and suggests fixes for any issues found.
+  Audits existing table permissions on a Power Pages site by analyzing them against site code
+  and Dataverse metadata. Generates an HTML audit report with findings grouped by severity
+  (critical, warning, info, pass) and suggests fixes for issues found. Use when the user wants
+  to review, verify, or check table permissions for security issues.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent
 model: opus
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Audit Permissions
 
@@ -470,11 +469,13 @@ Run the render script (it creates the output directory if needed):
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`.
+
 Delete the temporary data JSON file after the script succeeds.
 
 ### 5.4 Open in Browser
 
-Open the generated HTML file in the user's default browser.
+Open the actual output path in the user's default browser.
 
 ---
 

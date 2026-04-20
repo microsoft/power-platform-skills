@@ -1,0 +1,3723 @@
+{
+  "skill_name": "generate-mcp-app-ui",
+  "common_assertions": [
+    "Output is a complete HTML file starting with <!DOCTYPE html>",
+    "Contains exactly one <script type=\"module\"> block",
+    "Uses named import: import { App } from ... (not default import: import App from ...)",
+    "Sets app.ontoolresult before calling app.connect()",
+    "Sets app.onhostcontextchanged before calling app.connect()",
+    "Sets app.onteardown before calling app.connect()",
+    "Uses result.structuredContent to access tool data (not result.data, not result directly)",
+    "Defines an escapeHtml function and uses it for user data in innerHTML",
+    "Does not contain window.openai",
+    "Does not use max-width on the main container",
+    "Uses var(--color Fluent design tokens for colors instead of hardcoded values",
+    "Includes a loading state with <fluent-spinner>",
+    "Includes an error state"
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "tier": "smoke",
+      "prompt": "Create a map widget showing tourist attractions in San Francisco.",
+      "data": {
+        "city": "San Francisco",
+        "attractions": [
+          {
+            "name": "Golden Gate Bridge",
+            "lat": 37.8199,
+            "lng": -122.4783,
+            "category": "Landmark",
+            "rating": 4.8,
+            "description": "Iconic suspension bridge spanning the Golden Gate strait"
+          },
+          {
+            "name": "Fisherman's Wharf",
+            "lat": 37.808,
+            "lng": -122.4177,
+            "category": "Entertainment",
+            "rating": 4.5,
+            "description": "Waterfront neighborhood with shops, restaurants, and sea lions"
+          },
+          {
+            "name": "Alcatraz Island",
+            "lat": 37.8267,
+            "lng": -122.423,
+            "category": "Historic",
+            "rating": 4.7,
+            "description": "Former federal prison on an island in San Francisco Bay"
+          },
+          {
+            "name": "Golden Gate Park",
+            "lat": 37.7694,
+            "lng": -122.4862,
+            "category": "Nature",
+            "rating": 4.6,
+            "description": "Large urban park with museums, gardens, and trails"
+          }
+        ]
+      },
+      "assertions": [
+        "Uses a mapping library with interactive markers",
+        "Loads map library before Fluent UI to avoid global collision",
+        "Saves map library global reference to avoid Fluent overwriting it",
+        "Shows markers for all attractions",
+        "Map has explicit height"
+      ]
+    },
+    {
+      "id": 2,
+      "tier": "smoke",
+      "prompt": "Create a weather widget showing current conditions and 5-day forecast.",
+      "data": {
+        "city": "Seattle",
+        "temperature": 58,
+        "humidity": 72,
+        "conditions": "Partly Cloudy",
+        "forecast": [
+          {
+            "day": "Mon",
+            "high": 62,
+            "low": 48,
+            "conditions": "Sunny"
+          },
+          {
+            "day": "Tue",
+            "high": 59,
+            "low": 47,
+            "conditions": "Cloudy"
+          },
+          {
+            "day": "Wed",
+            "high": 55,
+            "low": 44,
+            "conditions": "Rain"
+          },
+          {
+            "day": "Thu",
+            "high": 57,
+            "low": 45,
+            "conditions": "Partly Cloudy"
+          },
+          {
+            "day": "Fri",
+            "high": 61,
+            "low": 49,
+            "conditions": "Sunny"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows current temperature prominently",
+        "Shows 5-day forecast strip",
+        "Uses weather icons/emoji for conditions"
+      ]
+    },
+    {
+      "id": 3,
+      "tier": "smoke",
+      "prompt": "Create a sales dashboard with KPI cards and a monthly revenue chart.",
+      "data": {
+        "period": "Q1 2026",
+        "total_revenue": 1245000,
+        "target": 1500000,
+        "growth_pct": 12.3,
+        "deals_closed": 47,
+        "avg_deal_size": 26489,
+        "pipeline_value": 890000,
+        "by_month": [
+          {
+            "month": "Jan",
+            "revenue": 385000,
+            "target": 500000
+          },
+          {
+            "month": "Feb",
+            "revenue": 425000,
+            "target": 500000
+          },
+          {
+            "month": "Mar",
+            "revenue": 435000,
+            "target": 500000
+          }
+        ],
+        "by_region": [
+          {
+            "region": "West",
+            "revenue": 520000,
+            "pct": 42
+          },
+          {
+            "region": "East",
+            "revenue": 380000,
+            "pct": 31
+          },
+          {
+            "region": "Central",
+            "revenue": 210000,
+            "pct": 17
+          },
+          {
+            "region": "South",
+            "revenue": 135000,
+            "pct": 10
+          }
+        ],
+        "top_reps": [
+          {
+            "name": "Jordan Lee",
+            "revenue": 285000,
+            "deals": 12
+          },
+          {
+            "name": "Sam Torres",
+            "revenue": 215000,
+            "deals": 9
+          },
+          {
+            "name": "Casey Morgan",
+            "revenue": 198000,
+            "deals": 11
+          }
+        ]
+      },
+      "assertions": [
+        "Shows key metrics as cards (revenue, target, growth)",
+        "Includes a bar or line chart",
+        "Formats currency values with $ and commas"
+      ]
+    },
+    {
+      "id": 4,
+      "tier": "smoke",
+      "prompt": "Create a task/ticket list showing sprint tasks with status and priority.",
+      "data": {
+        "project": "CloudSync v3.2",
+        "sprint": "Sprint 14",
+        "tasks": [
+          {
+            "id": "CS-421",
+            "title": "Implement dark mode toggle",
+            "status": "done",
+            "priority": "high",
+            "assignee": "Maria Garcia",
+            "points": 5
+          },
+          {
+            "id": "CS-422",
+            "title": "Fix sync conflict on mobile",
+            "status": "in_progress",
+            "priority": "critical",
+            "assignee": "Priya Patel",
+            "points": 8
+          },
+          {
+            "id": "CS-423",
+            "title": "Add bulk file operations",
+            "status": "in_progress",
+            "priority": "high",
+            "assignee": "James Wilson",
+            "points": 8
+          },
+          {
+            "id": "CS-424",
+            "title": "Update onboarding flow",
+            "status": "todo",
+            "priority": "medium",
+            "assignee": "Ana Costa",
+            "points": 3
+          },
+          {
+            "id": "CS-425",
+            "title": "Performance audit for large repos",
+            "status": "todo",
+            "priority": "medium",
+            "assignee": "Marcus Johnson",
+            "points": 5
+          },
+          {
+            "id": "CS-426",
+            "title": "Write API rate limit docs",
+            "status": "done",
+            "priority": "low",
+            "assignee": "Sarah Chen",
+            "points": 2
+          },
+          {
+            "id": "CS-427",
+            "title": "Webhook retry configuration",
+            "status": "in_progress",
+            "priority": "high",
+            "assignee": "Yuki Tanaka",
+            "points": 5
+          }
+        ]
+      },
+      "assertions": [
+        "Shows task cards or rows",
+        "Color-codes by status or priority",
+        "Shows assignee and story points"
+      ]
+    },
+    {
+      "id": 5,
+      "tier": "full",
+      "prompt": "Create a product comparison widget showing headphones side by side.",
+      "data": {
+        "category": "Wireless Headphones",
+        "products": [
+          {
+            "name": "Aura QuietMax 5",
+            "price": 349.99,
+            "rating": 4.7,
+            "noise_canceling": "Best-in-class ANC",
+            "battery": "30 hours",
+            "weight": "250g",
+            "connectivity": "Bluetooth 5.2, multipoint",
+            "highlights": [
+              "Industry-leading noise cancellation",
+              "Auto NC optimizer",
+              "Speak-to-chat"
+            ]
+          },
+          {
+            "name": "Zenith AirSound Pro",
+            "price": 549,
+            "rating": 4.5,
+            "noise_canceling": "Active NC with transparency",
+            "battery": "20 hours",
+            "weight": "384g",
+            "connectivity": "Bluetooth 5.0, Zenith ecosystem",
+            "highlights": [
+              "Spatial audio with head tracking",
+              "Digital Crown controls",
+              "Premium build quality"
+            ]
+          },
+          {
+            "name": "Voss NoiseFree Ultra",
+            "price": 429,
+            "rating": 4.6,
+            "noise_canceling": "CustomTune ANC",
+            "battery": "24 hours",
+            "weight": "250g",
+            "connectivity": "Bluetooth 5.3, multipoint",
+            "highlights": [
+              "Immersive audio mode",
+              "CustomTune technology",
+              "Plush comfort fit"
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows products in columns or cards",
+        "Displays price, rating, and key specs",
+        "Highlights differences between products"
+      ]
+    },
+    {
+      "id": 6,
+      "tier": "full",
+      "prompt": "Create an event schedule widget for a tech conference.",
+      "data": {
+        "conference": "TechConnect 2026",
+        "location": "Emerald City Conference Center",
+        "date": "March 25-27, 2026",
+        "events": [
+          {
+            "time": "9:00 AM",
+            "title": "Opening Keynote: The Next Platform Shift",
+            "speaker": "Diane Zhao",
+            "track": "Main Stage",
+            "duration": "60 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "10:30 AM",
+            "title": "Building with AI Agents",
+            "speaker": "Ethan Novak",
+            "track": "AI Track",
+            "duration": "45 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "11:30 AM",
+            "title": "Zero-Trust Architecture in Practice",
+            "speaker": "Rachel Tsai",
+            "track": "Security Track",
+            "duration": "45 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "1:00 PM",
+            "title": "Lunch & Networking",
+            "speaker": null,
+            "track": "Main Hall",
+            "duration": "60 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "2:00 PM",
+            "title": "The Future of WebAssembly",
+            "speaker": "Maya Chen",
+            "track": "Web Track",
+            "duration": "45 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "3:00 PM",
+            "title": "Panel: Open Source Sustainability",
+            "speaker": "Multiple",
+            "track": "Main Stage",
+            "duration": "60 min",
+            "day": "Day 1"
+          },
+          {
+            "time": "9:00 AM",
+            "title": "Hands-on Workshop: MCP Apps",
+            "speaker": "Priya Anand",
+            "track": "Workshop Room A",
+            "duration": "120 min",
+            "day": "Day 2"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows events in chronological order",
+        "Displays time, title, speaker, and track",
+        "Visually distinguishes tracks"
+      ]
+    },
+    {
+      "id": 7,
+      "tier": "full",
+      "prompt": "Create a code review summary widget for a pull request.",
+      "data": {
+        "pull_request": "#1247",
+        "title": "Add webhook retry configuration",
+        "author": "John Doe",
+        "branch": "feature/webhook-retry",
+        "base": "main",
+        "status": "ready_for_review",
+        "files_changed": 8,
+        "additions": 342,
+        "deletions": 45,
+        "comments": 5,
+        "summary": "Adds configurable retry logic for webhook deliveries with exponential backoff, max retries, and dead letter queue support.",
+        "files": [
+          {
+            "path": "src/webhooks/retry.ts",
+            "additions": 145,
+            "deletions": 0,
+            "status": "added"
+          },
+          {
+            "path": "src/webhooks/delivery.ts",
+            "additions": 52,
+            "deletions": 18,
+            "status": "modified"
+          },
+          {
+            "path": "src/webhooks/types.ts",
+            "additions": 28,
+            "deletions": 3,
+            "status": "modified"
+          },
+          {
+            "path": "src/config/defaults.ts",
+            "additions": 8,
+            "deletions": 0,
+            "status": "modified"
+          },
+          {
+            "path": "tests/webhooks/retry.test.ts",
+            "additions": 89,
+            "deletions": 0,
+            "status": "added"
+          },
+          {
+            "path": "tests/webhooks/delivery.test.ts",
+            "additions": 12,
+            "deletions": 20,
+            "status": "modified"
+          },
+          {
+            "path": "docs/webhooks.md",
+            "additions": 6,
+            "deletions": 2,
+            "status": "modified"
+          },
+          {
+            "path": "migrations/003_dead_letter_queue.sql",
+            "additions": 2,
+            "deletions": 2,
+            "status": "modified"
+          }
+        ],
+        "checks": {
+          "build": "passed",
+          "tests": "passed",
+          "lint": "passed",
+          "coverage": "92%"
+        }
+      },
+      "assertions": [
+        "Shows PR title, author, and stats",
+        "Lists changed files with additions/deletions",
+        "Shows CI check statuses"
+      ]
+    },
+    {
+      "id": 8,
+      "tier": "full",
+      "prompt": "Create a restaurant menu widget with grouped categories and dietary badges.",
+      "data": {
+        "restaurant": "Sakura Japanese Kitchen",
+        "cuisine": "Japanese",
+        "categories": [
+          {
+            "name": "Appetizers",
+            "items": [
+              {
+                "name": "Edamame",
+                "price": 6.5,
+                "description": "Steamed soybeans with sea salt",
+                "dietary": [
+                  "vegan",
+                  "gluten-free"
+                ]
+              },
+              {
+                "name": "Gyoza",
+                "price": 9,
+                "description": "Pan-fried pork dumplings (6 pcs)",
+                "dietary": []
+              },
+              {
+                "name": "Miso Soup",
+                "price": 4.5,
+                "description": "Traditional soybean soup with tofu and seaweed",
+                "dietary": [
+                  "vegetarian"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Sushi Rolls",
+            "items": [
+              {
+                "name": "Spicy Tuna Roll",
+                "price": 14,
+                "description": "Tuna, spicy mayo, cucumber, sesame",
+                "dietary": [
+                  "contains-raw-fish"
+                ]
+              },
+              {
+                "name": "Dragon Roll",
+                "price": 16.5,
+                "description": "Shrimp tempura, avocado, eel sauce",
+                "dietary": []
+              },
+              {
+                "name": "Veggie Roll",
+                "price": 11,
+                "description": "Avocado, cucumber, carrot, asparagus",
+                "dietary": [
+                  "vegan"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Entrees",
+            "items": [
+              {
+                "name": "Chicken Teriyaki",
+                "price": 18,
+                "description": "Grilled chicken thigh with teriyaki glaze, rice, and vegetables",
+                "dietary": [
+                  "gluten-free"
+                ]
+              },
+              {
+                "name": "Tonkotsu Ramen",
+                "price": 16,
+                "description": "Rich pork bone broth, chashu, egg, noodles",
+                "dietary": []
+              },
+              {
+                "name": "Salmon Sashimi",
+                "price": 22,
+                "description": "Fresh Atlantic salmon, 12 pieces",
+                "dietary": [
+                  "contains-raw-fish",
+                  "gluten-free"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Groups items by category",
+        "Shows name, price, and description",
+        "Displays dietary badges (vegan, gluten-free, etc.)"
+      ]
+    },
+    {
+      "id": 9,
+      "tier": "full",
+      "prompt": "Create a translation widget showing source and target text with alternatives.",
+      "data": {
+        "source_language": "English",
+        "target_language": "Japanese",
+        "source_text": "The quick brown fox jumps over the lazy dog. This sentence contains every letter of the English alphabet.",
+        "translation": "素早い茶色の狐が怠惰な犬を飛び越える。この文は英語のアルファベットの全ての文字を含んでいます。",
+        "alternatives": [
+          {
+            "text": "速い茶色のキツネが怠け者の犬を飛び越える。",
+            "note": "More literal translation"
+          },
+          {
+            "text": "茶色い狐がすばしこく怠け犬を飛び越えた。",
+            "note": "More natural Japanese phrasing"
+          }
+        ],
+        "confidence": 0.94,
+        "word_count": {
+          "source": 18,
+          "target": 2
+        }
+      },
+      "assertions": [
+        "Shows source and target text",
+        "Displays language labels",
+        "Shows confidence indicator",
+        "Lists alternative translations"
+      ]
+    },
+    {
+      "id": 10,
+      "tier": "full",
+      "prompt": "Create a dashboard overview widget showing app health metrics and service status.",
+      "data": {
+        "app": "CloudSync Pro",
+        "period": "Today",
+        "active_users": 2847,
+        "active_users_change": 5.2,
+        "files_synced": 145230,
+        "storage_used_gb": 1247,
+        "storage_limit_gb": 2000,
+        "api_calls": 89400,
+        "error_rate": 0.3,
+        "uptime_pct": 99.97,
+        "response_time_ms": 42,
+        "top_actions": [
+          {
+            "action": "File Upload",
+            "count": 45200
+          },
+          {
+            "action": "File Download",
+            "count": 38100
+          },
+          {
+            "action": "Share Link Created",
+            "count": 12400
+          },
+          {
+            "action": "Folder Sync",
+            "count": 9800
+          }
+        ],
+        "status_indicators": [
+          {
+            "service": "Sync Engine",
+            "status": "healthy"
+          },
+          {
+            "service": "API Gateway",
+            "status": "healthy"
+          },
+          {
+            "service": "Search Index",
+            "status": "degraded"
+          },
+          {
+            "service": "Notification Service",
+            "status": "healthy"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows KPI cards for key metrics",
+        "Displays service status indicators",
+        "Shows top actions or activity"
+      ]
+    },
+    {
+      "id": 11,
+      "tier": "full",
+      "prompt": "Create a stock portfolio widget showing holdings with price and daily change.",
+      "data": {
+        "portfolio_name": "Tech Growth Portfolio",
+        "total_value": 125430.5,
+        "daily_change": 1.23,
+        "holdings": [
+          {
+            "ticker": "APEX",
+            "name": "Apex Technologies Inc.",
+            "shares": 50,
+            "price": 178.52,
+            "change_pct": 1.85,
+            "day_high": 179.1,
+            "day_low": 175.3
+          },
+          {
+            "ticker": "MRDN",
+            "name": "Meridian Software Corp.",
+            "shares": 30,
+            "price": 415.2,
+            "change_pct": 0.92,
+            "day_high": 417,
+            "day_low": 412.5
+          },
+          {
+            "ticker": "LMNR",
+            "name": "Luminar Search Inc.",
+            "shares": 20,
+            "price": 141.8,
+            "change_pct": -0.45,
+            "day_high": 143.2,
+            "day_low": 140.9
+          },
+          {
+            "ticker": "VTXG",
+            "name": "Vertex Graphics Corp.",
+            "shares": 15,
+            "price": 875.3,
+            "change_pct": 3.21,
+            "day_high": 880,
+            "day_low": 855.1
+          },
+          {
+            "ticker": "PNCL",
+            "name": "Pinnacle Commerce Inc.",
+            "shares": 25,
+            "price": 182.5,
+            "change_pct": 0.65,
+            "day_high": 183.8,
+            "day_low": 181.2
+          }
+        ]
+      },
+      "assertions": [
+        "Shows total portfolio value",
+        "Lists holdings with ticker, price, change %",
+        "Colors positive green and negative red using Fluent tokens"
+      ]
+    },
+    {
+      "id": 12,
+      "tier": "full",
+      "prompt": "Create a flight status widget showing departure and arrival info.",
+      "data": {
+        "flight_number": "PA 1547",
+        "airline": "Pacific Airways",
+        "status": "On Time",
+        "departure": {
+          "airport": "SFO",
+          "city": "San Francisco",
+          "terminal": "3",
+          "gate": "G92",
+          "scheduled": "2026-03-19T14:30:00",
+          "actual": "2026-03-19T14:30:00"
+        },
+        "arrival": {
+          "airport": "JFK",
+          "city": "New York",
+          "terminal": "7",
+          "gate": "B21",
+          "scheduled": "2026-03-19T23:05:00",
+          "estimated": "2026-03-19T22:50:00"
+        },
+        "aircraft": "Skyline S900",
+        "duration": "5h 35m",
+        "distance_miles": 2586
+      },
+      "assertions": [
+        "Shows flight number and airline",
+        "Displays departure and arrival side by side",
+        "Shows status badge"
+      ]
+    },
+    {
+      "id": 13,
+      "tier": "full",
+      "prompt": "Create a recipe card widget with ingredients, steps, and nutrition.",
+      "data": {
+        "name": "Classic Margherita Pizza",
+        "prep_time": "20 min",
+        "cook_time": "12 min",
+        "servings": 4,
+        "difficulty": "Easy",
+        "ingredients": [
+          {
+            "item": "Pizza dough",
+            "amount": "1 lb"
+          },
+          {
+            "item": "Crushed tomatoes",
+            "amount": "1 can (14 oz)"
+          },
+          {
+            "item": "Fresh mozzarella",
+            "amount": "8 oz"
+          },
+          {
+            "item": "Fresh basil leaves",
+            "amount": "10-12"
+          },
+          {
+            "item": "Extra virgin olive oil",
+            "amount": "2 tbsp"
+          },
+          {
+            "item": "Salt",
+            "amount": "to taste"
+          },
+          {
+            "item": "Garlic",
+            "amount": "2 cloves"
+          }
+        ],
+        "steps": [
+          "Preheat oven to 500°F with pizza stone inside for 30 minutes.",
+          "Crush tomatoes by hand, mix with minced garlic and salt.",
+          "Stretch dough into 12-inch round on floured surface.",
+          "Spread thin layer of tomato sauce, leaving 1-inch border.",
+          "Tear mozzarella into pieces and distribute evenly.",
+          "Bake on pizza stone for 10-12 minutes until crust is golden.",
+          "Top with fresh basil and drizzle with olive oil. Serve immediately."
+        ],
+        "nutrition": {
+          "calories": 285,
+          "protein": "12g",
+          "carbs": "36g",
+          "fat": "10g",
+          "fiber": "2g"
+        }
+      },
+      "assertions": [
+        "Shows recipe name and time badges",
+        "Lists ingredients",
+        "Shows numbered steps",
+        "Includes nutrition summary"
+      ]
+    },
+    {
+      "id": 14,
+      "tier": "full",
+      "prompt": "Create a fitness tracker widget showing steps, calories, heart rate, and weekly trend.",
+      "data": {
+        "date": "2026-03-19",
+        "steps": 8432,
+        "step_goal": 10000,
+        "calories_burned": 2150,
+        "calories_goal": 2500,
+        "active_minutes": 45,
+        "active_goal": 60,
+        "heart_rate": {
+          "current": 72,
+          "resting": 62,
+          "max_today": 145,
+          "zone_minutes": {
+            "fat_burn": 18,
+            "cardio": 22,
+            "peak": 5
+          }
+        },
+        "sleep_last_night": {
+          "hours": 7.2,
+          "quality": "Good",
+          "deep_pct": 22,
+          "rem_pct": 25
+        },
+        "weekly_trend": [
+          {
+            "day": "Mon",
+            "steps": 9200
+          },
+          {
+            "day": "Tue",
+            "steps": 7800
+          },
+          {
+            "day": "Wed",
+            "steps": 11200
+          },
+          {
+            "day": "Thu",
+            "steps": 6500
+          },
+          {
+            "day": "Fri",
+            "steps": 8432
+          }
+        ]
+      },
+      "assertions": [
+        "Shows progress toward goals",
+        "Displays heart rate info",
+        "Shows weekly trend visualization"
+      ]
+    },
+    {
+      "id": 15,
+      "tier": "full",
+      "prompt": "Create a meeting notes widget with attendees, decisions, and action items.",
+      "data": {
+        "title": "Q1 Planning Review",
+        "date": "2026-03-18",
+        "duration": "45 min",
+        "attendees": [
+          {
+            "name": "Sarah Chen",
+            "role": "Product Manager"
+          },
+          {
+            "name": "James Wilson",
+            "role": "Engineering Lead"
+          },
+          {
+            "name": "Maria Garcia",
+            "role": "Design Lead"
+          },
+          {
+            "name": "Alex Kim",
+            "role": "Data Analyst"
+          }
+        ],
+        "summary": "Reviewed Q1 progress and set priorities for remaining weeks. Agreed to prioritize mobile performance and defer the dashboard redesign.",
+        "decisions": [
+          {
+            "decision": "Prioritize mobile performance optimization over dashboard redesign",
+            "owner": "James Wilson"
+          },
+          {
+            "decision": "Increase user research budget by 15%",
+            "owner": "Sarah Chen"
+          },
+          {
+            "decision": "Ship dark mode by end of Q1",
+            "owner": "Maria Garcia"
+          }
+        ],
+        "action_items": [
+          {
+            "task": "Draft mobile performance RFC",
+            "assignee": "James Wilson",
+            "due": "2026-03-22"
+          },
+          {
+            "task": "Schedule user interviews for new onboarding flow",
+            "assignee": "Sarah Chen",
+            "due": "2026-03-25"
+          },
+          {
+            "task": "Finalize dark mode color tokens",
+            "assignee": "Maria Garcia",
+            "due": "2026-03-20"
+          },
+          {
+            "task": "Pull Q1 engagement metrics report",
+            "assignee": "Alex Kim",
+            "due": "2026-03-21"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows meeting title and date",
+        "Lists attendees",
+        "Shows decisions with owners",
+        "Shows action items with assignees and due dates"
+      ]
+    },
+    {
+      "id": 16,
+      "tier": "full",
+      "prompt": "Create a customer feedback widget showing ratings, sentiment, and top themes.",
+      "data": {
+        "product": "CloudSync Pro",
+        "period": "Last 30 days",
+        "total_reviews": 342,
+        "average_rating": 4.2,
+        "rating_distribution": {
+          "1": 19,
+          "2": 28,
+          "3": 52,
+          "4": 98,
+          "5": 145
+        },
+        "sentiment": {
+          "positive": 71,
+          "neutral": 16,
+          "negative": 13
+        },
+        "top_themes": [
+          {
+            "theme": "Easy to use",
+            "count": 89,
+            "sentiment": "positive"
+          },
+          {
+            "theme": "Fast sync speed",
+            "count": 67,
+            "sentiment": "positive"
+          },
+          {
+            "theme": "Pricing concerns",
+            "count": 45,
+            "sentiment": "negative"
+          },
+          {
+            "theme": "Great support team",
+            "count": 38,
+            "sentiment": "positive"
+          },
+          {
+            "theme": "Mobile app needs work",
+            "count": 31,
+            "sentiment": "negative"
+          }
+        ],
+        "recent_comments": [
+          {
+            "rating": 5,
+            "text": "Best sync tool I've ever used. Setup took 5 minutes.",
+            "date": "2026-03-18"
+          },
+          {
+            "rating": 2,
+            "text": "The mobile app crashes when syncing large files.",
+            "date": "2026-03-17"
+          },
+          {
+            "rating": 4,
+            "text": "Solid product overall, wish the pricing was more transparent.",
+            "date": "2026-03-16"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows average rating",
+        "Displays rating distribution",
+        "Shows sentiment breakdown",
+        "Lists top themes"
+      ]
+    },
+    {
+      "id": 17,
+      "tier": "full",
+      "prompt": "Create an inventory status widget with stock levels and reorder alerts.",
+      "data": {
+        "warehouse": "Seattle Distribution Center",
+        "last_updated": "2026-03-19T10:30:00",
+        "total_skus": 1247,
+        "items": [
+          {
+            "sku": "WH-1001",
+            "name": "Wireless Headphones",
+            "category": "Electronics",
+            "stock": 245,
+            "min_stock": 50,
+            "status": "In Stock",
+            "location": "A-12"
+          },
+          {
+            "sku": "KB-2034",
+            "name": "Mechanical Keyboard",
+            "category": "Electronics",
+            "stock": 18,
+            "min_stock": 25,
+            "status": "Low Stock",
+            "location": "A-15"
+          },
+          {
+            "sku": "MT-3022",
+            "name": "Yoga Mat",
+            "category": "Fitness",
+            "stock": 0,
+            "min_stock": 30,
+            "status": "Out of Stock",
+            "location": "B-04"
+          },
+          {
+            "sku": "BP-4011",
+            "name": "Laptop Backpack",
+            "category": "Accessories",
+            "stock": 89,
+            "min_stock": 20,
+            "status": "In Stock",
+            "location": "C-08"
+          },
+          {
+            "sku": "CM-5009",
+            "name": "Coffee Mug Set",
+            "category": "Kitchen",
+            "stock": 12,
+            "min_stock": 15,
+            "status": "Low Stock",
+            "location": "D-02"
+          },
+          {
+            "sku": "SC-6015",
+            "name": "USB-C Cable 6ft",
+            "category": "Electronics",
+            "stock": 520,
+            "min_stock": 100,
+            "status": "In Stock",
+            "location": "A-03"
+          }
+        ],
+        "alerts": [
+          {
+            "type": "reorder",
+            "sku": "KB-2034",
+            "message": "Below minimum stock level"
+          },
+          {
+            "type": "out_of_stock",
+            "sku": "MT-3022",
+            "message": "Reorder placed 2026-03-18"
+          },
+          {
+            "type": "reorder",
+            "sku": "CM-5009",
+            "message": "Below minimum stock level"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows items with stock levels",
+        "Color-codes by status (in stock, low, out of stock)",
+        "Displays alerts for items needing reorder"
+      ]
+    },
+    {
+      "id": 18,
+      "tier": "full",
+      "prompt": "Create an email campaign stats widget showing key metrics and top links.",
+      "data": {
+        "campaign_name": "Spring Product Launch",
+        "sent_date": "2026-03-15",
+        "total_sent": 15420,
+        "delivered": 15102,
+        "opened": 6845,
+        "clicked": 2310,
+        "bounced": 318,
+        "unsubscribed": 42,
+        "open_rate": 45.3,
+        "click_rate": 15.3,
+        "bounce_rate": 2.1,
+        "top_links": [
+          {
+            "url": "Product page",
+            "clicks": 1245
+          },
+          {
+            "url": "Pricing",
+            "clicks": 632
+          },
+          {
+            "url": "Demo video",
+            "clicks": 433
+          }
+        ],
+        "by_device": {
+          "desktop": 52,
+          "mobile": 41,
+          "tablet": 7
+        },
+        "by_hour": [
+          {
+            "hour": "8am",
+            "opens": 820
+          },
+          {
+            "hour": "9am",
+            "opens": 1450
+          },
+          {
+            "hour": "10am",
+            "opens": 1120
+          },
+          {
+            "hour": "11am",
+            "opens": 890
+          },
+          {
+            "hour": "12pm",
+            "opens": 1030
+          },
+          {
+            "hour": "1pm",
+            "opens": 645
+          },
+          {
+            "hour": "2pm",
+            "opens": 510
+          },
+          {
+            "hour": "3pm",
+            "opens": 380
+          }
+        ]
+      },
+      "assertions": [
+        "Shows sent, opened, clicked, bounced metrics",
+        "Displays percentages",
+        "Lists top links"
+      ]
+    },
+    {
+      "id": 19,
+      "tier": "full",
+      "prompt": "Create a project timeline widget showing milestones and completion status.",
+      "data": {
+        "project": "Website Redesign",
+        "start_date": "2026-01-15",
+        "target_date": "2026-04-30",
+        "overall_completion": 62,
+        "milestones": [
+          {
+            "name": "Discovery & Research",
+            "start": "2026-01-15",
+            "end": "2026-02-01",
+            "status": "completed",
+            "completion": 100
+          },
+          {
+            "name": "Wireframes & Design",
+            "start": "2026-02-03",
+            "end": "2026-02-28",
+            "status": "completed",
+            "completion": 100
+          },
+          {
+            "name": "Frontend Development",
+            "start": "2026-03-01",
+            "end": "2026-03-31",
+            "status": "in_progress",
+            "completion": 55
+          },
+          {
+            "name": "Backend Integration",
+            "start": "2026-03-15",
+            "end": "2026-04-15",
+            "status": "in_progress",
+            "completion": 20
+          },
+          {
+            "name": "QA & Testing",
+            "start": "2026-04-10",
+            "end": "2026-04-25",
+            "status": "not_started",
+            "completion": 0
+          },
+          {
+            "name": "Launch",
+            "start": "2026-04-28",
+            "end": "2026-04-30",
+            "status": "not_started",
+            "completion": 0
+          }
+        ]
+      },
+      "assertions": [
+        "Shows overall progress",
+        "Displays milestones with status indicators",
+        "Shows completion percentages"
+      ]
+    },
+    {
+      "id": 20,
+      "tier": "full",
+      "prompt": "Create a music playlist widget showing tracks with artist, duration, and BPM.",
+      "data": {
+        "playlist_name": "Morning Focus",
+        "track_count": 8,
+        "total_duration": "32 min",
+        "tracks": [
+          {
+            "title": "Slow Drift",
+            "artist": "Lux Meridian",
+            "album": "Tidal Memory",
+            "duration": "5:02",
+            "bpm": 60
+          },
+          {
+            "title": "Glass Morning",
+            "artist": "Henri Fontaine",
+            "album": "Nocturnes en Gris",
+            "duration": "4:48",
+            "bpm": 72
+          },
+          {
+            "title": "Still Water",
+            "artist": "Marcel Duval",
+            "album": "Six Pastorales",
+            "duration": "3:25",
+            "bpm": 66
+          },
+          {
+            "title": "Above the Fog",
+            "artist": "David Lark",
+            "album": "Horizons",
+            "duration": "4:18",
+            "bpm": 58
+          },
+          {
+            "title": "White Clouds",
+            "artist": "Alessandro Moretto",
+            "album": "La Sera Calma",
+            "duration": "5:57",
+            "bpm": 70
+          },
+          {
+            "title": "Holding Light",
+            "artist": "Alessandro Moretto",
+            "album": "Between the Hours",
+            "duration": "5:15",
+            "bpm": 68
+          },
+          {
+            "title": "Fourteen Steps",
+            "artist": "Signal Ghost",
+            "album": "Glitchwork",
+            "duration": "2:05",
+            "bpm": 84
+          },
+          {
+            "title": "Mirror on Mirror",
+            "artist": "Jonas Rein",
+            "album": "Solace",
+            "duration": "3:42",
+            "bpm": 56
+          }
+        ]
+      },
+      "assertions": [
+        "Shows playlist name and total duration",
+        "Lists tracks with title, artist, duration",
+        "Displays track numbers"
+      ]
+    },
+    {
+      "id": 21,
+      "tier": "full",
+      "prompt": "Create a survey results widget showing question responses and NPS.",
+      "data": {
+        "survey_name": "Employee Satisfaction Q1 2026",
+        "responses": 248,
+        "completion_rate": 82,
+        "questions": [
+          {
+            "question": "How satisfied are you with your role?",
+            "type": "rating",
+            "average": 4.1,
+            "distribution": {
+              "1": 11,
+              "2": 22,
+              "3": 42,
+              "4": 78,
+              "5": 95
+            }
+          },
+          {
+            "question": "How would you rate work-life balance?",
+            "type": "rating",
+            "average": 3.7,
+            "distribution": {
+              "1": 16,
+              "2": 35,
+              "3": 55,
+              "4": 80,
+              "5": 62
+            }
+          },
+          {
+            "question": "Would you recommend this company to a friend?",
+            "type": "nps",
+            "promoters": 58,
+            "passives": 27,
+            "detractors": 15,
+            "nps_score": 43
+          },
+          {
+            "question": "What area needs the most improvement?",
+            "type": "multiple_choice",
+            "options": [
+              {
+                "label": "Communication",
+                "count": 72
+              },
+              {
+                "label": "Career growth",
+                "count": 65
+              },
+              {
+                "label": "Compensation",
+                "count": 58
+              },
+              {
+                "label": "Tools & equipment",
+                "count": 33
+              },
+              {
+                "label": "Office environment",
+                "count": 20
+              }
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows response count and completion rate",
+        "Visualizes rating distributions",
+        "Displays NPS score"
+      ]
+    },
+    {
+      "id": 22,
+      "tier": "full",
+      "prompt": "Create a server health monitoring widget showing CPU, memory, disk for each server.",
+      "data": {
+        "cluster": "us-west-prod",
+        "timestamp": "2026-03-19T10:45:00Z",
+        "servers": [
+          {
+            "hostname": "web-01",
+            "status": "healthy",
+            "cpu_pct": 34,
+            "memory_pct": 62,
+            "disk_pct": 45,
+            "uptime_days": 42,
+            "requests_per_sec": 1250
+          },
+          {
+            "hostname": "web-02",
+            "status": "healthy",
+            "cpu_pct": 28,
+            "memory_pct": 55,
+            "disk_pct": 43,
+            "uptime_days": 42,
+            "requests_per_sec": 1180
+          },
+          {
+            "hostname": "api-01",
+            "status": "warning",
+            "cpu_pct": 78,
+            "memory_pct": 85,
+            "disk_pct": 67,
+            "uptime_days": 15,
+            "requests_per_sec": 890
+          },
+          {
+            "hostname": "api-02",
+            "status": "healthy",
+            "cpu_pct": 45,
+            "memory_pct": 71,
+            "disk_pct": 65,
+            "uptime_days": 15,
+            "requests_per_sec": 920
+          },
+          {
+            "hostname": "db-01",
+            "status": "healthy",
+            "cpu_pct": 22,
+            "memory_pct": 48,
+            "disk_pct": 72,
+            "uptime_days": 90,
+            "requests_per_sec": 450
+          },
+          {
+            "hostname": "cache-01",
+            "status": "critical",
+            "cpu_pct": 95,
+            "memory_pct": 92,
+            "disk_pct": 38,
+            "uptime_days": 7,
+            "requests_per_sec": 3200
+          }
+        ]
+      },
+      "assertions": [
+        "Shows server cards in a grid",
+        "Displays CPU/memory/disk as progress bars",
+        "Color-codes by status (healthy, warning, critical)"
+      ]
+    },
+    {
+      "id": 23,
+      "tier": "full",
+      "prompt": "Create a team roster widget showing members with roles and availability.",
+      "data": {
+        "team": "Platform Engineering",
+        "members": [
+          {
+            "name": "Sarah Chen",
+            "role": "Engineering Manager",
+            "availability": "available",
+            "timezone": "PST",
+            "email": "schen@example.com"
+          },
+          {
+            "name": "James Wilson",
+            "role": "Senior Engineer",
+            "availability": "in_meeting",
+            "timezone": "PST",
+            "email": "jwilson@example.com"
+          },
+          {
+            "name": "Priya Patel",
+            "role": "Senior Engineer",
+            "availability": "available",
+            "timezone": "IST",
+            "email": "ppatel@example.com"
+          },
+          {
+            "name": "Marcus Johnson",
+            "role": "Engineer",
+            "availability": "focus_time",
+            "timezone": "EST",
+            "email": "mjohnson@example.com"
+          },
+          {
+            "name": "Yuki Tanaka",
+            "role": "Engineer",
+            "availability": "offline",
+            "timezone": "JST",
+            "email": "ytanaka@example.com"
+          },
+          {
+            "name": "Ana Costa",
+            "role": "Junior Engineer",
+            "availability": "available",
+            "timezone": "BRT",
+            "email": "acosta@example.com"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows team members as cards",
+        "Displays availability status with color indicators",
+        "Shows timezone and contact info"
+      ]
+    },
+    {
+      "id": 24,
+      "tier": "full",
+      "prompt": "Create an invoice summary widget with line items and totals.",
+      "data": {
+        "invoice_number": "INV-2026-0342",
+        "date": "2026-03-19",
+        "due_date": "2026-04-18",
+        "status": "pending",
+        "from": {
+          "company": "Acme Solutions",
+          "address": "123 Tech Blvd, San Francisco, CA"
+        },
+        "to": {
+          "company": "GlobalCorp Inc.",
+          "address": "89 Granite Ave, New York, NY",
+          "contact": "Jane Smith"
+        },
+        "line_items": [
+          {
+            "description": "Cloud Infrastructure Setup",
+            "quantity": 1,
+            "unit_price": 5000,
+            "total": 5000
+          },
+          {
+            "description": "API Integration (hours)",
+            "quantity": 40,
+            "unit_price": 150,
+            "total": 6000
+          },
+          {
+            "description": "Monthly Hosting (Pro Plan)",
+            "quantity": 3,
+            "unit_price": 299,
+            "total": 897
+          },
+          {
+            "description": "SSL Certificate (Annual)",
+            "quantity": 2,
+            "unit_price": 49.99,
+            "total": 99.98
+          }
+        ],
+        "subtotal": 11996.98,
+        "tax_rate": 8.75,
+        "tax": 1049.74,
+        "total": 13046.72,
+        "notes": "Payment due within 30 days. Late payments subject to 1.5% monthly interest."
+      },
+      "assertions": [
+        "Shows invoice number and dates",
+        "Displays from/to addresses",
+        "Lists line items in a table",
+        "Shows subtotal, tax, and total"
+      ]
+    },
+    {
+      "id": 25,
+      "tier": "full",
+      "prompt": "Create a social media analytics widget showing followers, engagement, and top posts.",
+      "data": {
+        "account": "@techbrand",
+        "period": "Last 7 days",
+        "followers": 24830,
+        "follower_change": 312,
+        "engagement_rate": 4.7,
+        "impressions": 89400,
+        "platforms": {
+          "chirp": {
+            "followers": 12500,
+            "engagement": 3.8,
+            "posts": 14
+          },
+          "snapshot": {
+            "followers": 8200,
+            "engagement": 6.2,
+            "posts": 7
+          },
+          "worknet": {
+            "followers": 4130,
+            "engagement": 4.1,
+            "posts": 5
+          }
+        },
+        "top_posts": [
+          {
+            "platform": "snapshot",
+            "content": "Product launch teaser video",
+            "likes": 892,
+            "comments": 67,
+            "shares": 134,
+            "date": "2026-03-17"
+          },
+          {
+            "platform": "chirp",
+            "content": "Behind the scenes at our hackathon",
+            "likes": 445,
+            "comments": 32,
+            "shares": 89,
+            "date": "2026-03-16"
+          },
+          {
+            "platform": "worknet",
+            "content": "We're hiring! 5 new engineering roles",
+            "likes": 312,
+            "comments": 45,
+            "shares": 78,
+            "date": "2026-03-15"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows overall metrics",
+        "Displays platform breakdown",
+        "Lists top posts with engagement"
+      ]
+    },
+    {
+      "id": 26,
+      "tier": "full",
+      "prompt": "Create a delivery tracking widget with step tracker and ETA.",
+      "data": {
+        "tracking_number": "PKG-98234-XL",
+        "carrier": "FastShip Express",
+        "status": "In Transit",
+        "estimated_delivery": "2026-03-20",
+        "origin": {
+          "city": "Los Angeles, CA",
+          "date": "2026-03-17"
+        },
+        "destination": {
+          "city": "Seattle, WA",
+          "address": "72 Ferndale Rd"
+        },
+        "current_location": "Portland, OR",
+        "steps": [
+          {
+            "status": "Order Placed",
+            "location": "Los Angeles, CA",
+            "timestamp": "2026-03-17T09:00:00",
+            "completed": true
+          },
+          {
+            "status": "Picked Up",
+            "location": "Los Angeles, CA",
+            "timestamp": "2026-03-17T14:30:00",
+            "completed": true
+          },
+          {
+            "status": "In Transit",
+            "location": "Sacramento, CA",
+            "timestamp": "2026-03-18T06:15:00",
+            "completed": true
+          },
+          {
+            "status": "In Transit",
+            "location": "Portland, OR",
+            "timestamp": "2026-03-19T02:45:00",
+            "completed": true
+          },
+          {
+            "status": "Out for Delivery",
+            "location": "Seattle, WA",
+            "timestamp": null,
+            "completed": false
+          },
+          {
+            "status": "Delivered",
+            "location": "Seattle, WA",
+            "timestamp": null,
+            "completed": false
+          }
+        ],
+        "weight": "4.2 lbs",
+        "dimensions": "12x8x6 in"
+      },
+      "assertions": [
+        "Shows tracking number and carrier",
+        "Displays vertical step tracker",
+        "Distinguishes completed vs pending steps",
+        "Shows current location"
+      ]
+    },
+    {
+      "id": 27,
+      "tier": "full",
+      "prompt": "Create a course curriculum widget showing modules with completion progress.",
+      "data": {
+        "course": "Full Stack Web Development",
+        "instructor": "Dr. Emily Park",
+        "total_hours": 48,
+        "overall_completion": 38,
+        "modules": [
+          {
+            "title": "HTML & CSS Fundamentals",
+            "lessons": 8,
+            "duration": "6h",
+            "completion": 100,
+            "status": "completed"
+          },
+          {
+            "title": "JavaScript Essentials",
+            "lessons": 12,
+            "duration": "10h",
+            "completion": 100,
+            "status": "completed"
+          },
+          {
+            "title": "Frontend & State Management",
+            "lessons": 10,
+            "duration": "8h",
+            "completion": 60,
+            "status": "in_progress"
+          },
+          {
+            "title": "Server-Side Development",
+            "lessons": 8,
+            "duration": "8h",
+            "completion": 0,
+            "status": "locked"
+          },
+          {
+            "title": "Database Design",
+            "lessons": 6,
+            "duration": "6h",
+            "completion": 0,
+            "status": "locked"
+          },
+          {
+            "title": "Deployment & DevOps",
+            "lessons": 5,
+            "duration": "4h",
+            "completion": 0,
+            "status": "locked"
+          },
+          {
+            "title": "Capstone Project",
+            "lessons": 3,
+            "duration": "6h",
+            "completion": 0,
+            "status": "locked"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows course title and overall progress",
+        "Lists modules with completion bars",
+        "Shows status badges (completed, in progress, locked)"
+      ]
+    },
+    {
+      "id": 28,
+      "tier": "full",
+      "prompt": "Create a bug report dashboard showing severity counts, components, and trends.",
+      "data": {
+        "project": "CloudSync",
+        "period": "Last 30 days",
+        "total_bugs": 87,
+        "open": 34,
+        "in_progress": 18,
+        "resolved": 35,
+        "by_severity": {
+          "critical": 3,
+          "high": 12,
+          "medium": 28,
+          "low": 44
+        },
+        "by_component": [
+          {
+            "component": "Sync Engine",
+            "count": 24
+          },
+          {
+            "component": "Mobile App",
+            "count": 19
+          },
+          {
+            "component": "Web UI",
+            "count": 16
+          },
+          {
+            "component": "API",
+            "count": 15
+          },
+          {
+            "component": "Auth",
+            "count": 8
+          },
+          {
+            "component": "Notifications",
+            "count": 5
+          }
+        ],
+        "trending": [
+          {
+            "week": "W10",
+            "opened": 18,
+            "closed": 22
+          },
+          {
+            "week": "W11",
+            "opened": 25,
+            "closed": 19
+          },
+          {
+            "week": "W12",
+            "opened": 22,
+            "closed": 24
+          },
+          {
+            "week": "W13",
+            "opened": 22,
+            "closed": 20
+          }
+        ],
+        "oldest_open": {
+          "id": "BUG-1847",
+          "title": "File conflicts not resolved on mobile",
+          "severity": "high",
+          "days_open": 28,
+          "assignee": "Priya Patel"
+        }
+      },
+      "assertions": [
+        "Shows summary counts (open, in progress, resolved)",
+        "Displays severity breakdown",
+        "Shows component breakdown",
+        "Includes trending visualization"
+      ]
+    },
+    {
+      "id": 29,
+      "tier": "full",
+      "prompt": "Create a real estate listings widget showing properties with price and details.",
+      "data": {
+        "search_area": "Maplewood Heights",
+        "listings": [
+          {
+            "address": "42 Birchwood Ln",
+            "price": 625000,
+            "beds": 2,
+            "baths": 1,
+            "sqft": 1050,
+            "year_built": 1925,
+            "type": "Condo",
+            "status": "Active",
+            "days_on_market": 5
+          },
+          {
+            "address": "118 Sycamore Dr",
+            "price": 875000,
+            "beds": 3,
+            "baths": 2,
+            "sqft": 1680,
+            "year_built": 1940,
+            "type": "Townhouse",
+            "status": "Active",
+            "days_on_market": 12
+          },
+          {
+            "address": "305 Cedar Ridge Rd",
+            "price": 1250000,
+            "beds": 4,
+            "baths": 2.5,
+            "sqft": 2400,
+            "year_built": 2018,
+            "type": "Single Family",
+            "status": "Active",
+            "days_on_market": 3
+          },
+          {
+            "address": "77 Hemlock Ct",
+            "price": 549000,
+            "beds": 1,
+            "baths": 1,
+            "sqft": 720,
+            "year_built": 2010,
+            "type": "Condo",
+            "status": "Pending",
+            "days_on_market": 8
+          },
+          {
+            "address": "210 Alder Way",
+            "price": 975000,
+            "beds": 3,
+            "baths": 2,
+            "sqft": 1920,
+            "year_built": 1952,
+            "type": "Single Family",
+            "status": "Active",
+            "days_on_market": 21
+          }
+        ]
+      },
+      "assertions": [
+        "Shows listing cards with address and price",
+        "Displays beds/baths/sqft",
+        "Shows status badges (Active, Pending)"
+      ]
+    },
+    {
+      "id": 30,
+      "tier": "full",
+      "prompt": "Create a workout plan widget showing exercises with sets, reps, and muscle groups.",
+      "data": {
+        "plan_name": "Upper Body Strength",
+        "duration": "45 min",
+        "difficulty": "Intermediate",
+        "muscle_groups": [
+          "Chest",
+          "Back",
+          "Shoulders",
+          "Arms"
+        ],
+        "exercises": [
+          {
+            "name": "Bench Press",
+            "sets": 4,
+            "reps": "8-10",
+            "rest": "90s",
+            "muscle": "Chest",
+            "weight": "135 lbs"
+          },
+          {
+            "name": "Bent-Over Rows",
+            "sets": 4,
+            "reps": "8-10",
+            "rest": "90s",
+            "muscle": "Back",
+            "weight": "115 lbs"
+          },
+          {
+            "name": "Overhead Press",
+            "sets": 3,
+            "reps": "10-12",
+            "rest": "60s",
+            "muscle": "Shoulders",
+            "weight": "85 lbs"
+          },
+          {
+            "name": "Pull-Ups",
+            "sets": 3,
+            "reps": "8-10",
+            "rest": "90s",
+            "muscle": "Back",
+            "weight": "Bodyweight"
+          },
+          {
+            "name": "Dumbbell Curls",
+            "sets": 3,
+            "reps": "12",
+            "rest": "45s",
+            "muscle": "Biceps",
+            "weight": "30 lbs"
+          },
+          {
+            "name": "Tricep Dips",
+            "sets": 3,
+            "reps": "12",
+            "rest": "45s",
+            "muscle": "Triceps",
+            "weight": "Bodyweight"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows plan name and duration",
+        "Lists exercises with sets x reps",
+        "Shows target muscle groups"
+      ]
+    },
+    {
+      "id": 31,
+      "tier": "smoke",
+      "prompt": "Create an airline seat map widget showing available and taken seats.",
+      "data": {
+        "flight": "PA 1547",
+        "aircraft": "Skyline S900",
+        "classes": [
+          {
+            "name": "First Class",
+            "rows": [
+              {
+                "row": 1,
+                "seats": [
+                  {
+                    "seat": "1A",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "1B",
+                    "status": "available",
+                    "price": 450
+                  },
+                  {
+                    "seat": "1C",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "1D",
+                    "status": "available",
+                    "price": 450
+                  }
+                ]
+              },
+              {
+                "row": 2,
+                "seats": [
+                  {
+                    "seat": "2A",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "2B",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "2C",
+                    "status": "available",
+                    "price": 420
+                  },
+                  {
+                    "seat": "2D",
+                    "status": "taken"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Economy",
+            "rows": [
+              {
+                "row": 10,
+                "seats": [
+                  {
+                    "seat": "10A",
+                    "status": "available",
+                    "price": 35
+                  },
+                  {
+                    "seat": "10B",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "10C",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "10D",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "10E",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "10F",
+                    "status": "available",
+                    "price": 35
+                  }
+                ]
+              },
+              {
+                "row": 11,
+                "seats": [
+                  {
+                    "seat": "11A",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "11B",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "11C",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "11D",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "11E",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "11F",
+                    "status": "taken"
+                  }
+                ]
+              },
+              {
+                "row": 12,
+                "seats": [
+                  {
+                    "seat": "12A",
+                    "status": "available",
+                    "price": 35
+                  },
+                  {
+                    "seat": "12B",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "12C",
+                    "status": "taken"
+                  },
+                  {
+                    "seat": "12D",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "12E",
+                    "status": "available",
+                    "price": 25
+                  },
+                  {
+                    "seat": "12F",
+                    "status": "available",
+                    "price": 35
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows visual seat grid",
+        "Color-codes available vs taken seats",
+        "Labels class sections"
+      ]
+    },
+    {
+      "id": 32,
+      "tier": "full",
+      "prompt": "Create a book recommendations widget with ratings, genres, and descriptions.",
+      "data": {
+        "query": "science fiction books",
+        "recommendations": [
+          {
+            "title": "The Obsidian Meridian",
+            "author": "Lena Voss",
+            "rating": 4.7,
+            "genre": "Sci-Fi",
+            "year": 2019,
+            "description": "A cartographer on a tidally locked planet discovers that the permanent twilight zone is shifting, threatening the only habitable strip of land.",
+            "pages": 382
+          },
+          {
+            "title": "Hollow Crescents",
+            "author": "Tariq Nassar",
+            "rating": 4.5,
+            "genre": "Fantasy",
+            "year": 2014,
+            "description": "Twin siblings inherit opposing halves of a dying god's power and must cooperate before the last temple collapses.",
+            "pages": 441
+          },
+          {
+            "title": "Voidloom",
+            "author": "Ingrid Solheim",
+            "rating": 4.6,
+            "genre": "Sci-Fi",
+            "year": 2022,
+            "description": "A textile engineer aboard a generation ship realizes the fabric of the hull is alive and slowly rewriting the crew's memories.",
+            "pages": 298
+          },
+          {
+            "title": "Ashfall Covenant",
+            "author": "Davi Rocha",
+            "rating": 4.4,
+            "genre": "Fantasy",
+            "year": 2017,
+            "description": "After a volcanic winter blankets the realm, rival guilds of fire-shapers compete to reignite the sun forge before famine takes hold.",
+            "pages": 510
+          },
+          {
+            "title": "The Copper Parallax",
+            "author": "Suki Arden",
+            "rating": 4.3,
+            "genre": "Space Opera",
+            "year": 2020,
+            "description": "A retired smuggler is pulled back into service when a rogue satellite network starts broadcasting coordinates to a place that shouldn't exist.",
+            "pages": 365
+          }
+        ]
+      },
+      "assertions": [
+        "Shows book cards with title and author",
+        "Displays star ratings visually",
+        "Shows genre badges"
+      ]
+    },
+    {
+      "id": 33,
+      "tier": "full",
+      "prompt": "Create an API response time dashboard showing endpoint latencies.",
+      "data": {
+        "service": "Commerce API",
+        "period": "Last 24 hours",
+        "overall_p50": 42,
+        "overall_p95": 185,
+        "overall_p99": 420,
+        "endpoints": [
+          {
+            "path": "POST /api/transactions",
+            "avg_ms": 55,
+            "p50_ms": 48,
+            "p95_ms": 210,
+            "p99_ms": 450,
+            "requests": 12400,
+            "error_rate": 0.3
+          },
+          {
+            "path": "GET /api/accounts",
+            "avg_ms": 28,
+            "p50_ms": 22,
+            "p95_ms": 85,
+            "p99_ms": 190,
+            "requests": 8900,
+            "error_rate": 0.1
+          },
+          {
+            "path": "POST /api/reports",
+            "avg_ms": 72,
+            "p50_ms": 65,
+            "p95_ms": 280,
+            "p99_ms": 520,
+            "requests": 1200,
+            "error_rate": 0.8
+          },
+          {
+            "path": "GET /api/sessions",
+            "avg_ms": 15,
+            "p50_ms": 12,
+            "p95_ms": 45,
+            "p99_ms": 110,
+            "requests": 25000,
+            "error_rate": 0
+          },
+          {
+            "path": "POST /api/notifications",
+            "avg_ms": 38,
+            "p50_ms": 32,
+            "p95_ms": 120,
+            "p99_ms": 310,
+            "requests": 6700,
+            "error_rate": 0.2
+          }
+        ]
+      },
+      "assertions": [
+        "Shows overall P50/P95/P99 metrics",
+        "Lists endpoints with latency data",
+        "Color-codes high latencies"
+      ]
+    },
+    {
+      "id": 34,
+      "tier": "full",
+      "prompt": "Create an employee directory widget with name, title, office, and contact.",
+      "data": {
+        "department": "Engineering",
+        "employee_count": 12,
+        "members": [
+          {
+            "name": "Sarah Chen",
+            "title": "VP of Engineering",
+            "office": "Seattle HQ",
+            "floor": 12,
+            "phone": "x4501",
+            "email": "schen@example.com",
+            "reports": 4
+          },
+          {
+            "name": "James Wilson",
+            "title": "Senior Staff Engineer",
+            "office": "Seattle HQ",
+            "floor": 12,
+            "phone": "x4502",
+            "email": "jwilson@example.com",
+            "reports": 0
+          },
+          {
+            "name": "Priya Patel",
+            "title": "Staff Engineer",
+            "office": "Bangalore",
+            "floor": 5,
+            "phone": "x8201",
+            "email": "ppatel@example.com",
+            "reports": 0
+          },
+          {
+            "name": "Marcus Johnson",
+            "title": "Engineering Manager",
+            "office": "Austin",
+            "floor": 3,
+            "phone": "x6101",
+            "email": "mjohnson@example.com",
+            "reports": 3
+          },
+          {
+            "name": "Yuki Tanaka",
+            "title": "Senior Engineer",
+            "office": "Tokyo",
+            "floor": 8,
+            "phone": "x9301",
+            "email": "ytanaka@example.com",
+            "reports": 0
+          },
+          {
+            "name": "Ana Costa",
+            "title": "Engineer",
+            "office": "Seattle HQ",
+            "floor": 11,
+            "phone": "x4510",
+            "email": "acosta@example.com",
+            "reports": 0
+          }
+        ]
+      },
+      "assertions": [
+        "Shows employee cards",
+        "Displays name, title, office",
+        "Shows contact info"
+      ]
+    },
+    {
+      "id": 35,
+      "tier": "full",
+      "prompt": "Create a sprint burndown chart showing actual vs ideal burndown.",
+      "data": {
+        "sprint": "Sprint 14",
+        "start_date": "2026-03-09",
+        "end_date": "2026-03-20",
+        "total_points": 42,
+        "days": [
+          {
+            "day": "Mon 3/9",
+            "remaining": 42,
+            "ideal": 42
+          },
+          {
+            "day": "Tue 3/10",
+            "remaining": 38,
+            "ideal": 37.8
+          },
+          {
+            "day": "Wed 3/11",
+            "remaining": 35,
+            "ideal": 33.6
+          },
+          {
+            "day": "Thu 3/12",
+            "remaining": 33,
+            "ideal": 29.4
+          },
+          {
+            "day": "Fri 3/13",
+            "remaining": 28,
+            "ideal": 25.2
+          },
+          {
+            "day": "Mon 3/16",
+            "remaining": 25,
+            "ideal": 21
+          },
+          {
+            "day": "Tue 3/17",
+            "remaining": 20,
+            "ideal": 16.8
+          },
+          {
+            "day": "Wed 3/18",
+            "remaining": 18,
+            "ideal": 12.6
+          },
+          {
+            "day": "Thu 3/19",
+            "remaining": 12,
+            "ideal": 8.4
+          },
+          {
+            "day": "Fri 3/20",
+            "remaining": null,
+            "ideal": 0
+          }
+        ],
+        "velocity_avg": 38,
+        "stories_completed": 8,
+        "stories_remaining": 4
+      },
+      "assertions": [
+        "Uses a charting library for the chart",
+        "Shows actual burndown line",
+        "Shows ideal burndown line",
+        "Displays sprint dates"
+      ]
+    },
+    {
+      "id": 36,
+      "tier": "smoke",
+      "prompt": "Create a nutrition label widget mimicking FDA format.",
+      "data": {
+        "product": "Organic Granola Bar",
+        "serving_size": "1 bar (40g)",
+        "servings_per_container": 6,
+        "calories": 180,
+        "nutrients": [
+          {
+            "name": "Total Fat",
+            "amount": "7g",
+            "daily_value": 9,
+            "children": [
+              {
+                "name": "Saturated Fat",
+                "amount": "1.5g",
+                "daily_value": 8
+              },
+              {
+                "name": "Trans Fat",
+                "amount": "0g",
+                "daily_value": null
+              }
+            ]
+          },
+          {
+            "name": "Cholesterol",
+            "amount": "0mg",
+            "daily_value": 0
+          },
+          {
+            "name": "Sodium",
+            "amount": "95mg",
+            "daily_value": 4
+          },
+          {
+            "name": "Total Carbohydrate",
+            "amount": "27g",
+            "daily_value": 10,
+            "children": [
+              {
+                "name": "Dietary Fiber",
+                "amount": "3g",
+                "daily_value": 11
+              },
+              {
+                "name": "Total Sugars",
+                "amount": "10g",
+                "daily_value": null,
+                "includes_added": "6g added sugars"
+              }
+            ]
+          },
+          {
+            "name": "Protein",
+            "amount": "4g",
+            "daily_value": 8
+          },
+          {
+            "name": "Vitamin D",
+            "amount": "0mcg",
+            "daily_value": 0
+          },
+          {
+            "name": "Calcium",
+            "amount": "20mg",
+            "daily_value": 2
+          },
+          {
+            "name": "Iron",
+            "amount": "1.2mg",
+            "daily_value": 6
+          },
+          {
+            "name": "Potassium",
+            "amount": "110mg",
+            "daily_value": 2
+          }
+        ]
+      },
+      "assertions": [
+        "Shows product name and serving size",
+        "Displays calories prominently",
+        "Lists nutrients with daily values",
+        "Shows nested sub-nutrients indented"
+      ]
+    },
+    {
+      "id": 37,
+      "tier": "full",
+      "prompt": "Create a movie showtimes widget showing theaters and movies with times.",
+      "data": {
+        "date": "2026-03-19",
+        "location": "Downtown Seattle",
+        "theaters": [
+          {
+            "name": "Starview Cinema Downtown",
+            "movies": [
+              {
+                "title": "The Last Frontier",
+                "rating": "PG-13",
+                "runtime": "2h 15m",
+                "genre": "Sci-Fi",
+                "showtimes": [
+                  "1:30 PM",
+                  "4:45 PM",
+                  "7:30 PM",
+                  "10:15 PM"
+                ]
+              },
+              {
+                "title": "Garden of Dreams",
+                "rating": "PG",
+                "runtime": "1h 52m",
+                "genre": "Animation",
+                "showtimes": [
+                  "12:00 PM",
+                  "2:30 PM",
+                  "5:00 PM"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Crescent Cinemas",
+            "movies": [
+              {
+                "title": "The Last Frontier",
+                "rating": "PG-13",
+                "runtime": "2h 15m",
+                "genre": "Sci-Fi",
+                "showtimes": [
+                  "2:00 PM",
+                  "5:30 PM",
+                  "8:45 PM"
+                ]
+              },
+              {
+                "title": "Midnight Echo",
+                "rating": "R",
+                "runtime": "2h 05m",
+                "genre": "Thriller",
+                "showtimes": [
+                  "3:15 PM",
+                  "6:30 PM",
+                  "9:45 PM"
+                ]
+              },
+              {
+                "title": "Laugh Track",
+                "rating": "PG-13",
+                "runtime": "1h 45m",
+                "genre": "Comedy",
+                "showtimes": [
+                  "1:00 PM",
+                  "3:30 PM",
+                  "6:00 PM",
+                  "8:30 PM"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Groups by theater",
+        "Shows movie title, rating, runtime",
+        "Displays showtime buttons/badges"
+      ]
+    },
+    {
+      "id": 38,
+      "tier": "full",
+      "prompt": "Create a parking lot availability widget showing zones and capacity.",
+      "data": {
+        "facility": "Downtown Parking Garage",
+        "last_updated": "2026-03-19T10:30:00",
+        "total_capacity": 450,
+        "total_available": 127,
+        "zones": [
+          {
+            "name": "Level 1 - Accessible",
+            "total": 20,
+            "available": 5,
+            "rate": "$5/hr"
+          },
+          {
+            "name": "Level 2 - Compact",
+            "total": 80,
+            "available": 22,
+            "rate": "$3/hr"
+          },
+          {
+            "name": "Level 3 - Standard",
+            "total": 120,
+            "available": 45,
+            "rate": "$3/hr"
+          },
+          {
+            "name": "Level 4 - Standard",
+            "total": 120,
+            "available": 38,
+            "rate": "$2.50/hr"
+          },
+          {
+            "name": "Level 5 - Rooftop",
+            "total": 110,
+            "available": 17,
+            "rate": "$2/hr"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows total available count",
+        "Displays zones with capacity bars",
+        "Shows rates"
+      ]
+    },
+    {
+      "id": 39,
+      "tier": "full",
+      "prompt": "Create a weather alerts widget with severity-colored cards.",
+      "data": {
+        "location": "King County, WA",
+        "alerts": [
+          {
+            "severity": "warning",
+            "type": "Winter Storm Warning",
+            "headline": "Heavy snow expected above 2000ft",
+            "description": "A strong Pacific front will bring 8-14 inches of snow to elevations above 2000ft. Travel over mountain passes will be hazardous.",
+            "area": "Cascade Mountains",
+            "issued": "2026-03-19T06:00:00",
+            "expires": "2026-03-20T18:00:00"
+          },
+          {
+            "severity": "watch",
+            "type": "Flood Watch",
+            "headline": "Rising rivers may cause minor flooding",
+            "description": "Rain combined with snowmelt may cause rivers to rise above flood stage. Low-lying areas near rivers should monitor conditions.",
+            "area": "Snoqualmie Valley",
+            "issued": "2026-03-19T08:00:00",
+            "expires": "2026-03-21T06:00:00"
+          },
+          {
+            "severity": "advisory",
+            "type": "Wind Advisory",
+            "headline": "Gusty winds expected this afternoon",
+            "description": "South winds 25-35 mph with gusts to 50 mph expected. Secure loose outdoor objects. Power outages possible.",
+            "area": "Greater Seattle Area",
+            "issued": "2026-03-19T10:00:00",
+            "expires": "2026-03-19T22:00:00"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows alert cards with severity styling",
+        "Displays type, headline, description",
+        "Shows area and time range"
+      ]
+    },
+    {
+      "id": 40,
+      "tier": "full",
+      "prompt": "Create a changelog/release notes widget showing versions with features and fixes.",
+      "data": {
+        "product": "CloudSync",
+        "releases": [
+          {
+            "version": "3.2.0",
+            "date": "2026-03-18",
+            "type": "minor",
+            "features": [
+              "Dark mode support for web dashboard",
+              "Bulk file operations (move, copy, delete)",
+              "Webhook retry configuration"
+            ],
+            "fixes": [
+              "Fixed sync conflict resolution on mobile",
+              "Resolved memory leak in background sync service",
+              "Fixed timezone display in activity log"
+            ]
+          },
+          {
+            "version": "3.1.2",
+            "date": "2026-03-05",
+            "type": "patch",
+            "features": [],
+            "fixes": [
+              "Fixed crash when syncing files >2GB",
+              "Corrected file count in sync summary notification"
+            ]
+          },
+          {
+            "version": "3.1.0",
+            "date": "2026-02-20",
+            "type": "minor",
+            "features": [
+              "Real-time collaboration indicators",
+              "Shared folder permissions management",
+              "Export sync history as CSV"
+            ],
+            "fixes": [
+              "Fixed duplicate notifications on mobile",
+              "Resolved slow search on large repositories"
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows version headers with dates",
+        "Displays type badges (minor, patch)",
+        "Lists features and fixes separately"
+      ]
+    },
+    {
+      "id": 41,
+      "tier": "full",
+      "prompt": "Create a quiz results widget showing score, questions, and correct/incorrect answers.",
+      "data": {
+        "quiz_name": "JavaScript Fundamentals",
+        "student": "Alex Kim",
+        "score": 7,
+        "total": 10,
+        "percentage": 70,
+        "pass_threshold": 60,
+        "passed": true,
+        "questions": [
+          {
+            "question": "What is the output of typeof null?",
+            "user_answer": "object",
+            "correct_answer": "object",
+            "correct": true
+          },
+          {
+            "question": "Which method removes the last element from an array?",
+            "user_answer": "pop()",
+            "correct_answer": "pop()",
+            "correct": true
+          },
+          {
+            "question": "What does === check?",
+            "user_answer": "Value and type equality",
+            "correct_answer": "Value and type equality",
+            "correct": true
+          },
+          {
+            "question": "What is a closure?",
+            "user_answer": "A function with access to its outer scope",
+            "correct_answer": "A function that retains access to its lexical scope",
+            "correct": true
+          },
+          {
+            "question": "What is the default value of an uninitialized variable?",
+            "user_answer": "null",
+            "correct_answer": "undefined",
+            "correct": false
+          },
+          {
+            "question": "Which is NOT a primitive type?",
+            "user_answer": "Array",
+            "correct_answer": "Array",
+            "correct": true
+          },
+          {
+            "question": "What does Promise.all() return if one promise rejects?",
+            "user_answer": "An array of results",
+            "correct_answer": "A rejected promise",
+            "correct": false
+          },
+          {
+            "question": "What is event delegation?",
+            "user_answer": "Assigning events to parent elements",
+            "correct_answer": "Handling events at a parent level using event bubbling",
+            "correct": true
+          },
+          {
+            "question": "What is the temporal dead zone?",
+            "user_answer": "When var is hoisted",
+            "correct_answer": "Period between entering scope and let/const declaration",
+            "correct": false
+          },
+          {
+            "question": "What does Array.from() do?",
+            "user_answer": "Creates an array from an iterable",
+            "correct_answer": "Creates a new Array from an array-like or iterable object",
+            "correct": true
+          }
+        ]
+      },
+      "assertions": [
+        "Shows score and pass/fail",
+        "Lists questions with correct/incorrect indicators",
+        "Shows user answer vs correct answer for wrong ones"
+      ]
+    },
+    {
+      "id": 42,
+      "tier": "full",
+      "prompt": "Create a device status widget showing battery levels and connectivity.",
+      "data": {
+        "account": "Home Network",
+        "devices": [
+          {
+            "name": "Prism X15 Pro",
+            "type": "phone",
+            "battery_pct": 72,
+            "charging": false,
+            "last_seen": "2026-03-19T10:42:00",
+            "status": "online",
+            "os": "PrismOS 19.3"
+          },
+          {
+            "name": "Apex Notebook Pro 16\"",
+            "type": "laptop",
+            "battery_pct": 45,
+            "charging": true,
+            "last_seen": "2026-03-19T10:45:00",
+            "status": "online",
+            "os": "ApexOS 16.2"
+          },
+          {
+            "name": "Prism Tablet Air",
+            "type": "tablet",
+            "battery_pct": 15,
+            "charging": false,
+            "last_seen": "2026-03-19T08:30:00",
+            "status": "idle",
+            "os": "PrismOS Tablet 19.3"
+          },
+          {
+            "name": "Prism Buds Pro",
+            "type": "earbuds",
+            "battery_pct": 88,
+            "charging": false,
+            "last_seen": "2026-03-19T09:15:00",
+            "status": "connected",
+            "os": null
+          },
+          {
+            "name": "Prism Watch Ultra",
+            "type": "watch",
+            "battery_pct": 53,
+            "charging": false,
+            "last_seen": "2026-03-19T10:44:00",
+            "status": "online",
+            "os": "PrismOS Watch 12.1"
+          },
+          {
+            "name": "Prism Speaker Mini",
+            "type": "speaker",
+            "battery_pct": null,
+            "charging": null,
+            "last_seen": "2026-03-19T10:45:00",
+            "status": "online",
+            "os": "PrismOS Audio 19.3"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows device cards with battery bars",
+        "Color-codes low battery",
+        "Shows online/offline status"
+      ]
+    },
+    {
+      "id": 43,
+      "tier": "full",
+      "prompt": "Create a price comparison widget showing stores and highlighting best deal.",
+      "data": {
+        "product": "Aura QuietMax 5 Headphones",
+        "category": "Electronics",
+        "stores": [
+          {
+            "store": "MegaMart",
+            "price": 328,
+            "in_stock": true,
+            "shipping": "Free 2-day",
+            "rating": 4.7,
+            "url": "megamart.example.com"
+          },
+          {
+            "store": "TechDepot",
+            "price": 349.99,
+            "in_stock": true,
+            "shipping": "Free pickup",
+            "rating": 4.6,
+            "url": "techdepot.example.com"
+          },
+          {
+            "store": "ValueMart",
+            "price": 329,
+            "in_stock": true,
+            "shipping": "Free 3-day",
+            "rating": 4.5,
+            "url": "valuemart.example.com"
+          },
+          {
+            "store": "BullsEye",
+            "price": 349.99,
+            "in_stock": false,
+            "shipping": "N/A",
+            "rating": 4.6,
+            "url": "bullseye.example.com"
+          },
+          {
+            "store": "ShutterBox",
+            "price": 319.99,
+            "in_stock": true,
+            "shipping": "Free expedited",
+            "rating": 4.8,
+            "url": "shutterbox.example.com"
+          }
+        ],
+        "best_deal": {
+          "store": "ShutterBox",
+          "price": 319.99,
+          "savings": 30
+        }
+      },
+      "assertions": [
+        "Shows product name",
+        "Lists stores with prices",
+        "Highlights the best deal",
+        "Shows stock and shipping info"
+      ]
+    },
+    {
+      "id": 44,
+      "tier": "full",
+      "prompt": "Create a train schedule widget showing departures with platform and status.",
+      "data": {
+        "station": "Central Station, Bayport",
+        "direction": "Southbound",
+        "departures": [
+          {
+            "train": "Westcoast 507",
+            "destination": "Harborview",
+            "departure": "11:45 AM",
+            "arrival": "3:30 PM",
+            "platform": 3,
+            "status": "On Time",
+            "stops": [
+              "Millbrook",
+              "Lakewood",
+              "Ferndale",
+              "Clearwater",
+              "Ashton",
+              "Bridgeport",
+              "Harborview"
+            ]
+          },
+          {
+            "train": "Pacific Daylight 11",
+            "destination": "Sun Valley",
+            "departure": "12:15 PM",
+            "arrival": "9:30 AM +1",
+            "platform": 1,
+            "status": "Delayed 25 min",
+            "stops": [
+              "Lakewood",
+              "Ferndale",
+              "Harborview",
+              "Mapleton",
+              "Ridgewood",
+              "Cedar Falls",
+              "Gold Creek",
+              "Bayside",
+              "Seaview",
+              "Sun Valley"
+            ]
+          },
+          {
+            "train": "Westcoast 509",
+            "destination": "Harborview",
+            "departure": "3:45 PM",
+            "arrival": "7:25 PM",
+            "platform": 2,
+            "status": "On Time",
+            "stops": [
+              "Millbrook",
+              "Lakewood",
+              "Ferndale",
+              "Clearwater",
+              "Harborview"
+            ]
+          },
+          {
+            "train": "Continental Express 8",
+            "destination": "Grandview",
+            "departure": "4:40 PM",
+            "arrival": "3:55 PM +2",
+            "platform": 1,
+            "status": "On Time",
+            "stops": [
+              "Northfield",
+              "Summit Pass",
+              "Pine Bluff",
+              "Eagle Rock",
+              "Prairieton",
+              "Lakeshore",
+              "Riverside",
+              "Grandview"
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows station name",
+        "Lists departures with times",
+        "Shows platform numbers",
+        "Color-codes on-time vs delayed"
+      ]
+    },
+    {
+      "id": 45,
+      "tier": "full",
+      "prompt": "Create a donation tracker widget with progress bar, milestones, and recent donations.",
+      "data": {
+        "campaign": "Community Library Renovation",
+        "goal": 50000,
+        "raised": 34250,
+        "donor_count": 187,
+        "days_remaining": 22,
+        "recent_donations": [
+          {
+            "name": "Anonymous",
+            "amount": 500,
+            "date": "2026-03-19",
+            "message": "For the children's reading room!"
+          },
+          {
+            "name": "Sarah M.",
+            "amount": 100,
+            "date": "2026-03-18",
+            "message": null
+          },
+          {
+            "name": "Tech Corp",
+            "amount": 5000,
+            "date": "2026-03-17",
+            "message": "Happy to support local literacy"
+          },
+          {
+            "name": "James R.",
+            "amount": 250,
+            "date": "2026-03-16",
+            "message": "In memory of Mrs. Patterson"
+          },
+          {
+            "name": "Anonymous",
+            "amount": 50,
+            "date": "2026-03-16",
+            "message": null
+          }
+        ],
+        "milestones": [
+          {
+            "amount": 10000,
+            "label": "Foundation Repairs",
+            "reached": true
+          },
+          {
+            "amount": 25000,
+            "label": "New Shelving & Furniture",
+            "reached": true
+          },
+          {
+            "amount": 35000,
+            "label": "Technology Upgrades",
+            "reached": false
+          },
+          {
+            "amount": 50000,
+            "label": "Full Renovation",
+            "reached": false
+          }
+        ]
+      },
+      "assertions": [
+        "Shows progress bar (raised vs goal)",
+        "Displays milestone indicators",
+        "Lists recent donations"
+      ]
+    },
+    {
+      "id": 46,
+      "tier": "full",
+      "prompt": "Create a language learning progress widget showing skills, streak, and weekly XP.",
+      "data": {
+        "user": "Alex",
+        "language": "Spanish",
+        "level": "Intermediate",
+        "streak_days": 42,
+        "total_xp": 12450,
+        "skills": [
+          {
+            "name": "Vocabulary",
+            "level": 3,
+            "progress": 72,
+            "max_level": 5
+          },
+          {
+            "name": "Grammar",
+            "level": 2,
+            "progress": 85,
+            "max_level": 5
+          },
+          {
+            "name": "Listening",
+            "level": 2,
+            "progress": 45,
+            "max_level": 5
+          },
+          {
+            "name": "Speaking",
+            "level": 1,
+            "progress": 90,
+            "max_level": 5
+          },
+          {
+            "name": "Reading",
+            "level": 3,
+            "progress": 30,
+            "max_level": 5
+          },
+          {
+            "name": "Writing",
+            "level": 2,
+            "progress": 60,
+            "max_level": 5
+          }
+        ],
+        "weekly_xp": [
+          {
+            "day": "Mon",
+            "xp": 280
+          },
+          {
+            "day": "Tue",
+            "xp": 150
+          },
+          {
+            "day": "Wed",
+            "xp": 320
+          },
+          {
+            "day": "Thu",
+            "xp": 200
+          },
+          {
+            "day": "Fri",
+            "xp": 180
+          }
+        ],
+        "next_lesson": "Subjunctive Mood"
+      },
+      "assertions": [
+        "Shows language and level",
+        "Displays streak",
+        "Shows skill progress bars",
+        "Includes weekly XP visualization"
+      ]
+    },
+    {
+      "id": 47,
+      "tier": "full",
+      "prompt": "Create a warehouse layout widget showing zones with capacity and status.",
+      "data": {
+        "warehouse": "Distribution Center West",
+        "zones": [
+          {
+            "name": "Zone A - Receiving",
+            "item_count": 1240,
+            "capacity_pct": 62,
+            "temperature": "Ambient",
+            "status": "normal"
+          },
+          {
+            "name": "Zone B - Electronics",
+            "item_count": 3450,
+            "capacity_pct": 87,
+            "temperature": "Climate Controlled",
+            "status": "near_capacity"
+          },
+          {
+            "name": "Zone C - Bulk Storage",
+            "item_count": 890,
+            "capacity_pct": 34,
+            "temperature": "Ambient",
+            "status": "normal"
+          },
+          {
+            "name": "Zone D - Cold Storage",
+            "item_count": 560,
+            "capacity_pct": 78,
+            "temperature": "35°F",
+            "status": "normal"
+          },
+          {
+            "name": "Zone E - Hazmat",
+            "item_count": 120,
+            "capacity_pct": 24,
+            "temperature": "Climate Controlled",
+            "status": "normal"
+          },
+          {
+            "name": "Zone F - Shipping",
+            "item_count": 2100,
+            "capacity_pct": 92,
+            "temperature": "Ambient",
+            "status": "critical"
+          }
+        ],
+        "total_items": 8360,
+        "total_capacity_pct": 63,
+        "workers_on_shift": 24
+      },
+      "assertions": [
+        "Shows zone cards",
+        "Displays capacity bars color-coded by status",
+        "Shows temperature info"
+      ]
+    },
+    {
+      "id": 48,
+      "tier": "full",
+      "prompt": "Create a conference room availability widget showing time slots per room.",
+      "data": {
+        "building": "Building 40",
+        "floor": 3,
+        "rooms": [
+          {
+            "name": "Cascade",
+            "capacity": 12,
+            "equipment": [
+              "Projector",
+              "Whiteboard",
+              "Video conferencing"
+            ],
+            "slots": [
+              {
+                "time": "9:00 AM",
+                "status": "booked",
+                "meeting": "Sprint Planning"
+              },
+              {
+                "time": "10:00 AM",
+                "status": "booked",
+                "meeting": "Design Review"
+              },
+              {
+                "time": "11:00 AM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "1:00 PM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "2:00 PM",
+                "status": "booked",
+                "meeting": "All Hands"
+              },
+              {
+                "time": "3:00 PM",
+                "status": "free",
+                "meeting": null
+              }
+            ]
+          },
+          {
+            "name": "Rainier",
+            "capacity": 6,
+            "equipment": [
+              "Display",
+              "Whiteboard"
+            ],
+            "slots": [
+              {
+                "time": "9:00 AM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "10:00 AM",
+                "status": "booked",
+                "meeting": "1:1 with Sarah"
+              },
+              {
+                "time": "11:00 AM",
+                "status": "booked",
+                "meeting": "Incident Review"
+              },
+              {
+                "time": "1:00 PM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "2:00 PM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "3:00 PM",
+                "status": "booked",
+                "meeting": "Interview"
+              }
+            ]
+          },
+          {
+            "name": "Olympic",
+            "capacity": 20,
+            "equipment": [
+              "Projector",
+              "Video conferencing",
+              "Recording"
+            ],
+            "slots": [
+              {
+                "time": "9:00 AM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "10:00 AM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "11:00 AM",
+                "status": "free",
+                "meeting": null
+              },
+              {
+                "time": "1:00 PM",
+                "status": "booked",
+                "meeting": "Quarterly Review"
+              },
+              {
+                "time": "2:00 PM",
+                "status": "booked",
+                "meeting": "Quarterly Review"
+              },
+              {
+                "time": "3:00 PM",
+                "status": "free",
+                "meeting": null
+              }
+            ]
+          }
+        ]
+      },
+      "assertions": [
+        "Shows rooms with time slots",
+        "Distinguishes booked vs free slots",
+        "Displays room capacity and equipment"
+      ]
+    },
+    {
+      "id": 49,
+      "tier": "full",
+      "prompt": "Create a podcast episode list widget showing episodes with guests and duration.",
+      "data": {
+        "podcast": "The Tech Stack",
+        "host": "Jordan Rivera",
+        "total_episodes": 142,
+        "episodes": [
+          {
+            "number": 142,
+            "title": "The Future of WebAssembly",
+            "guest": "Maya Chen",
+            "duration": "48 min",
+            "date": "2026-03-17",
+            "description": "Maya Chen discusses how WebAssembly is reshaping server-side computing and what WASI means for the future.",
+            "listens": 4520
+          },
+          {
+            "number": 141,
+            "title": "Building Accessible-First Design Systems",
+            "guest": "Devon Stafford",
+            "duration": "52 min",
+            "date": "2026-03-10",
+            "description": "Practical patterns for making design systems accessible by default rather than as an afterthought.",
+            "listens": 3890
+          },
+          {
+            "number": 140,
+            "title": "Edge Computing in Practice",
+            "guest": "Rohan Desai",
+            "duration": "41 min",
+            "date": "2026-03-03",
+            "description": "When edge computing makes sense, when it doesn't, and lessons from running code at the edge in production.",
+            "listens": 3650
+          },
+          {
+            "number": 139,
+            "title": "Static Typing Deep Dive",
+            "guest": "Nathan Greenfield",
+            "duration": "55 min",
+            "date": "2026-02-24",
+            "description": "A language tooling lead walks through the biggest changes in modern static type systems and the roadmap ahead.",
+            "listens": 5210
+          },
+          {
+            "number": 138,
+            "title": "Rethinking State Management",
+            "guest": "Jake Thornton",
+            "duration": "45 min",
+            "date": "2026-02-17",
+            "description": "Open-source maintainer Jake Thornton on the evolution of state management and where signals fit in.",
+            "listens": 4100
+          }
+        ]
+      },
+      "assertions": [
+        "Shows podcast name and host",
+        "Lists episodes with title, guest, duration",
+        "Shows listen counts"
+      ]
+    },
+    {
+      "id": 50,
+      "tier": "full",
+      "prompt": "Create a carbon footprint summary widget showing categories and reduction tips.",
+      "data": {
+        "period": "March 2026",
+        "total_emissions_kg": 842,
+        "previous_month_kg": 910,
+        "change_pct": -7.5,
+        "categories": [
+          {
+            "name": "Transportation",
+            "emissions_kg": 320,
+            "pct": 38,
+            "breakdown": [
+              {
+                "item": "Car commute",
+                "kg": 180
+              },
+              {
+                "item": "Flights",
+                "kg": 120
+              },
+              {
+                "item": "Public transit",
+                "kg": 20
+              }
+            ]
+          },
+          {
+            "name": "Home Energy",
+            "emissions_kg": 245,
+            "pct": 29,
+            "breakdown": [
+              {
+                "item": "Electricity",
+                "kg": 145
+              },
+              {
+                "item": "Natural gas",
+                "kg": 100
+              }
+            ]
+          },
+          {
+            "name": "Food",
+            "emissions_kg": 165,
+            "pct": 20,
+            "breakdown": [
+              {
+                "item": "Meat & dairy",
+                "kg": 95
+              },
+              {
+                "item": "Produce",
+                "kg": 40
+              },
+              {
+                "item": "Packaged foods",
+                "kg": 30
+              }
+            ]
+          },
+          {
+            "name": "Shopping",
+            "emissions_kg": 72,
+            "pct": 9,
+            "breakdown": [
+              {
+                "item": "Clothing",
+                "kg": 35
+              },
+              {
+                "item": "Electronics",
+                "kg": 25
+              },
+              {
+                "item": "Other",
+                "kg": 12
+              }
+            ]
+          },
+          {
+            "name": "Waste",
+            "emissions_kg": 40,
+            "pct": 4,
+            "breakdown": [
+              {
+                "item": "Landfill",
+                "kg": 28
+              },
+              {
+                "item": "Recycling",
+                "kg": 12
+              }
+            ]
+          }
+        ],
+        "tips": [
+          "Consider carpooling 2 days/week to reduce transportation by 15%",
+          "Switch to LED bulbs to save 40kg CO2/year",
+          "Try one meatless day per week to reduce food emissions by 10%"
+        ]
+      },
+      "assertions": [
+        "Shows total emissions with trend",
+        "Displays category breakdown visually",
+        "Lists reduction tips"
+      ]
+    },
+    {
+      "id": 51,
+      "tier": "smoke",
+      "prompt": "Create a bar chart showing sales rep performance. Revenue and quota are the key metrics.",
+      "data": {
+        "department": "Sales",
+        "quarter": "Q1 2026",
+        "reps": [
+          {
+            "name": "Jordan Lee",
+            "revenue": "285000",
+            "deals": "12",
+            "quota": "250000"
+          },
+          {
+            "name": "Sam Torres",
+            "revenue": "215000",
+            "deals": "9",
+            "quota": "220000"
+          },
+          {
+            "name": "Casey Morgan",
+            "revenue": "198000",
+            "deals": "11",
+            "quota": "200000"
+          },
+          {
+            "name": "Riley Park",
+            "revenue": "",
+            "deals": "7",
+            "quota": "180000"
+          },
+          {
+            "name": "Alex Chen",
+            "revenue": "0",
+            "deals": "3",
+            "quota": "200000"
+          }
+        ]
+      },
+      "assertions": [
+        "Uses a charting library or CSS bars for visualization",
+        "Handles revenue values that are strings (e.g. '285000') by parsing to numbers",
+        "Does not display NaN or undefined for missing revenue",
+        "Uses parseFloat or equivalent for numeric conversion, not Number()",
+        "Rep with empty string revenue is handled gracefully (omitted or shown as no data)",
+        "Rep with '0' revenue is shown as zero, not omitted"
+      ]
+    },
+    {
+      "id": 52,
+      "tier": "stress",
+      "prompt": "Create a team member card grid showing who is active and who is remote.",
+      "data": {
+        "team": "Platform Engineering",
+        "members": [
+          {
+            "name": "Sarah Chen",
+            "role": "Engineering Manager",
+            "isActive": "true",
+            "isRemote": "false",
+            "startDate": "2022-03-15"
+          },
+          {
+            "name": "James Wilson",
+            "role": "Senior Engineer",
+            "isActive": "true",
+            "isRemote": "true",
+            "startDate": "2021-08-01"
+          },
+          {
+            "name": "Priya Patel",
+            "role": "Staff Engineer",
+            "isActive": "false",
+            "isRemote": "true",
+            "startDate": "2020-11-10"
+          },
+          {
+            "name": "Marcus Johnson",
+            "role": "Engineer",
+            "isActive": "true",
+            "isRemote": "false",
+            "startDate": "2023-06-20"
+          },
+          {
+            "name": "Yuki Tanaka",
+            "role": "Senior Engineer",
+            "isActive": "",
+            "isRemote": "",
+            "startDate": "2019-04-01"
+          }
+        ]
+      },
+      "assertions": [
+        "Shows member cards with name and role",
+        "Correctly interprets string 'true'/'false' for isActive and isRemote",
+        "Does not treat string 'false' as truthy (inactive members must look visually distinct)",
+        "Member with empty string isActive is handled gracefully (treated as inactive/unknown)",
+        "Uses explicit boolean comparison (=== true or === 'true'), not bare truthiness"
+      ]
+    },
+    {
+      "id": 53,
+      "tier": "stress",
+      "prompt": "Create a map showing CRM leads. Leads with valid coordinates should show at their location. Leads without coordinates should fall back to city/state.",
+      "data": {
+        "leads": [
+          {
+            "leadName": "Yvonne McKay",
+            "companyName": "New store opened",
+            "latitude": "",
+            "longitude": "",
+            "city": "La Vergne",
+            "stateProvince": "TN"
+          },
+          {
+            "leadName": "Sarah Mitchell",
+            "companyName": "Mailed interest card",
+            "latitude": "",
+            "longitude": "",
+            "city": "Saint Louis",
+            "stateProvince": "MO"
+          },
+          {
+            "leadName": "Nancy Anderson",
+            "companyName": "Follow up needed",
+            "latitude": "36.1627",
+            "longitude": "-86.7816",
+            "city": "Nashville",
+            "stateProvince": "TN"
+          },
+          {
+            "leadName": "Maria Campbell",
+            "companyName": "Online store interest",
+            "latitude": "",
+            "longitude": "",
+            "city": "Cerritos",
+            "stateProvince": "CA"
+          },
+          {
+            "leadName": "Peter Houston",
+            "companyName": "Good prospect",
+            "latitude": "25.7617",
+            "longitude": "-80.1918",
+            "city": "Miami",
+            "stateProvince": "FL"
+          }
+        ]
+      },
+      "assertions": [
+        "Uses a mapping library for the map",
+        "Does not place markers at [0,0] for leads with empty string coordinates",
+        "Leads with empty string lat/lng use city/state fallback or are omitted",
+        "Leads with valid string coordinates (e.g. '36.1627') are parsed and placed correctly",
+        "Uses parseFloat or equivalent for coordinate parsing, not Number()",
+        "Does not use != null as the sole guard for coordinate presence"
+      ]
+    }
+  ]
+}

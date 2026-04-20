@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __SITE_NAME__</title>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020; --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.layout{display:flex;min-height:calc(100vh - 65px);}
+.sidebar{width:200px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;padding:32px 40px 72px;max-width:960px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--pass);}
+.stat-card:nth-child(3)::after{background:var(--purple);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+.principle{display:flex;gap:16px;padding:16px 0;border-bottom:1px solid var(--border);}
+.principle:last-child{border-bottom:none;}
+.principle-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.principle-title{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:3px;}
+.principle-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+.role-chip,.logic-chip,.fn-chip{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-block;}
+.role-chip{border:1px solid var(--border);}
+.logic-chip{background:var(--surface2);border:1px solid var(--border);color:var(--text);}
+.fn-chip{background:var(--accent-bg);border:1px solid var(--accent-border);color:var(--accent);}
+.new-badge,.existing-badge,.builtin-badge,.reused-badge,.updated-badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
+.new-badge{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+.existing-badge{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.builtin-badge{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
+.reused-badge{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.updated-badge{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
+.mono{font-family:var(--mono);}
+.reason-box{font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;}
+.reasoning-list{margin:0;padding-left:18px;list-style:disc;}
+.reasoning-list li{margin-bottom:2px;}
+.reasoning-list li strong{color:var(--text-bright);}
+.keyvault-banner{background:linear-gradient(135deg,#0078d408,#5c2d9108);border:1px solid #5c2d9130;border-radius:12px;padding:20px 22px;margin-bottom:22px;display:flex;gap:16px;align-items:flex-start;}
+.keyvault-banner .kv-icon{width:40px;height:40px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;color:#fff;}
+.keyvault-banner .kv-title{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;}
+.keyvault-banner .kv-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+.keyvault-banner .kv-benefits{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
+.keyvault-banner .kv-benefit{font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px;}
+.keyvault-banner .kv-benefit-icon{color:var(--pass);font-size:13px;flex-shrink:0;}
+.secrets-section{margin-top:12px;}
+.secret-chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:5px;background:#5c2d910a;border:1px solid #5c2d9120;color:#5c2d91;}
+.secret-chip .secret-icon{font-size:10px;}
+.kv-instructions{margin-top:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+.kv-instructions summary{font-size:13px;font-weight:700;color:var(--text-bright);cursor:pointer;user-select:none;}
+.kv-instructions summary:hover{color:var(--accent);}
+.kv-instructions-body{margin-top:14px;}
+.kv-method{margin-bottom:16px;}
+.kv-method:last-child{margin-bottom:0;}
+.kv-method-title{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+.kv-method-title .kv-method-icon{font-size:14px;}
+.kv-steps{font-size:12px;color:var(--text);line-height:1.8;padding-left:18px;}
+.kv-steps li{margin-bottom:4px;}
+.kv-steps code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px;}
+.kv-cmd-block{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;font-family:var(--mono);font-size:11px;line-height:1.7;white-space:pre-wrap;word-break:break-all;margin:8px 0;}
+.kv-secret-instructions{margin-top:8px;border-top:1px solid var(--border);padding-top:12px;}
+.custom-action-badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;background:#8764b80a;border:1px solid #8764b825;color:#8764b8;text-transform:uppercase;letter-spacing:0.3px;}
+.custom-action-detail{font-size:12px;color:var(--text);background:var(--purple-bg);border:1px solid var(--purple-border);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--purple);line-height:1.7;margin-top:8px;}
+.custom-action-detail code{font-family:var(--mono);font-size:11px;background:var(--surface2);padding:1px 5px;border-radius:3px;}
+.fn-list{display:grid;gap:10px;margin-top:12px;}
+.fn-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px 72px;}
+  .stats-grid,.meta-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PP</div>
+      <div>
+        <div class="topbar-title">__PLAN_TITLE__</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+    <div class="topbar-sub" id="topbarCount"></div>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="roles"><span class="nav-icon">&#9672;</span> Web Roles</button>
+      <button class="nav-btn" data-tab="serverlogic"><span class="nav-icon">&#9638;</span> Server Logic</button>
+    </div>
+
+    <div class="content">
+      <div class="section active" id="tab-overview">
+        <h2>Plan Overview</h2>
+        <p class="section-desc">Server logic implementation plan for <code>__SITE_NAME__</code></p>
+
+        <div class="summary-box" id="summaryBox">__SUMMARY__</div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--accent)" id="statTotal">0</div><div class="stat-label">Server Logic Items</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--pass)" id="statCreate">0</div><div class="stat-label">New / Create</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--purple)" id="statReuse">0</div><div class="stat-label">Reused</div></div>
+        </div>
+
+        <div id="keyvaultBanner"></div>
+
+        <div class="card">
+          <div class="field-label">Status Summary</div>
+          <div class="chip-row" id="statusSummary"></div>
+        </div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+      </div>
+
+      <div class="section" id="tab-roles">
+        <h2>Web Roles</h2>
+        <p class="section-desc" id="rolesDesc"></p>
+        <div id="rolesContainer"></div>
+      </div>
+
+      <div class="section" id="tab-serverlogic">
+        <h2>Server Logic</h2>
+        <p class="section-desc" id="serverLogicDesc"></p>
+        <div id="serverLogicContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const WEB_ROLES = __WEB_ROLES_DATA__;
+const SERVER_LOGICS = __SERVER_LOGICS_DATA__;
+const RATIONALE = __RATIONALE_DATA__;
+const SECRETS = __SECRETS_DATA__;
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+// Key Vault banner rendering
+const kvBanner = document.getElementById('keyvaultBanner');
+if (SECRETS && SECRETS.useKeyVault && SECRETS.secrets && SECRETS.secrets.length > 0) {
+  kvBanner.innerHTML = `
+    <div class="keyvault-banner">
+      <div class="kv-icon">&#128273;</div>
+      <div style="flex:1;">
+        <div class="kv-title">Azure Key Vault</div>
+        <div class="kv-desc">Secrets for this implementation will be stored in Azure Key Vault${SECRETS.vaultName ? ' (<span class="mono">' + esc(SECRETS.vaultName) + '</span>)' : ''}, keeping sensitive values out of source code and Dataverse environment variables.</div>
+        <div class="keyvault-banner kv-benefits" style="border:none;padding:0;margin-top:12px;background:none;">
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Secrets never stored in code or config files</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Centralized access control via Azure RBAC</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Automatic secret rotation support</div>
+          <div class="kv-benefit"><span class="kv-benefit-icon">&#10003;</span> Audit logging for all secret access</div>
+        </div>
+        <div style="margin-top:12px;">
+          <div class="field-label">Secrets (${SECRETS.secrets.length})</div>
+          <div class="chip-row" style="margin-top:4px;">
+            ${SECRETS.secrets.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + esc(s.name) + '</span>').join('')}
+          </div>
+        </div>
+      </div>
+    </div>` + renderKvInstructions();
+}
+
+function renderKvInstructions() {
+  const vaultName = SECRETS.vaultName ? esc(SECRETS.vaultName) : '&lt;your-vault-name&gt;';
+  const secretRows = SECRETS.secrets.map((s, i) => {
+    const sn = esc(s.name);
+    return `<li><strong>${sn}</strong>${s.purpose ? ' &mdash; ' + esc(s.purpose) : ''}` +
+      `<div class="kv-cmd-block">printf '%s' '&lt;YOUR_SECRET_VALUE&gt;' | az keyvault secret set \\
+  --vault-name "${vaultName}" \\
+  --name "${sn}" \\
+  --value @-</div></li>`;
+  }).join('');
+
+  return `
+    <details class="kv-instructions" open>
+      <summary>&#9881; How to Set Secrets in Azure Key Vault</summary>
+      <div class="kv-instructions-body">
+        <div class="kv-method">
+          <div class="kv-method-title"><span class="kv-method-icon">&#9002;</span> Option A &mdash; Azure CLI</div>
+          <ol class="kv-steps">
+            <li>Open a terminal and ensure you are logged in: <code>az login</code></li>
+            ${secretRows}
+          </ol>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">Each command prints a JSON object containing a <code>id</code> field &mdash; that is the Secret Identifier URI you will need.</div>
+        </div>
+        <div class="kv-method">
+          <div class="kv-method-title"><span class="kv-method-icon">&#9741;</span> Option B &mdash; Azure Portal</div>
+          <ol class="kv-steps">
+            <li>Go to <a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a></li>
+            <li>Search for <strong>Key vaults</strong> in the top search bar and select it</li>
+            <li>Select the Key Vault: <strong>${vaultName}</strong></li>
+            <li>In the left menu under <strong>Objects</strong>, click <strong>Secrets</strong></li>` +
+            SECRETS.secrets.map(s => {
+              const sn = esc(s.name);
+              return `
+            <li>Click <strong>+ Generate/Import</strong> and fill in:
+              <ul style="margin-top:4px;">
+                <li>Upload options: <strong>Manual</strong></li>
+                <li>Name: <code>${sn}</code></li>
+                <li>Secret value: paste your actual value</li>
+              </ul>
+              Then click <strong>Create</strong></li>`;
+            }).join('') + `
+            <li>After creating each secret, click its name &rarr; click the current version &rarr; copy the <strong>Secret Identifier</strong> URI</li>
+          </ol>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">The Secret Identifier looks like <code>https://${vaultName}.vault.azure.net/secrets/&lt;name&gt;/&lt;version&gt;</code></div>
+        </div>
+      </div>
+    </details>`;
+}
+
+function getCustomActionMarkup(item) {
+  if (!item.customAction) return '';
+  const ca = item.customAction;
+  const bindingLabel = ca.binding === 'entity' ? 'Bound to <code>' + esc(ca.boundEntity || '') + '</code>' :
+    ca.binding === 'entityCollection' ? 'Bound to <code>' + esc(ca.boundEntity || '') + '</code> collection' : 'Unbound';
+  const typeLabel = ca.type === 'function' ? 'Function (GET)' : 'Action (POST)';
+  return '<div style="margin-top:12px;"><div class="field-label">Wraps Dataverse Custom Action</div>' +
+    '<div class="custom-action-detail">' +
+    '<strong>' + esc(ca.displayName || ca.name) + '</strong>' +
+    ' &mdash; <code>' + esc(ca.name) + '</code>' +
+    '<br/>' + typeLabel + ' &bull; ' + bindingLabel +
+    '</div></div>';
+}
+
+function getCustomActionBadge(item) {
+  if (!item.customAction) return '';
+  return ' <span class="custom-action-badge">&#9881; Custom Action</span>';
+}
+
+function getSecretsMarkup(serverLogicId) {
+  if (!SECRETS || !SECRETS.useKeyVault || !SECRETS.secrets) return '';
+  const matched = SECRETS.secrets.filter(s => s.serverLogicId === serverLogicId);
+  if (matched.length === 0) return '';
+  return '<div class="secrets-section"><div class="field-label">Secrets (Azure Key Vault)</div><div class="chip-row" style="margin-top:4px;">' +
+    matched.map(s => '<span class="secret-chip"><span class="secret-icon">&#128274;</span> ' + esc(s.name) + ' &mdash; ' + esc(s.purpose || '') + '</span>').join('') +
+    '</div></div>';
+}
+
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+function getRole(id) {
+  return WEB_ROLES.find(role => role.id === id) || { id, name: id, desc: '', builtin: false, isNew: false, color: '#8890a4' };
+}
+
+function getAssignedRoleDetails(item) {
+  return (item.webRoles || []).map(entry => {
+    if (typeof entry === 'string') {
+      return { id: entry, reasoning: '' };
+    }
+    return { id: entry.id, reasoning: entry.reasoning || '' };
+  });
+}
+
+function getStatusBadge(status) {
+  if (status === 'create') return '<span class="new-badge">PROPOSED</span>';
+  if (status === 'reuse') return '<span class="reused-badge">REUSED</span>';
+  if (status === 'update') return '<span class="updated-badge">UPDATE</span>';
+  return '<span class="existing-badge">EXISTING</span>';
+}
+
+function getStatusLabel(status) {
+  if (status === 'create') return 'Proposed';
+  if (status === 'reuse') return 'Reused';
+  if (status === 'update') return 'Updated';
+  return 'Existing';
+}
+
+document.getElementById('topbarCount').textContent =
+  SERVER_LOGICS.length + ' server logic item' + (SERVER_LOGICS.length !== 1 ? 's' : '');
+
+const createCount = SERVER_LOGICS.filter(item => item.status === 'create').length;
+const reuseCount = SERVER_LOGICS.filter(item => item.status === 'reuse').length;
+
+document.getElementById('statTotal').textContent = SERVER_LOGICS.length;
+document.getElementById('statCreate').textContent = createCount;
+document.getElementById('statReuse').textContent = reuseCount;
+
+const statusSummary = document.getElementById('statusSummary');
+statusSummary.innerHTML = SERVER_LOGICS.length
+  ? SERVER_LOGICS.map(item => `<span class="logic-chip">${item.displayName || item.name} ${getStatusBadge(item.status)}</span>`).join('')
+  : '<span class="logic-chip">No server logic items defined</span>';
+
+const rationaleContainer = document.getElementById('rationaleContainer');
+rationaleContainer.innerHTML = RATIONALE.map(r => `
+  <div class="principle">
+    <div class="principle-icon">${r.icon}</div>
+    <div>
+      <div class="principle-title">${r.title}</div>
+      <div class="principle-desc">${r.desc}</div>
+    </div>
+  </div>
+`).join('');
+
+const proposedRoles = WEB_ROLES.filter(r => r.isNew).length;
+const builtinRoles = WEB_ROLES.filter(r => r.builtin).length;
+const existingRoles = WEB_ROLES.filter(r => !r.builtin && !r.isNew).length;
+const roleParts = [];
+if (builtinRoles > 0) roleParts.push(builtinRoles + ' built-in');
+if (existingRoles > 0) roleParts.push(existingRoles + ' existing');
+if (proposedRoles > 0) roleParts.push(proposedRoles + ' proposed');
+document.getElementById('rolesDesc').textContent =
+  WEB_ROLES.length + ' role' + (WEB_ROLES.length !== 1 ? 's' : '') +
+  (roleParts.length ? ' — ' + roleParts.join(', ') : '') + '.';
+
+const rolesContainer = document.getElementById('rolesContainer');
+rolesContainer.innerHTML = WEB_ROLES.map(role => {
+  const assigned = SERVER_LOGICS.filter(item => getAssignedRoleDetails(item).some(entry => entry.id === role.id));
+  const assignedMarkup = assigned.length
+    ? assigned.map(item => `<span class="logic-chip">${item.displayName || item.name}</span>`).join('')
+    : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not assigned</span>';
+
+  return `<div class="card"${role.isNew ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <div style="width:10px;height:10px;border-radius:50%;background:${role.color || '#8890a4'};flex-shrink:0;margin-top:6px;"></div>
+        <div>
+          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${role.name}</span>
+          ${role.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : role.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${role.desc || ''}</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <div class="field-label">Assigned Server Logic</div>
+      <div class="chip-row">${assignedMarkup}</div>
+    </div>
+  </div>`;
+}).join('');
+
+const createLogicCount = SERVER_LOGICS.filter(item => item.status === 'create').length;
+const reuseLogicCount = SERVER_LOGICS.filter(item => item.status === 'reuse').length;
+const updateLogicCount = SERVER_LOGICS.filter(item => item.status === 'update').length;
+const logicParts = [];
+if (createLogicCount > 0) logicParts.push(createLogicCount + ' proposed');
+if (reuseLogicCount > 0) logicParts.push(reuseLogicCount + ' reused');
+if (updateLogicCount > 0) logicParts.push(updateLogicCount + ' updated');
+document.getElementById('serverLogicDesc').textContent =
+  SERVER_LOGICS.length + ' server logic item' + (SERVER_LOGICS.length !== 1 ? 's' : '') +
+  (logicParts.length ? ' — ' + logicParts.join(', ') : '') + '.';
+
+const serverLogicContainer = document.getElementById('serverLogicContainer');
+serverLogicContainer.innerHTML = SERVER_LOGICS.map(item => {
+  const roles = getAssignedRoleDetails(item).map(entry => ({ ...getRole(entry.id), reasoning: entry.reasoning }));
+  const roleMarkup = roles.length
+    ? roles.map(role => `
+      <div class="fn-item">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${role.name}</div>
+          <div class="role-chip" style="background:${role.color || '#8890a4'}18;color:${role.color || '#8890a4'};">Assigned Role</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${role.reasoning || 'No role reasoning provided.'}</div>
+      </div>
+    `).join('')
+    : '<div class="fn-item">No web roles assigned.</div>';
+
+  const fnMarkup = (item.functions || []).map(fn => `
+    <div class="fn-item">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-bright);"><span class="mono">${fn.name}()</span></div>
+        <div class="fn-chip">${fn.purpose}</div>
+      </div>
+      <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${fn.reasoning || ''}</div>
+    </div>
+  `).join('');
+
+  return `<div class="card"${item.status === 'create' ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div>
+        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${item.displayName || item.name}</span>
+        ${getStatusBadge(item.status)}${getCustomActionBadge(item)}
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span class="mono">${item.name}</span>${item.apiUrl ? ' • <span class="mono">' + item.apiUrl + '</span>' : ''}</div>
+      </div>
+    </div>
+
+    <div class="meta-grid">
+      <div>
+        <div class="field-label">Status</div>
+        <div>${getStatusLabel(item.status)}</div>
+      </div>
+      <div>
+        <div class="field-label">API URL</div>
+        <div class="mono" style="font-size:11px;word-break:break-word;">${item.apiUrl || 'Not provided'}</div>
+      </div>
+    </div>
+    ${getCustomActionMarkup(item)}
+
+    <div style="margin-top:12px;">
+      <div class="field-label">Reasoning</div>
+      <div class="reason-box">${item.rationale || 'No rationale provided.'}</div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="field-label">Assigned Web Roles and Why</div>
+      <div class="fn-list">${roleMarkup}</div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="field-label">Functions</div>
+      <div class="fn-list">${fnMarkup || '<div class="fn-item">No functions proposed.</div>'}</div>
+    </div>
+    ${getSecretsMarkup(item.id || item.name)}
+  </div>`;
+}).join('');
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+</body>
+</html>

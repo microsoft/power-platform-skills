@@ -1,0 +1,58 @@
+name: validate-skill-version-check
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/power-pages/skills/**"
+
+permissions:
+    contents: write
+
+jobs:
+    validate-skill-version-check:
+        name: validate-skill-version-check
+        runs-on: ubuntu-latest
+        steps:
+            - name: generate app token
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
+              id: app-token
+              uses: actions/create-github-app-token@v1
+              with:
+                  app-id: 3189942
+                  private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
+
+            - name: checkout (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.head_ref }}
+                  token: ${{ steps.app-token.outputs.token }}
+
+            - name: checkout (fork)
+              if: ${{ github.event.pull_request.head.repo.fork == true }}
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: check-only (fork)
+              if: ${{ github.event.pull_request.head.repo.fork == true }}
+              run: node scripts/ensure-skill-version-check.js --check
+
+            - name: add missing version checks (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
+              run: node scripts/ensure-skill-version-check.js
+
+            - name: commit and push if changed (non-fork)
+              if: ${{ github.event.pull_request.head.repo.fork == false }}
+              run: |
+                  git diff --quiet && exit 0
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add "plugins/power-pages/skills/*/SKILL.md"
+                  git commit -m "Auto-add plugin version check to SKILL.md files"
+                  git push

@@ -75,5 +75,12 @@ Your credentials are always handled securely through the official Azure Identity
 MCP is a new and developing standard. As with all new technology standards, you should review the security of any systems that integrate with MCP servers, such as MCP hosts, clients, agents, AI applications, and models and confirm that they comply with system requirements, standards, and expectations. You should follow Microsoft security guidance for MCP servers, including enabling Entra ID authentication, secure token management, and network isolation. Refer to Microsoft Security Documentation for details.
 
 
+## Support
+
+If you face issues with:
+
+- **Using the MCP Plugin:** Report your issue here: [aka.ms/power-skills-canvas-issues](https://aka.ms/power-skills-canvas-issues). (Microsoft Support won't help you with issues related to this MCP Plugin, but they will help with related, underlying platform and feature issues.)
+- **The core features in Microsoft Power Apps Canvas Apps:** Use your standard channel to contact Microsoft Support.
+
 ## License
 See the [LICENSE](../../LICENSE) file for license information.

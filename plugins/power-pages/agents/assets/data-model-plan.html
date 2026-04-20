@@ -422,7 +422,7 @@ function buildErDiagram(compact) {
 }
 
 // Apply status-based colors to rendered SVG entity boxes
-// Mermaid v11 uses <path> elements inside g.node groups with IDs like "entity-CONTACT-0"
+// Mermaid v11 prefixes node IDs with the SVG element ID (e.g. "erSvg1-entity-CONTACT-0")
 function colorErDiagram(container) {
   const svg = container.querySelector('svg');
   if (!svg) return;
@@ -439,18 +439,18 @@ function colorErDiagram(container) {
     entityStatusMap[eid] = t.status;
   });
 
-  // Find entity nodes by their IDs (pattern: entity-{NAME}-{index})
+  // Find entity nodes — use suffix match since Mermaid v11 prepends the SVG ID to node IDs
   svg.querySelectorAll('g.node').forEach(node => {
     const id = node.getAttribute('id') || '';
-    const match = id.match(/^entity-(.+)-\d+$/);
+    const match = id.match(/entity-(.+)-\d+$/);
     if (!match) return;
 
     const entityName = match[1];
     const status = entityStatusMap[entityName];
     if (!status) return;
 
-    // First child <g> contains two <path>: header fill + header outline
-    const headerGroup = node.children[0];
+    // .outer-path <g> contains two <path>: entity fill + entity outline
+    const headerGroup = node.querySelector('.outer-path') || node.children[0];
     if (headerGroup && headerGroup.tagName === 'g') {
       const paths = headerGroup.querySelectorAll('path');
       if (paths[0]) paths[0].setAttribute('fill', headerFills[status]);
@@ -462,6 +462,11 @@ function colorErDiagram(container) {
       const isOdd = row.classList.contains('row-rect-odd');
       const fillPath = row.querySelector('path');
       if (fillPath) fillPath.setAttribute('fill', isOdd ? rowOddFills[status] : rowEvenFills[status]);
+    });
+
+    // Update divider stroke colors to match the status
+    node.querySelectorAll('.divider path').forEach(p => {
+      if (p.getAttribute('stroke') !== 'none') p.setAttribute('stroke', strokes[status]);
     });
   });
 }

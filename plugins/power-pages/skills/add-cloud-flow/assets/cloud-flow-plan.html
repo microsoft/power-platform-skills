@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __SITE_NAME__</title>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020; --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.layout{display:flex;min-height:calc(100vh - 65px);}
+.sidebar{width:200px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;padding:32px 40px 72px;max-width:960px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--pass);}
+.stat-card:nth-child(3)::after{background:var(--purple);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+.principle{display:flex;gap:16px;padding:16px 0;border-bottom:1px solid var(--border);}
+.principle:last-child{border-bottom:none;}
+.principle-icon{font-size:22px;flex-shrink:0;margin-top:2px;}
+.principle-title{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:3px;}
+.principle-desc{font-size:13px;color:var(--text-dim);line-height:1.65;}
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+.role-chip,.flow-chip{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-block;}
+.role-chip{border:1px solid var(--border);}
+.flow-chip{background:var(--surface2);border:1px solid var(--border);color:var(--text);}
+.state-chip{font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;}
+.state-active{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.state-draft{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
+.new-badge,.existing-badge,.builtin-badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:8px;text-transform:uppercase;letter-spacing:0.5px;}
+.new-badge{background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
+.existing-badge{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.builtin-badge{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
+.mono{font-family:var(--mono);}
+.reason-box{font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;}
+.fn-list{display:grid;gap:10px;margin-top:12px;}
+.fn-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+.warn-banner{background:var(--high-bg);border:1px solid var(--high-border);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--high);margin-top:8px;line-height:1.65;}
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px 72px;}
+  .stats-grid,.meta-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PP</div>
+      <div>
+        <div class="topbar-title">__PLAN_TITLE__</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+    <div class="topbar-sub" id="topbarCount"></div>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="roles"><span class="nav-icon">&#9672;</span> Web Roles</button>
+      <button class="nav-btn" data-tab="flows"><span class="nav-icon">&#9658;</span> Cloud Flows</button>
+    </div>
+
+    <div class="content">
+      <div class="section active" id="tab-overview">
+        <h2>Plan Overview</h2>
+        <p class="section-desc">Cloud flow integration plan for <code>__SITE_NAME__</code></p>
+
+        <div class="summary-box" id="summaryBox">__SUMMARY__</div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--accent)" id="statTotal">0</div><div class="stat-label">Flows to Add</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--pass)" id="statRoles">0</div><div class="stat-label">Web Roles Involved</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--purple)" id="statNew">0</div><div class="stat-label">New Roles Proposed</div></div>
+        </div>
+
+        <div class="card">
+          <div class="field-label">Flows Being Added</div>
+          <div class="chip-row" id="flowSummary"></div>
+        </div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+      </div>
+
+      <div class="section" id="tab-roles">
+        <h2>Web Roles</h2>
+        <p class="section-desc" id="rolesDesc"></p>
+        <div id="rolesContainer"></div>
+      </div>
+
+      <div class="section" id="tab-flows">
+        <h2>Cloud Flows</h2>
+        <p class="section-desc" id="flowsDesc"></p>
+        <div id="flowsContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const WEB_ROLES = __WEB_ROLES_DATA__;
+const CLOUD_FLOWS = __CLOUD_FLOWS_DATA__;
+const RATIONALE = __RATIONALE_DATA__;
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+function getRole(id) {
+  return WEB_ROLES.find(r => r.id === id) || { id, name: id, desc: '', builtin: false, isNew: false, color: '#8890a4' };
+}
+
+function getAssignedRoleDetails(flow) {
+  return (flow.webRoles || []).map(entry => {
+    if (typeof entry === 'string') return { id: entry, reasoning: '' };
+    return { id: entry.id, reasoning: entry.reasoning || '' };
+  });
+}
+
+function stateChip(state) {
+  const cls = state === 'Active' ? 'state-active' : 'state-draft';
+  return `<span class="state-chip ${cls}">${state}</span>`;
+}
+
+// Topbar
+document.getElementById('topbarCount').textContent =
+  CLOUD_FLOWS.length + ' flow' + (CLOUD_FLOWS.length !== 1 ? 's' : '');
+
+// Stats
+const newRolesCount = WEB_ROLES.filter(r => r.isNew).length;
+document.getElementById('statTotal').textContent = CLOUD_FLOWS.length;
+document.getElementById('statRoles').textContent = WEB_ROLES.length;
+document.getElementById('statNew').textContent = newRolesCount;
+
+// Flow summary chips
+const flowSummaryEl = document.getElementById('flowSummary');
+flowSummaryEl.innerHTML = CLOUD_FLOWS.length
+  ? CLOUD_FLOWS.map(f => `<span class="flow-chip">${f.displayName || f.name}</span>`).join('')
+  : '<span class="flow-chip">No flows planned</span>';
+
+// Rationale
+const rationaleContainer = document.getElementById('rationaleContainer');
+rationaleContainer.innerHTML = RATIONALE.map(r => `
+  <div class="principle">
+    <div class="principle-icon">${r.icon}</div>
+    <div>
+      <div class="principle-title">${r.title}</div>
+      <div class="principle-desc">${r.desc}</div>
+    </div>
+  </div>
+`).join('');
+
+// Roles tab
+const proposedRoles = WEB_ROLES.filter(r => r.isNew).length;
+const builtinRoles = WEB_ROLES.filter(r => r.builtin).length;
+const existingRoles = WEB_ROLES.filter(r => !r.builtin && !r.isNew).length;
+const roleParts = [];
+if (builtinRoles > 0) roleParts.push(builtinRoles + ' built-in');
+if (existingRoles > 0) roleParts.push(existingRoles + ' existing');
+if (proposedRoles > 0) roleParts.push(proposedRoles + ' proposed');
+document.getElementById('rolesDesc').textContent =
+  WEB_ROLES.length + ' role' + (WEB_ROLES.length !== 1 ? 's' : '') +
+  (roleParts.length ? ' — ' + roleParts.join(', ') : '') + '.';
+
+const rolesContainer = document.getElementById('rolesContainer');
+rolesContainer.innerHTML = WEB_ROLES.map(role => {
+  const assigned = CLOUD_FLOWS.filter(f => getAssignedRoleDetails(f).some(e => e.id === role.id));
+  const assignedMarkup = assigned.length
+    ? assigned.map(f => `<span class="flow-chip">${f.displayName || f.name}</span>`).join('')
+    : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not assigned to any flow</span>';
+
+  const anonWarning = role.isAnonymous
+    ? `<div class="warn-banner">⚠ This is the Anonymous Users role. Any unauthenticated visitor to the site will be able to trigger flows assigned to this role. Confirm this is intentional before proceeding.</div>`
+    : '';
+
+  return `<div class="card"${role.isNew ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <div style="width:10px;height:10px;border-radius:50%;background:${role.color || '#8890a4'};flex-shrink:0;margin-top:6px;"></div>
+        <div>
+          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${role.name}</span>
+          ${role.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : role.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${role.desc || ''}</div>
+        </div>
+      </div>
+    </div>
+    ${anonWarning}
+    <div style="margin-top:12px;">
+      <div class="field-label">Assigned to Flows</div>
+      <div class="chip-row">${assignedMarkup}</div>
+    </div>
+  </div>`;
+}).join('');
+
+// Flows tab
+const flowParts = [];
+flowParts.push(CLOUD_FLOWS.length + ' to add');
+document.getElementById('flowsDesc').textContent =
+  CLOUD_FLOWS.length + ' cloud flow' + (CLOUD_FLOWS.length !== 1 ? 's' : '') +
+  (flowParts.length ? ' — ' + flowParts.join(', ') : '') + '.';
+
+const flowsContainer = document.getElementById('flowsContainer');
+flowsContainer.innerHTML = CLOUD_FLOWS.map(flow => {
+  const roles = getAssignedRoleDetails(flow).map(entry => ({ ...getRole(entry.id), reasoning: entry.reasoning }));
+  const roleMarkup = roles.length
+    ? roles.map(role => `
+      <div class="fn-item">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${role.name}</div>
+              ${role.builtin ? '<span class="builtin-badge">Built-in</span>' : role.isNew ? '<span class="new-badge">Proposed</span>' : '<span class="existing-badge">Existing</span>'}
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${role.reasoning || 'No reasoning provided.'}</div>
+        ${role.isAnonymous ? '<div class="warn-banner" style="margin-top:8px;">⚠ Anonymous Users role — any unauthenticated visitor can trigger this flow.</div>' : ''}
+      </div>
+    `).join('')
+    : '<div class="fn-item" style="color:var(--high);">⚠ No web roles assigned — this flow will not be accessible by any user.</div>';
+
+  return `<div class="card" style="background:var(--accent-bg);border-color:var(--accent-border);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div>
+        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${flow.displayName || flow.name}</span>
+        ${stateChip(flow.state || 'Active')}
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span style="text-transform:uppercase;letter-spacing:0.4px;font-size:10px;font-weight:600;">Process ID</span> <span class="mono">${flow.flowId || ''}</span></div>
+        ${flow.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${flow.description}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="meta-grid">
+      <div>
+        <div class="field-label">Scenario</div>
+        <div style="font-size:13px;">${flow.scenario || 'Not specified'}</div>
+      </div>
+      <div>
+        <div class="field-label">Flow State</div>
+        <div>${stateChip(flow.state || 'Active')}</div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="field-label">Rationale</div>
+      <div class="reason-box">${flow.rationale || 'No rationale provided.'}</div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="field-label">Web Roles Assigned and Why</div>
+      <div class="fn-list">${roleMarkup}</div>
+    </div>
+  </div>`;
+}).join('');
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+</body>
+</html>

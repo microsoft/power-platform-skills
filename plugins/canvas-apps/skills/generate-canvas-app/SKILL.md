@@ -1,89 +1,140 @@
 ---
 name: generate-canvas-app
-version: 1.0.0
+version: 2.0.0
 description: Generate a complete, visually distinctive Power Apps canvas app with YAML. USE WHEN the user wants to create, build, or generate a Canvas App or pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
+allowed-tools: Read, Write, Edit, Bash, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__compile_canvas
 ---
 
 # Generate a Canvas App
 
-Create a complete Power Apps canvas app for the following requirements:
+Generate a complete Power Apps canvas app for the following requirements:
 
 $ARGUMENTS
 
-## CRITICAL: Review Guidance First
+## Overview
 
-Before designing anything, you MUST read and internalize both reference documents:
+This skill orchestrates two specialist agents:
 
-- `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md` — Technical best practices, control selection, validation workflow, formulas, layout strategies
-- `${CLAUDE_PLUGIN_ROOT}/references/DesignGuide.md` — Design principles, aesthetic guidelines, anti-patterns to avoid, visual composition
+1. **`canvas-app-planner`** — discovers available controls and data sources, designs the app,
+   presents a screen plan for your approval, then writes a shared plan document
+2. **`canvas-screen-builder`** — writes exactly one screen's YAML; multiple builders run in
+   parallel after the plan is approved
 
-Read both files before planning any layout or choosing any control types.
+You (the skill) coordinate the agents and own the compilation + error-fixing loop after all
+screens are written.
 
-## Generation Workflow
+---
 
-1. **Discover** — Call `list_controls`, `list_apis`, and `list_data_sources` to understand what is available before making any design decisions. Controls you don't know exist can't influence your design. After all three calls complete, share a brief discovery summary with the user:
+## Phase 0 — Create App Folder
 
-   > **Discovery complete.** Found [N] controls, [N] connectors, [N] data sources.
-   > Notable controls available for this app: [3-5 most relevant controls, e.g., ModernCard, Gallery, ModernTabList].
-   > Data sources: [list names, or "none connected"].
-   > Connectors: [list relevant ones, or "none connected"].
+Before planning, derive a short folder name from the user's requirements:
 
-2. **Plan** — Using what you learned from discovery, think through the full app: how many screens it needs and what major phases of work are required. Call `TaskCreate` once per task to capture every screen and phase (e.g., "Design screen layout and aesthetic", "Implement Home screen", "Implement Detail screen", "Validate and fix compilation errors"). Do not begin implementation until all tasks are created.
+1. Extract the app name or a 2–4 word summary from `$ARGUMENTS`
+2. Convert to kebab-case (e.g., "Expense Tracker" → `expense-tracker`, "my travel planner" → `my-travel-planner`)
+3. Create the folder using `Bash`: `mkdir -p <folder-name>`
+4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
-   After creating all tasks, present the plan to the user:
+Pass this absolute path as the working directory in every agent prompt below.
 
-   > **App Plan**
-   >
-   > **Screens ([N] total):**
-   > | Screen | Purpose | Key Controls |
-   > |--------|---------|--------------|
-   > | [Name] | [one-line description] | [2-3 main control types] |
-   >
-   > **Data:** [how data will be loaded — data sources used, or "collections/mock data"]
-   >
-   > **Aesthetic direction:** [e.g., "Minimal & professional — muted palette, card-based layout, strong typographic hierarchy"]
+---
 
-   Then use `AskUserQuestion`:
+## Phase 1 — Plan
 
-   | Question | Options |
-   |----------|---------|
-   | Does this plan look good? | Approve and start building (Recommended), I'd like to make changes |
+Invoke the `canvas-app-planner` agent using the `Task` tool.
 
-   - If approved: proceed to Design.
-   - If changes requested: ask what they want changed, revise the plan, and re-present it.
+Pass a prompt that includes:
 
-3. **Design** — Choose an aesthetic direction and layout strategy. Identify the primary screens, visual hierarchy, and control types. Before writing any YAML, call `describe_control` for every control type in your design — including seemingly obvious ones like Button, Rectangle, and GroupContainer. Property names differ significantly between Classic and FluentV9 families. Never assume. Call `TaskUpdate` to mark the Design task complete when done.
+- The user's requirements: `$ARGUMENTS`
+- The working directory (the absolute path resolved in Phase 0)
+- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
 
-   After finalizing the design, share the direction with the user:
+Example prompt:
 
-   > **Design direction locked in.**
-   > - **Aesthetic:** [e.g., Bold & editorial — high-contrast dark background, accent RGBA(255,90,60,1)]
-   > - **Layout:** [e.g., VerticalAutoLayout containers, two-column split on Detail screen]
-   > - **Typography:** [e.g., 28px bold headers, 14px body, strong size contrast]
-   > - **Key controls:** [4-6 controls driving the design, e.g., ModernCard, Gallery, Badge, ModernTabList]
-   > - **Screens to implement:** [list screen names in order]
+> You are the canvas-app-planner agent. Plan a Canvas App for the following requirements:
+>
+> [paste $ARGUMENTS here]
+>
+> Working directory: [absolute path from Phase 0]
+> Plugin root: ${CLAUDE_PLUGIN_ROOT}
+>
+> Follow the instructions in your agent file. Write canvas-app-plan.md and App.pa.yaml to
+> the working directory. Return the screen list and plan document path when complete.
 
-4. **Implement** — Write the `.pa.yaml` files following conventions from `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`. Include state initialization in `OnVisible`, event handlers with guard clauses, and Power Fx formulas with the `=` prefix. Write the simplest working version of a formula, then let `compile_canvas` catch errors. Don't deliberate on formulas you can validate in under 10 seconds. Reserve reasoning for errors the compiler can't catch (logic bugs, wrong data source fields). Before writing each screen's YAML, announce progress:
+**Wait for the planner to finish.** The planner will present the screen plan to the user via
+plan mode and wait for approval before returning. Do not proceed to Phase 2 until the planner
+task completes successfully.
 
-   > **Implementing [Screen Name] ([N] of [Total])...**
+---
 
-   Call `TaskUpdate` to mark each screen's task complete as each screen is finished.
+## Phase 2 — Build
 
-5. **Validate** — Call `compile_canvas` after implementing each screen. Fix any errors before moving on — do not defer validation to the end. After each `compile_canvas` call, report the result:
+After the planner completes, read `canvas-app-plan.md` from the working directory.
 
-   - On success: > **[Screen Name] compiled successfully.**
-   - On failure: > **[Screen Name] has [N] error(s) — fixing before moving on.** [brief description of errors]
+Extract the screen list from the `## Screens` table — collect each screen name and its
+target file name.
 
-6. **Iterate** — Repeat validate → fix until all screens compile clean. Call `TaskUpdate` to mark the validation task complete when all screens pass.
+Invoke one `canvas-screen-builder` agent per screen. **Fire all invocations in a single
+message** (parallel execution) — do not wait for one screen to finish before starting the next.
 
-7. **Complete** — When all screens pass validation, present a final summary:
+For each screen, pass a prompt that includes:
 
-   > **App generation complete.**
-   >
-   > | Screen | File | Status |
-   > |--------|------|--------|
-   > | [Screen Name] | [filename].pa.yaml | Compiled |
-   >
-   > **Aesthetic:** [one-line description] | **Screens:** [N] | **Data:** [source or collections]
+- Screen name (e.g., "Home")
+- Target file name (e.g., "Home.pa.yaml")
+- Absolute path to `canvas-app-plan.md`
+- Working directory
+
+Example prompt per screen:
+
+> You are the canvas-screen-builder agent. Implement the **[Screen Name]** screen.
+>
+> - Target file: [ScreenName].pa.yaml
+> - Plan document: [absolute path to canvas-app-plan.md]
+> - Working directory: [absolute path from Phase 0]
+>
+> Follow the instructions in your agent file. Write [ScreenName].pa.yaml and return your
+> result when done. Do not call compile_canvas — validation is handled by the skill.
+
+Wait for all screen-builder tasks to complete before proceeding.
+
+---
+
+## Phase 3 — Validate and Fix
+
+After all screen-builders have finished writing their files, call `compile_canvas` on the
+working directory.
+
+**On success:** Proceed to Phase 4.
+
+**On failure:** Read every error in the output. Errors will reference specific files and
+line numbers. For each error:
+
+1. `Read` the referenced `.pa.yaml` file
+2. Fix the error using `Edit`
+3. After fixing all errors from this pass, call `compile_canvas` again
+
+Repeat until `compile_canvas` reports no errors. Do not give up after a single fix attempt —
+iterate until the entire directory compiles clean.
+
+Track how many `compile_canvas` passes were needed.
+
+---
+
+## Phase 4 — Summary
+
+Delete `canvas-app-plan.md` from the working directory using `Bash`:
+`rm <working-directory>/canvas-app-plan.md`
+
+Present a final summary:
+
+> **App generation complete.**
+>
+> | Screen | File | Status |
+> |--------|------|--------|
+> | [Screen Name] | [filename].pa.yaml | Written |
+>
+> **Compiled clean** after [N] pass(es). | **Screens:** [N] | **Data:** [source or collections]
+
+If any errors remain after exhausting fixes, report them explicitly so the user knows what
+needs manual attention.
