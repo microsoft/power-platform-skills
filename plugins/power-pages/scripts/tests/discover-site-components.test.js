@@ -340,26 +340,26 @@ test('skips env var + table discovery when publisherPrefix is not provided', asy
   assert.deepEqual(result.customTables, []);
 });
 
-test('sanitizes publisherPrefix to avoid OData injection', async () => {
-  let capturedUrl = null;
-  const makeRequest = async ({ url }) => {
-    if (url.includes('/environmentvariabledefinitions?')) capturedUrl = url;
+test('rejects publisherPrefix with OData-injection characters up front', async () => {
+  // A publisherPrefix with invalid characters must error before any HTTP is
+  // issued — silently stripping would both mask the typo and leak the call.
+  let anyCall = false;
+  const makeRequest = async () => {
+    anyCall = true;
     return { statusCode: 200, body: '{"value":[]}' };
   };
 
-  await discoverSiteComponents({
-    envUrl: 'https://example.crm.dynamics.com',
-    token: 'tok',
-    siteId: 'site-guid',
-    publisherPrefix: "crd50' or '1'='1",
-    makeRequest,
-  });
-
-  assert.ok(capturedUrl, 'envvar query should have been issued');
-  assert.ok(
-    !/or\s*'1'\s*=/i.test(capturedUrl),
-    `URL must strip injection characters; got ${capturedUrl}`
+  await assert.rejects(
+    discoverSiteComponents({
+      envUrl: 'https://example.crm.dynamics.com',
+      token: 'tok',
+      siteId: 'site-guid',
+      publisherPrefix: "crd50' or '1'='1",
+      makeRequest,
+    }),
+    /Invalid publisherPrefix/
   );
+  assert.strictEqual(anyCall, false, 'no HTTP request should have been made');
 });
 
 test('follows @odata.nextLink pagination for large result sets', async () => {

@@ -96,11 +96,17 @@ async function verifySolutionExists({ envUrl, token, uniqueName, makeRequest }) 
   if (!envUrl) throw new Error('verifyExists: true requires envUrl');
   if (!token) throw new Error('verifyExists: true requires token');
   const cleanUrl = envUrl.replace(/\/+$/, '');
-  // Sanitize uniquename — only allow characters that a valid solution unique name can have.
-  // Solution unique names must be alphanumeric + underscores (no apostrophes, slashes, or spaces),
-  // so stripping anything outside that set protects the OData filter from injection.
-  const safeName = String(uniqueName).replace(/[^A-Za-z0-9_]/g, '');
-  if (!safeName) throw new Error(`Invalid solution unique name: ${uniqueName}`);
+  // Validate uniquename — only alphanumeric + underscore allowed. Reject anything
+  // else up front so a typo surfaces as "invalid name" rather than a confusing
+  // "not found" after silently dropping characters. Also protects the OData
+  // filter below from injection.
+  const trimmed = String(uniqueName).trim();
+  if (!/^[A-Za-z0-9_]+$/.test(trimmed)) {
+    throw new Error(
+      `Invalid solution unique name "${uniqueName}" — only alphanumeric and underscore characters are allowed.`
+    );
+  }
+  const safeName = trimmed;
   const url =
     `${cleanUrl}/api/data/v9.2/solutions` +
     `?$filter=uniquename eq '${safeName}'` +

@@ -191,29 +191,26 @@ test('verifyExists prefers live solutionId + version over stale manifest values'
   assert.equal(r.version, '1.0.0.5');
 });
 
-test('verifyExists sanitizes solution names to prevent OData injection', async (t) => {
+test('verifyExists rejects solution names with OData-injection characters', async () => {
+  // Invalid characters (apostrophes, spaces, '=') must cause a hard error up front —
+  // silently stripping them would convert a typo into a confusing "not found" and
+  // could mask an attacker's input. No HTTP request should be issued.
   let captured = null;
   const makeRequest = async ({ url }) => {
     captured = url;
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        value: [{ solutionid: 's', uniquename: 'MySolution', version: '1', ismanaged: false }],
-      }),
-    };
+    return { statusCode: 200, body: '{"value":[]}' };
   };
-  await resolveTargetSolution({
-    explicit: "MySolution' or '1'='1",
-    envUrl: 'https://e.example.com',
-    token: 't',
-    verifyExists: true,
-    makeRequest,
-  });
-  assert.ok(captured, 'query should have been made');
-  assert.ok(
-    !/or\s*'1'\s*=/i.test(captured),
-    `OData filter must not contain injection characters; got: ${captured}`
+  await assert.rejects(
+    resolveTargetSolution({
+      explicit: "MySolution' or '1'='1",
+      envUrl: 'https://e.example.com',
+      token: 't',
+      verifyExists: true,
+      makeRequest,
+    }),
+    /Invalid solution unique name/
   );
+  assert.strictEqual(captured, null, 'no HTTP request should have been made');
 });
 
 test('verifyExists throws when envUrl is missing', async () => {

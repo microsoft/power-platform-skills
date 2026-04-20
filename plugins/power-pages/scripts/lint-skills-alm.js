@@ -114,7 +114,12 @@ function extractIgnores(content) {
   const matches = [
     ...content.matchAll(/alm-lint-ignore:\s*([A-Za-z0-9_-]+)/gi),
   ];
-  return new Set(matches.map((m) => m[1]));
+  // Normalize captured rule names to the canonical case so downstream
+  // `.has(ruleName)` checks line up with the canonical rule strings used
+  // elsewhere in the file.
+  return new Set(
+    matches.map((m) => RULE_CANONICAL.get(m[1].toLowerCase()) || m[1])
+  );
 }
 
 /**
@@ -136,6 +141,12 @@ const KNOWN_RULES = new Set([
   'DISCOVER-coverage',
 ]);
 
+// Map lowercased rule name → canonical form. Inline `alm-lint-ignore:` tags
+// match case-insensitively (the regex uses `gi`), so the file-based allowlist
+// must too — otherwise the same rule name that suppresses inline fails to
+// suppress from the file.
+const RULE_CANONICAL = new Map([...KNOWN_RULES].map((r) => [r.toLowerCase(), r]));
+
 function parseAllowlist(text, filePath) {
   const entries = [];
   const lines = text.split(/\r?\n/);
@@ -153,7 +164,8 @@ function parseAllowlist(text, filePath) {
     const pathPart = line.slice(0, first);
     const rulePart = line.slice(first + 1, second);
     const reasonPart = line.slice(second + 1).trim();
-    if (!KNOWN_RULES.has(rulePart)) {
+    const canonicalRule = RULE_CANONICAL.get(rulePart.toLowerCase());
+    if (!canonicalRule) {
       throw new Error(
         `${filePath}:${i + 1}: unknown rule name "${rulePart}". Known: ${[...KNOWN_RULES].join(', ')}`
       );
@@ -165,7 +177,7 @@ function parseAllowlist(text, filePath) {
     }
     entries.push({
       pathPattern: pathPart,
-      rule: rulePart,
+      rule: canonicalRule,
       reason: reasonPart,
       line: i + 1,
     });
@@ -209,17 +221,25 @@ function findingIsAllowlisted(finding, allowlistEntries, pluginRoot) {
 }
 
 // Derives referenced powerpagecomponenttype values from the PPC_TYPE_LABELS
-// constant in scripts/lib/discover-site-components.js.
+// constant exported by scripts/lib/discover-site-components.js. Require the
+// sibling module directly rather than regex-parsing its source — formatting
+// changes (comments, multi-line entries) would silently shrink the known-set
+// with a text-based approach, defeating the non-waivable DISCOVER-coverage rule.
 function loadKnownPpcTypes(pluginRoot) {
   const discoveryFile = path.join(pluginRoot, 'scripts', 'lib', 'discover-site-components.js');
   if (!fs.existsSync(discoveryFile)) return null;
-  const src = fs.readFileSync(discoveryFile, 'utf8');
-  // Pull every `<int>:` label entry from the PPC_TYPE_LABELS object.
-  const match = src.match(/const\s+PPC_TYPE_LABELS\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/);
-  if (!match) return null;
-  const body = match[1];
-  const ids = [...body.matchAll(/^\s*(\d+)\s*:/gm)].map((m) => Number(m[1]));
-  return new Set(ids);
+  try {
+    // Bypass require cache so repeated invocations with different pluginRoots
+    // (tests + CLI in the same process) don't reuse a stale module object.
+    const resolved = require.resolve(discoveryFile);
+    delete require.cache[resolved];
+    const mod = require(resolved);
+    const labels = mod && mod.PPC_TYPE_LABELS;
+    if (!labels || typeof labels !== 'object') return null;
+    return new Set(Object.keys(labels).map((k) => Number(k)));
+  } catch {
+    return null;
+  }
 }
 
 const PPCTYPE_FILTER_PATTERN = /powerpagecomponenttype\s+eq\s+(\d+)/gi;

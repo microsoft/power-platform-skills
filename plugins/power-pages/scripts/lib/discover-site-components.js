@@ -157,6 +157,16 @@ async function discoverSiteComponents({
   if (!token) throw new Error('--token is required');
   if (!siteId) throw new Error('--siteId is required');
 
+  // Validate publisherPrefix once, up front. Dataverse publisher prefixes are
+  // alphanumeric + underscore; reject anything else so a typo surfaces as a
+  // clear error rather than silently matching a shortened prefix (and returning
+  // unrelated results) downstream.
+  if (publisherPrefix !== null && !/^[A-Za-z0-9_]+$/.test(String(publisherPrefix).trim())) {
+    throw new Error(
+      `Invalid publisherPrefix "${publisherPrefix}" — only alphanumeric and underscore characters are allowed.`
+    );
+  }
+
   const baseUrl = envUrl.replace(/\/+$/, '');
 
   // 1) All site components (the primary inventory)
@@ -292,7 +302,8 @@ async function discoverCloudFlows({ baseUrl, token, ppcRows, makeRequest }) {
 }
 
 async function discoverEnvVars({ baseUrl, token, publisherPrefix, makeRequest }) {
-  const prefix = publisherPrefix.replace(/[^a-z0-9_]/gi, '');
+  // publisherPrefix validated at the entry point of discoverSiteComponents.
+  const prefix = String(publisherPrefix).trim();
   const url =
     `${baseUrl}/api/data/v9.2/environmentvariabledefinitions` +
     `?$filter=startswith(schemaname,'${prefix}_')` +
@@ -313,7 +324,8 @@ async function discoverCustomTables({ baseUrl, token, publisherPrefix, makeReque
   // so we fetch all custom tables and filter client-side. Custom-entity sets are small
   // enough that a single request is fine. MetadataId is included so callers can diff
   // against solutioncomponents.objectid (componenttype 1 = Entity).
-  const prefixLower = publisherPrefix.replace(/[^a-z0-9_]/gi, '').toLowerCase();
+  // publisherPrefix validated at the entry point of discoverSiteComponents.
+  const prefixLower = String(publisherPrefix).trim().toLowerCase();
   const url =
     `${baseUrl}/api/data/v9.2/EntityDefinitions` +
     `?$filter=IsCustomEntity eq true` +
