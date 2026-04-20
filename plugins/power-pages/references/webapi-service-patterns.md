@@ -169,11 +169,11 @@ Create a service module with CRUD operations for the target table. Place it foll
 
 **Every list/query operation MUST be paginated.** Never fetch unbounded data. Two pagination approaches exist — choose based on the use case:
 
-**Cursor-based pagination (`$top` + `@odata.nextLink`)** — Use for UI list views with paging controls. The `list` function below uses this approach. Always include `$count=true` to get the total record count efficiently without fetching all rows. **Note:** Dataverse Web API does **not** support the `$skip` query option. Use `@odata.nextLink` from each response to fetch the next page.
+**Cursor-based pagination (`Prefer: odata.maxpagesize=N` + `@odata.nextLink`)** — Use for UI list views with paging controls. The `list` function below uses this approach. Always include `$count=true` to get the total record count efficiently without fetching all rows. **Note:** Power Pages does **not** support the `$skip` query option (returns error `9004010B: QueryParamNotSupported`). Use `@odata.nextLink` cursors (which contain `$skiptoken`) from each response to fetch the next page.
 
 **Client-side pagination (`fetchAllPages`)** — Use only when you genuinely need every record (e.g., populating a local dropdown, building a lookup map, exporting data). Uses the `fetchAllPages` helper from the core API client which follows `@odata.nextLink` with a safety iteration limit.
 
-**Never omit `$top`.** An API call without `$top` returns the server's default page size (typically 5000 records). Always set an explicit `$top` to control payload size.
+**Always use `Prefer: odata.maxpagesize=N` for pagination.** This request header controls the page size and ensures `@odata.nextLink` is returned for subsequent pages. Do NOT use `$top` for page-by-page navigation — `$top` caps the total result set and prevents `@odata.nextLink` from being returned. If you include both `$top` and `Prefer: odata.maxpagesize`, `$top` is ignored. Use `$top` only as a safety cap when you genuinely want to limit total results (e.g., `$top=5` for "top 5 recent items" on a dashboard widget, or `$top=0` for count-only queries).
 
 ### Select Columns
 
@@ -219,17 +219,22 @@ export const listProducts = async (params?: ListParams): Promise<PaginatedResult
   const pageSize = params?.pageSize ?? 10;
 
   // If we have a nextLink from a previous response, use it directly.
-  // Dataverse does NOT support $skip — pagination uses @odata.nextLink cursors.
+  // Power Pages does NOT support $skip — pagination uses @odata.nextLink cursors.
+  // Use Prefer: odata.maxpagesize to control page size (NOT $top).
+  // $top caps the total result set and prevents @odata.nextLink from being returned.
   const url = params?.nextLink ?? buildODataUrl('cr4fc_products', {
     '$select': PRODUCT_SELECT,
     '$expand': PRODUCT_EXPAND,
     '$orderby': params?.orderBy ?? 'createdon desc',
     '$count': 'true',
-    '$top': String(pageSize),
     '$filter': params?.filter,
   });
 
-  const response = await powerPagesFetch<ODataCollectionResponse<ProductEntity>>(url);
+  const response = await powerPagesFetch<ODataCollectionResponse<ProductEntity>>(url, {
+    headers: {
+      'Prefer': `odata.include-annotations="OData.Community.Display.V1.FormattedValue",odata.maxpagesize=${pageSize}`,
+    },
+  });
 
   return {
     items: (response?.value ?? []).map(mapProductEntity),
@@ -734,15 +739,19 @@ For large collections or when you need full paging control, fetch related record
 export const listOrderLines = async (orderId: string, params?: ListParams): Promise<PaginatedResult<OrderLine>> => {
   const pageSize = params?.pageSize ?? 20;
 
+  // Use Prefer: odata.maxpagesize to control page size (NOT $top).
   const url = params?.nextLink ?? buildODataUrl('cr4fc_orderlines', {
     '$select': 'cr4fc_orderlineid,cr4fc_productname,cr4fc_quantity,cr4fc_unitprice',
     '$filter': `_cr4fc_order_value eq ${orderId}`,
     '$orderby': params?.orderBy ?? 'cr4fc_quantity desc',
     '$count': 'true',
-    '$top': String(pageSize),
   });
 
-  const response = await powerPagesFetch<ODataCollectionResponse<OrderLineEntity>>(url);
+  const response = await powerPagesFetch<ODataCollectionResponse<OrderLineEntity>>(url, {
+    headers: {
+      'Prefer': `odata.include-annotations="OData.Community.Display.V1.FormattedValue",odata.maxpagesize=${pageSize}`,
+    },
+  });
 
   return {
     items: (response?.value ?? []).map(mapOrderLineEntity),

@@ -1,11 +1,9 @@
 ---
 name: add-sample-data
-description: >
-  This skill should be used when the user asks to "add sample data",
-  "populate tables", "seed data", "add test records", "generate sample records",
-  "insert demo data", "fill tables with data", "create test data",
-  or wants to populate their Dataverse tables with sample records
-  so they can test and demo their Power Pages site.
+description: >-
+  Populates Dataverse tables with sample records for testing and demoing a Power Pages site.
+  Use when the user wants to add sample data, seed data, generate test records, or insert
+  demo data into their tables.
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: sonnet

@@ -1,13 +1,10 @@
 ---
 name: setup-auth
-description: >
-  This skill should be used when the user asks to "set up authentication",
-  "add login", "add logout", "configure Entra ID", "set up Azure AD auth",
-  "add Microsoft login", "enable authentication", "set up sign in",
-  "add role-based access", "add authorization", "protect routes",
-  "add auth to my site", "configure identity provider", or wants to set up
-  authentication (login/logout via Microsoft Entra ID) and role-based
-  authorization for their Power Pages code site.
+description: >-
+  Sets up authentication (login/logout via Microsoft Entra ID) and role-based authorization
+  for a Power Pages code site. Configures identity providers, protected routes, and access
+  control. Use when the user wants to add login, configure Entra ID, enable authentication,
+  or add role-based access to their site.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus

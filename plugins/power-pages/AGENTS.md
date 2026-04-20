@@ -341,6 +341,21 @@ This runs a lightweight check comparing the local plugin version against `origin
   - **Skills that can leave Dataverse artifacts uncovered** (e.g. `setup-auth` writing OAuth secrets as env vars) must end by prompting the user to run `/power-pages:setup-solution` in sync mode so the discovery pass picks up any newly-created records.
   - **New component types** added to Power Pages must be reflected in `scripts/lib/discover-site-components.js` (the single source of truth for site inventory) and, if applicable, in the `PPC_TYPE_LABELS` enum. Discovery should never silently skip a type.
 
+## Planned Skills (Not Yet Implemented)
+
+The following skills are planned but require POC validation before implementation:
+
+### Sprint 2 — Needs POC First
+
+- `setup-environments`: Blocked by BAP API auth scope (`https://service.powerapps.com/`) differing from Dataverse token scope — needs POC in personal tenant. Managed env flag + admin assignment also need validation.
+- `setup-git-versioning`: Blocked pending determination of whether `pac pages` has a git-config subcommand, or if git integration is portal-only. If no CLI surface exists, this reduces to a guidance doc.
+- `configure-secrets`: Blocked pending mapping of full API path for Key Vault-backed environment variables (`environmentvariablevalues` with `keyVaultReference` JSON) and validation of `az keyvault set-policy` assignment in same session.
+
+### Sprint 3 — Future / Complex
+
+- `setup-approvals`: Blocked by the fact that ADO environment approval gates have no create/trigger API — the approval workflow setup requires human interaction in the ADO UI. Power Platform Pipelines approval status (`UpdateApprovalStatus`) schema is undocumented.
+- `setup-pipeline` GitHub/ADO paths: Currently "coming soon" stubs. Full implementation spec is at `C:\Users\nityagi\OneDrive - Microsoft\Design Documents\Plans\ALM skills for plugin\ado-cicd-skills-guide.md`.
+
 ## Common Review Pitfalls
 
 These patterns have caused repeated PR review feedback. Check for them before submitting changes to skills, validators, or hooks.

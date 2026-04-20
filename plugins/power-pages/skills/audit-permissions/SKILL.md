@@ -1,13 +1,10 @@
 ---
 name: audit-permissions
 description: >-
-  Use this skill to audit existing table permissions on a Power Pages site.
-  Trigger examples: "audit permissions", "check permissions", "review table permissions",
-  "are my permissions correct", "permission security audit", "verify permissions setup",
-  "check for permission issues", "permission health check".
-  This skill analyzes existing table permissions against the site code and Dataverse metadata,
-  generates an HTML audit report with findings grouped by severity (critical, warning, info, pass),
-  and suggests fixes for any issues found.
+  Audits existing table permissions on a Power Pages site by analyzing them against site code
+  and Dataverse metadata. Generates an HTML audit report with findings grouped by severity
+  (critical, warning, info, pass) and suggests fixes for issues found. Use when the user wants
+  to review, verify, or check table permissions for security issues.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent

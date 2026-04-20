@@ -1,11 +1,9 @@
 ---
 name: test-site
-description: >
-  This skill should be used when the user asks to "test my site", "test the site",
-  "run site tests", "check if site is working", "verify site", "smoke test",
-  "test pages", "check api calls", "test web api", "verify deployment works",
-  or wants to test a deployed, activated Power Pages site at runtime using
-  browser-based navigation, page crawling, and API request verification.
+description: >-
+  Tests a deployed, activated Power Pages site at runtime using browser-based navigation,
+  page crawling, and API request verification via Playwright. Use when the user wants to
+  test, verify, or smoke-test their deployed site.
 user-invocable: true
 argument-hint: "<site-url>"
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close, mcp__plugin_power-pages_playwright__browser_network_requests, mcp__plugin_power-pages_playwright__browser_console_messages, mcp__plugin_power-pages_playwright__browser_wait_for, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_evaluate

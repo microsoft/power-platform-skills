@@ -10,7 +10,7 @@ model: opus
 
 **References:**
 
-- [dataverse-reference.md](./references/dataverse-reference.md) - Picklist fields, virtual fields, lookups, form patterns (CRITICAL)
+- [dataverse-reference.md](./references/dataverse-reference.md) - Picklist fields, virtual fields, lookups, file/image columns, form patterns (CRITICAL)
 - [api-authentication-reference.md](./references/api-authentication-reference.md) - Dataverse API auth, token, publisher prefix
 - [table-management-reference.md](./references/table-management-reference.md) - Query, create, extend tables and columns
 - [data-architecture-reference.md](./references/data-architecture-reference.md) - Relationship types, dependency tiers
@@ -102,8 +102,8 @@ Can add multiple tables by running the command for each one.
 
 The command generates:
 
-- `src/generated/models/{Table}Model.ts` -- TypeScript interfaces
-- `src/generated/services/{Table}Service.ts` -- CRUD methods (create, get, getAll, update, delete)
+- `src/generated/models/{Table}Model.ts` -- TypeScript interfaces, plus `{Table}FileColumnName`, `{Table}ImageColumnName`, `{Table}UploadColumnName` union types if the table has file/image columns
+- `src/generated/services/{Table}Service.ts` -- CRUD methods (create, get, getAll, update, delete) plus `upload`, `downloadFile`, `downloadImage`, `deleteFileOrImage` if file/image columns exist
 
 Show the user a usage example:
 
@@ -124,7 +124,7 @@ const accounts = result.data || [];
 - Use generated services (e.g., `AccountsService.getAll()`), not fetch/axios
 - Check `result.data` for actual data
 - Don't edit generated files unless needed
-- **Read [dataverse-reference.md](./references/dataverse-reference.md) before writing any Dataverse code** -- picklist fields, virtual fields, and lookups have critical gotchas
+- **Read [dataverse-reference.md](./references/dataverse-reference.md) before writing any Dataverse code** -- picklist fields, virtual fields, lookups, and file/image columns all have critical gotchas
 
 ### Step 7: Build
 

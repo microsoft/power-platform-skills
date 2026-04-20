@@ -1,11 +1,9 @@
 ---
 name: add-seo
-description: >
-  This skill should be used when the user asks to "add SEO", "add meta tags",
-  "add robots.txt", "add sitemap", "improve SEO", "search engine optimization",
-  "add open graph tags", "add favicon", "make site searchable",
-  or wants to add SEO essentials (robots.txt, sitemap.xml, meta tags) to their
-  Power Pages code site after creating it with /create-site.
+description: >-
+  Adds SEO essentials to a Power Pages code site, including robots.txt, sitemap.xml,
+  meta tags, Open Graph tags, and favicon configuration. Use when the user wants to
+  improve search engine optimization or make their site more searchable.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close
 model: sonnet

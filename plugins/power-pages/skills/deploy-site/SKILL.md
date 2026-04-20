@@ -1,6 +1,9 @@
 ---
 name: deploy-site
-description: This skill should be used when the user asks to "deploy to power pages", "upload site", "publish site", "deploy site", "push to power pages", "upload code site", or wants to deploy/upload an existing Power Pages code site to a Power Pages environment using PAC CLI.
+description: >-
+  Deploys an existing Power Pages code site to a Power Pages environment using PAC CLI.
+  Handles tooling verification, authentication, environment confirmation, building, and
+  uploading. Use when the user wants to deploy, upload, or publish their code site.
 user-invocable: true
 allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 model: sonnet

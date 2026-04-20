@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/@fluentui/web-components@beta/dist/web-components.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; font-family: var(--fontFamilyBase, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif); font-size: 14px; line-height: 1.5; background: var(--colorNeutralBackground1, #fff); color: var(--colorNeutralForeground1, #242424); overflow-x: hidden; }
+    .flight-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .flight-info { font-size: 20px; font-weight: 600; }
+    .airline { font-size: 14px; color: var(--colorNeutralForeground3, #707070); margin-top: 2px; }
+    .status-badge { display: inline-block; padding: 4px 12px; border-radius: 16px; font-size: 13px; font-weight: 600; }
+    .status-ontime { background: var(--colorPaletteGreenBackground1, #e6f9e6); color: var(--colorPaletteGreenForeground1, #0e7a0d); }
+    .status-delayed { background: var(--colorPaletteRedBackground1, #fde7e9); color: var(--colorPaletteRedForeground1, #bc2f32); }
+    .status-default { background: var(--colorNeutralBackground3, #f0f0f0); color: var(--colorNeutralForeground1, #242424); }
+    .route { display: flex; align-items: center; gap: 16px; margin: 20px 0; }
+    .airport-block { flex: 1; }
+    .airport-block.arrival { text-align: right; }
+    .airport-code { font-size: 32px; font-weight: 700; }
+    .city-name { font-size: 13px; color: var(--colorNeutralForeground3, #707070); }
+    .time-label { font-size: 12px; color: var(--colorNeutralForeground3, #707070); margin-top: 8px; }
+    .time-value { font-size: 16px; font-weight: 600; }
+    .route-line { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .line { width: 100%; height: 2px; background: var(--colorNeutralStroke1, #d1d1d1); position: relative; }
+    .line::after { content: ''; position: absolute; right: -2px; top: -4px; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid var(--colorNeutralStroke1, #d1d1d1); }
+    .duration { font-size: 12px; color: var(--colorNeutralForeground3, #707070); }
+    .details { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--colorNeutralStroke2, #e0e0e0); }
+    .detail-item { font-size: 13px; }
+    .detail-label { color: var(--colorNeutralForeground3, #707070); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div id="widget-root">
+    <fluent-spinner></fluent-spinner>
+    <span style="margin-left:8px;">Loading flight status...</span>
+  </div>
+  <script type="module">
+    import { App } from 'https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps/+esm';
+    import { webLightTheme, webDarkTheme } from 'https://cdn.jsdelivr.net/npm/@fluentui/tokens/+esm';
+    function applyTheme(theme) { const tokens = theme === 'dark' ? webDarkTheme : webLightTheme; for (const [token, value] of Object.entries(tokens)) { document.documentElement.style.setProperty('--' + token, value); } document.body.style.background = theme === 'dark' ? 'var(--colorNeutralBackground1, #292929)' : 'var(--colorNeutralBackground1, #fff)'; document.body.style.color = theme === 'dark' ? 'var(--colorNeutralForeground1, #e0e0e0)' : 'var(--colorNeutralForeground1, #242424)'; }
+    function escapeHtml(text) { const div = document.createElement('div'); div.textContent = String(text ?? ''); return div.innerHTML; }
+
+    const root = document.getElementById('widget-root');
+
+    function renderLoading() {
+      root.innerHTML = '<fluent-spinner></fluent-spinner><span style="margin-left:8px;">Loading flight status...</span>';
+    }
+
+    function renderError(msg) {
+      root.innerHTML = '<div style="color:var(--colorPaletteRedForeground1,#bc2f32);">' + escapeHtml(msg) + '</div>';
+    }
+
+    function formatTime(isoStr) {
+      if (!isoStr) { return ''; }
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+      } catch (e) {
+        return escapeHtml(isoStr);
+      }
+    }
+
+    function statusClass(status) {
+      const s = String(status ?? '').toLowerCase();
+      if (s === 'on time') { return 'status-ontime'; }
+      if (s === 'delayed') { return 'status-delayed'; }
+      return 'status-default';
+    }
+
+    function renderData(data) {
+      const dep = data.departure || {};
+      const arr = data.arrival || {};
+
+      root.innerHTML =
+        '<div class="flight-header">' +
+          '<div>' +
+            '<div class="flight-info">' + escapeHtml(data.flight_number) + '</div>' +
+            '<div class="airline">' + escapeHtml(data.airline) + '</div>' +
+          '</div>' +
+          '<div class="status-badge ' + statusClass(data.status) + '">' + escapeHtml(data.status) + '</div>' +
+        '</div>' +
+        '<div class="route">' +
+          '<div class="airport-block">' +
+            '<div class="airport-code">' + escapeHtml(dep.airport) + '</div>' +
+            '<div class="city-name">' + escapeHtml(dep.city) + '</div>' +
+            '<div class="time-label">Scheduled</div>' +
+            '<div class="time-value">' + formatTime(dep.scheduled) + '</div>' +
+            '<div class="time-label">Terminal ' + escapeHtml(dep.terminal) + ' &middot; Gate ' + escapeHtml(dep.gate) + '</div>' +
+          '</div>' +
+          '<div class="route-line">' +
+            '<div class="duration">' + escapeHtml(data.duration) + '</div>' +
+            '<div class="line"></div>' +
+            '<div class="duration">' + escapeHtml(data.aircraft) + '</div>' +
+          '</div>' +
+          '<div class="airport-block arrival">' +
+            '<div class="airport-code">' + escapeHtml(arr.airport) + '</div>' +
+            '<div class="city-name">' + escapeHtml(arr.city) + '</div>' +
+            '<div class="time-label">Estimated</div>' +
+            '<div class="time-value">' + formatTime(arr.estimated || arr.scheduled) + '</div>' +
+            '<div class="time-label">Terminal ' + escapeHtml(arr.terminal) + ' &middot; Gate ' + escapeHtml(arr.gate) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="details">' +
+          '<div class="detail-item"><div class="detail-label">Distance</div>' + escapeHtml(data.distance_miles) + ' miles</div>' +
+          '<div class="detail-item"><div class="detail-label">Aircraft</div>' + escapeHtml(data.aircraft) + '</div>' +
+        '</div>';
+    }
+
+    renderLoading();
+    const app = new App({ name: "flight-status", version: "1.0.0" });
+    app.ontoolresult = (result) => { const data = result.structuredContent; if (data) { renderData(data); } else { renderError('No flight data received.'); } };
+    app.onhostcontextchanged = (ctx) => { if (ctx.theme) { applyTheme(ctx.theme); } };
+    app.onteardown = () => ({});
+    await app.connect();
+    const hostCtx = app.getHostContext();
+    if (hostCtx?.theme) { applyTheme(hostCtx.theme); }
+  </script>
+</body>
+</html>

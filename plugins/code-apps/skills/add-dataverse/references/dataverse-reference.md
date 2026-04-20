@@ -174,6 +174,89 @@ const newRecord: any = {
 
 The `@odata.bind` value must be an entity set path with the GUID: `/<entitysetname>(<guid>)`
 
+## File and Image Columns
+
+Dataverse supports two special column types for binary content:
+
+| Type  | Dataverse Column Type | Max Size              | Notes                                               |
+|-------|-----------------------|-----------------------|-----------------------------------------------------|
+| File  | `FileType`            | 131 MB (configurable) | Any file type                                       |
+| Image | `ImageType`           | 30 MB                 | Converted to JPEG; supports full-size and thumbnail |
+
+The generated model exports type-safe union types for the file and image columns on the table. Use these types for all `columnName` arguments — never pass an arbitrary string:
+
+```typescript
+// Example from a table with two file columns and two image columns:
+type AccountsFileColumnName  = 'cr3d5_filecol' | 'cr3d5_filecol2';
+type AccountsImageColumnName = 'cr3d5_imagecol' | 'entityimage';
+type AccountsUploadColumnName = AccountsFileColumnName | AccountsImageColumnName;
+```
+
+The generated service exposes four methods for file/image operations.
+
+### `upload(id, columnName, file, fileDisplayName?)`
+
+Uploads a file or image to a record column. Accepts a standard browser `File` object directly.
+
+- `columnName` — must be `UploadColumnName` (works for both file and image columns)
+- `fileDisplayName` — optional friendly name shown in Dataverse; defaults to `file.name`
+- Returns a result object with `success`, `data`, and `error` fields; for uploads, `data` is empty
+
+```tsx
+const [uploading, setUploading] = useState(false);
+
+const handleUpload = async () => {
+  setUploading(true);
+  const result = await AccountsService.upload(recordId, columnName, selectedFile, displayName);
+  setUploading(false);
+  if (result.error) {
+    showToast('Upload failed: ' + result.error.message, 'error');
+  } else {
+    showToast('File uploaded successfully', 'success');
+    onUploadSuccess?.();  // refresh parent list
+  }
+};
+
+<button onClick={handleUpload} disabled={uploading}>
+  {uploading ? 'Uploading...' : 'Upload'}
+</button>
+```
+
+### `downloadFile(id, columnName)`
+
+Downloads a file column. The file bytes are returned in `result.data`.
+
+- `columnName` — must be `FileColumnName` (file columns only, not image)
+- Returns `IOperationResult<Uint8Array>` — use `result.data` for the raw bytes and `result.fileName` for the original filename
+
+### `downloadImage(id, columnName, fullSize?)`
+
+Downloads an image column and returns the raw bytes. Pass `fullSize: true` for the original resolution; defaults to thumbnail.
+
+- `columnName` — must be `ImageColumnName` (image columns only, not file)
+- `fullSize` — optional boolean, default `false` (thumbnail)
+- Returns `IOperationResult<Uint8Array>`
+
+### `deleteFileOrImage(id, columnName)`
+
+Deletes the file or image stored in a column. Works for both file and image columns.
+
+- `columnName` — must be `UploadColumnName`
+- Returns `IOperationResult<void>`
+
+```tsx
+const result = await AccountsService.deleteFileOrImage(recordId, columnName);
+if (!result.error) {
+  onUploadSuccess?.();  // refresh parent list
+}
+```
+
+### Common Patterns
+
+- **Disable during operation**: Set a loading flag and disable upload/delete buttons while the call is in flight to prevent double-submits.
+- **Toast feedback**: Show success/error after upload and delete. Auto-dismiss after ~5 seconds.
+- **Refresh after mutation**: Call a refresh callback after upload or delete so the UI reflects the latest state.
+
 ## TypeScript useState with Choice Values - CRITICAL
 
 When using `useState` with enum constants, TypeScript infers literal types. Explicitly type as `number`:

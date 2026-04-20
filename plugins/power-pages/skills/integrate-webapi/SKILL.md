@@ -1,13 +1,10 @@
 ---
 name: integrate-webapi
-description: >
-  This skill should be used when the user asks to "integrate web api", "add web api",
-  "connect to dataverse", "add api integration", "set up web api calls",
-  "integrate api for my tables", "add crud operations", "hook up web api",
-  "add data fetching", "connect frontend to dataverse", or wants to integrate
-  Power Pages Web API into their site's frontend code with proper permissions
-  and deployment. This skill orchestrates the full integration lifecycle:
-  code integration, permissions setup, and deployment.
+description: >-
+  Integrates Power Pages Web API into a site's frontend code with proper permissions and
+  deployment. Orchestrates the full integration lifecycle: code integration, table permissions
+  setup, and deployment for Dataverse CRUD operations. Use when the user wants to add Web API
+  calls, connect to Dataverse, or add data fetching to their frontend.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus

@@ -99,6 +99,7 @@ pwsh -NoProfile -Command "pac code init --displayName '{app-name}' -e <environme
 - **Lookup fields** expose `_fieldname_value` (GUID, read-only) for reading and `@odata.bind` for writing.
 - **Formatted values** can be requested via `Prefer: odata.include-annotations` header for server-side date/currency/label formatting.
 - **useState with enums**: Explicitly type picklist state fields as `number` to avoid TypeScript literal type inference.
+- **File/Image columns**: Use the generated `upload`, `downloadFile`, `downloadImage`, and `deleteFileOrImage` service methods — never raw fetch. The model exports table-prefixed union types for type-safe column references (for example, `AccountsFileColumnName`, `AccountsImageColumnName`, and `AccountsUploadColumnName`, depending on the table). See [dataverse-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) for full patterns.
 
 ### Connector Workarounds
 

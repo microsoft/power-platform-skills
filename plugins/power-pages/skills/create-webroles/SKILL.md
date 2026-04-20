@@ -1,10 +1,9 @@
 ---
 name: create-webroles
-description: >
-  This skill should be used when the user asks to "create web roles", "add web roles",
-  "set up web roles", "add roles", "create roles for my site", "manage web roles",
-  "add authenticated role", "add anonymous role", or wants to create web roles for
-  their Power Pages code site. Web roles control access and permissions for site users.
+description: >-
+  Creates and configures web roles for a Power Pages code site. Web roles control access
+  and permissions for site users, including authenticated and anonymous roles. Use when the
+  user wants to create, add, set up, or manage web roles for their site.
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus

@@ -1,0 +1,21 @@
+{
+  "name": "mcp-apps",
+  "version": "1.0.0",
+  "description": "Generate MCP App widgets for MCP tools. Produces self-contained HTML widgets using the MCP Apps protocol.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "mcp-apps",
+    "mcp",
+    "widget",
+    "ext-apps",
+    "fluent-ui",
+    "html",
+    "tool-visualization"
+  ]
+}
