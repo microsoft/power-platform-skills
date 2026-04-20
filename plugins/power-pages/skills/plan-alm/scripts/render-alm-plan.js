@@ -421,6 +421,9 @@ for (const [key, value] of Object.entries(replacements)) {
   result = result.split(`__${key}__`).join(value);
 }
 
+// The template contains exactly one `<span class="plan-status">` in the topbar —
+// we inject the status-specific modifier class onto it. If a future template revision
+// adds a second occurrence, switch to a `replace_all`-style loop.
 result = result.replace(/(<span class="plan-status)"/, `$1 ${planStatusClass}"`);
 
 const remaining = result.match(/__[A-Z][A-Z0-9_]+__/g);

@@ -71,10 +71,15 @@ function loadConfig(projectRoot) {
   }
 }
 
-function classifyTier(value, green, yellow) {
+// Bounds are strict upper bounds for each tier:
+//   value <  greenUpperExclusive  -> green
+//   value <  yellowUpperExclusive -> yellow
+//   otherwise                     -> red
+// Callers that want inclusive bounds should pass `bound + epsilon`.
+function classifyTier(value, greenUpperExclusive, yellowUpperExclusive) {
   if (value == null) return 'unknown';
-  if (value < green) return 'green';
-  if (value < yellow) return 'yellow';
+  if (value < greenUpperExclusive) return 'green';
+  if (value < yellowUpperExclusive) return 'yellow';
   return 'red';
 }
 

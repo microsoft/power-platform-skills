@@ -135,21 +135,24 @@ Steps:
    Site settings: {N total — K regular (keep as-is), P auth settings to review for env var, A auth settings (no dev value), E credential secrets excluded / unable to query}.
    ```
 
-10. **Estimate solution size and evaluate the split decision tree.** Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count:
+10. **Estimate solution size and evaluate the split decision tree.** Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count. Use the tmp-file write pattern — if the estimator fails, a prior good `.alm-size-estimate.json` is preserved instead of being overwritten with an empty/partial file:
     ```bash
     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
-      --datamodelManifest "./.datamodel-manifest.json" > ./.alm-size-estimate.json
+      --datamodelManifest "./.datamodel-manifest.json" > ./.alm-size-estimate.json.tmp \
+      && mv ./.alm-size-estimate.json.tmp ./.alm-size-estimate.json
     ```
-    Then run the decision tree:
+    Then run the decision tree (same tmp-file pattern):
     ```bash
     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
       --estimate ./.alm-size-estimate.json \
       --projectRoot "." \
       --siteName "{siteName}" \
-      --publisherPrefix "{publisherPrefix}" > ./.alm-split-plan.json
+      --publisherPrefix "{publisherPrefix}" > ./.alm-split-plan.json.tmp \
+      && mv ./.alm-split-plan.json.tmp ./.alm-split-plan.json
     ```
+    If either command exits non-zero, stop and report the stderr message to the user. Do not proceed to Q1b in Phase 2 without a valid split plan.
     Store the output as `SPLIT_PLAN`. Fields to read: `splitStrategy`, `proposedSolutions[]`, `appliedStrategies[]`, `assetAdvisory`, `sizeAnalysis`, `recommendations[]`.
 
     If `SPLIT_PLAN.proposedSolutions.length > 1`, set `RECOMMEND_SPLIT = true`. Otherwise `false`.

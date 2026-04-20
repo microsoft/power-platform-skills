@@ -257,3 +257,58 @@ test('buildSizeAnalysis tags signals as green/yellow/red', () => {
   assert.equal(analysis.componentCount.tier, 'red');
   assert.equal(analysis.schemaAttrCount.tier, 'green');
 });
+
+// --- Hard-flag component count ---------------------------------------------
+
+test('Hard-flag component count still routes to Strategy 2 (not silent single)', () => {
+  // 12,000 components is above hardFlagComponentCount (10,000) — earlier code
+  // fell through to `single`. Now it should still recommend a split.
+  const est = baseEstimate({ componentCount: 12000 });
+  const { primary } = selectStrategy(est, baseConfig());
+  assert.equal(primary, 'strategy-2-change-frequency');
+});
+
+test('Hard-flag component count emits an error-type recommendation', () => {
+  const result = computeSplitPlan({
+    estimate: baseEstimate({ componentCount: 12000 }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  const hit = result.recommendations.find((r) => r.type === 'error' && /hard-flag/i.test(r.message));
+  assert.ok(hit, 'expected an error-type recommendation mentioning the hard-flag threshold');
+});
+
+// --- Size / count consistency in Change-Frequency partition ----------------
+
+test('partitionByChangeFrequency sums sizeMB back to totalSizeMB (±0.5)', () => {
+  const est = baseEstimate({ totalSizeMB: 74, componentCount: 7200, cloudFlowCount: 12 });
+  const solutions = partitionByChangeFrequency(est, { baseName: 'T', siteName: 'T' });
+  const sum = solutions.reduce((s, sol) => s + sol.sizeMB, 0);
+  assert.ok(
+    Math.abs(sum - est.totalSizeMB) < 0.5,
+    `expected sizes to sum to ~${est.totalSizeMB} MB, got ${sum}`,
+  );
+});
+
+// --- partitionBySchema uses breakdown when available -----------------------
+
+test('partitionBySchema uses breakdown.tables to size domain solutions', () => {
+  const est = baseEstimate({
+    totalSizeMB: 100,
+    tableCount: 34,
+    schemaAttrCount: 32000,
+    breakdown: { tables: 40 }, // 40 MB in tables, 60 MB for site
+  });
+  const cfg = baseConfig({
+    domains: [
+      { name: 'Catalog', tableLogicalNames: ['tst_product'] },
+      { name: 'Orders', tableLogicalNames: ['tst_order'] },
+    ],
+  });
+  const solutions = partitionBySchema(est, { baseName: 'T', siteName: 'T' }, cfg);
+  // 40 MB split across 2 domains = 20 MB each
+  assert.equal(solutions[0].sizeMB, 20);
+  assert.equal(solutions[1].sizeMB, 20);
+  // Site solution absorbs the remainder
+  assert.equal(solutions[2].sizeMB, 60);
+});

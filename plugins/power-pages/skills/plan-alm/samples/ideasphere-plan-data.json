@@ -1,6 +1,6 @@
 {
   "SITE_NAME": "IdeaSphere",
-  "GENERATED_AT": "2026-04-20T07:16:54.037Z",
+  "GENERATED_AT": "2026-04-20T08:57:27.502Z",
   "STRATEGY": "pp-pipelines",
   "EXPORT_TYPE": "managed",
   "APPROVAL_MODE": "Staging auto-approve, production requires approval",

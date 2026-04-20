@@ -171,9 +171,10 @@ function selectStrategy(estimate, config) {
     estimate.totalSizeMB > t.maxSolutionSizeMB &&
     estimate.totalSizeMB <= t.sizeExceedsCapUpperBound &&
     estimate.webFilesAggregateMB > t.webFileDominanceRatio * estimate.totalSizeMB;
+  // Hard-flag counts still route to Strategy 2 — a split is the best option we have. The
+  // hard-flag warning is added separately in buildRecommendations.
   const isComponentHeavy =
-    (estimate.componentCount > t.maxComponentCount &&
-      estimate.componentCount <= t.hardFlagComponentCount) ||
+    estimate.componentCount > t.maxComponentCount ||
     (estimate.cloudFlowCount > t.changeFreqMinFlows && estimate.totalSizeMB > t.changeFreqMinSizeMB);
   const hasManyEnvVars = estimate.envVarCount > t.maxEnvVarCount;
 
@@ -244,7 +245,12 @@ function partitionByChangeFrequency(estimate, meta) {
     0,
   );
 
-  const approxSizePer = (pct) => round(estimate.totalSizeMB * pct);
+  // Derive size from count shares so size and componentCount stay self-consistent.
+  // Avoids the earlier bug where fixed 25/20/10/45% size fractions didn't track the
+  // count allocation and confused users reading the HTML.
+  const totalCounts = foundationCount + integrationCount + configCount + contentCount;
+  const sizePerCount = totalCounts > 0 ? estimate.totalSizeMB / totalCounts : 0;
+  const sizeFor = (n) => round(n * sizePerCount);
 
   return [
     {
@@ -253,7 +259,7 @@ function partitionByChangeFrequency(estimate, meta) {
       order: 1,
       componentTypes: ['Table', 'Environment Variable', 'Web Role', 'Table Permission'],
       description: 'Schema and security — rarely changes.',
-      sizeMB: approxSizePer(0.25),
+      sizeMB: sizeFor(foundationCount),
       componentCount: foundationCount,
       components: [],
     },
@@ -263,7 +269,7 @@ function partitionByChangeFrequency(estimate, meta) {
       order: 2,
       componentTypes: ['Cloud Flow', 'Bot Component', 'Connection Reference'],
       description: 'Cloud flows, bots, connection references.',
-      sizeMB: approxSizePer(0.2),
+      sizeMB: sizeFor(integrationCount),
       componentCount: integrationCount,
       components: [],
     },
@@ -273,7 +279,7 @@ function partitionByChangeFrequency(estimate, meta) {
       order: 3,
       componentTypes: ['Site Setting', 'Site Marker', 'Publishing State'],
       description: 'Site settings, markers, publishing states.',
-      sizeMB: approxSizePer(0.1),
+      sizeMB: sizeFor(configCount),
       componentCount: configCount,
       components: [],
     },
@@ -283,7 +289,7 @@ function partitionByChangeFrequency(estimate, meta) {
       order: 4,
       componentTypes: ['Web Page', 'Web Template', 'Page Template', 'Content Snippet', 'Web File'],
       description: 'Pages, templates, content snippets, web files. Highest change frequency.',
-      sizeMB: approxSizePer(0.45),
+      sizeMB: sizeFor(contentCount),
       componentCount: contentCount,
       components: [],
     },
@@ -295,15 +301,26 @@ function partitionBySchema(estimate, meta, config) {
     ? config.domains
     : deriveDomainsFromPrefix(estimate);
 
+  // Derive domain vs site size shares from the estimator's breakdown when available,
+  // falling back to a 50/50 heuristic only if breakdown is absent.
+  const tablesSizeMB = estimate.breakdown && Number.isFinite(Number(estimate.breakdown.tables))
+    ? Number(estimate.breakdown.tables)
+    : estimate.totalSizeMB * 0.5;
+  const siteSizeMB = Math.max(estimate.totalSizeMB - tablesSizeMB, 0);
+  const domainCount = Math.max(explicitDomains.length, 1);
+  const sizePerDomain = tablesSizeMB / domainCount;
+  const breakdownAvailable = estimate.breakdown && Number.isFinite(Number(estimate.breakdown.tables));
+  const domainDescSuffix = breakdownAvailable ? '' : ' (rough estimate — breakdown unavailable)';
+
   const domainSolutions = explicitDomains.map((dom, i) => ({
     uniqueName: `${meta.baseName}_${sanitizeDomainName(dom.name)}`,
     displayName: `${meta.siteName} — ${dom.name}`,
     order: i + 1,
     componentTypes: ['Table'],
-    description: `Schema domain: ${dom.name}. Tables: ${(dom.tableLogicalNames || []).join(', ') || '(derived)'}`,
-    sizeMB: round(estimate.totalSizeMB * (0.5 / Math.max(explicitDomains.length, 1))),
+    description: `Schema domain: ${dom.name}. Tables: ${(dom.tableLogicalNames || []).join(', ') || '(derived)'}${domainDescSuffix}`,
+    sizeMB: round(sizePerDomain),
     componentCount: Math.ceil(
-      (estimate.schemaAttrCount || 0) / Math.max(explicitDomains.length, 1),
+      (estimate.schemaAttrCount || 0) / domainCount,
     ),
     components: [],
     tableLogicalNames: dom.tableLogicalNames || [],
@@ -317,7 +334,7 @@ function partitionBySchema(estimate, meta, config) {
     componentTypes: ['Web Role', 'Table Permission', 'Site Setting', 'Cloud Flow', 'Web File', 'Web Page', 'Web Template'],
     description:
       'Site artifacts — web roles, permissions, settings, flows, pages. Imports after all domain solutions.',
-    sizeMB: round(estimate.totalSizeMB * 0.5),
+    sizeMB: round(siteSizeMB),
     componentCount: Math.max(
       estimate.componentCount - domainSolutions.reduce((s, d) => s + d.componentCount, 0),
       0,
@@ -401,6 +418,13 @@ function buildRecommendations(estimate, strategy, config) {
       type: 'warning',
       message:
         'Schema-heavy solution detected. Expected import time per stage: 2–10+ hours. Test in staging first and do not schedule production deploys during peak hours.',
+    });
+  }
+  if (estimate.componentCount > t.hardFlagComponentCount) {
+    recs.push({
+      type: 'error',
+      message:
+        `Component count (${estimate.componentCount.toLocaleString()}) exceeds the hard-flag threshold of ${t.hardFlagComponentCount.toLocaleString()}. Splitting alone is unlikely to be sufficient — archive historical data, remove unused components, or consolidate before proceeding.`,
     });
   }
   if (estimate.totalSizeMB > t.maxSolutionSizeMB) {

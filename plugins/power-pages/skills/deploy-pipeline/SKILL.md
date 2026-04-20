@@ -110,7 +110,9 @@ Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploym
 **In `MULTI_PIPELINE_MODE`:** The selected stage label (e.g., "Staging") is matched against each pipeline's `stages[]` — each pipeline has its own `stageId` for the same target environment. All subsequent phases (validate, deploy, poll) are looped over `PIPELINES_LIST` in `order`:
 1. Loop iteration i: use `pipelines[i].stageId` where stage label matches `SELECTED_STAGE.name`, `pipelines[i].solutionName`, etc.
 2. If any iteration fails (validation or deployment), halt the loop and report which pipeline failed and which were already deployed.
-3. Write one `.last-deploy.json` at the end summarizing all pipeline runs for this stage.
+3. Write one `.last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
+
+> **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-pipeline `status` in `.last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all pipelines again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-pipeline deploy to production.
 
 Check `.last-deploy.json` — if the last deployment to this stage failed, warn the user:
 > "The last deployment to `{stageName}` had status: **Failed**. Would you like to retry? 1. Yes, retry / 2. No, cancel"

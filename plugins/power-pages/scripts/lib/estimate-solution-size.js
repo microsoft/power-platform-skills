@@ -19,8 +19,9 @@
 //     siteType, tables[], estimationMethod, estimationAccuracyPct
 //   }
 //
-// Exit 0 on success, exit 1 on API error. Auth errors downgrade to exit 0
-// with a best-effort empty estimate so callers can still render a plan skeleton.
+// Exit 0 on success, exit 1 on any error (including auth failure). Callers that
+// redirect stdout to a file should use the tmp-file pattern (write to `.tmp`, move
+// on success) so a failed run doesn't clobber a prior good estimate.
 
 'use strict';
 
@@ -273,16 +274,16 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     throw new Error('Failed to acquire Azure CLI token. Run `az login` first.');
   }
 
-  const ppcs = await discoverPowerPageComponents(envUrl, websiteRecordId, token || resolved);
+  const ppcs = await discoverPowerPageComponents(envUrl, websiteRecordId, resolved);
   const classified = classifyPPCs(ppcs);
 
-  const tables = await discoverTables(envUrl, publisherPrefix, token || resolved, datamodelManifest);
-  const schemaAttrCount = await countAttributesForTables(envUrl, tables, token || resolved);
+  const tables = await discoverTables(envUrl, publisherPrefix, resolved, datamodelManifest);
+  const schemaAttrCount = await countAttributesForTables(envUrl, tables, resolved);
 
-  const envVarCount = await countEnvVarDefinitions(envUrl, publisherPrefix, token || resolved);
+  const envVarCount = await countEnvVarDefinitions(envUrl, publisherPrefix, resolved);
 
   const webFileSample = classified.webFiles.slice(0, 80); // sample up to 80 web files for sizing
-  const webMeasure = await measureWebFiles(envUrl, webFileSample, token || resolved);
+  const webMeasure = await measureWebFiles(envUrl, webFileSample, resolved);
 
   // Scale measured bytes to full web file count if we sampled
   const scaleFactor =
@@ -356,7 +357,7 @@ if (require.main === module) {
     })
     .catch((err) => {
       process.stderr.write(`${err.message}\n`);
-      process.exit(err.code === 'AUTH' ? 0 : 1);
+      process.exit(1);
     });
 }
 
