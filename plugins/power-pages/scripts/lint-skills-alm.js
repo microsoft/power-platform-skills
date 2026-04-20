@@ -57,16 +57,22 @@ function walkFiles(rootDir, predicate) {
   return out;
 }
 
-// Heuristics that identify "this file creates Dataverse state" across two very
-// different content shapes:
+// Heuristics that identify "this file creates or mutates Dataverse state" across
+// two very different content shapes:
 //
 // * SKILL.md prose style:  `POST {envUrl}/api/data/v9.2/environmentvariabledefinitions`
-// * JavaScript call style:  `makeRequest({ url: '…environmentvariabledefinitions', method: 'POST' })`
+//                          `PATCH {envUrl}/api/data/v9.2/solutions(...)`
+// * JavaScript call style: `makeRequest({ url: '…environmentvariabledefinitions', method: 'POST' })`
+//                          `apiPatch('solutions', ...)`
 //
-// The prose regex requires `POST` and a /api/data/ URL on the same line; the JS
-// check accepts them in any order across the whole file, as long as both a
-// POST/PATCH/PUT method and a known write endpoint appear.
-const PROSE_POST_PATTERN = /POST\s+[^\n]*\/api\/data\//i;
+// The prose regex requires a write verb + `/api/data/` URL on the same line.
+// The JS checks accept verb + endpoint in any order across the whole file.
+// POST creates; PATCH/PUT mutate an existing record and should still honor the
+// solution context (version bumps, component ownership checks); DELETE is
+// intentionally excluded — it's a different semantic that the resolver does not
+// help with.
+const WRITE_VERBS_PATTERN = /\b(POST|PATCH|PUT)\b/i;
+const PROSE_WRITE_PATTERN = /\b(POST|PATCH|PUT)\s+[^\n]*\/api\/data\//i;
 const ADD_COMPONENT_PATTERN = /AddSolutionComponent/;
 const WRITE_ENDPOINT_PATTERN =
   /\/api\/data\/v9\.\d\/(environmentvariabledefinitions|publishers|solutions|solutioncomponents|powerpagecomponents)\b/i;
@@ -76,15 +82,21 @@ const JS_WRITE_ENTITY_STRING_PATTERN =
   /['"](environmentvariabledefinitions|publishers|solutions|solutioncomponents|powerpagecomponents)['"]/i;
 const JS_WRITE_METHOD_PATTERN = /method\s*:\s*['"](POST|PATCH|PUT)['"]/i;
 // Helper function names that imply a Dataverse write.
-const JS_HELPER_WRITE_PATTERN = /\b(apiPost|apiPatch|apiPut|postRecord|createRecord|addSolutionComponent)\b/;
+const JS_HELPER_WRITE_PATTERN =
+  /\b(apiPost|apiPatch|apiPut|postRecord|patchRecord|createRecord|updateRecord|addSolutionComponent)\b/;
 
 function touchesDataverseWrites(content) {
   if (ADD_COMPONENT_PATTERN.test(content)) return true;
-  if (PROSE_POST_PATTERN.test(content)) return true;
+  if (PROSE_WRITE_PATTERN.test(content)) return true;
   if (WRITE_ENDPOINT_PATTERN.test(content) && JS_WRITE_METHOD_PATTERN.test(content)) return true;
   if (JS_WRITE_ENTITY_STRING_PATTERN.test(content) && JS_HELPER_WRITE_PATTERN.test(content)) return true;
   if (JS_WRITE_ENTITY_STRING_PATTERN.test(content) && JS_WRITE_METHOD_PATTERN.test(content)) return true;
   return false;
+}
+
+// Exported for tests so we can assert the verbs we actually intend to gate.
+function getGatedWriteVerbs() {
+  return ['POST', 'PATCH', 'PUT'];
 }
 
 function hasManifestRead(content) {
@@ -105,6 +117,97 @@ function extractIgnores(content) {
   return new Set(matches.map((m) => m[1]));
 }
 
+/**
+ * Parses a `.almlintignore` allowlist. Each non-empty, non-comment line has the
+ * shape: `<relative-path-or-glob> <rule-name> <reason text ...>`.
+ *
+ * - Paths are matched against the repo-relative path from pluginRoot, with
+ *   forward slashes and lowercase. `*` is a greedy wildcard (no cross-segment
+ *   magic); `?` matches a single character. Full globs aren't supported —
+ *   keep entries readable.
+ * - `rule-name` must be one of the KNOWN_RULES; an unknown name throws so that
+ *   typos can't silently disable a rule.
+ * - `reason` is required and must be at least 3 characters. Allowlist entries
+ *   should always document why they exist.
+ */
+const KNOWN_RULES = new Set([
+  'SKILL-must-read-manifest',
+  'SCRIPT-must-use-resolver',
+  'DISCOVER-coverage',
+]);
+
+function parseAllowlist(text, filePath) {
+  const entries = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.replace(/^\s+|\s+$/g, '');
+    if (!line || line.startsWith('#')) continue;
+    const first = line.indexOf(' ');
+    const second = first >= 0 ? line.indexOf(' ', first + 1) : -1;
+    if (first < 0 || second < 0) {
+      throw new Error(
+        `${filePath}:${i + 1}: allowlist entry must have '<path> <rule> <reason>' (got: "${raw}")`
+      );
+    }
+    const pathPart = line.slice(0, first);
+    const rulePart = line.slice(first + 1, second);
+    const reasonPart = line.slice(second + 1).trim();
+    if (!KNOWN_RULES.has(rulePart)) {
+      throw new Error(
+        `${filePath}:${i + 1}: unknown rule name "${rulePart}". Known: ${[...KNOWN_RULES].join(', ')}`
+      );
+    }
+    if (reasonPart.length < 3) {
+      throw new Error(
+        `${filePath}:${i + 1}: allowlist entry needs a reason of at least 3 characters`
+      );
+    }
+    entries.push({
+      pathPattern: pathPart,
+      rule: rulePart,
+      reason: reasonPart,
+      line: i + 1,
+    });
+  }
+  return entries;
+}
+
+function allowlistPathMatches(pattern, relPath) {
+  // Normalize both sides to POSIX, lowercase for case-insensitive matching.
+  const normPattern = pattern.replace(/\\/g, '/').toLowerCase();
+  const normPath = relPath.replace(/\\/g, '/').toLowerCase();
+  // Convert simple glob (* and ?) to regex.
+  const regexSrc =
+    '^' +
+    normPattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.') +
+    '$';
+  return new RegExp(regexSrc).test(normPath);
+}
+
+function loadAllowlist(pluginRoot) {
+  const candidates = [
+    path.join(pluginRoot, '.almlintignore'),
+    path.join(pluginRoot, 'scripts', '.almlintignore'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return { entries: parseAllowlist(fs.readFileSync(p, 'utf8'), p), source: p };
+    }
+  }
+  return { entries: [], source: null };
+}
+
+function findingIsAllowlisted(finding, allowlistEntries, pluginRoot) {
+  const rel = path.relative(pluginRoot, finding.file);
+  return allowlistEntries.some(
+    (e) => e.rule === finding.rule && allowlistPathMatches(e.pathPattern, rel)
+  );
+}
+
 // Derives referenced powerpagecomponenttype values from the PPC_TYPE_LABELS
 // constant in scripts/lib/discover-site-components.js.
 function loadKnownPpcTypes(pluginRoot) {
@@ -123,6 +226,7 @@ const PPCTYPE_FILTER_PATTERN = /powerpagecomponenttype\s+eq\s+(\d+)/gi;
 
 function collectFindings({ pluginRoot }) {
   const findings = [];
+  const { entries: allowlistEntries } = loadAllowlist(pluginRoot);
   const skillFiles = walkFiles(path.join(pluginRoot, 'skills'), (p) =>
     p.endsWith(`${path.sep}SKILL.md`)
   );
@@ -200,7 +304,12 @@ function collectFindings({ pluginRoot }) {
     });
   }
 
-  return findings;
+  // Apply the allowlist as a final filter — entries in .almlintignore suppress
+  // the matching finding. Inline `alm-lint-ignore:` comments handle single-file
+  // exceptions; the allowlist handles broader patterns that shouldn't require
+  // touching the source file.
+  if (allowlistEntries.length === 0) return findings;
+  return findings.filter((f) => !findingIsAllowlisted(f, allowlistEntries, pluginRoot));
 }
 
 function formatFinding(finding, pluginRoot) {
@@ -236,4 +345,11 @@ if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-module.exports = { collectFindings, formatFinding };
+module.exports = {
+  collectFindings,
+  formatFinding,
+  getGatedWriteVerbs,
+  parseAllowlist,
+  allowlistPathMatches,
+  KNOWN_RULES,
+};

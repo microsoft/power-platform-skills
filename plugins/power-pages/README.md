@@ -204,6 +204,10 @@ The plugin invokes multiple tools during a session. To reduce approval prompts:
 claude --dangerously-skip-permissions
 ```
 
+## ALM prompts you may see
+
+Several skills now ask about solution identity, orphan components, and pre-export completeness. These prompts catch a real class of bugs where Dataverse records silently stay behind in the `Default` solution. See **[`references/alm-prompts.md`](references/alm-prompts.md)** for a user-facing walkthrough of each prompt and how to respond.
+
 ## Documentation
 
 - [Power Pages AI Plugin Documentation](https://learn.microsoft.com/power-pages/configure/create-code-site-using-claude-code)
@@ -211,6 +215,7 @@ claude --dangerously-skip-permissions
 - [PAC CLI Reference](https://learn.microsoft.com/power-platform/developer/cli/reference/pages)
 - [Power Pages REST API](https://learn.microsoft.com/rest/api/power-platform/powerpages/websites)
 - [Dataverse Web API](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/overview)
+- [ALM prompts — user guide](references/alm-prompts.md)
 
 ## Testing validator scripts
 
