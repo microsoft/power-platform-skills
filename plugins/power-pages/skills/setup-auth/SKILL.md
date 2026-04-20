@@ -229,13 +229,18 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 **For "Entra External ID"**:
 
+All values below come from the Microsoft Entra admin center — **App registrations → {your app} → Endpoints** blade.
+
 | Question | Options |
 |----------|---------|
-| What is the Authority URL for your Entra External ID tenant? (e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/` or a custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) | *(free text)* |
-| What is the Client ID (Application ID) from the External ID app registration? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
-| What is the Metadata Address URL? (Leave blank to auto-derive from authority. Only needed if metadata is at a non-standard path.) | *(free text, optional)* |
+| What is the Authority URL? (from the Endpoints blade — e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/` or a custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) | *(free text)* |
+| What is the Client ID (Application ID)? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
+| What is the OpenID Connect metadata document URL? (from the Endpoints blade — e.g., `https://contoso.ciamlogin.com/{tenant-id}/v2.0/.well-known/openid-configuration`) | *(free text)* |
+| What display name should the login button show? (e.g., `Microsoft Entra External ID` or `Sign in with External ID`. **Do NOT use "Sign in with Microsoft"** — that conflicts with the Microsoft Account social provider.) | *(free text)* |
 
-> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
+> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
+
+> **Implementation note:** Power Pages server treats Entra External ID as a generic OpenID Connect provider (no special CIAM handling). All settings go under `Authentication/OpenIdConnect/{ProviderName}/`. The `provider` value posted to `/Account/Login/ExternalLogin` must match the `AuthenticationType` site setting, which by default equals the authority URL.
 
 **For "SAML2"**:
 
@@ -896,7 +901,21 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 - SAML2: `SAML2_1`, `SAML2_2`, etc.
 - WS-Federation: `WsFederation_1`, `WsFederation_2`, etc.
 
-**Handling re-runs:** If `create-site-setting.js` exits with code 1 because a setting already exists, skip that setting and continue. The existing setting is already configured from a previous run. Do not treat this as a fatal error.
+**Handling re-runs:** If `create-site-setting.js` exits with code 1 because a setting already exists, skip that setting and continue. The existing setting is already configured from a previous run. Do not treat this as a fatal error. The script checks for duplicates by both setting name and filename (case-insensitive) — no overwrites happen.
+
+**CRITICAL — Redirect URI / CallbackPath uniqueness when multiple OIDC providers are configured:**
+
+The OWIN OpenID Connect middleware defaults `CallbackPath` to `/signin-oidc` for **every** OIDC provider. If you configure two OIDC providers (e.g., Entra External ID + Okta) without setting unique CallbackPath values, they will both claim `/signin-oidc` and authentication will silently fail for one.
+
+**When creating site settings for a second (or later) OIDC provider:**
+
+1. Read existing site settings in `.powerpages-site/site-settings/` matching `Authentication/OpenIdConnect/*/CallbackPath` and `Authentication/OpenIdConnect/*/RedirectUri`
+2. Derive a unique suffix for the new provider (e.g., `-extid`, `-okta`, based on ProviderName)
+3. Set `CallbackPath` to `/signin-oidc-<suffix>` (unique across all OIDC providers)
+4. Set `RedirectUri` to `{site-url}/signin-oidc-<suffix>` (must match CallbackPath)
+5. Tell the user to add this exact redirect URI to their identity provider's app registration
+
+For the first/only OIDC provider, you can use the OWIN default `/signin-oidc` — but explicitly setting it is still recommended for clarity.
 
 **How values are sourced:**
 - **Non-secret values** (authority URL, site URL, redirect URIs, AuthenticationType) → filled automatically from information gathered during the flow. The user should NOT need to edit any files.
@@ -966,12 +985,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<authority-url-from-user>" \
   --description "Provider identifier for ExternalLogin"
 
-# RedirectUri
+# RedirectUri — MUST be unique across all OIDC providers (see collision note above)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<site-url>/signin-{provider}" \
-  --description "OAuth callback URL"
+  --value "<site-url>/signin-oidc-<unique-suffix>" \
+  --description "OAuth callback URL — unique per provider"
+
+# CallbackPath — REQUIRED when multiple OIDC providers are configured
+# OWIN defaults ALL OIDC providers to /signin-oidc, causing collisions
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
+  --value "/signin-oidc-<unique-suffix>" \
+  --description "Unique callback path for this OIDC provider"
 
 # ExternalLogoutEnabled — set to false when using RPInitiatedLogout (they are mutually exclusive)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1002,13 +1029,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<authority-url-from-user>" \
   --description "Entra External ID authority URL"
 
-# MetadataAddress — create if user provided one, or if authority doesn't follow standard convention
-# If blank, server auto-derives as {authority}/.well-known/openid-configuration
-# node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-#   --projectRoot "<PROJECT_ROOT>" \
-#   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
-#   --value "<metadata-address-from-user>" \
-#   --description "OIDC metadata endpoint URL"
+# MetadataAddress — REQUIRED for Entra External ID per Microsoft Learn docs
+# Collected from user in Phase 2.1 (from Endpoints blade in Entra admin center)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
+  --value "<metadata-address-from-user>" \
+  --description "OIDC metadata document URL"
 
 # ClientId — use value collected in Phase 2.1
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1017,19 +1044,27 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<client-id-from-user>" \
   --description "Application client ID"
 
-# AuthenticationType — same as authority URL
+# AuthenticationType — must match authority URL (used as the 'provider' form value in ExternalLogin POST)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
   --value "<authority-url-from-user>" \
   --description "Provider identifier for ExternalLogin — must match authority URL exactly"
 
-# RedirectUri
+# RedirectUri — MUST be unique across all OIDC providers (see collision note below)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<site-url>/signin-{provider}" \
-  --description "OAuth callback URL"
+  --value "<site-url>/signin-oidc-<unique-suffix>" \
+  --description "OAuth callback URL — unique per provider"
+
+# CallbackPath — REQUIRED when multiple OIDC providers are configured to prevent collision
+# OWIN defaults ALL OIDC providers to /signin-oidc, so a unique path per provider is needed
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
+  --value "/signin-oidc-<unique-suffix>" \
+  --description "Unique callback path for this OIDC provider"
 
 # ExternalLogoutEnabled — set to false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
