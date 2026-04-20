@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>ALM Plan — __SITE_NAME__</title>
+<title>ALM Plan — IdeaSphere</title>
 <style>
 :root {
   --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
@@ -204,18 +204,18 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
   <div class="topbar-left">
     <div class="logo">PP</div>
     <div>
-      <div class="topbar-title">ALM Plan &mdash; __SITE_NAME__</div>
-      <div class="topbar-sub">Generated __GENERATED_AT__</div>
+      <div class="topbar-title">ALM Plan &mdash; IdeaSphere</div>
+      <div class="topbar-sub">Generated 2026-04-20T07:16:54.037Z</div>
     </div>
   </div>
-  <span class="plan-status">__PLAN_STATUS__</span>
+  <span class="plan-status draft">Draft</span>
 </div>
 
 <div class="layout">
 
   <div class="sidebar">
     <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
-    <button class="nav-btn" data-tab="size"><span class="nav-icon">&#9670;</span> Size Analysis <span class="nav-badge __SIZE_BADGE_CLASS__">__SIZE_BADGE__</span></button>
+    <button class="nav-btn" data-tab="size"><span class="nav-icon">&#9670;</span> Size Analysis <span class="nav-badge nav-badge-warn">SPLIT</span></button>
     <button class="nav-btn" data-tab="advisory"><span class="nav-icon">&#9883;</span> Asset Advisory</button>
     <button class="nav-btn" data-tab="envvars"><span class="nav-icon">&#9830;</span> Env Variables</button>
     <button class="nav-btn" data-tab="solutions"><span class="nav-icon">&#9638;</span> Solutions</button>
@@ -227,42 +227,185 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
 
     <div class="section active" id="tab-overview">
       <h2>Overview</h2>
-      <p class="section-desc">Application lifecycle plan for <code>__SITE_NAME__</code>. Strategy: <strong>__STRATEGY_LABEL__</strong>.</p>
+      <p class="section-desc">Application lifecycle plan for <code>IdeaSphere</code>. Strategy: <strong>Power Platform Pipelines</strong>.</p>
 
-      <div class="summary-box">__OVERVIEW_SUMMARY__</div>
+      <div class="summary-box"><strong>IdeaSphere</strong> &mdash; estimated at <strong>128.4 MB</strong> with <strong>2,480</strong> components. Recommendation: <strong>2 solutions</strong> (strategy-1-layer). Each solution gets its own pipeline.<br/><br/>Asset advisory flagged <strong>5 file(s)</strong> for externalization to Azure Blob.</div>
 
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-num" style="color:var(--accent);">__STAT_COMPONENTS__</div><div class="stat-label">Components</div></div>
-        <div class="stat-card"><div class="stat-num" style="color:var(--pass);">__STAT_ENVVARS__</div><div class="stat-label">Env Variables</div></div>
-        <div class="stat-card"><div class="stat-num" style="color:__STAT_SIZE_COLOR__;">__STAT_SIZE__</div><div class="stat-label">Est. Size (MB)</div></div>
-        <div class="stat-card"><div class="stat-num" style="color:var(--purple);">__STAT_SOLUTIONS__</div><div class="stat-label">Solutions</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--accent);">2,480</div><div class="stat-label">Components</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--pass);">7</div><div class="stat-label">Env Variables</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--critical);">128.4</div><div class="stat-label">Est. Size (MB)</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--purple);">2</div><div class="stat-label">Solutions</div></div>
       </div>
 
       <h3>Environments</h3>
-      <div class="pipeline-container">__STAGES_HTML__</div>
+      <div class="pipeline-container"><div class="pipeline-stage stage-active">
+  <div class="stage-name">Dev</div>
+  <div class="stage-env">org1e98cc97.crm.dynamics.com</div>
+</div>
+<div class="pipeline-stage ">
+  <div class="stage-name">Staging</div>
+  <div class="stage-env">org60573626.crm4.dynamics.com</div>
+</div>
+<div class="pipeline-stage ">
+  <div class="stage-name">Production</div>
+  <div class="stage-env">(not yet configured)</div>
+</div></div>
 
       <h3>Recommendations &amp; Risks</h3>
-      __RISKS_HTML__
+      <div class="risk-item type-info"><span class="risk-icon">&#9432;</span><span>Estimated total size (128.4 MB) exceeds the recommended 95 MB cap.</span></div>
+<div class="risk-item type-info"><span class="risk-icon">&#9432;</span><span>Web files total 92.1 MB. Externalize large media to Azure Blob before import for reliability.</span></div>
 
       <h3>ALM Strategy</h3>
       <div class="card">
-        __STRATEGY_RATIONALE__
+        Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.
       </div>
     </div>
 
     <div class="section" id="tab-size">
       <h2>Size Analysis</h2>
-      <p class="section-desc">Estimated solution size and component signals against recommended thresholds. Estimation: <code>__ESTIMATION_METHOD__</code> (&plusmn;__ESTIMATION_ACCURACY__%).</p>
+      <p class="section-desc">Estimated solution size and component signals against recommended thresholds. Estimation: <code>metadata-based</code> (&plusmn;15%).</p>
 
-      __SIZE_ALERT__
+      <div class="warning-box">
+  <span style="font-size:18px;">&#9888;</span>
+  <div><strong>2 solutions recommended.</strong> See the Solutions tab for the split layout and Pipelines for per-solution deployment order.</div>
+</div>
 
-      __SIZE_GAUGE__
+      <div class="size-gauge-container">
+  <div class="size-gauge-header">
+    <div>
+      <div class="size-gauge-title">Total Estimated Size</div>
+      <div class="size-gauge-limit">Recommended limit: 95 MB</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="size-gauge-value" style="color:var(--critical);">128.4<span style="font-size:14px;color:var(--text-dim);font-weight:500;"> MB</span></div>
+      <div style="font-size:11px;color:var(--text-dim);">33.4 MB over limit</div>
+    </div>
+  </div>
+  <div class="size-gauge-track">
+    <div class="size-gauge-fill" style="width:76.92307692307692%;background:linear-gradient(90deg, #ca5010 0%, #d13438 100%);">
+      <span class="size-gauge-fill-label">128.4 MB</span>
+    </div>
+    <div class="size-gauge-threshold" style="left:56.91349149293073%;background:var(--text-bright);">
+      <div class="size-gauge-threshold-label">95 MB limit</div>
+    </div>
+  </div>
+</div>
 
       <h3>Signal classification</h3>
-      <div class="signal-grid">__SIGNAL_CARDS__</div>
+      <div class="signal-grid"><div class="signal-card">
+  <div class="signal-name">Size (MB)</div>
+  <div class="signal-value" style="color:var(--critical);">128.4</div>
+  <div class="signal-footer">
+    <span class="tier tier-red">red</span>
+    <span>&lt; 95 MB</span>
+  </div>
+</div>
+<div class="signal-card">
+  <div class="signal-name">Components</div>
+  <div class="signal-value" style="color:var(--pass);">2,480</div>
+  <div class="signal-footer">
+    <span class="tier tier-green">green</span>
+    <span>&lt; 6,000</span>
+  </div>
+</div>
+<div class="signal-card">
+  <div class="signal-name">Schema Attrs</div>
+  <div class="signal-value" style="color:var(--pass);">180</div>
+  <div class="signal-footer">
+    <span class="tier tier-green">green</span>
+    <span>&lt; 15,000</span>
+  </div>
+</div>
+<div class="signal-card">
+  <div class="signal-name">Tables</div>
+  <div class="signal-value" style="color:var(--pass);">6</div>
+  <div class="signal-footer">
+    <span class="tier tier-green">green</span>
+    <span>&lt; 20</span>
+  </div>
+</div>
+<div class="signal-card">
+  <div class="signal-name">Web Files (MB)</div>
+  <div class="signal-value" style="color:var(--critical);">92.1</div>
+  <div class="signal-footer">
+    <span class="tier tier-red">red</span>
+    <span>&lt; 40 MB</span>
+  </div>
+</div>
+<div class="signal-card">
+  <div class="signal-name">Env Vars</div>
+  <div class="signal-value" style="color:var(--pass);">7</div>
+  <div class="signal-footer">
+    <span class="tier tier-green">green</span>
+    <span>&lt; 500</span>
+  </div>
+</div></div>
 
       <h3>Breakdown by component category</h3>
-      <div class="card">__SIZE_BREAKDOWN__</div>
+      <div class="card"><div class="size-bar-row">
+  <div class="size-bar-label">Web Files</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:100%;background:#ca5010;">
+      <span class="size-bar-fill-label">71.7%</span>
+    </div>
+  </div>
+  <div class="size-bar-value">92.1 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Other Metadata</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:29.42453854505972%;background:#8890a4;">
+      <span class="size-bar-fill-label">21.1%</span>
+    </div>
+  </div>
+  <div class="size-bar-value">27.1 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Cloud Flows</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:7.166123778501629%;background:#5c2d91;">
+      
+    </div>
+  </div>
+  <div class="size-bar-value">6.6 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Tables &amp; Columns</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:2.2801302931596092%;background:#0078d4;">
+      
+    </div>
+  </div>
+  <div class="size-bar-value">2.1 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Site Settings</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:2%;background:#8764b8;">
+      
+    </div>
+  </div>
+  <div class="size-bar-value">0.3 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Web Roles &amp; Permissions</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:2%;background:#107c10;">
+      
+    </div>
+  </div>
+  <div class="size-bar-value">0.2 MB</div>
+</div>
+<div class="size-bar-row">
+  <div class="size-bar-label">Environment Variables</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:2%;background:#038387;">
+      
+    </div>
+  </div>
+  <div class="size-bar-value">0.0 MB</div>
+</div></div>
 
       <h3>Scale data &mdash; what we've tested</h3>
       <div class="card" style="font-size:12px;line-height:1.85;">
@@ -276,41 +419,244 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
     <div class="section" id="tab-advisory">
       <h2>Asset Advisory</h2>
       <p class="section-desc">Large files that should live outside the Dataverse solution. Primary recommendation: Azure Blob Storage (private, SAS-gated). Advisory only &mdash; no automated upload.</p>
-      __ADVISORY_HTML__
+      <div class="warning-box"><span style="font-size:18px;">&#9888;</span>
+    <div><strong>Bulk externalization recommended.</strong> Aggregate web file size and media ratio indicate the bundle is dominated by images/fonts. Moving these to Azure Blob (or CDN) will reduce solution size meaningfully and can avoid the need for a split.</div></div><div class="advisory-item">
+  <div class="advisory-item-size">8.4 MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">hero-banner-4k.png</div>
+    <div class="advisory-item-rationale">Large image (8.4 MB). Private access via SAS preserves any auth requirements. Consider WebP conversion before upload (est. 30–70% reduction).</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; https://{account}.blob.core.windows.net/{container}/hero-banner-4k.png</div>
+  </div>
+  <span class="advisory-item-tag azure-blob">Azure Blob</span>
+</div>
+<div class="advisory-item">
+  <div class="advisory-item-size">24.6 MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">product-tour.mp4</div>
+    <div class="advisory-item-rationale">Large file (24.6 MB). Private access via SAS preserves any auth requirements.</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; https://{account}.blob.core.windows.net/{container}/product-tour.mp4</div>
+  </div>
+  <span class="advisory-item-tag azure-blob">Azure Blob</span>
+</div>
+<div class="advisory-item">
+  <div class="advisory-item-size">18.2 MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">ideasphere-demo.mp4</div>
+    <div class="advisory-item-rationale">Large file (18.2 MB). Private access via SAS preserves any auth requirements.</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; https://{account}.blob.core.windows.net/{container}/ideasphere-demo.mp4</div>
+  </div>
+  <span class="advisory-item-tag azure-blob">Azure Blob</span>
+</div>
+<div class="advisory-item">
+  <div class="advisory-item-size">3.1 MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">team-photo-gallery.png</div>
+    <div class="advisory-item-rationale">Large image (3.1 MB). Private access via SAS preserves any auth requirements. Consider WebP conversion before upload (est. 30–70% reduction).</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; https://{account}.blob.core.windows.net/{container}/team-photo-gallery.png</div>
+  </div>
+  <span class="advisory-item-tag azure-blob">Azure Blob</span>
+</div>
+<div class="advisory-item">
+  <div class="advisory-item-size">2.8 MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">product-catalog.pdf</div>
+    <div class="advisory-item-rationale">Large file (2.8 MB). Private access via SAS preserves any auth requirements.</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; https://{account}.blob.core.windows.net/{container}/product-catalog.pdf</div>
+  </div>
+  <span class="advisory-item-tag azure-blob">Azure Blob</span>
+</div>
     </div>
 
     <div class="section" id="tab-envvars">
       <h2>Environment Variables</h2>
       <p class="section-desc">Environment-specific configuration that should differ between stages.</p>
-      __ENVVARS_HTML__
+      <div class="card" style="padding:0;overflow-x:auto;">
+  <table class="env-table"><thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Dev</th><th>Staging</th><th>Production</th></tr></thead><tbody><tr>
+  <td class="env-name">ids_SiteUrl</td>
+  <td>String</td>
+  <td><code>Site/BaseUrl</code></td>
+  <td class="env-val">https://ideasphere-dev.powerappsportals.com</td><td class="env-val">https://site-p3ie2.powerappsportals.com</td><td class="env-val">(not set)</td>
+</tr>
+<tr>
+  <td class="env-name">ids_LocalLoginEnabled</td>
+  <td>Boolean</td>
+  <td><code>Authentication/Registration/LocalLoginEnabled</code></td>
+  <td class="env-val">true</td><td class="env-val">false</td><td class="env-val">false</td>
+</tr>
+<tr>
+  <td class="env-name">ids_EntraClientId</td>
+  <td>String</td>
+  <td><code>Authentication/OpenIdConnect/AzureAD/ClientId</code></td>
+  <td class="env-val">dev-aaaa-1111-2222-cccc</td><td class="env-val">stg-bbbb-3333-4444-dddd</td><td class="env-val">(not set)</td>
+</tr>
+<tr>
+  <td class="env-name">ids_DataverseOrgUrl</td>
+  <td>String</td>
+  <td><code>Site/DataverseOrgUrl</code></td>
+  <td class="env-val">https://org1e98cc97.crm.dynamics.com</td><td class="env-val">https://org60573626.crm4.dynamics.com</td><td class="env-val">(not set)</td>
+</tr>
+<tr>
+  <td class="env-name">ids_NotificationEndpoint</td>
+  <td>String</td>
+  <td><code>Site/NotificationEndpoint</code></td>
+  <td class="env-val">https://prod-01.westus.logic.azure.com:443/workflows/dev-abc123</td><td class="env-val">https://prod-02.westus.logic.azure.com:443/workflows/stg-def456</td><td class="env-val">(not set)</td>
+</tr>
+<tr>
+  <td class="env-name">ids_WebApiEnabled</td>
+  <td>Boolean</td>
+  <td><code>Webapi/ids_idea/Enabled</code></td>
+  <td class="env-val">true</td><td class="env-val">true</td><td class="env-val">(not set)</td>
+</tr>
+<tr>
+  <td class="env-name">ids_SearchEnabled</td>
+  <td>Boolean</td>
+  <td><code>Search/Enabled</code></td>
+  <td class="env-val">true</td><td class="env-val">false</td><td class="env-val">(not set)</td>
+</tr></tbody></table>
+</div>
     </div>
 
     <div class="section" id="tab-solutions">
-      <h2>__SOLUTIONS_TAB_TITLE__</h2>
-      <p class="section-desc">__SOLUTIONS_TAB_DESC__</p>
-      __SOLUTIONS_HTML__
+      <h2>Solutions (2)</h2>
+      <p class="section-desc">Split into 2 managed solutions per the decision tree. Deploy in order shown below.</p>
+      <div class="split-solution-card open">
+  <div class="split-solution-header">
+    <div class="split-solution-num" style="background:#0078d4;">1</div>
+    <div>
+      <div class="split-solution-title">IdeaSphere — Core</div>
+      <div class="split-solution-subtitle"><code>IdeaSphere_Core</code></div>
+    </div>
+    <div class="split-solution-size">
+      <span class="split-solution-size-val" style="color:var(--pass);">36.3</span>
+      <span class="split-solution-size-unit">MB</span>
+    </div>
+    <span class="split-solution-chevron">&#9660;</span>
+  </div>
+  <div class="split-solution-body">
+    <div style="font-size:13px;color:var(--text);margin:14px 0;line-height:1.7;">Tables, security, integrations, site settings, environment variables. Low change frequency.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">
+      <div><h4>Component types</h4><div style="color:var(--text);">Table, Site Setting, Web Role, Table Permission, Cloud Flow, Environment Variable, Bot Component</div></div>
+      <div><h4>Component count (est.)</h4><div style="font-family:var(--mono);font-size:15px;font-weight:700;">310</div></div>
+    </div>
+    
+  </div>
+</div>
+<div class="split-solution-card ">
+  <div class="split-solution-header">
+    <div class="split-solution-num" style="background:#ca5010;">2</div>
+    <div>
+      <div class="split-solution-title">IdeaSphere — Web Assets</div>
+      <div class="split-solution-subtitle"><code>IdeaSphere_WebAssets</code></div>
+    </div>
+    <div class="split-solution-size">
+      <span class="split-solution-size-val" style="color:var(--pass);">92.1</span>
+      <span class="split-solution-size-unit">MB</span>
+    </div>
+    <span class="split-solution-chevron">&#9660;</span>
+  </div>
+  <div class="split-solution-body">
+    <div style="font-size:13px;color:var(--text);margin:14px 0;line-height:1.7;">Web files (media, content uploads tracked in powerpagecomponent). High change frequency — deploy independently.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">
+      <div><h4>Component types</h4><div style="color:var(--text);">Web File</div></div>
+      <div><h4>Component count (est.)</h4><div style="font-family:var(--mono);font-size:15px;font-weight:700;">2,170</div></div>
+    </div>
+    
+  </div>
+</div>
     </div>
 
     <div class="section" id="tab-pipelines">
-      <h2>__PIPELINES_TAB_TITLE__</h2>
-      <p class="section-desc">__PIPELINES_TAB_DESC__</p>
-      __PIPELINES_HTML__
+      <h2>Deployment Pipelines (2)</h2>
+      <p class="section-desc">One pipeline per solution, deployed in dependency order. All pipelines share the same deployment environments.</p>
+      <div class="pipeline-solution-label">
+  <span class="pipeline-solution-dot" style="background:#0078d4;"></span>
+  <span class="pipeline-solution-name">IdeaSphere_Core-Pipeline</span>
+  <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">order 1</span>
+</div>
+<div class="pipeline-container">
+  <div class="pipeline-stage stage-active">
+    <div class="stage-name">Dev</div>
+    <div class="stage-env">org1e98cc97.crm.dynamics.com</div>
+  </div><div class="pipeline-stage ">
+    <div class="stage-name">Staging</div>
+    <div class="stage-env">org60573626.crm4.dynamics.com</div>
+  </div><div class="pipeline-stage ">
+    <div class="stage-name">Production</div>
+    <div class="stage-env">(not yet configured)</div>
+  </div>
+</div>
+<div class="pipeline-solution-label">
+  <span class="pipeline-solution-dot" style="background:#ca5010;"></span>
+  <span class="pipeline-solution-name">IdeaSphere_WebAssets-Pipeline</span>
+  <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">order 2</span>
+</div>
+<div class="pipeline-container">
+  <div class="pipeline-stage stage-active">
+    <div class="stage-name">Dev</div>
+    <div class="stage-env">org1e98cc97.crm.dynamics.com</div>
+  </div><div class="pipeline-stage ">
+    <div class="stage-name">Staging</div>
+    <div class="stage-env">org60573626.crm4.dynamics.com</div>
+  </div><div class="pipeline-stage ">
+    <div class="stage-name">Production</div>
+    <div class="stage-env">(not yet configured)</div>
+  </div>
+</div>
     </div>
 
     <div class="section" id="tab-checklist">
       <h2>Execution Checklist</h2>
       <p class="section-desc">Steps invoked by plan-alm after approval.</p>
-      __CHECKLIST_HTML__
+      <div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Setup solutions (Core + WebAssets)</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Setup pipelines (one per solution)</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Deploy IdeaSphere_Core to Staging</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Deploy IdeaSphere_WebAssets to Staging</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Activate site in Staging</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Deploy IdeaSphere_Core to Production</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Deploy IdeaSphere_WebAssets to Production</span>
+  <span class="status-badge pending">pending</span>
+</div>
+<div class="checklist-item status-pending">
+  <span class="checklist-icon">&#9675;</span>
+  <span class="checklist-name">Activate site in Production</span>
+  <span class="status-badge pending">pending</span>
+</div>
       <div class="card" style="margin-top:20px;font-size:12px;color:var(--text-dim);">
-        <strong>Approved by:</strong> <span id="approved-by">__APPROVED_BY__</span> &nbsp;&middot;&nbsp;
-        <strong>Approval date:</strong> <span id="approval-date">__APPROVAL_DATE__</span>
+        <strong>Approved by:</strong> <span id="approved-by"></span> &nbsp;&middot;&nbsp;
+        <strong>Approval date:</strong> <span id="approval-date"></span>
       </div>
     </div>
 
   </div>
 </div>
 
-<footer class="page-footer">AI-generated content may be incorrect &middot; ALM Plan for __SITE_NAME__</footer>
+<footer class="page-footer">AI-generated content may be incorrect &middot; ALM Plan for IdeaSphere</footer>
 
 <script>
 document.querySelectorAll('.nav-btn').forEach(btn => {

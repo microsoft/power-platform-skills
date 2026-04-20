@@ -1,0 +1,42 @@
+{
+  "siteName": "IdeaSphere",
+  "publisherPrefix": "ids",
+  "totalSizeMB": 128.4,
+  "componentCount": 2480,
+  "tableCount": 6,
+  "schemaAttrCount": 180,
+  "webFilesAggregateMB": 92.1,
+  "webFilesIndividual": [
+    { "name": "hero-banner-4k.png", "sizeMB": 8.4 },
+    { "name": "product-tour.mp4", "sizeMB": 24.6 },
+    { "name": "ideasphere-demo.mp4", "sizeMB": 18.2 },
+    { "name": "team-photo-gallery.png", "sizeMB": 3.1 },
+    { "name": "product-catalog.pdf", "sizeMB": 2.8 },
+    { "name": "favicon.ico", "sizeMB": 0.05 }
+  ],
+  "webFileCount": 2170,
+  "cloudFlowCount": 3,
+  "botCount": 0,
+  "envVarCount": 7,
+  "mediaRatio": 0.82,
+  "siteType": "code-site",
+  "tables": [
+    { "logicalName": "ids_idea", "attributeCount": 42 },
+    { "logicalName": "ids_vote", "attributeCount": 18 },
+    { "logicalName": "ids_comment", "attributeCount": 24 },
+    { "logicalName": "ids_category", "attributeCount": 14 },
+    { "logicalName": "ids_review", "attributeCount": 48 },
+    { "logicalName": "ids_tag", "attributeCount": 34 }
+  ],
+  "breakdown": {
+    "tables": 2.1,
+    "webFiles": 92.1,
+    "siteSettings": 0.3,
+    "cloudFlows": 6.6,
+    "webRolesAndPermissions": 0.2,
+    "envVars": 0.01,
+    "otherMetadata": 27.1
+  },
+  "estimationMethod": "metadata-based",
+  "estimationAccuracyPct": 15
+}

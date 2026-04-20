@@ -1,0 +1,91 @@
+{
+  "siteName": "IdeaSphere",
+  "baseName": "IdeaSphere",
+  "STRATEGY": "pp-pipelines",
+  "APPROVAL_MODE": "Staging auto-approve, production requires approval",
+  "GIT_STATUS": "yes",
+  "PLAN_STATUS": "Draft",
+  "stages": [
+    { "label": "Dev", "envUrl": "org1e98cc97.crm.dynamics.com", "type": "source" },
+    { "label": "Staging", "envUrl": "org60573626.crm4.dynamics.com", "type": "target" },
+    { "label": "Production", "envUrl": "(not yet configured)", "type": "target" }
+  ],
+  "steps": [
+    { "name": "Setup solutions (Core + WebAssets)", "status": "pending" },
+    { "name": "Setup pipelines (one per solution)", "status": "pending" },
+    { "name": "Deploy IdeaSphere_Core to Staging", "status": "pending" },
+    { "name": "Deploy IdeaSphere_WebAssets to Staging", "status": "pending" },
+    { "name": "Activate site in Staging", "status": "pending" },
+    { "name": "Deploy IdeaSphere_Core to Production", "status": "pending" },
+    { "name": "Deploy IdeaSphere_WebAssets to Production", "status": "pending" },
+    { "name": "Activate site in Production", "status": "pending" }
+  ],
+  "risks": [],
+  "envVars": [
+    {
+      "schemaName": "ids_SiteUrl",
+      "displayName": "IdeaSphere - Site URL",
+      "type": "String",
+      "siteSetting": "Site/BaseUrl",
+      "values": {
+        "Dev": "https://ideasphere-dev.powerappsportals.com",
+        "Staging": "https://site-p3ie2.powerappsportals.com",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_LocalLoginEnabled",
+      "displayName": "IdeaSphere - Local Login Enabled",
+      "type": "Boolean",
+      "siteSetting": "Authentication/Registration/LocalLoginEnabled",
+      "values": { "Dev": "true", "Staging": "false", "Production": "false" }
+    },
+    {
+      "schemaName": "ids_EntraClientId",
+      "displayName": "IdeaSphere - Entra ID Client ID",
+      "type": "String",
+      "siteSetting": "Authentication/OpenIdConnect/AzureAD/ClientId",
+      "values": {
+        "Dev": "dev-aaaa-1111-2222-cccc",
+        "Staging": "stg-bbbb-3333-4444-dddd",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_DataverseOrgUrl",
+      "displayName": "IdeaSphere - Dataverse Org URL",
+      "type": "String",
+      "siteSetting": "Site/DataverseOrgUrl",
+      "values": {
+        "Dev": "https://org1e98cc97.crm.dynamics.com",
+        "Staging": "https://org60573626.crm4.dynamics.com",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_NotificationEndpoint",
+      "displayName": "IdeaSphere - Notification Endpoint",
+      "type": "String",
+      "siteSetting": "Site/NotificationEndpoint",
+      "values": {
+        "Dev": "https://prod-01.westus.logic.azure.com:443/workflows/dev-abc123",
+        "Staging": "https://prod-02.westus.logic.azure.com:443/workflows/stg-def456",
+        "Production": "(not set)"
+      }
+    },
+    {
+      "schemaName": "ids_WebApiEnabled",
+      "displayName": "IdeaSphere - Web API Enabled",
+      "type": "Boolean",
+      "siteSetting": "Webapi/ids_idea/Enabled",
+      "values": { "Dev": "true", "Staging": "true", "Production": "(not set)" }
+    },
+    {
+      "schemaName": "ids_SearchEnabled",
+      "displayName": "IdeaSphere - Search Feature Enabled",
+      "type": "Boolean",
+      "siteSetting": "Search/Enabled",
+      "values": { "Dev": "true", "Staging": "false", "Production": "(not set)" }
+    }
+  ]
+}

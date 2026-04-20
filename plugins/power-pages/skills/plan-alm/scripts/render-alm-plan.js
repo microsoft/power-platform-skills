@@ -5,10 +5,13 @@
  * Usage:
  *   node render-alm-plan.js --output <path> --data <json-file>
  *
- * Required keys in the JSON data file:
- *   SITE_NAME, GENERATED_AT, STRATEGY, EXPORT_TYPE, APPROVAL_MODE,
- *   GIT_STATUS, HAS_ENV_VARS, SOLUTION_DONE, PIPELINE_DONE,
- *   PLAN_STATUS, APPROVED_BY, APPROVAL_DATE, stages, steps, risks
+ * Required top-level keys in the JSON data file:
+ *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE,
+ *   stages, steps, risks
+ *
+ * Optional v2 keys (added for split-solutions support):
+ *   sizeAnalysis, assetAdvisory, proposedSolutions, appliedStrategies,
+ *   recommendations, envVars, breakdown, estimationMethod, estimationAccuracyPct
  */
 
 const path = require('path');
@@ -44,255 +47,373 @@ try {
   process.exit(1);
 }
 
-// ── Validate required keys ────────────────────────────────────────────────────
-const requiredKeys = [
-  'SITE_NAME', 'GENERATED_AT', 'STRATEGY', 'EXPORT_TYPE', 'APPROVAL_MODE',
-  'GIT_STATUS', 'HAS_ENV_VARS', 'PLAN_STATUS', 'APPROVED_BY', 'APPROVAL_DATE',
-  'stages', 'steps', 'risks',
-];
-const missing = requiredKeys.filter(k => !(k in data));
-if (missing.length > 0) {
-  console.error(`Missing required keys in data file: ${missing.join(', ')}`);
-  process.exit(1);
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+const tierColor = { green: 'var(--pass)', yellow: 'var(--high)', red: 'var(--critical)', unknown: 'var(--text-dim)' };
+
+const strategyLabel = data.STRATEGY === 'pp-pipelines' ? 'Power Platform Pipelines' : 'Manual Export / Import';
+const proposedSolutions = Array.isArray(data.proposedSolutions) ? data.proposedSolutions : [];
+const envVars = Array.isArray(data.envVars) ? data.envVars : [];
+const sizeAnalysis = data.sizeAnalysis || null;
+const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
+const breakdown = data.breakdown || {};
+
+const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
+const componentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+const SIZE_LIMIT_MB = 95;
+const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
+const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
+const sizeColor = tierColor[sizeTier];
+
+const sizeBadge = proposedSolutions.length > 1 ? 'SPLIT' : (exceedsSize ? 'SPLIT' : 'OK');
+const sizeBadgeClass = (proposedSolutions.length > 1 || exceedsSize) ? 'nav-badge-warn' : 'nav-badge-ok';
+
+function buildOverviewSummary() {
+  const solCount = proposedSolutions.length || 1;
+  const strat = Array.isArray(data.appliedStrategies) && data.appliedStrategies.length > 0
+    ? data.appliedStrategies.join(' + ')
+    : data.splitStrategy || 'single';
+
+  let msg = `<strong>${escapeHtml(data.SITE_NAME)}</strong> &mdash; `;
+  msg += `estimated at <strong>${totalSizeMB.toFixed(1)} MB</strong> with <strong>${componentCount.toLocaleString()}</strong> components. `;
+  if (solCount > 1) {
+    msg += `Recommendation: <strong>${solCount} solutions</strong> (${strat}). Each solution gets its own pipeline.`;
+  } else {
+    msg += 'Recommendation: <strong>single solution</strong>. Within thresholds across all signals.';
+  }
+  if (assetAdvisory.candidates?.length > 0) {
+    msg += `<br/><br/>Asset advisory flagged <strong>${assetAdvisory.candidates.length} file(s)</strong> for externalization to Azure Blob.`;
+  }
+  return msg;
 }
 
-// ── Derived display values ─────────────────────────────────────────────────────
-const strategyLabel = data.STRATEGY === 'pp-pipelines'
-  ? 'Power Platform Pipelines'
-  : 'Manual Export / Import';
-
-const stageCount = Array.isArray(data.stages) ? data.stages.length : 0;
-
-const approvalLabel = (() => {
-  const m = String(data.APPROVAL_MODE || '').toLowerCase();
-  if (m.includes('required') || m.includes('before each') || m === '1') return 'Required';
-  if (m.includes('staging auto') || m === '2') return 'Partial';
-  if (m.includes('no approval') || m.includes('auto') || m === '3') return 'None';
-  return data.APPROVAL_MODE || 'Not set';
-})();
-
-// ── Build __STAGES_HTML__ ─────────────────────────────────────────────────────
-function stageClass(stage) {
-  // Explicit deployment status takes priority
-  const ds = String(stage.deployStatus || '').toLowerCase();
-  if (ds === 'deployed')     return 'stage-deployed';
-  if (ds === 'failed')       return 'stage-failed';
-  if (ds === 'not-deployed') return 'stage-pending';
-  // Source stage is always blue (not a deployment target)
-  if (stage.type === 'source') return 'stage-not-started';
-  // Target stages with no status yet → not-started (blue)
-  return 'stage-not-started';
-}
-
-const stagesHtml = (data.stages || []).map((stage, i) => {
-  const cls = stageClass(stage, i);
-  const urlDisplay = stage.envUrl
-    ? `<span class="env-url">${escapeHtml(stage.envUrl)}</span>`
-    : '';
-  const approvalBadge = (stage.approval)
-    ? `<div><span class="approval-badge">Approval gate</span></div>`
-    : '';
-  const stageBox = `<div class="stage-box ${cls}">
-  <span class="stage-label">${escapeHtml(stage.label)}</span>
-  ${urlDisplay}
-  ${approvalBadge}
+function buildStagesHtml() {
+  return (data.stages || []).map((stage) => {
+    const activeClass = stage.type === 'source' ? 'stage-active' : '';
+    const url = stage.envUrl ? `<div class="stage-env">${escapeHtml(stage.envUrl)}</div>` : '';
+    return `<div class="pipeline-stage ${activeClass}">
+  <div class="stage-name">${escapeHtml(stage.label || '')}</div>
+  ${url}
 </div>`;
-  const arrow = (i < (data.stages || []).length - 1)
-    ? `<div class="stage-arrow">→</div>`
-    : '';
-  return stageBox + arrow;
-}).join('\n');
+  }).join('\n');
+}
 
-// ── Build __ENVIRONMENTS_TABLE__ ──────────────────────────────────────────────
-const envRows = (data.stages || []).map(stage => {
-  const roleLabel = stage.type === 'source' ? 'Source (Dev)' : 'Target';
-  const url = stage.envUrl || '—';
-  return `<tr>
-  <td>${escapeHtml(stage.label)}</td>
-  <td>${escapeHtml(roleLabel)}</td>
-  <td><code>${escapeHtml(url)}</code></td>
-  <td>${escapeHtml(data.EXPORT_TYPE === 'managed' ? 'Managed' : 'Unmanaged')}</td>
+function buildRisksHtml() {
+  const risks = Array.isArray(data.risks) ? data.risks : [];
+  const recs = Array.isArray(data.recommendations) ? data.recommendations : [];
+  const all = [...risks, ...recs];
+  if (all.length === 0) {
+    return '<div class="note-box neutral">No risks or recommendations identified for this plan.</div>';
+  }
+  const iconMap = { warning: '&#9888;', info: '&#9432;', error: '&#9940;' };
+  return all.map((r) => {
+    const t = String(r.type || 'info').toLowerCase();
+    return `<div class="risk-item type-${t}"><span class="risk-icon">${iconMap[t] || '&#9432;'}</span><span>${escapeHtml(r.message || '')}</span></div>`;
+  }).join('\n');
+}
+
+function buildStrategyRationale() {
+  const strat = data.splitStrategy || 'single';
+  const map = {
+    'single': 'All components packaged in a single managed solution. Estimated size is within the recommended 95 MB cap and component count is within tested bounds. One pipeline, one approval chain.',
+    'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.',
+    'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. Each solution has its own pipeline so low-churn layers don\'t re-import when content changes.',
+    'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
+    'strategy-4-config-isolation': 'Environment variable definitions isolated into their own solution so value changes don\'t require re-importing everything else.',
+  };
+  let rationale = map[strat] || map.single;
+  if (data.appliedStrategies?.includes('strategy-4-config-isolation') && strat !== 'strategy-4-config-isolation') {
+    rationale += ' Additionally, env var definitions are isolated into a dedicated EnvVars solution (additive Strategy 4).';
+  }
+  return rationale;
+}
+
+function buildSizeAlert() {
+  if (proposedSolutions.length > 1) {
+    return `<div class="warning-box">
+  <span style="font-size:18px;">&#9888;</span>
+  <div><strong>${proposedSolutions.length} solutions recommended.</strong> See the Solutions tab for the split layout and Pipelines for per-solution deployment order.</div>
+</div>`;
+  }
+  if (exceedsSize) {
+    return `<div class="critical-box">
+  <span style="font-size:18px;">&#128680;</span>
+  <div><strong>Estimated size ${totalSizeMB.toFixed(1)} MB exceeds the recommended ${SIZE_LIMIT_MB} MB cap.</strong></div>
+</div>`;
+  }
+  return `<div class="pass-box">
+  <span style="font-size:18px;">&#9989;</span>
+  <div><strong>Within recommended limits.</strong> No split is required.</div>
+</div>`;
+}
+
+function buildSizeGauge() {
+  const maxDisplay = Math.max(totalSizeMB, SIZE_LIMIT_MB) * 1.3;
+  const fillPct = Math.min((totalSizeMB / maxDisplay) * 100, 100);
+  const threshPct = (SIZE_LIMIT_MB / maxDisplay) * 100;
+  const fillColor = exceedsSize
+    ? 'linear-gradient(90deg, #ca5010 0%, #d13438 100%)'
+    : 'linear-gradient(90deg, #107c10 0%, #0078d4 100%)';
+  return `<div class="size-gauge-container">
+  <div class="size-gauge-header">
+    <div>
+      <div class="size-gauge-title">Total Estimated Size</div>
+      <div class="size-gauge-limit">Recommended limit: ${SIZE_LIMIT_MB} MB</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="size-gauge-value" style="color:${sizeColor};">${totalSizeMB.toFixed(1)}<span style="font-size:14px;color:var(--text-dim);font-weight:500;"> MB</span></div>
+      <div style="font-size:11px;color:var(--text-dim);">${exceedsSize ? (totalSizeMB - SIZE_LIMIT_MB).toFixed(1) + ' MB over limit' : (SIZE_LIMIT_MB - totalSizeMB).toFixed(1) + ' MB under limit'}</div>
+    </div>
+  </div>
+  <div class="size-gauge-track">
+    <div class="size-gauge-fill" style="width:${fillPct}%;background:${fillColor};">
+      <span class="size-gauge-fill-label">${totalSizeMB.toFixed(1)} MB</span>
+    </div>
+    <div class="size-gauge-threshold" style="left:${threshPct}%;background:var(--text-bright);">
+      <div class="size-gauge-threshold-label">${SIZE_LIMIT_MB} MB limit</div>
+    </div>
+  </div>
+</div>`;
+}
+
+function buildSignalCards() {
+  if (!sizeAnalysis) return '<div class="note-box neutral">Size analysis unavailable.</div>';
+  const signals = [
+    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 95 MB' },
+    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 6,000' },
+    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 15,000' },
+    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 20' },
+    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 40 MB' },
+    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 500' },
+  ];
+  return signals.map((s) => {
+    const a = sizeAnalysis[s.key];
+    if (!a) return '';
+    const tier = a.tier || 'unknown';
+    const color = tierColor[tier];
+    return `<div class="signal-card">
+  <div class="signal-name">${s.label}</div>
+  <div class="signal-value" style="color:${color};">${s.fmt(a.value || 0)}</div>
+  <div class="signal-footer">
+    <span class="tier tier-${tier}">${tier}</span>
+    <span>${s.threshold}</span>
+  </div>
+</div>`;
+  }).join('\n');
+}
+
+function buildSizeBreakdown() {
+  const entries = [
+    { label: 'Tables &amp; Columns', key: 'tables', color: '#0078d4' },
+    { label: 'Web Files', key: 'webFiles', color: '#ca5010' },
+    { label: 'Cloud Flows', key: 'cloudFlows', color: '#5c2d91' },
+    { label: 'Site Settings', key: 'siteSettings', color: '#8764b8' },
+    { label: 'Web Roles &amp; Permissions', key: 'webRolesAndPermissions', color: '#107c10' },
+    { label: 'Environment Variables', key: 'envVars', color: '#038387' },
+    { label: 'Other Metadata', key: 'otherMetadata', color: '#8890a4' },
+  ].map((e) => ({ ...e, sizeMB: Number(breakdown[e.key] || 0) }))
+   .filter((e) => e.sizeMB > 0)
+   .sort((a, b) => b.sizeMB - a.sizeMB);
+
+  if (entries.length === 0) return '<div style="font-size:12px;color:var(--text-dim);">Breakdown not available.</div>';
+  const max = Math.max(...entries.map((e) => e.sizeMB));
+  const total = entries.reduce((s, e) => s + e.sizeMB, 0);
+  return entries.map((e) => {
+    const barPct = Math.max((e.sizeMB / max) * 100, 2);
+    const pctOfTotal = ((e.sizeMB / total) * 100).toFixed(1);
+    return `<div class="size-bar-row">
+  <div class="size-bar-label">${e.label}</div>
+  <div class="size-bar-track">
+    <div class="size-bar-fill" style="width:${barPct}%;background:${e.color};">
+      ${barPct > 15 ? `<span class="size-bar-fill-label">${pctOfTotal}%</span>` : ''}
+    </div>
+  </div>
+  <div class="size-bar-value">${e.sizeMB.toFixed(1)} MB</div>
+</div>`;
+  }).join('\n');
+}
+
+function buildAdvisoryHtml() {
+  if (!assetAdvisory.enabled) {
+    return '<div class="note-box neutral">Asset advisory is disabled in <code>.alm-config.json</code>.</div>';
+  }
+  const candidates = assetAdvisory.candidates || [];
+  if (candidates.length === 0) {
+    return '<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (2 MB) or excluded by patterns.</div></div>';
+  }
+  let html = '';
+  if (assetAdvisory.recommendation === 'externalize-media') {
+    html += `<div class="warning-box"><span style="font-size:18px;">&#9888;</span>
+    <div><strong>Bulk externalization recommended.</strong> Aggregate web file size and media ratio indicate the bundle is dominated by images/fonts. Moving these to Azure Blob (or CDN) will reduce solution size meaningfully and can avoid the need for a split.</div></div>`;
+  }
+  html += candidates.map((c) => `<div class="advisory-item">
+  <div class="advisory-item-size">${Number(c.sizeMB || 0).toFixed(1)} MB</div>
+  <div class="advisory-item-body">
+    <div class="advisory-item-name">${escapeHtml(c.name)}</div>
+    <div class="advisory-item-rationale">${escapeHtml(c.rationale || '')}</div>
+    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;font-family:var(--mono);">&rarr; ${escapeHtml(c.suggestedUrlFormat || '')}</div>
+  </div>
+  <span class="advisory-item-tag ${c.recommendation || 'azure-blob'}">${c.recommendation === 'cdn' ? 'CDN' : 'Azure Blob'}</span>
+</div>`).join('\n');
+  return html;
+}
+
+function buildEnvVarsHtml() {
+  if (envVars.length === 0) {
+    return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
+  }
+  const envNames = Object.keys(envVars[0]?.values || {});
+  const tableHeader = envNames.length > 0
+    ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
+    : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
+  const rows = envVars.map((ev) => {
+    const valueCells = envNames.length > 0
+      ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
+      : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
+    return `<tr>
+  <td class="env-name">${escapeHtml(ev.schemaName)}</td>
+  <td>${escapeHtml(ev.type || 'String')}</td>
+  <td><code>${escapeHtml(ev.siteSetting || '—')}</code></td>
+  ${valueCells}
 </tr>`;
-}).join('\n');
-
-// ── Build __ENV_VAR_NOTE__ and __ENV_VAR_CLASS__ ───────────────────────────────
-const envVarNote = data.HAS_ENV_VARS
-  ? 'This solution has environment variables defined. Per-stage values will be captured or confirmed during the Setup Solution step, then stored in <code>deployment-settings.json</code>. Have the correct values ready for each target environment before executing.'
-  : 'No environment variables have been detected in this solution yet. If environment-specific configuration is needed (API endpoints, feature flags, site URLs), variables can be added during the Setup Solution step and will flow through the pipeline automatically.';
-const envVarClass = data.HAS_ENV_VARS ? 'warning' : 'neutral';
-
-// ── Build __ENVVAR_FRONTLOAD_NOTICE__ ──────────────────────────────────────────
-const envVarFrontloadNotice = data.HAS_ENV_VARS
-  ? `<div class="note-box warning" style="margin-bottom:28px;">
-  <strong>Environment variables detected.</strong> This solution contains environment-specific configuration.
-  Variable names, types, and per-stage values will be defined during the <strong>Setup Solution</strong> step.
-  Per-stage overrides are then stored in <code>deployment-settings.json</code> and applied automatically during deployment.
-  See <a href="#env-vars" style="color:inherit;">Environment Variable Strategy</a> below for details.
-</div>`
-  : `<div class="note-box neutral" style="margin-bottom:28px;">
-  <strong>Environment Variables:</strong> Any environment-specific configuration (API endpoints, feature flags, site URLs)
-  can be added as environment variables during the <strong>Setup Solution</strong> step.
-  Each stage (Staging, Production) will then use its own values — no code changes needed between environments.
+  }).join('\n');
+  return `<div class="card" style="padding:0;overflow-x:auto;">
+  <table class="env-table">${tableHeader}<tbody>${rows}</tbody></table>
 </div>`;
+}
 
-// ── Build __GIT_NOTE__ and __GIT_CLASS__ ──────────────────────────────────────
-const gitNotes = {
-  yes: 'Source control is enabled for this project. Changes will be tracked in Git before each deployment.',
-  no: 'Source control is not currently enabled. Consider setting up Git to track changes and enable rollback.',
-  'not-yet': 'Source control has not been set up yet. It is recommended to enable Git before deploying to production.',
-};
-const gitNote = gitNotes[String(data.GIT_STATUS).toLowerCase()] || 'Source control status unknown.';
-const gitClass = data.GIT_STATUS === 'yes' ? 'info' : 'warning';
+function buildSolutionsTabTitle() { return proposedSolutions.length > 1 ? `Solutions (${proposedSolutions.length})` : 'Solution'; }
+function buildSolutionsTabDesc() {
+  return proposedSolutions.length > 1
+    ? `Split into ${proposedSolutions.length} managed solutions per the decision tree. Deploy in order shown below.`
+    : 'All components packaged in a single managed solution.';
+}
 
-// ── Build __CHECKLIST_HTML__ ──────────────────────────────────────────────────
-const statusIcon = { pending: '○', 'in-progress': '●', completed: '✓', skipped: '—' };
-const checklistHtml = (data.steps || []).map(step => {
-  const s = String(step.status || 'pending').toLowerCase().replace(/_/g, '-');
-  const icon = statusIcon[s] || '○';
-  const skip = step.skip ? ' <em style="opacity:0.6;font-size:12px;">(will skip)</em>' : '';
-  return `<div class="checklist-item status-${s}">
-  <span class="checklist-icon">${icon}</span>
+function buildSolutionsHtml() {
+  if (proposedSolutions.length === 0) {
+    return '<div class="note-box neutral">Solution structure will be determined during Setup Solution.</div>';
+  }
+  const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387', '#5c2d91'];
+  return proposedSolutions.map((sol, i) => {
+    const color = colors[i % colors.length];
+    const overLimit = sol.sizeMB > SIZE_LIMIT_MB;
+    const sColor = overLimit ? 'var(--high)' : 'var(--pass)';
+    const componentTypes = Array.isArray(sol.componentTypes) ? sol.componentTypes.join(', ') : '';
+    const tables = Array.isArray(sol.tableLogicalNames) && sol.tableLogicalNames.length > 0
+      ? `<h4>Tables in this solution</h4><div>${sol.tableLogicalNames.map((t) => `<span class="table-chip">${escapeHtml(t)}</span>`).join('')}</div>`
+      : '';
+    return `<div class="split-solution-card ${i === 0 ? 'open' : ''}">
+  <div class="split-solution-header">
+    <div class="split-solution-num" style="background:${color};">${sol.order || i + 1}</div>
+    <div>
+      <div class="split-solution-title">${escapeHtml(sol.displayName || sol.uniqueName)}</div>
+      <div class="split-solution-subtitle"><code>${escapeHtml(sol.uniqueName)}</code></div>
+    </div>
+    <div class="split-solution-size">
+      <span class="split-solution-size-val" style="color:${sColor};">${Number(sol.sizeMB || 0).toFixed(1)}</span>
+      <span class="split-solution-size-unit">MB</span>
+    </div>
+    <span class="split-solution-chevron">&#9660;</span>
+  </div>
+  <div class="split-solution-body">
+    <div style="font-size:13px;color:var(--text);margin:14px 0;line-height:1.7;">${escapeHtml(sol.description || '')}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">
+      <div><h4>Component types</h4><div style="color:var(--text);">${escapeHtml(componentTypes)}</div></div>
+      <div><h4>Component count (est.)</h4><div style="font-family:var(--mono);font-size:15px;font-weight:700;">${(sol.componentCount || 0).toLocaleString()}</div></div>
+    </div>
+    ${tables}
+  </div>
+</div>`;
+  }).join('\n');
+}
+
+function buildPipelinesTabTitle() { return proposedSolutions.length > 1 ? `Deployment Pipelines (${proposedSolutions.length})` : 'Deployment Pipeline'; }
+function buildPipelinesTabDesc() {
+  return proposedSolutions.length > 1
+    ? 'One pipeline per solution, deployed in dependency order. All pipelines share the same deployment environments.'
+    : `Power Platform Pipelines configuration for promoting ${escapeHtml(data.SITE_NAME)} across environments.`;
+}
+
+function buildPipelinesHtml() {
+  const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387'];
+  const stages = Array.isArray(data.stages) ? data.stages : [];
+
+  if (proposedSolutions.length > 1) {
+    return proposedSolutions.map((sol, i) => {
+      const color = colors[i % colors.length];
+      return `<div class="pipeline-solution-label">
+  <span class="pipeline-solution-dot" style="background:${color};"></span>
+  <span class="pipeline-solution-name">${escapeHtml(sol.uniqueName)}-Pipeline</span>
+  <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">order ${sol.order || i + 1}</span>
+</div>
+<div class="pipeline-container">
+  ${stages.map((st) => `<div class="pipeline-stage ${st.type === 'source' ? 'stage-active' : ''}">
+    <div class="stage-name">${escapeHtml(st.label || '')}</div>
+    <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
+  </div>`).join('')}
+</div>`;
+    }).join('\n');
+  }
+  return `<div class="pipeline-container">
+  ${stages.map((st) => `<div class="pipeline-stage ${st.type === 'source' ? 'stage-active' : ''}">
+    <div class="stage-name">${escapeHtml(st.label || '')}</div>
+    <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
+  </div>`).join('')}
+</div>`;
+}
+
+function buildChecklistHtml() {
+  const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;' };
+  const steps = Array.isArray(data.steps) ? data.steps : [];
+  if (steps.length === 0) return '<div class="note-box neutral">Execution steps will be populated after approval.</div>';
+  return steps.map((step) => {
+    const s = String(step.status || 'pending').toLowerCase().replace(/_/g, '-');
+    const skip = step.skip ? ' <em style="opacity:0.6;font-size:12px;">(will skip)</em>' : '';
+    return `<div class="checklist-item status-${s}">
+  <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
   <span class="checklist-name">${escapeHtml(step.name)}${skip}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
 </div>`;
-}).join('\n');
-
-// ── Build __RISKS_HTML__ ──────────────────────────────────────────────────────
-const riskIcon = { warning: '⚠', info: 'ℹ', error: '✗' };
-const risksHtml = (data.risks || []).length > 0
-  ? (data.risks || []).map(risk => {
-      const t = String(risk.type || 'info').toLowerCase();
-      const icon = riskIcon[t] || 'ℹ';
-      return `<div class="risk-item type-${t}">
-  <span class="risk-icon">${icon}</span>
-  <span class="risk-message">${escapeHtml(risk.message)}</span>
-</div>`;
-    }).join('\n')
-  : '<div class="note-box neutral">No risks or recommendations identified for this plan.</div>';
-
-// ── Build __SOLUTION_CONTENTS__ ───────────────────────────────────────────────
-const sc = data.solutionContents;
-let solutionContentsHtml = '';
-
-if (!sc) {
-  solutionContentsHtml =
-    '<div class="note-box neutral">Solution contents will be discovered and added to the solution during the <strong>Setup Solution</strong> step.</div>';
-} else {
-  // Tables
-  const tables = Array.isArray(sc.tables) ? sc.tables : [];
-  const tablesHtml = tables.length > 0
-    ? tables.map(t => `<span class="table-chip">${escapeHtml(t)}</span>`).join('')
-    : '<em style="color:var(--text-dim);font-size:12px;">Will be discovered during Setup Solution</em>';
-
-  // Bot components
-  const bots = Array.isArray(sc.botComponents) ? sc.botComponents : [];
-  const botsHtml = bots.length > 0
-    ? bots.map(b => escapeHtml(b.name || String(b))).join(', ')
-    : '<em style="color:var(--text-dim);font-size:12px;">None detected</em>';
-
-  // Site settings
-  const ss = sc.siteSettings || null;
-  let settingsSummaryHtml = '';
-  let promoteTableHtml = '';
-  let excludedNoteHtml = '';
-
-  if (ss) {
-    const keepList = Array.isArray(ss.keepAsIs) ? ss.keepAsIs : [];
-    const authNoValueList = Array.isArray(ss.authNoValue) ? ss.authNoValue : [];
-    const promoteList = Array.isArray(ss.promoteToEnvVar) ? ss.promoteToEnvVar : [];
-    const excludedList = Array.isArray(ss.excluded) ? ss.excluded : [];
-    const total = keepList.length + authNoValueList.length + promoteList.length + excludedList.length;
-
-    settingsSummaryHtml = `<div class="note-box info" style="margin-bottom:14px;">
-  <strong>Site Settings:</strong> ${total} detected &mdash;
-  <span style="color:var(--text-dim);">${keepList.length} regular settings</span> (included as-is),
-  <span style="color:var(--warning);">${promoteList.length} auth settings with values</span> (review for env var promotion),
-  ${authNoValueList.length > 0 ? `<span style="color:var(--accent);">${authNoValueList.length} auth settings without dev values</span> (will be included with note),` : ''}
-  <span style="color:var(--text-dim);">${excludedList.length} credential secrets excluded</span> (never added to solution).
-</div>`;
-
-    if (promoteList.length > 0) {
-      const rows = promoteList.map(s => {
-        const displayVal = String(s.value || '');
-        const truncated = displayVal.length > 60 ? displayVal.substring(0, 60) + '…' : displayVal;
-        return `<tr>
-  <td><code>${escapeHtml(s.name)}</code></td>
-  <td style="font-family:var(--mono);font-size:11px;max-width:220px;word-break:break-all;">${escapeHtml(truncated)}</td>
-  <td><span class="env-var-badge promote">Review</span></td>
-</tr>`;
-      }).join('\n');
-      promoteTableHtml = `<h3>Site Settings with Values &mdash; Review for Env Var Promotion</h3>
-<p style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">If a setting's value should differ per environment (e.g. a feature flag, API endpoint, or site URL), promote it to an environment variable during Setup Solution. If the value is the same everywhere, include it as a plain site setting.</p>
-<div class="card" style="padding:0;overflow:hidden;margin-top:0;">
-<table>
-  <thead><tr><th>Setting Name</th><th>Current Value (dev)</th><th>Action</th></tr></thead>
-  <tbody>${rows}</tbody>
-</table>
-</div>`;
-    }
-
-    if (excludedList.length > 0) {
-      excludedNoteHtml = `<div class="note-box neutral" style="margin-top:12px;font-size:12px;">
-  <strong>${excludedList.length} credential secret(s) excluded:</strong> OAuth/identity credentials (ConsumerKey, ClientSecret, AppSecret, etc.) are never added to the solution — they must be configured manually in each target environment after deployment.
-</div>`;
-    }
-
-    if (authNoValueList.length > 0) {
-      const authNoValueRows = authNoValueList.map(name =>
-        `<tr><td><code>${escapeHtml(name)}</code></td><td style="color:var(--text-dim);font-size:12px;">No value configured in dev — will be included in the solution as-is. Verify or set the correct value in each target environment after deployment.</td></tr>`
-      ).join('\n');
-      excludedNoteHtml += `<div class="note-box warning" style="margin-top:12px;">
-  <strong>Auth settings included without a dev value (${authNoValueList.length}):</strong> These are authentication configuration settings that have no value set in your dev environment. They will be added to the solution with no value. After deploying to each target environment, confirm the correct value is configured there.
-  <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
-  <table><thead><tr><th>Setting Name</th><th>Note</th></tr></thead>
-  <tbody>${authNoValueRows}</tbody></table></div>
-</div>`;
-    }
-  } else {
-    settingsSummaryHtml =
-      '<div class="note-box neutral" style="margin-bottom:14px;">Site settings could not be queried. They will be discovered during Setup Solution.</div>';
-  }
-
-  const contentsGrid = `<div class="contents-grid">
-  <div class="contents-card">
-    <div class="contents-card-label">Dataverse Tables</div>
-    <div style="line-height:2;">${tablesHtml}</div>
-  </div>
-  <div class="contents-card">
-    <div class="contents-card-label">Bot Components</div>
-    <div style="font-size:13px;">${botsHtml}</div>
-  </div>
-</div>`;
-
-  solutionContentsHtml = contentsGrid + settingsSummaryHtml + promoteTableHtml + excludedNoteHtml;
+  }).join('\n');
 }
 
-// ── Build plan-status CSS class ───────────────────────────────────────────────
-const planStatusClass = String(data.PLAN_STATUS || 'Draft')
-  .toLowerCase()
-  .replace(/[^a-z]+/g, '-')
-  .replace(/-+$/, '');
+const planStatusClass = String(data.PLAN_STATUS || 'Draft').toLowerCase().replace(/[^a-z]+/g, '-').replace(/-+$/, '');
 
-// ── Replace simple string tokens ──────────────────────────────────────────────
 const replacements = {
-  SITE_NAME: data.SITE_NAME,
-  GENERATED_AT: data.GENERATED_AT,
+  SITE_NAME: escapeHtml(data.SITE_NAME),
+  GENERATED_AT: escapeHtml(data.GENERATED_AT),
   STRATEGY_LABEL: strategyLabel,
-  STAGE_COUNT: String(stageCount),
-  APPROVAL_LABEL: approvalLabel,
-  STAGES_HTML: stagesHtml,
-  ENVIRONMENTS_TABLE: envRows,
-  ENV_VAR_NOTE: envVarNote,
-  ENV_VAR_CLASS: envVarClass,
-  ENVVAR_FRONTLOAD_NOTICE: envVarFrontloadNotice,
-  GIT_NOTE: gitNote,
-  GIT_CLASS: gitClass,
-  CHECKLIST_HTML: checklistHtml,
-  RISKS_HTML: risksHtml,
-  APPROVED_BY: data.APPROVED_BY || '',
-  APPROVAL_DATE: data.APPROVAL_DATE || '',
-  PLAN_STATUS: data.PLAN_STATUS || 'Draft',
-  SOLUTION_CONTENTS: solutionContentsHtml,
+  PLAN_STATUS: escapeHtml(data.PLAN_STATUS || 'Draft'),
+  APPROVED_BY: escapeHtml(data.APPROVED_BY || ''),
+  APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
+  OVERVIEW_SUMMARY: buildOverviewSummary(),
+  STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
+  STAT_ENVVARS: String(envVars.length || 0),
+  STAT_SIZE: totalSizeMB.toFixed(1),
+  STAT_SIZE_COLOR: sizeColor,
+  STAT_SOLUTIONS: String(proposedSolutions.length || 1),
+  STAGES_HTML: buildStagesHtml(),
+  RISKS_HTML: buildRisksHtml(),
+  STRATEGY_RATIONALE: buildStrategyRationale(),
+  SIZE_ALERT: buildSizeAlert(),
+  SIZE_GAUGE: buildSizeGauge(),
+  SIGNAL_CARDS: buildSignalCards(),
+  SIZE_BREAKDOWN: buildSizeBreakdown(),
+  SIZE_BADGE: sizeBadge,
+  SIZE_BADGE_CLASS: sizeBadgeClass,
+  ADVISORY_HTML: buildAdvisoryHtml(),
+  ENVVARS_HTML: buildEnvVarsHtml(),
+  SOLUTIONS_TAB_TITLE: buildSolutionsTabTitle(),
+  SOLUTIONS_TAB_DESC: buildSolutionsTabDesc(),
+  SOLUTIONS_HTML: buildSolutionsHtml(),
+  PIPELINES_TAB_TITLE: buildPipelinesTabTitle(),
+  PIPELINES_TAB_DESC: buildPipelinesTabDesc(),
+  PIPELINES_HTML: buildPipelinesHtml(),
+  CHECKLIST_HTML: buildChecklistHtml(),
+  ESTIMATION_METHOD: escapeHtml(data.estimationMethod || 'metadata-based'),
+  ESTIMATION_ACCURACY: String(data.estimationAccuracyPct || 15),
 };
 
 let result = template;
@@ -300,34 +421,15 @@ for (const [key, value] of Object.entries(replacements)) {
   result = result.split(`__${key}__`).join(value);
 }
 
-// Inject plan-status CSS class onto the span
-result = result.replace(
-  /(<span class="plan-status"[^>]*>)/,
-  `<span class="plan-status ${planStatusClass}">`
-);
+result = result.replace(/(<span class="plan-status)"/, `$1 ${planStatusClass}"`);
 
-// Warn about unreplaced tokens
 const remaining = result.match(/__[A-Z][A-Z0-9_]+__/g);
 if (remaining) {
   const unique = [...new Set(remaining)];
   console.error(`Warning: unreplaced placeholders: ${unique.join(', ')}`);
 }
 
-// Ensure output directory exists
 const outputDir = path.dirname(outputPath);
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
-
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 fs.writeFileSync(outputPath, result, 'utf8');
 console.log(JSON.stringify({ status: 'ok', output: outputPath }));
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function escapeHtml(str) {
-  if (str == null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}

@@ -67,7 +67,11 @@ Steps:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
-   Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). If `siteName` is absent (no `powerpages.config.json`), stop and advise running `/power-pages:create-site` first. If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first. Read `solutionManifest.solution.uniqueName` and `solutionManifest.solution.solutionId` from the returned object.
+   Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). If `siteName` is absent (no `powerpages.config.json`), stop and advise running `/power-pages:create-site` first. If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first.
+
+   **Manifest version check:**
+   - If `solutionManifest.schemaVersion === 2` (multi-solution layout), set `MULTI_SOLUTION_MODE = true` and store `solutionManifest.solutions[]` as `SOLUTIONS_LIST`. One pipeline will be created per solution.
+   - If `schemaVersion` is absent or `1` (single solution), read `solutionManifest.solution.uniqueName` and `solutionManifest.solution.solutionId`. One pipeline will be created (existing flow).
 
 2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
    ```bash
@@ -241,6 +245,16 @@ Extract:
 
 On failure: the script writes the error to stderr and exits 1 — stop and report the error to the user.
 
+### Phase 6b — Multi-solution loop (only if `MULTI_SOLUTION_MODE = true`)
+
+When the manifest is `schemaVersion: 2`, repeat the pipeline-creation flow for **each entry** in `SOLUTIONS_LIST`:
+
+1. Derive `pipelineName = "{solution.uniqueName}-Pipeline"` (e.g. `IdeaSphere_Core-Pipeline`).
+2. Re-use the same `HOST_ENV_URL`, `SOURCE_DEPLOYMENT_ENV_ID`, and `TARGET_DEPLOYMENT_ENV_IDS` across all pipelines. Only the pipeline record + its stage records are created per solution — the deployment environments are shared.
+3. Iterate `SOLUTIONS_LIST` **in `order`** so lower-order solutions get their pipelines first.
+4. Collect each created pipelineId into `PIPELINES[]`.
+5. When writing `.last-pipeline.json` in Phase 7, include `pipelines[]` with one entry per solution (see below).
+
 ### Phase 7 — Verify, Write Artifacts, Commit
 
 **7.1 Verify pipeline was created:**
@@ -269,6 +283,33 @@ Confirm `statecode = 0` (Active). If the query fails, report as "verification in
       "rank": 1,
       "targetDeploymentEnvironmentId": "{TARGET_DEPLOYMENT_ENV_ID}",
       "targetEnvironmentUrl": "{targetEnvUrl}"
+    }
+  ]
+}
+```
+
+**Multi-solution marker (manifest v2):** When `MULTI_SOLUTION_MODE = true`, `.last-pipeline.json` uses `schemaVersion: 2` with a `pipelines[]` array:
+```json
+{
+  "schemaVersion": 2,
+  "hostEnvUrl": "{HOST_ENV_URL}",
+  "sourceDeploymentEnvironmentId": "{SOURCE_DEPLOYMENT_ENV_ID}",
+  "sourceEnvironmentUrl": "{devEnvUrl}",
+  "createdAt": "{ISO timestamp}",
+  "pipelines": [
+    {
+      "pipelineId": "...",
+      "pipelineName": "IdeaSphere_Core-Pipeline",
+      "solutionName": "IdeaSphere_Core",
+      "order": 1,
+      "stages": [ /* same shape as v1 stages[] */ ]
+    },
+    {
+      "pipelineId": "...",
+      "pipelineName": "IdeaSphere_WebAssets-Pipeline",
+      "solutionName": "IdeaSphere_WebAssets",
+      "order": 2,
+      "stages": [ /* ... */ ]
     }
   ]
 }

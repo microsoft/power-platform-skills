@@ -135,6 +135,32 @@ Steps:
    Site settings: {N total — K regular (keep as-is), P auth settings to review for env var, A auth settings (no dev value), E credential secrets excluded / unable to query}.
    ```
 
+10. **Estimate solution size and evaluate the split decision tree.** Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count:
+    ```bash
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
+      --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
+      --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
+      --datamodelManifest "./.datamodel-manifest.json" > ./.alm-size-estimate.json
+    ```
+    Then run the decision tree:
+    ```bash
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
+      --estimate ./.alm-size-estimate.json \
+      --projectRoot "." \
+      --siteName "{siteName}" \
+      --publisherPrefix "{publisherPrefix}" > ./.alm-split-plan.json
+    ```
+    Store the output as `SPLIT_PLAN`. Fields to read: `splitStrategy`, `proposedSolutions[]`, `appliedStrategies[]`, `assetAdvisory`, `sizeAnalysis`, `recommendations[]`.
+
+    If `SPLIT_PLAN.proposedSolutions.length > 1`, set `RECOMMEND_SPLIT = true`. Otherwise `false`.
+
+    Report to the user:
+    ```
+    Estimated size: {totalSizeMB} MB — components: {count} — tier: {overall tier}.
+    Decision tree result: {splitStrategy} → {N} solutions recommended.
+    Asset advisory: {K} files flagged for Azure Blob externalization.
+    ```
+
 ---
 
 ## Phase 2 — Gather ALM Strategy
@@ -163,6 +189,25 @@ Ask via `AskUserQuestion`:
 Options:
 1. **Yes, include solution setup** — continue
 2. **I already have a solution (enter name)** — accept free-text solution unique name, set `SOLUTION_DONE = true`, `SOLUTION_UNIQUE_NAME = user input`
+
+---
+
+### Q1b — Split Recommendation (only if `RECOMMEND_SPLIT = true`)
+
+The decision tree from Phase 1 Step 10 recommended splitting into multiple solutions. Ask via `AskUserQuestion`:
+
+> "Based on the site size and component analysis, the recommended approach is **{splitStrategy}** — {N} solutions instead of one. Do you want to follow this recommendation?"
+
+Options:
+1. **Use the recommended split** — proceed with `proposedSolutions[]` from the decision tree. `setup-solution` will create all N solutions.
+2. **Keep as a single solution anyway** — override to single. Record override reason; `setup-solution` creates one solution with all components.
+3. **Accept Asset Advisory first** (only offered if `assetAdvisory.candidates.length > 0`) — user commits to externalizing the flagged assets. Recompute size excluding those files, re-run the decision tree, present the new recommendation.
+4. **Show me migration guidance** (only offered if an existing `.solution-manifest.json` is found and does not match the recommendation) — produce `docs/alm-migration-plan.md` and exit. Do not execute.
+
+**If option 1:** continue with `proposedSolutions`.
+**If option 2:** override `SPLIT_PLAN.proposedSolutions` to the single-solution structure for rendering; record `overrideReason` in the plan.
+**If option 3:** subtract advisory candidate sizes from the estimate, re-run `compute-split-plan.js`, re-present.
+**If option 4:** write `docs/alm-migration-plan.md` (see the spec doc `solution-splitting-logic.md` §7), commit it, mark plan as Deferred, exit.
 
 ---
 
@@ -374,11 +419,25 @@ Build a `planData` object with all gathered strategy inputs:
       "promoteToEnvVar": [{ "name": "...", "value": "..." }],
       "excluded": [{ "name": "..." }]
     }
-  }
+  },
+
+  // --- v2 fields from the split decision tree (Phase 1 Step 10) ---
+  "sizeAnalysis": { /* tier-classified signals from SPLIT_PLAN.sizeAnalysis */ },
+  "assetAdvisory": { /* candidates + recommendation from SPLIT_PLAN.assetAdvisory */ },
+  "splitStrategy": "single | strategy-1-layer | strategy-2-change-frequency | strategy-3-schema-segmentation | strategy-4-config-isolation",
+  "appliedStrategies": ["strategy-1-layer"],
+  "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions */ ],
+  "recommendations": [ /* from SPLIT_PLAN.recommendations */ ],
+  "envVars": [ /* optional: env var metadata with per-environment values */ ],
+  "breakdown": { /* bytes-per-category from the estimate */ },
+  "estimationMethod": "metadata-based",
+  "estimationAccuracyPct": 15
 }
 ```
 
 `solutionContents` is populated from `SOLUTION_CONTENTS_DATA` built in Phase 1. If discovery was unavailable, pass `null` — the renderer will show a fallback note.
+
+**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
 
 Populate `risks` based on gathered data:
 - If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables — you will be prompted for per-stage values during deployment." }`

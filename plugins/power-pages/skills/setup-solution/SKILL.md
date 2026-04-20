@@ -67,6 +67,15 @@ Steps:
    - If user chooses pre-loaded: read `.alm-plan-context.json`, store the `siteSettings` object as `preloadedSettings`. When Step 5.3 is reached, **skip the query and classification logic** — use `preloadedSettings` directly.
    - If user chooses re-discover: proceed normally (Steps 5.3–5.4 query Dataverse and reclassify).
 
+6. **Check for split plan (multi-solution mode)** — look for `.alm-split-plan.json` (written by `plan-alm` Phase 1 Step 10):
+   - If found and `proposedSolutions.length > 1`, set `MULTI_SOLUTION_MODE = true` and store the array as `PROPOSED_SOLUTIONS`.
+   - In multi-solution mode:
+     - Phase 2 asks for publisher details **once** (shared across all solutions) and presents the proposed solution names/versions for **confirmation** (user can override each before proceeding).
+     - Phase 4 creates each solution in `PROPOSED_SOLUTIONS` in `order`, reusing the same publisher.
+     - Phase 5 partitions `AddSolutionComponent` calls per solution based on `proposedSolutions[i].componentTypes` and `tableLogicalNames` (for Strategy 3).
+     - Phase 6 writes manifest v2 (see below).
+   - If not found or `proposedSolutions.length === 1`, proceed in single-solution mode (existing flow).
+
 ### Phase 2 — Gather Solution Configuration
 
 Ask user (via `AskUserQuestion`) for:
@@ -394,6 +403,38 @@ The script handles token refresh every 20 calls, treats "already in solution" as
    - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`
    - If bot components were confirmed, include a `botComponents` array: `[{ "botId": "...", "name": "..." }]`
    - Omit these arrays entirely if no flows/bots were discovered or confirmed (absence = not tracked; `[]` = tracked but none selected)
+
+   **In `MULTI_SOLUTION_MODE`, write manifest v2** with a `solutions[]` array:
+   ```json
+   {
+     "schemaVersion": 2,
+     "publisher": { "publisherId": "...", "uniqueName": "...", "friendlyName": "...", "customizationPrefix": "..." },
+     "solutions": [
+       {
+         "uniqueName": "IdeaSphere_Core",
+         "solutionId": "...",
+         "version": "1.0.0.0",
+         "order": 1,
+         "componentTypes": ["Table", "Site Setting", ...],
+         "components": [ { "componentId": "...", "componentType": 1, "description": "..." } ]
+       },
+       {
+         "uniqueName": "IdeaSphere_WebAssets",
+         "solutionId": "...",
+         "version": "1.0.0.0",
+         "order": 2,
+         "componentTypes": ["Web File"],
+         "components": [ ... ]
+       }
+     ],
+     "splitStrategy": "strategy-1-layer",
+     "assetAdvisory": [ /* pass-through from plan context */ ]
+   }
+   ```
+
+   **v1 single-solution manifest stays backward compatible.** Readers (`export-solution`, `import-solution`, `setup-pipeline`, `deploy-pipeline`) check `schemaVersion`:
+   - `schemaVersion` absent or `1` → treat as single-solution (existing behavior).
+   - `schemaVersion: 2` → iterate `solutions[]` in `order`.
 
 4. Commit: `git add .solution-manifest.json && git commit -m "Add solution manifest for ALM"`
 
