@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
+// PostToolUse:Skill hook — records which skill was invoked to a session state
+// file so the Stop hook can run the validator AFTER the skill has finished
+// its work. Running validation here (immediately after the skill loads its
+// instructions) fails because the skill hasn't done any work yet.
+
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
-const {
-  getTrackedSkillFromToolInput,
-  getValidatorScript,
-} = require('../scripts/lib/powerpages-hook-utils');
+const { getTrackedSkillFromToolInput } = require('../scripts/lib/powerpages-hook-utils');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
@@ -22,40 +25,35 @@ process.stdin.on('data', (chunk) => {
 });
 
 process.stdin.on('end', () => {
-  debug(`[power-pages hook] stdin closed, received ${inputData.length} bytes\n`);
   try {
     const input = JSON.parse(inputData);
     const skillName = getTrackedSkillFromToolInput(input.tool_input);
     if (!skillName) {
-      debug('[power-pages hook] No tracked skill detected — skipping validation\n');
+      debug('[power-pages hook] No tracked skill detected — skipping\n');
       process.exit(0);
     }
 
-    const validatorScript = getValidatorScript(skillName);
-    if (!validatorScript) {
-      debug(`[power-pages hook] Skill "${skillName}" has no validator — skipping\n`);
-      process.exit(0);
+    // Record the invoked skill to a session state file. Session ID is derived
+    // from the Claude Code session (via env var) or falls back to cwd hash.
+    const sessionId = input.session_id || process.env.CLAUDE_SESSION_ID || 'default';
+    const stateDir = path.join(os.tmpdir(), 'power-pages-skills');
+    const stateFile = path.join(stateDir, `session-${sessionId}.json`);
+
+    try { fs.mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
+
+    let state = { skills: [], cwd: input.cwd || process.cwd() };
+    if (fs.existsSync(stateFile)) {
+      try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { /* ignore */ }
     }
 
-    debug(`[power-pages hook] Running validator for skill "${skillName}": ${validatorScript}\n`);
-
-    const validatorPath = path.join(__dirname, '..', validatorScript);
-    const result = spawnSync(process.execPath, [validatorPath], {
-      input: inputData,
-      encoding: 'utf8',
-      cwd: input.cwd || process.cwd(),
-    });
-
-    if (result.stdout) {
-      process.stdout.write(result.stdout);
+    if (!state.skills.includes(skillName)) {
+      state.skills.push(skillName);
     }
+    state.cwd = input.cwd || process.cwd();
 
-    if (result.stderr) {
-      process.stderr.write(result.stderr);
-    }
-
-    debug(`[power-pages hook] Validator exited with code ${result.status ?? 0}\n`);
-    process.exit(result.status ?? 0);
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    debug(`[power-pages hook] Recorded skill "${skillName}" for session ${sessionId}\n`);
+    process.exit(0);
   } catch (err) {
     process.stderr.write(`[power-pages hook] Unexpected error: ${err.message}\n`);
     process.exit(0);
