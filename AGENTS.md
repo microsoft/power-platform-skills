@@ -58,12 +58,9 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
 **Pattern:**
 - `shared/skills/<skill-name>/<workflow>.md` — Full workflow (phases, instructions, field definitions)
 - `shared/skills/<skill-name>/SKILL.template.md` — Template SKILL.md (frontmatter + reference to workflow); supports `{{PLUGIN_NAME}}` placeholder
-- `shared/skills/<skill-name>/config.json` — Controls which plugins get this skill:
-  - `{ "plugins": "*" }` — all plugins (default if no config.json)
-  - `{ "plugins": ["power-pages", "code-apps"] }` — only listed plugins
-- `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Auto-generated from the template above
+- `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Per-plugin wrapper generated from the template above
 
-This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/` — then regenerate the per-plugin wrappers from the template (the frontmatter + reference pointing to the shared workflow, with `{{PLUGIN_NAME}}` substituted) and commit them alongside the shared change.
+This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + reference pointing to the shared workflow, with `{{PLUGIN_NAME}}` substituted) and commit them alongside the shared change.
 
 ## Code Conventions
 
