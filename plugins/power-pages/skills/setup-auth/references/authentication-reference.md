@@ -1805,6 +1805,216 @@ await login('/dashboard', { username: email, password, rememberMe: true }, invit
 
 ---
 
+## Terms and Conditions for SPA Sites
+
+### Prerequisites
+
+The Terms feature requires three things to work:
+
+1. **GDPR solution installed** (`msdynce_PortalPrivacyExtensions`) — without this, `IsGdprEnabled()` returns false and terms are disabled
+2. **Site setting** `Authentication/Registration/TermsAgreementEnabled = true`
+3. **Content snippet** `Account/Signin/TermsAndConditionsCopy` must exist with non-empty content — if blank, terms are disabled even with the setting enabled
+
+### How it works
+
+After login or registration, the server checks terms (in the `LoginController` and `RegistrationManager`):
+
+```
+IsTermsAndConditionsEnabled():
+  if (!TermsConsentEnabled || !IsGdprEnabled) return false
+  if (snippet "Account/Signin/TermsAndConditionsCopy" is empty) return false
+  return true
+```
+
+If enabled, the server redirects to the terms page instead of the ReturnUrl:
+- **Login**: redirects to `/Account/Login/TermsAndConditions`
+- **Registration**: redirects to `/TermsAndConditions?ReturnUrl=%2F`
+
+The server also sets a `DeferredLocalLoginCookie` — it defers session creation until terms are accepted.
+
+### Auth Service: TermsRequiredError and acceptTerms
+
+Add to `authService.ts`:
+
+```typescript
+// Thrown when the server redirects to the terms page after login/registration.
+export class TermsRequiredError extends Error {
+  constructor() {
+    super('Terms and conditions acceptance required.');
+    this.name = 'TermsRequiredError';
+  }
+}
+```
+
+**Detection in `loginLocal()` and `register()`** — add before the redirect handling:
+
+```typescript
+// Check if the server redirected to terms (catches both URL patterns)
+if (response.url.includes('TermsAndConditions')) {
+  throw new TermsRequiredError();
+}
+```
+
+**`acceptTerms()` function:**
+
+```typescript
+export async function acceptTerms(returnUrl?: string): Promise<void> {
+  if (isDevelopment) {
+    window.location.href = returnUrl || '/';
+    return;
+  }
+
+  // Fetch the server terms page to get the anti-forgery token
+  const pageResponse = await fetch('/Account/Login/TermsAndConditions', {
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  // Use the final URL the server responded from (may differ between login/registration flows)
+  const termsUrl = new URL(pageResponse.url).pathname;
+
+  const pageHtml = await pageResponse.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(pageHtml, 'text/html');
+
+  const antiForgeryToken = (doc.querySelector('input[name="__RequestVerificationToken"]') as HTMLInputElement)?.value || '';
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', antiForgeryToken);
+  body.set('InvitationCode', '');
+  body.set('IsFacebook', 'False');
+  body.set('UseExternalSignInAsync', 'False');
+  body.set('IsInternalAADUser', 'False');
+  body.set('IsTermsAndConditionsAccepted', 'true');
+
+  const response = await fetch(termsUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  if (response.redirected || response.ok) {
+    window.location.href = returnUrl || '/';
+    return;
+  }
+
+  const responseHtml = await response.text();
+  const errors = parseServerErrors(responseHtml);
+  if (errors.length > 0) throw new Error(errors.join(' '));
+  throw new Error('Failed to accept terms. Please try again.');
+}
+```
+
+### React: Terms Page Component
+
+Create `src/pages/Terms.tsx`. The terms content is hardcoded from the snippet values collected during skill setup:
+
+```tsx
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { acceptTerms } from '../services/authService'
+
+// Content from Power Pages content snippets — hardcoded during skill setup.
+// Update these values and redeploy when the site creator changes the terms.
+const TERMS_HEADING = 'Terms and Conditions'
+const TERMS_CONTENT = `
+  <p>By using this portal, you agree to the following terms of service.</p>
+  <h3>1. Acceptance of Terms</h3>
+  <p>By accessing and using this portal, you accept and agree to be bound by these terms.</p>
+  <h3>2. Privacy & Data</h3>
+  <p>We collect and process your personal data in accordance with our privacy policy.</p>
+  <h3>3. Account Responsibility</h3>
+  <p>You are responsible for maintaining the confidentiality of your account credentials.</p>
+  <h3>4. Changes to Terms</h3>
+  <p>We reserve the right to update these terms at any time.</p>
+`
+const TERMS_AGREEMENT_TEXT = 'I agree to these terms and conditions.'
+const TERMS_BUTTON_TEXT = 'Confirm'
+
+export default function Terms() {
+  const [accepted, setAccepted] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [serverError, setServerError] = useState<string | undefined>()
+
+  useEffect(() => { document.title = `${TERMS_HEADING} — Site Name` }, [])
+
+  function handleConfirm() {
+    if (!accepted) return
+    setIsSubmitting(true)
+    setServerError(undefined)
+    acceptTerms('/').catch(err => {
+      setServerError(err instanceof Error ? err.message : 'Failed to accept terms.')
+      setIsSubmitting(false)
+    })
+  }
+
+  return (
+    <section>
+      <h1>{TERMS_HEADING}</h1>
+      {serverError && <div role="alert">{serverError}</div>}
+      <div dangerouslySetInnerHTML={{ __html: TERMS_CONTENT }} />
+      <label>
+        <input type="checkbox" checked={accepted} onChange={e => setAccepted(e.target.checked)} />
+        {TERMS_AGREEMENT_TEXT}
+      </label>
+      <button onClick={handleConfirm} disabled={!accepted || isSubmitting}>
+        {isSubmitting ? 'Confirming...' : TERMS_BUTTON_TEXT}
+      </button>
+      <p><Link to="/login">Back to sign in</Link></p>
+    </section>
+  )
+}
+```
+
+Style the component to match the site's existing auth page design (card layout, CSS variables, etc.).
+
+### Login and Registration: Catching TermsRequiredError
+
+Both pages must catch `TermsRequiredError` in their submit handlers:
+
+```typescript
+// In Login.tsx
+loginLocal(email, password, false, '/').catch(err => {
+  if (err instanceof TermsRequiredError) {
+    navigate('/terms')
+    return
+  }
+  // ... existing error handling
+})
+
+// In Registration.tsx
+register({ email, password, confirmPassword }, '/', invitationCode).catch(err => {
+  if (err instanceof TermsRequiredError) {
+    navigate('/terms')
+    return
+  }
+  // ... existing error handling
+})
+```
+
+### Content Snippets Used by the Server
+
+The server-rendered terms page uses these snippets. Create the required one and optionally the others:
+
+| Snippet | Required | Default |
+|---------|----------|---------|
+| `Account/Signin/TermsAndConditionsCopy` | **Yes** (feature disabled without it) | The terms HTML content |
+| `Account/Signin/TermsAndConditionsHeading` | No | "Terms and Conditions" |
+| `Account/Signin/TermsAndConditionsAgreementText` | No | "I agree to these terms and conditions." |
+| `Account/Signin/TermsAndConditionsButtonText` | No | "Confirm" |
+
+### Re-consent via TermsPublicationDate
+
+The `TermsPublicationDate` site setting controls re-acceptance:
+- **Not set**: users are prompted every login
+- **Set to a date**: users who accepted after that date are not re-prompted. Bump the date to force everyone to re-accept when terms are updated.
+
+The server stores acceptance on the contact record's `msdyn_portaltermsagreementdate` field.
+
+---
+
 ## Session KeepAlive for SPA Sites
 
 In SPAs, page navigation is client-side — no server requests are made. The session cookie's `SlidingExpiration` only renews when the browser sends a request to the server. Without a keepalive, the session silently expires even while the user is actively using the SPA.

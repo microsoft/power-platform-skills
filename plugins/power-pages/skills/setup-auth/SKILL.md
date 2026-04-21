@@ -283,9 +283,39 @@ Then ask about optional features:
 
 | Question | Options |
 |----------|---------|
-| Would you like to enable any of these optional features? | None (Recommended), Two-factor authentication (2FA) — users verify with a code after login, Invitation-based registration — only users with invitation codes can register |
+| Would you like to enable any of these optional features? | None (Recommended), Terms and Conditions — require users to accept terms before accessing the site, Two-factor authentication (2FA) — users verify with a code after login, Invitation-based registration — only users with invitation codes can register |
 
-> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select invitation-based registration, Phase 8.1 will create `InvitationEnabled`, `RequireInvitationCode`, and `OpenRegistrationEnabled` site settings.
+> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select invitation-based registration, Phase 8.1 will create `InvitationEnabled`, `RequireInvitationCode`, and `OpenRegistrationEnabled` site settings. If they select Terms and Conditions, follow the Terms flow below.
+
+**If "Terms and Conditions" is selected**, collect the terms content. The server uses 4 content snippets — the skill hardcodes these values into the SPA Terms page component. Ask the user:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| What terms text should be shown to users? You can provide HTML or plain text. | Terms Content | Use default terms (Recommended) — Generic terms covering data use, account responsibility, and acceptable use, I'll provide my own terms text |
+
+If the user provides custom text, use it. Otherwise use the default terms template (see `authentication-reference.md` for the default content).
+
+Also collect optional customizations:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Would you like to customize the terms page labels? | Labels | Use defaults (Recommended) — heading: "Terms and Conditions", checkbox: "I agree to these terms and conditions.", button: "Confirm", I'll customize the labels |
+
+Store these 4 values — they'll be hardcoded into the Terms page component in Phase 5 and created as content snippets in Phase 8.1:
+- `TERMS_HEADING` (default: "Terms and Conditions")
+- `TERMS_CONTENT` (default: generic terms HTML)
+- `TERMS_AGREEMENT_TEXT` (default: "I agree to these terms and conditions.")
+- `TERMS_BUTTON_TEXT` (default: "Confirm")
+
+> **GDPR prerequisite**: Terms require the `msdynce_PortalPrivacyExtensions` solution installed in Dataverse. Inform the user: "Terms and Conditions requires the GDPR/Privacy Extensions solution to be installed in your Dataverse environment. Without it, the server will not enforce terms even if the setting is enabled."
+
+Optionally ask about `TermsPublicationDate`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| When should users be re-prompted to accept terms? | Re-consent | Every login (no publication date) — users accept terms every time they sign in, Set a publication date — users re-accept only when terms are updated past this date |
+
+If "Set a publication date", collect the date. The format should be ISO: `YYYY-MM-DD` (e.g., `2026-01-01`). If "Every login", leave `TermsPublicationDate` unset.
 
 If web roles were found in Phase 1.4, also ask:
 
@@ -493,8 +523,16 @@ Create the auth service file based on the detected framework and selected identi
 - `parseServerErrors(html)` — **Required for local auth.** Parses validation errors from server HTML responses (`.validation-summary-errors li`, `.alert-danger li`, `.field-validation-error`). Used by login and register to show server errors in the SPA.
 - `register(fields, returnUrl?, invitationCode?)` — **Required when local auth is configured.** POSTs registration form to `/Account/Login/Register` with anti-forgery token, email or username (based on `LocalLoginByEmail` choice from Phase 2.1), password, confirmPassword, and optional invitationCode. When `LocalLoginByEmail` is `true`, sends `Email` field. When `false`, sends `Username` field. See `authentication-reference.md` for the full implementation.
 - `forgotPassword(email)` — **Required when local auth is configured.** MVC form POST to `/Account/Login/ForgotPassword` with `Email` + anti-forgery token. Server sends a password reset email. Uses `fetch()` like login.
+- `TermsRequiredError` — **Required when terms are enabled.** Custom error class thrown when the server redirects to the terms page after login or registration. The login/registration page catches this and navigates to the SPA `/terms` page.
+- `acceptTerms(returnUrl?)` — **Required when terms are enabled.** Fetches the server terms page (GET `/Account/Login/TermsAndConditions`) to get the anti-forgery token, then POSTs acceptance (`IsTermsAndConditionsAccepted=true`, `IsFacebook=False`, `UseExternalSignInAsync=False`, `IsInternalAADUser=False`). Uses the response URL dynamically (server may serve terms from `/Account/Login/TermsAndConditions` or `/TermsAndConditions`).
 - `getUserDisplayName()` — prefers full name, falls back to userName
 - `getUserInitials()` — for avatar display
+
+**Terms detection in login and registration:** Both `loginLocal()` and `register()` must check `response.url.includes('TermsAndConditions')` after the fetch completes. The server redirects to different URLs depending on the flow:
+- **Login**: redirects to `/Account/Login/TermsAndConditions`
+- **Registration**: redirects to `/TermsAndConditions?ReturnUrl=%2F`
+
+Both are caught by `response.url.includes('TermsAndConditions')`. When detected, throw `TermsRequiredError`. The server also sets a `DeferredLocalLoginCookie` — it defers the session creation until terms are accepted.
 
 > **CRITICAL — Use `fetch()` not `form.submit()` for local login and registration.** Using `form.submit()` causes a full-page navigation — if the server returns an error, the user leaves the SPA and sees the server-rendered error page. Using `fetch()` instead keeps the user in the SPA: on success (redirect), navigate via `window.location.href`; on failure (200 with HTML), parse errors with `parseServerErrors()` and throw them so the page component can display them inline. See `authentication-reference.md` for the full implementation.
 
@@ -755,6 +793,39 @@ All local auth pages (login, registration, forgot password) must implement **val
 
 The password strength validation matches the default Power Pages password policy (`EnforcePasswordPolicy`). If the site creator customizes the password policy via `Authentication/UserManager/PasswordValidator/*` site settings, the client-side validation should match.
 
+#### 5.1.5 Create Terms and Conditions Page (When Terms Enabled)
+
+**If the user enabled Terms and Conditions in Phase 2**, create a `/terms` SPA page. This page is shown when the server redirects to the terms page after login or registration — the SPA intercepts the redirect and shows this page instead of the server-rendered one.
+
+The terms page must:
+
+- Hardcode the 4 snippet values collected in Phase 2 as constants at the top of the component:
+  ```typescript
+  const TERMS_HEADING = '<value from Phase 2 or default>'
+  const TERMS_CONTENT = '<HTML content from Phase 2 or default>'
+  const TERMS_AGREEMENT_TEXT = '<value from Phase 2 or default>'
+  const TERMS_BUTTON_TEXT = '<value from Phase 2 or default>'
+  ```
+- Display the heading, terms content (rendered as HTML via `dangerouslySetInnerHTML`), checkbox with agreement text, and confirm button
+- The confirm button calls `acceptTerms('/')` from authService — this fetches the server terms page to get the anti-forgery token, then POSTs the acceptance
+- The confirm button is disabled until the checkbox is checked
+- Display server errors inline if `acceptTerms()` throws
+- Include a "Back to sign in" link to `/login`
+
+**Both Login and Registration pages must catch `TermsRequiredError`:**
+- In the Login page's `loginLocal()` catch block: if `err instanceof TermsRequiredError`, navigate to `/terms`
+- In the Registration page's `register()` catch block: if `err instanceof TermsRequiredError`, navigate to `/terms`
+
+**How the server triggers terms:**
+- **Login flow**: Server redirects to `/Account/Login/TermsAndConditions` after auth
+- **Registration flow**: Server redirects to `/TermsAndConditions?ReturnUrl=%2F` after registration (different URL!)
+- Both are detected by `response.url.includes('TermsAndConditions')` in the auth service
+
+**Framework-specific implementation:**
+- **React**: Create `src/pages/Terms.tsx` and add `<Route path="/terms" element={<Terms />} />` to the router
+
+> **Content updates**: When the site creator wants to change the terms text, they update the constants in the Terms page component and redeploy. The content snippets in Dataverse (`Account/Signin/TermsAndConditionsCopy` etc.) must also be updated to match — the server-rendered terms page reads from snippets, and the SPA reads from the hardcoded constants. Both must stay in sync.
+
 #### 5.2 Integrate into Navigation
 
 Find the site's navigation component and integrate the auth button:
@@ -866,12 +937,13 @@ Confirm the following files were created:
 - Registration page (e.g., `src/pages/Registration.tsx` for React) — only when local auth with open registration is configured
 - Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) — only when local auth with reset password is configured
 - Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) — integrated into Layout
+- Terms page (e.g., `src/pages/Terms.tsx` for React) — only when terms are enabled
 
 Read each file and verify it contains the expected exports and functions:
 
-- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, and `register`, `forgotPassword` (when local auth is configured)
+- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, `register`, `forgotPassword` (when local auth), `TermsRequiredError`, `acceptTerms` (when terms enabled)
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
-- Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper
+- Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper. Both must catch `TermsRequiredError` and navigate to `/terms` (when terms enabled).
 - Session keepalive: integrated in Layout, pings `/_layout/tokenhtml`, tracks activity, detects expiry
 
 #### 7.2 Verify Build
@@ -1410,6 +1482,38 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
+**Terms and Conditions** — when terms are enabled:
+
+> **Prerequisite**: The GDPR/Privacy Extensions solution (`msdynce_PortalPrivacyExtensions`) must be installed in the Dataverse environment. Without it, the server ignores `TermsAgreementEnabled` entirely. Remind the user of this requirement.
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/TermsAgreementEnabled" \
+  --value "true" \
+  --description "Require terms acceptance before accessing the site" \
+  --type boolean
+```
+
+If the user provided a `TermsPublicationDate`:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/TermsPublicationDate" \
+  --value "<ISO-date-from-user>" \
+  --description "Users who accepted before this date will be re-prompted"
+```
+
+**Create the required content snippet** `Account/Signin/TermsAndConditionsCopy` in `.powerpages-site/content-snippets/`. This snippet MUST exist with non-empty content — without it, the server disables terms even if the setting is `true`. The snippet content should match the `TERMS_CONTENT` constant hardcoded in the SPA Terms page.
+
+Check if the content snippet directory exists and create the snippet YAML file. The format follows the existing snippet pattern in `.powerpages-site/content-snippets/`. If a script exists for creating content snippets, use it. Otherwise, create the YAML file manually following the pattern of existing snippets.
+
+Optionally create the other 3 snippets for the server-rendered terms page (used when the SPA isn't loaded, e.g., deep links):
+- `Account/Signin/TermsAndConditionsHeading`
+- `Account/Signin/TermsAndConditionsAgreementText`
+- `Account/Signin/TermsAndConditionsButtonText`
+
 #### 8.2 Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
@@ -1431,6 +1535,8 @@ Present a summary of everything created:
 | Registration Page | `src/pages/Registration.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Forgot Password Page | `src/pages/ForgotPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Session KeepAlive | `src/hooks/useSessionKeepAlive.ts` (or framework equivalent) — integrated in Layout | Created |
+| Terms Page | `src/pages/Terms.tsx` (or framework equivalent) — when terms enabled | Created (if applicable) |
+| Terms Snippet | `Account/Signin/TermsAndConditionsCopy` content snippet | Created (if applicable) |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy
