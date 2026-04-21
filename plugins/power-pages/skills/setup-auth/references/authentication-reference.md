@@ -1817,9 +1817,16 @@ Create `src/hooks/useSessionKeepAlive.ts`:
 import { useEffect, useRef } from 'react';
 import { isAuthenticated, fetchAntiForgeryToken } from '../services/authService';
 
+// Set this to match your Authentication/ApplicationCookie/ExpireTimeSpan site setting.
+// Default Power Pages session is 24 hours. For a 10-minute session, use 10 * 60 * 1000.
+const SESSION_EXPIRE_MS = 24 * 60 * 60 * 1000;
+
 export function useSessionKeepAlive({
-  intervalMs = 15 * 60 * 1000,      // 15 minutes
-  idleTimeoutMs = 30 * 60 * 1000,   // 30 minutes idle = stop pinging
+  // Ping at 1/3 of session timeout, capped at 15min.
+  // Must be well before the halfway point where SlidingExpiration renews.
+  intervalMs = Math.min(SESSION_EXPIRE_MS / 3, 15 * 60 * 1000),
+  // Stop pinging after 90% of session timeout idle, capped at 30min.
+  idleTimeoutMs = Math.min(SESSION_EXPIRE_MS * 0.9, 30 * 60 * 1000),
   onSessionExpired,
 }: {
   intervalMs?: number;

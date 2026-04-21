@@ -556,10 +556,17 @@ Create a session keepalive hook that periodically pings `/_layout/tokenhtml` to 
 
 The hook must:
 
-- Ping `/_layout/tokenhtml` via `fetchAntiForgeryToken()` every 15 minutes (configurable via `intervalMs`)
+- Define a `SESSION_EXPIRE_MS` constant based on the session timeout:
+  - If the user configured a custom `ApplicationCookie/ExpireTimeSpan` in Phase 2.1.1, convert that timespan to milliseconds
+  - If using defaults, use `24 * 60 * 60 * 1000` (24 hours)
+- Derive timing from the session timeout — do NOT hardcode intervals:
+  - `intervalMs` = `min(SESSION_EXPIRE_MS / 3, 15 * 60 * 1000)` — ping at 1/3 of the session timeout, capped at 15min. This ensures the ping happens well before the SlidingExpiration halfway renewal point.
+  - `idleTimeoutMs` = `min(SESSION_EXPIRE_MS * 0.9, 30 * 60 * 1000)` — stop pinging when idle for 90% of the session timeout, capped at 30min.
+  - Example: 10min session → intervalMs=3.3min, idleTimeoutMs=9min. 24h session → intervalMs=15min, idleTimeoutMs=30min.
+- Ping `/_layout/tokenhtml` via `fetchAntiForgeryToken()` at the calculated interval
 - Only ping when the user is authenticated (`isAuthenticated()`)
 - Only ping when the browser tab is visible (`document.visibilityState !== 'hidden'`)
-- Track user activity (mouse, keyboard, touch, scroll) and stop pinging after 30 minutes of idle (configurable via `idleTimeoutMs`) — let the session expire naturally for security
+- Track user activity (mouse, keyboard, touch, scroll) and stop pinging after `idleTimeoutMs` of idle — let the session expire naturally for security
 - Detect session expiry: if the ping fails, call `onSessionExpired` callback so the app can redirect to login with `?sessionExpired=true`
 - Skip entirely in development mode (no real session to keep alive)
 
