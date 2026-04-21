@@ -544,11 +544,33 @@ const isDevelopment = window.location.hostname === 'localhost' || window.locatio
 
 The mock should return a fake user with configurable roles so developers can test role-based UI locally.
 
+#### 3.5 Create Session KeepAlive Hook
+
+> **SPA session expiry problem:** In SPAs, page navigation is client-side — no server requests are made. The session cookie's `SlidingExpiration` only renews when the browser sends a request to the server. Without a keepalive, the session silently expires even while the user is actively using the SPA. The default `ExpireTimeSpan` is 24 hours with renewal at the halfway point (12 hours), but this can be configured shorter.
+
+Create a session keepalive hook that periodically pings `/_layout/tokenhtml` to renew the session cookie:
+
+- **React**: Create `src/hooks/useSessionKeepAlive.ts`
+- **Vue**: Create `src/composables/useSessionKeepAlive.ts`
+- **Angular**: Create `src/app/services/session-keepalive.service.ts`
+
+The hook must:
+
+- Ping `/_layout/tokenhtml` via `fetchAntiForgeryToken()` every 15 minutes (configurable via `intervalMs`)
+- Only ping when the user is authenticated (`isAuthenticated()`)
+- Only ping when the browser tab is visible (`document.visibilityState !== 'hidden'`)
+- Track user activity (mouse, keyboard, touch, scroll) and stop pinging after 30 minutes of idle (configurable via `idleTimeoutMs`) — let the session expire naturally for security
+- Detect session expiry: if the ping fails, call `onSessionExpired` callback so the app can redirect to login with `?sessionExpired=true`
+- Skip entirely in development mode (no real session to keep alive)
+
+Integrate the hook into the Layout component so it runs on every page. Pass an `onSessionExpired` callback that navigates to `/login?sessionExpired=true`. The login page already handles `?sessionExpired=true` via `getSessionExpiredMessage()`.
+
 ### Output
 
 - `src/types/powerPages.d.ts` created with Power Pages type definitions
 - `src/services/authService.ts` created with login/logout functions
 - Framework-specific auth hook/composable created
+- Session keepalive hook created and integrated into Layout
 - Local development mock data included
 
 ---
@@ -836,12 +858,14 @@ Confirm the following files were created:
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
 - Registration page (e.g., `src/pages/Registration.tsx` for React) — only when local auth with open registration is configured
 - Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) — only when local auth with reset password is configured
+- Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) — integrated into Layout
 
 Read each file and verify it contains the expected exports and functions:
 
 - Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, and `register`, `forgotPassword` (when local auth is configured)
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
 - Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper
+- Session keepalive: integrated in Layout, pings `/_layout/tokenhtml`, tracks activity, detects expiry
 
 #### 7.2 Verify Build
 
@@ -1399,6 +1423,7 @@ Present a summary of everything created:
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
 | Registration Page | `src/pages/Registration.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Forgot Password Page | `src/pages/ForgotPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| Session KeepAlive | `src/hooks/useSessionKeepAlive.ts` (or framework equivalent) — integrated in Layout | Created |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy

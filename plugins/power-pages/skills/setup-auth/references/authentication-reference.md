@@ -1805,6 +1805,97 @@ await login('/dashboard', { username: email, password, rememberMe: true }, invit
 
 ---
 
+## Session KeepAlive for SPA Sites
+
+In SPAs, page navigation is client-side — no server requests are made. The session cookie's `SlidingExpiration` only renews when the browser sends a request to the server. Without a keepalive, the session silently expires even while the user is actively using the SPA.
+
+### React: useSessionKeepAlive Hook
+
+Create `src/hooks/useSessionKeepAlive.ts`:
+
+```typescript
+import { useEffect, useRef } from 'react';
+import { isAuthenticated, fetchAntiForgeryToken } from '../services/authService';
+
+export function useSessionKeepAlive({
+  intervalMs = 15 * 60 * 1000,      // 15 minutes
+  idleTimeoutMs = 30 * 60 * 1000,   // 30 minutes idle = stop pinging
+  onSessionExpired,
+}: {
+  intervalMs?: number;
+  idleTimeoutMs?: number;
+  onSessionExpired?: () => void;
+} = {}) {
+  const lastActivityRef = useRef(Date.now());
+
+  useEffect(() => {
+    const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isDev) return;
+
+    function onActivity() { lastActivityRef.current = Date.now(); }
+
+    window.addEventListener('mousemove', onActivity, { passive: true });
+    window.addEventListener('keydown', onActivity, { passive: true });
+    window.addEventListener('touchstart', onActivity, { passive: true });
+    window.addEventListener('scroll', onActivity, { passive: true });
+
+    const timer = setInterval(async () => {
+      if (!isAuthenticated()) return;
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastActivityRef.current > idleTimeoutMs) return;
+
+      try {
+        await fetchAntiForgeryToken();
+      } catch {
+        if (onSessionExpired) onSessionExpired();
+      }
+    }, intervalMs);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('mousemove', onActivity);
+      window.removeEventListener('keydown', onActivity);
+      window.removeEventListener('touchstart', onActivity);
+      window.removeEventListener('scroll', onActivity);
+    };
+  }, [intervalMs, idleTimeoutMs, onSessionExpired]);
+}
+```
+
+### Integration
+
+Add to the Layout component so it runs on every page:
+
+```typescript
+import { useSessionKeepAlive } from '../hooks/useSessionKeepAlive';
+import { useNavigate } from 'react-router-dom';
+import { useCallback } from 'react';
+
+export default function Layout({ children }) {
+  const navigate = useNavigate();
+  const handleSessionExpired = useCallback(() => {
+    navigate('/login?sessionExpired=true');
+  }, [navigate]);
+
+  useSessionKeepAlive({ onSessionExpired: handleSessionExpired });
+
+  return (/* ... */);
+}
+```
+
+The login page already handles `?sessionExpired=true` via `getSessionExpiredMessage()`.
+
+### Why `/_layout/tokenhtml`?
+
+This is the best endpoint for keepalive because:
+- Smallest response (~200-300 bytes — just an anti-forgery token `<input>` tag)
+- Low server cost (no Dataverse queries, no template rendering)
+- Renews the session cookie via OWIN middleware
+- Already used by the auth service for CSRF tokens
+- No dedicated health/ping endpoint exists in Power Pages
+
+---
+
 ## Important Notes
 
 - **Auth only works on deployed sites**: The `/_layout/tokenhtml` endpoint and `window.Microsoft.Dynamic365.Portal` object are only available when the site is served from Power Pages, not during local `npm run dev`.
