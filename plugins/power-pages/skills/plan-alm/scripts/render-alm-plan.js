@@ -61,14 +61,24 @@ const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], re
 const breakdown = data.breakdown || {};
 
 const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
-const componentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
-// Optional two-number semantics (estimator output when --solutionId was passed):
-// siteTotal = everything on the site in Dataverse. inSolution = what the target
-// solution actually contains. orphans = siteTotal - inSolution.
-const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? componentCount);
+// Three-number semantics when the estimator ran with --solutionId:
+//   componentCountSiteTotal      — RAW Dataverse rows on the site. What the
+//                                  Maker UI would show if the entire site
+//                                  were adopted into a solution.
+//   componentCountInSolution     — solutioncomponents rows for the target
+//                                  solution. Matches the Maker "Objects" count.
+//   orphansOnSite                — ppcs on the site that aren't in the solution,
+//                                  excluding stale bundle chunks.
+// For the headline "X components" we prefer inSolution when present (that's
+// what the pipeline ships). Fall back to siteTotal or the legacy
+// sizeAnalysis.componentCount value when the estimator ran without a solution
+// context.
+const fallbackComponentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? fallbackComponentCount);
 const componentCountInSolution = (data.componentCountInSolution == null) ? null : Number(data.componentCountInSolution);
 const orphansOnSite = (data.orphansOnSite == null) ? null : Number(data.orphansOnSite);
 const hasSolutionMembershipBreakout = componentCountInSolution !== null;
+const componentCount = hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal;
 const SIZE_LIMIT_MB = 95;
 const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
 const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
@@ -323,16 +333,17 @@ function buildAssetAdvisoryCallout() {
 
 function buildSolutionMembershipBanner() {
   // When the estimator had a --solutionId context, show the site-vs-solution
-  // split so reviewers don't conflate "908 components on the site" with "908
-  // components in the solution about to ship."
+  // split so reviewers can reconcile what they see in the Maker UI with what
+  // ships. Numbers are all raw row counts — bundle chunks included — so they
+  // match the "Objects" page in Power Platform's solution explorer.
   if (!hasSolutionMembershipBreakout) return '';
   const orphansClass = (orphansOnSite && orphansOnSite > 0) ? 'warn' : 'pass';
   const orphansNote = (orphansOnSite && orphansOnSite > 0)
-    ? ` · ${orphansOnSite.toLocaleString()} orphan(s) on the site are NOT in this solution — run <code>/power-pages:setup-solution</code> in sync mode to adopt them.`
-    : ` · solution is fully in sync with the site.`;
+    ? ` · ${orphansOnSite.toLocaleString()} actionable orphan(s) on the site are NOT in this solution — run <code>/power-pages:setup-solution</code> in sync mode to adopt them. (Stale bundle-chunk orphans are excluded from this count.)`
+    : ` · solution is fully in sync with the site (no actionable orphans).`;
   return `<div class="note-box ${orphansClass}" style="margin-bottom:16px;">
   <strong>Solution membership vs. site inventory.</strong>
-  The site currently holds <strong>${componentCountSiteTotal.toLocaleString()}</strong> components in Dataverse; the target solution owns <strong>${componentCountInSolution.toLocaleString()}</strong> of them.${orphansNote}
+  The site holds <strong>${componentCountSiteTotal.toLocaleString()}</strong> raw rows in Dataverse; the target solution owns <strong>${componentCountInSolution.toLocaleString()}</strong> components.${orphansNote}
 </div>`;
 }
 

@@ -116,7 +116,9 @@ async function collectPaginated(envUrl, path, token, maxPages = 20) {
  *
  * Each bot has child `botcomponent` rows (topics, entities, gpt defs). Both
  * bots and bot components become separate `solutioncomponents` rows when added
- * to a solution (types 10137 and 10193). Counting them here closes the
+ * to a solution — componenttype 10192 for Bot and 10193 for Bot Component.
+ * (componenttype 10137 is Connection Reference, NOT a bot type — earlier
+ * comments in this module had those swapped.) Counting them here closes the
  * siteTotal gap that previously made orphansOnSite look artificially small.
  *
  * Pagination ceilings (from collectPaginated below): bots up to 1,500 records
@@ -525,39 +527,36 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   });
 
   // Optional: when caller passes --solutionId, also report what's actually
-  // in the solution vs. site-total. Fixes the 908-on-site / 361-in-solution
-  // ambiguity that previously caused plan docs to overstate solution size.
-  //
-  // Also provides the site's ppc id set as a cross-site safety check — if any
-  // type-10373 rows in the solution aren't on this site, we surface that as
-  // a warning in the output rather than silently miscounting.
+  // in the solution vs. site-total. Reported raw — every solutioncomponents
+  // row counts, including bundle-chunk ppcs that were explicitly added to the
+  // solution. Matches the Power Platform Maker UI's solution breakdown
+  // (e.g. 311 site components + 11 tables + 1 site record + 1 site language
+  // + 4 connection references + 2 cloud flows + 2 agents + 30 agent
+  // components = 362). An earlier revision subtracted bundle chunks from
+  // inSolution.total on the theory they were "noise", but bundle chunks that
+  // made it into the solution ship as managed components — they're real
+  // members, not noise. Noise-filtering belongs only to the on-site orphan
+  // heuristic below, not the in-solution count.
   const sitePpcIdSet = new Set(
     ppcs.map((p) => (p.powerpagecomponentid || '').toLowerCase()).filter(Boolean),
   );
-  const inSolutionRaw = solutionId
+  const inSolution = solutionId
     ? await countSolutionMembership(envUrl, solutionId, resolved, sitePpcIdSet)
     : null;
 
-  // Exclude bundle chunks from inSolution too so the comparison stays
-  // apples-to-apples with siteTotal. Without this, solutions that shipped
-  // last week's bundle chunks (still living in Dataverse even though
-  // superseded on-site) make inSolution look artificially larger.
-  let inSolution = inSolutionRaw;
+  // Tag how many of the solution's ppc rows are bundle-chunk files, purely as
+  // metadata — we do NOT subtract this from inSolution.total. Useful for
+  // downstream cleanup tooling and for the plan banner that says "your
+  // solution contains N superseded bundle chunks — consider a cleanup pass".
   let bundleChunksInSolution = 0;
-  if (inSolutionRaw && classified.bundleChunks.length > 0) {
+  if (inSolution && classified.bundleChunks.length > 0) {
     const chunkIdSet = new Set(
       classified.bundleChunks.map((c) => (c.powerpagecomponentid || '').toLowerCase()),
     );
-    const inSolIds = new Set(inSolutionRaw.objectIds || []);
+    const inSolIds = new Set(inSolution.objectIds || []);
     for (const id of chunkIdSet) {
       if (inSolIds.has(id)) bundleChunksInSolution += 1;
     }
-    inSolution = {
-      ...inSolutionRaw,
-      total: Math.max(inSolutionRaw.total - bundleChunksInSolution, 0),
-      totalRawIncludingBundleChunks: inSolutionRaw.total,
-      bundleChunksInSolution,
-    };
   }
 
   // Component count must match what Dataverse `solutioncomponents` counts —
@@ -566,75 +565,81 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // on schema-heavy sites (e.g. 503 attrs pushed the count from 405 → 908).
   //
   // Each term maps to a distinct `solutioncomponents` row that would be added
-  // when the site is solutionized:
+  // when the site is solutionized. Solutioncomponents componenttype values are:
   //
-  //   ppcs.length                               → type 10373 rows (includes
-  //                                                type-27 bot consumers and
-  //                                                type-33 cloud flow bindings,
-  //                                                which themselves import as
-  //                                                type 10373 sub-components)
-  //   tables.length                             → type 1 rows (Entity). Columns
-  //                                                ride along — do NOT add
-  //                                                schemaAttrCount here.
-  //   envVarCount                               → type 380 rows
-  //   classified.cloudFlowLinks.length          → type 29 rows (the workflow
-  //                                                entity itself). Each cloud
-  //                                                flow contributes TWO distinct
-  //                                                solutioncomponents rows: one
-  //                                                type-10373 (the ppc binding,
-  //                                                already in ppcs.length) and
-  //                                                one type-29 (added here).
-  //                                                Since type-33 ppc bindings
-  //                                                pair 1:1 with workflows,
-  //                                                cloudFlowLinks.length is the
-  //                                                workflow count. NOT a double-
-  //                                                count despite the name.
-  //   botsAndComponents.bots.length             → type 10137 rows
-  //   botsAndComponents.botComponents.length    → type 10193 rows
+  //   1       Entity (table) — columns ride along, never counted separately
+  //   29      Workflow (cloud flow — the workflow entity itself)
+  //   10137   Connection Reference
+  //   10192   Bot (Power Virtual Agent / Copilot Studio agent)
+  //   10193   Bot Component (agent topics, entities, gpt defs)
+  //   10373   Power Page Component (unified site-component type — pages, files,
+  //           templates, roles, settings, permissions, bot consumers,
+  //           cloud flow bindings, server logic all share this type)
+  //   10374   Website (the site record)
+  //   380     Environment Variable Definition
   //
-  // Before adding bot queries on 2026-04-22, bots + bot components were a known
-  // undercount. Live SIP site had 4 bots + 30 components missing from siteTotal,
-  // making orphansOnSite (46) misleadingly small. With bot queries enabled,
-  // siteTotal now includes them and orphansOnSite reflects reality.
+  // ppcs.length already includes type-27 bot consumers and type-33 cloud flow
+  // bindings under the umbrella of type-10373. cloudFlowLinks.length below
+  // refers to the 1:1 paired type-29 workflow record, not a double-count.
   //
-  // Subtract bundle chunks (Vite/Rollup hashed .js/.css). Those accumulate as
-  // dead orphans with every `pac pages upload-code-site` rebuild and don't
-  // represent real site inventory — they're noise, not content.
+  // Raw site inventory — every ppc and related artifact, no filtering. Matches
+  // the Dataverse view of the site. Bundle-chunk noise is surfaced separately
+  // (bundleChunkCount) so consumers can reason about it without us silently
+  // subtracting it here. Earlier revisions subtracted chunks to get an
+  // "actionable" count, but that made the siteTotal non-comparable to the
+  // solution count in Dataverse (which does include chunk members).
   const bundleChunkCount = classified.bundleChunks.length;
   const siteTotalComponents =
-    ppcs.length -
-    bundleChunkCount +
+    ppcs.length +
     tables.length +
     envVarCount +
     classified.cloudFlowLinks.length +
     (botsAndComponents.bots.length || 0) +
     (botsAndComponents.botComponents.length || 0);
 
+  // "Actionable" site inventory — excludes bundle-chunk ppcs that are stale
+  // leftovers from prior `pac pages upload-code-site` runs. Useful when the
+  // user wants to know "how many real components do I have" vs. "how many
+  // rows exist in Dataverse".
+  const siteActionableComponents = siteTotalComponents - bundleChunkCount;
+
   return {
     siteName: siteName || null,
     publisherPrefix: publisherPrefix || null,
     solutionId: solutionId || null,
     totalSizeMB: round1(totalSizeMB),
-    // Canonical field for "components the site would export as solutioncomponents
-    // rows." Earlier revisions exposed a duplicate `componentCount` alias; it was
-    // dropped on 2026-04-22 since ALM skills are still in feature-branch development
-    // and don't need the legacy alias. Consumers (compute-split-plan, render-alm-plan)
-    // read `componentCountSiteTotal` directly.
+    // componentCountSiteTotal is the RAW site inventory — one count per
+    // Dataverse row. Matches what the Power Platform Maker UI would show
+    // if the whole site were added to a solution. Bundle chunks are included
+    // here because they're real rows in the site's `powerpagecomponents`.
     componentCountSiteTotal: siteTotalComponents,
+    // Sub-count that strips bundle-chunk noise (stale .js/.css from prior
+    // `pac pages upload-code-site` runs) for people who want the
+    // "actionable content" view.
+    componentCountSiteActionable: siteActionableComponents,
+    // componentCountInSolution matches the raw solutioncomponents row count
+    // for the target solution — i.e. what the Maker UI "Objects" page shows.
+    // Bundle chunks that were added to the solution count as members here;
+    // they ship with the managed solution when exported.
     componentCountInSolution: inSolution ? inSolution.total : null,
-    orphansOnSite: inSolution ? Math.max(siteTotalComponents - inSolution.total, 0) : null,
+    // Orphans = ppcs on the site that the solution does not own. Bundle
+    // chunks are excluded from orphans since they're stale upload artifacts,
+    // not content gaps. If you want the strict diff, compare
+    // componentCountSiteTotal - componentCountInSolution yourself.
+    orphansOnSite: inSolution
+      ? Math.max(siteActionableComponents - inSolution.total, 0)
+      : null,
     botCountScoped: botsAndComponents.bots.length || 0,
     botComponentCountScoped: botsAndComponents.botComponents.length || 0,
     bundleChunkCount,
     bundleChunkNote: bundleChunkCount > 0
-      ? `${bundleChunkCount} hashed bundle chunks (Vite/Rollup) excluded from siteTotal — they're stale orphans from prior pac pages upload-code-site runs. Cleanable via dedicated cleanup pass (not yet implemented).`
+      ? `${bundleChunkCount} hashed bundle chunks (Vite/Rollup) on the site — ${bundleChunksInSolution} are in the solution, ${bundleChunkCount - bundleChunksInSolution} are orphans from prior pac pages upload-code-site runs. Cleanable via dedicated cleanup pass.`
       : null,
     inSolution: inSolution
       ? {
           total: inSolution.total,
           byComponentType: inSolution.byComponentType,
-          totalRawIncludingBundleChunks: inSolution.totalRawIncludingBundleChunks,
-          bundleChunksInSolution: inSolution.bundleChunksInSolution,
+          bundleChunksInSolution,
           crossSitePpcCount: (inSolution.crossSitePpcs || []).length,
           crossSitePpcWarning:
             inSolution.crossSitePpcs && inSolution.crossSitePpcs.length > 0
