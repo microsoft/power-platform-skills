@@ -6,10 +6,12 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
+const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-runValidation((cwd) => {
-  const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project, skip
+async function main() {
+  return runValidation((cwd) => {
+    const projectRoot = findProjectRoot(cwd);
+    if (!projectRoot) approve(); // Not a Power Pages project, skip
 
   // Check if any auth files exist — if none, this wasn't an auth session
   const authServiceExists = findAuthService(projectRoot);
@@ -56,11 +58,17 @@ runValidation((cwd) => {
     errors.push('Missing auth UI component (AuthButton or equivalent)');
   }
 
-  if (errors.length > 0) {
-    block('Authentication setup validation failed:\n- ' + errors.join('\n- '));
-  }
+    if (errors.length > 0) {
+      block('Authentication setup validation failed:\n- ' + errors.join('\n- '));
+    }
 
-  approve();
+    approve();
+  });
+}
+
+runInstrumented('validate-setup-auth', main).catch((err) => {
+  process.stderr.write(String((err && err.stack) || err) + '\n');
+  process.exit(1);
 });
 
 function findAuthService(projectRoot) {
@@ -125,3 +133,12 @@ function findAuthComponent(projectRoot) {
 
   return null;
 }
+
+if (require.main === module) {
+  runInstrumented('validate-setup-auth', main).catch((err) => {
+    process.stderr.write(String((err && err.stack) || err) + '\n');
+    process.exit(1);
+  });
+}
+
+module.exports = { main };

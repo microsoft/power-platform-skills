@@ -6,58 +6,61 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
+const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-runValidation((cwd) => {
-  const configPath = findPath(cwd, 'powerpages.config.json');
-  if (!configPath) approve(); // Not a Power Pages project, skip
+async function main() {
+  return runValidation((cwd) => {
+    const configPath = findPath(cwd, 'powerpages.config.json');
+    if (!configPath) approve(); // Not a Power Pages project, skip
 
-  const projectRoot = path.dirname(configPath);
-  const publicDir = path.join(projectRoot, 'public');
+    const projectRoot = path.dirname(configPath);
+    const publicDir = path.join(projectRoot, 'public');
 
-  if (!fs.existsSync(publicDir)) approve();
+    if (!fs.existsSync(publicDir)) approve();
 
-  // Check if any SEO file exists — if none, this wasn't an SEO session, skip
-  const hasRobots = fs.existsSync(path.join(publicDir, 'robots.txt'));
-  const hasSitemap = fs.existsSync(path.join(publicDir, 'sitemap.xml'));
-  if (!hasRobots && !hasSitemap) approve();
+    // Check if any SEO file exists — if none, this wasn't an SEO session, skip
+    const hasRobots = fs.existsSync(path.join(publicDir, 'robots.txt'));
+    const hasSitemap = fs.existsSync(path.join(publicDir, 'sitemap.xml'));
+    if (!hasRobots && !hasSitemap) approve();
 
-  const errors = [];
+    const errors = [];
 
-  // 1. robots.txt
-  if (!hasRobots) {
-    errors.push('Missing public/robots.txt');
-  } else {
-    const content = fs.readFileSync(path.join(publicDir, 'robots.txt'), 'utf8');
-    if (!content.includes('User-agent:')) errors.push('robots.txt: missing User-agent directive');
-    if (!content.toLowerCase().includes('sitemap:')) errors.push('robots.txt: missing Sitemap directive');
-  }
-
-  // 2. sitemap.xml
-  if (!hasSitemap) {
-    errors.push('Missing public/sitemap.xml');
-  } else {
-    const content = fs.readFileSync(path.join(publicDir, 'sitemap.xml'), 'utf8');
-    if (!content.includes('<urlset')) errors.push('sitemap.xml: missing <urlset> element');
-    if (!content.includes('<loc>')) errors.push('sitemap.xml: missing <loc> entries');
-    if (content.includes('<PRODUCTION_URL>') || content.includes('<TODAY_DATE>')) {
-      errors.push('sitemap.xml: contains unreplaced template placeholders');
+    // 1. robots.txt
+    if (!hasRobots) {
+      errors.push('Missing public/robots.txt');
+    } else {
+      const content = fs.readFileSync(path.join(publicDir, 'robots.txt'), 'utf8');
+      if (!content.includes('User-agent:')) errors.push('robots.txt: missing User-agent directive');
+      if (!content.toLowerCase().includes('sitemap:')) errors.push('robots.txt: missing Sitemap directive');
     }
-  }
 
-  // 3. Meta tags in index.html
-  const indexPath = findIndexHtml(projectRoot);
-  if (indexPath) {
-    const content = fs.readFileSync(indexPath, 'utf8');
-    if (!content.includes('meta name="description"')) errors.push('index.html: missing meta description tag');
-    if (!content.includes('meta name="viewport"')) errors.push('index.html: missing viewport meta tag');
-  }
+    // 2. sitemap.xml
+    if (!hasSitemap) {
+      errors.push('Missing public/sitemap.xml');
+    } else {
+      const content = fs.readFileSync(path.join(publicDir, 'sitemap.xml'), 'utf8');
+      if (!content.includes('<urlset')) errors.push('sitemap.xml: missing <urlset> element');
+      if (!content.includes('<loc>')) errors.push('sitemap.xml: missing <loc> entries');
+      if (content.includes('<PRODUCTION_URL>') || content.includes('<TODAY_DATE>')) {
+        errors.push('sitemap.xml: contains unreplaced template placeholders');
+      }
+    }
 
-  if (errors.length > 0) {
-    block('SEO validation failed:\n- ' + errors.join('\n- '));
-  }
+    // 3. Meta tags in index.html
+    const indexPath = findIndexHtml(projectRoot);
+    if (indexPath) {
+      const content = fs.readFileSync(indexPath, 'utf8');
+      if (!content.includes('meta name="description"')) errors.push('index.html: missing meta description tag');
+      if (!content.includes('meta name="viewport"')) errors.push('index.html: missing viewport meta tag');
+    }
 
-  approve();
-});
+    if (errors.length > 0) {
+      block('SEO validation failed:\n- ' + errors.join('\n- '));
+    }
+
+    approve();
+  });
+}
 
 function findIndexHtml(projectRoot) {
   const candidates = [
@@ -83,3 +86,8 @@ function findIndexHtml(projectRoot) {
 
   return null;
 }
+
+runInstrumented('validate-add-seo', main).catch((err) => {
+  process.stderr.write(String((err && err.stack) || err) + '\n');
+  process.exit(1);
+});
