@@ -88,6 +88,8 @@ Ask the user:
 > Copy the URL from the browser address bar while your app is open in Power Apps Designer (it should look like `https://make.powerapps.com/e/Default-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/canvas/?action=edit&app-id=...`).
 >
 > Make sure coauthoring is enabled in the app (Settings → Updates → Coauthoring).
+>
+> **Keep this browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. Closing the tab ends the coauthoring session, which prevents `compile_canvas` and `sync_canvas` from working and means you can't see or save generated changes.
 
 Then extract from the URL:
 - **ENV_ID**: the path segment between `/e/` and the next `/` (e.g. `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`).
@@ -184,10 +186,6 @@ claude mcp add --scope {CLAUDE_SCOPE} canvas-authoring \
 - Preserve the existing structure and formatting
 
 ### 5. Confirm and provide next steps
-
-Always include this note in your response:
-
-> **Important: Keep your Power Apps Studio browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. If you close the tab, the coauthoring session ends and `compile_canvas` / `sync_canvas` will fail. You won't be able to see generated changes or save your app without it.
 
 If TOOL_TYPE is `claude`:
 
