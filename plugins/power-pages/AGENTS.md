@@ -78,6 +78,18 @@ These patterns have caused repeated PR review feedback. Check for them before su
 - **Template placeholders in `<script>` blocks need special care** — `render-template.js` injects string values as-is (no encoding), which is safe for HTML text contexts but risky inside JavaScript. Avoid declaring JS variables with `"__PLACEHOLDER__"` in script blocks; prefer reading from the DOM or using `JSON.stringify` for JS contexts.
 - **Guidance must be consistent within a skill** — If one section says "always use raw fetch", a framework-specific table in the same file must not recommend a different HTTP client without qualification. Reviewers will flag contradictions.
 
+## Telemetry
+
+This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; the synced copy at `scripts/lib/telemetry/` is the live code. Zero npm dependencies — nothing to install.
+
+- **DO NOT hand-edit** files under `scripts/lib/telemetry/`. Edit `shared/telemetry/` and re-run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages`.
+- **Consent:** every tracked skill runs the Phase-1 one-liner from `references/telemetry-consent-reference.md`. Never emit without the user's explicit consent.
+- **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the reference doc.
+- **Env off-switch:** `POWER_PLATFORM_SKILLS_TELEMETRY=0` disables emission regardless of the consent file.
+- **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.
+
+See `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md` for the full design.
+
 ## Maintaining This File
 
 Update when plugin structure or conventions change or you learn something which can be useful for new skills or agents.
