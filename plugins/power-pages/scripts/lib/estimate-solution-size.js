@@ -131,11 +131,15 @@ async function discoverTables(envUrl, publisherPrefix, token, manifestPath) {
     } catch {}
   }
 
-  // Query EntityDefinitions for custom unmanaged tables
+  // Query EntityDefinitions for custom unmanaged tables.
+  // Verified 2026-04-22 against org1e98cc97 (v9.2): EntityDefinitions does NOT
+  // support `$top` (returns 400 "The query parameter $top is not supported").
+  // We filter server-side to IsCustomEntity=true to keep the payload bounded —
+  // there's still no client-side pagination needed for typical tenants.
   const path =
     `EntityDefinitions` +
-    `?$select=LogicalName,MetadataId,IsManaged,IsCustomEntity` +
-    `&$top=500`;
+    `?$filter=IsCustomEntity eq true` +
+    `&$select=LogicalName,MetadataId,IsManaged,IsCustomEntity`;
   const all = await collectPaginated(envUrl, path, token, 10);
   const custom = all.filter((e) => e.IsCustomEntity === true && e.IsManaged === false);
   const matchingPrefix = publisherPrefix
