@@ -165,7 +165,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
 
 Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for `AddSolutionComponent` body templates and `powerpagecomponents` discovery patterns.
 
-> **Sync-mode behavior**: When `syncMode = true`, run the discovery helper with `--solutionId` populated and use the returned `missing.*` arrays as the candidate set. Everything else in this phase (dynamic component-type lookup in 5.1, categorization in 5.3, OAuth secret conversion in 5.4, orphan adoption in 5.4b, manifest summary in 5.5, bulk add in 5.6) runs the same way, just with a pre-filtered "only things that aren't already in the solution" list. The goal of sync mode is: a user who added a server logic, bot, flow, or env var *after* `setup-solution` last ran can re-invoke the skill and get those components adopted without any fresh-setup prompts.
+> **Sync-mode behavior**: When `syncMode = true`, run the discovery helper with `--solutionId` populated and use the returned `missing.*` arrays as the candidate set. Everything else in this phase (dynamic component-type lookup in 5.1, categorization in 5.3, OAuth secret conversion in 5.4, env var adoption in 5.4b, **orphan ppc adoption in 5.4c**, manifest summary in 5.5, bulk add in 5.6) runs the same way, just with a pre-filtered "only things that aren't already in the solution" list. The goal of sync mode is: a user who added a server logic, bot, flow, env var, or page *after* `setup-solution` last ran can re-invoke the skill and get those components adopted without any fresh-setup prompts.
 >
 > **Fresh-mode behavior** (`syncMode = false`): run the full discovery as documented below — every ppc, every site language, every custom table, every publisher-prefix env var becomes a candidate for inclusion.
 
@@ -360,6 +360,47 @@ If none are selected or the list is empty, `adoptedEnvVars` stays empty — the 
 
 > **Why this step exists**: before this check, env vars created by other skills were silently excluded from the site's solution and didn't travel to staging/prod. Surfacing them here is the cross-skill safety net required by the ALM-aware-by-default principle in `AGENTS.md`.
 
+#### Step 5.4c — Adopt Orphaned Power Pages Components
+
+Symmetric to 5.4b but for `powerpagecomponent` rows. Catches components on the site that were created by other skills or by `pac pages upload-code-site` without being wrapped into a user solution. Canonical examples surfaced in 2026-04-22 live validation:
+
+- **`invoice-checker` server logic** (type 35) — added via `/power-pages:add-server-logic` in an earlier session, never registered into the user solution.
+- **`index.html`** (type 3) — the current SPA entry page refreshed by `pac pages upload-code-site`; on every rebuild a new `index.html` record is created but nothing auto-adds it to the user solution.
+
+Use the shared discovery helper to collect the orphan list (it already excludes Vite/Rollup bundle chunks — `Home-XYZ.js`, `index-XYZ.css`, etc. — so the prompt doesn't drown the user in hash-named noise):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{envUrl}" --token "{token}" \
+  --siteId "{websiteRecordId}" \
+  --publisherPrefix "{publisherPrefix}" \
+  --solutionId "{solutionId}"
+```
+
+From the JSON output, take `missing.powerpagecomponents` and partition:
+
+- **Real content orphans** — entries whose `name` does NOT match the bundle-chunk regex (`[-.][A-Za-z0-9_-]{7,14}\.(js|mjs|cjs|css)(\.map)?$`). These are the ones to adopt.
+- **Bundle-chunk orphans** — keep a count for the summary, but do NOT prompt for adoption. They're stale build artifacts, not real content. Report them in the Phase 7 summary with a suggestion to clean up via a separate housekeeping pass.
+
+For each real-content orphan, also deduplicate by `name`: if there are multiple `index.html` rows and one is already in the solution (newer `modifiedon`), the older orphan is a stale duplicate — **exclude it from the adoption prompt** and log it as a stale duplicate instead. Rule: keep only the most-recent orphan per `(powerpagecomponenttype, name)` pair.
+
+If the real-content orphan list is non-empty, prompt via `AskUserQuestion` with `multiSelect: true`:
+
+> "Found **{N}** site components not yet in **{solutionUniqueName}**:
+>
+> 1. `{name}` (type {type} {typeLabel}) — currently in: **{currentSolution}**
+> 2. ...
+>
+> Plus: **Include all orphans (Recommended)** / **Skip for now**"
+
+Collect selections into `adoptedPpcs: [{ id, name, type, typeLabel }]`.
+
+When the user selects, call `AddSolutionComponent` per entry with `ComponentType: 10373` and `AddRequiredComponents: false`. Do **not** set `DoNotIncludeSubcomponents: true` — the Dataverse API rejects that flag for non-Entity root components (HTTP 400 `0x80040216`) and it's not needed for type-10373 rows anyway.
+
+If zero real-content orphans, the step runs silently.
+
+> **Why this step exists**: before this check, a recurring failure pattern was that `setup-solution` finished with the user convinced everything was wrapped up, while `invoice-checker` / `index.html` / similar site-linked records quietly stayed in the `Active` solution and didn't travel to staging/prod. Today's live validation found 1 real orphan (`invoice-checker`) on SupplierInvoicePortal — adopted via AddSolutionComponent, solution bumped from v1.0.0.1 → v1.0.0.2.
+
 #### Step 5.5 — Present Full Manifest and Get User Confirmation
 
 **This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
@@ -420,6 +461,7 @@ Total to add: ~{N} components
 For clarity, use these tags after each env var entry in the manifest:
 - `[converted from OAuth secret]` — created in Step 5.4 from a site setting
 - `[ADOPTED — was in Default only]` — existed before this run; being pulled into the solution in Step 5.4b
+- `[ADOPTED ppc — was in Active only]` — powerpagecomponent adopted in Step 5.4c (e.g. `invoice-checker` server logic, real site pages not yet registered)
 - `[ADOPTED — also in {otherSolutionName}]` — existed in another user solution; being additionally added here (user explicitly opted in)
 
 If `cloudFlows` is non-empty, use `AskUserQuestion` with `multiSelect: true`:
@@ -460,6 +502,7 @@ The components array should be built in this order:
 5. **Dataverse tables** — `{ componentType: 1, componentId: MetadataId }`
 6. **Confirmed cloud flows** (from Step 5.5) — `{ componentId: workflowId, componentType: workflowComponentType }` (uses runtime-discovered type)
 7. **Confirmed bot components** — `{ componentId: botId, componentType: botComponentType }` (uses runtime-discovered type)
+8. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: 10373, addRequired: false }`. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
 
 Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
 ```bash
