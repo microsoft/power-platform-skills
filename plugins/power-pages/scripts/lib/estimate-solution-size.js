@@ -105,6 +105,86 @@ async function collectPaginated(envUrl, path, token, maxPages = 20) {
   return items;
 }
 
+/**
+ * Discovers bots + bot components linked to the site.
+ *
+ * Power Pages bot linkage: each site has `powerpagecomponent` rows of type 27
+ * (Bot Consumer). Each consumer references a bot by its schemaname stored in
+ * the ppc `name` field. We use those names to scope the bot query so we only
+ * count bots actually attached to this site, not every bot in the env.
+ *
+ * Each bot has child `botcomponent` rows (topics, entities, gpt defs). Both
+ * bots and bot components become separate `solutioncomponents` rows when added
+ * to a solution (types 10137 and 10193). Counting them here closes the
+ * siteTotal gap that previously made orphansOnSite look artificially small.
+ */
+async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
+  if (!botConsumerPpcs || botConsumerPpcs.length === 0) {
+    return { bots: [], botComponents: [] };
+  }
+
+  // Bot schemaname lives in the ppc `content` JSON (the `name` field is the
+  // literal string "Bot Consumer" — not useful). We re-query the consumers
+  // with content included, parse, and collect unique schema names.
+  const consumerIds = botConsumerPpcs
+    .map((c) => c.powerpagecomponentid)
+    .filter(Boolean);
+  if (consumerIds.length === 0) return { bots: [], botComponents: [] };
+
+  const idFilter = consumerIds.map((id) => `powerpagecomponentid eq ${id}`).join(' or ');
+  const withContentPath =
+    `powerpagecomponents?$filter=${idFilter}&$select=powerpagecomponentid,content&$top=500`;
+  let enriched;
+  try {
+    enriched = await collectPaginated(envUrl, withContentPath, token, 2);
+  } catch {
+    return { bots: [], botComponents: [] };
+  }
+
+  const consumerNames = [];
+  for (const row of enriched) {
+    let schema = null;
+    try {
+      const parsed = JSON.parse(row.content || '{}');
+      schema = parsed.botschemaname || parsed.botSchemaName || null;
+    } catch {
+      // Malformed content — skip this consumer.
+    }
+    if (schema) consumerNames.push(schema);
+  }
+
+  const unique = [...new Set(consumerNames)];
+  if (unique.length === 0) return { bots: [], botComponents: [] };
+
+  // Fetch bots by schema-name match. OR-chaining several equality predicates
+  // stays well inside URL-length limits for realistic consumer counts (<50).
+  const safeNames = unique.map((n) => n.replace(/'/g, "''"));
+  const botFilter = safeNames.map((n) => `schemaname eq '${n}'`).join(' or ');
+  const botsPath =
+    `bots?$filter=${botFilter}&$select=botid,name,schemaname&$top=500`;
+  let bots = [];
+  try {
+    bots = await collectPaginated(envUrl, botsPath, token, 3);
+  } catch {
+    // Bots may be unavailable in some tenants (privilege / feature gating).
+    // Don't fail the whole estimate — surface as zero and move on.
+    return { bots: [], botComponents: [] };
+  }
+  if (bots.length === 0) return { bots: [], botComponents: [] };
+
+  const botIds = bots.map((b) => b.botid).filter(Boolean);
+  const compFilter = botIds.map((id) => `_parentbotid_value eq ${id}`).join(' or ');
+  const compsPath =
+    `botcomponents?$filter=${compFilter}&$select=botcomponentid&$top=5000`;
+  let botComponents = [];
+  try {
+    botComponents = await collectPaginated(envUrl, compsPath, token, 5);
+  } catch {
+    botComponents = [];
+  }
+  return { bots, botComponents };
+}
+
 async function discoverPowerPageComponents(envUrl, websiteRecordId, token) {
   // Verified 2026-04-21 against org1e98cc97 (v9.2 endpoint): both quoted and
   // unquoted GUID forms return identical results. Keeping quoted because it's
@@ -328,6 +408,14 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
 
   const envVarCount = await countEnvVarDefinitions(envUrl, publisherPrefix, resolved);
 
+  // Bot + bot components — scoped to bots referenced by this site's
+  // type-27 bot consumer ppcs so env-wide bots don't inflate the count.
+  const botsAndComponents = await discoverBotsAndComponents(
+    envUrl,
+    classified.botConsumers,
+    resolved,
+  );
+
   const webFileSample = classified.webFiles.slice(0, 80); // sample up to 80 web files for sizing
   const webMeasure = await measureWebFiles(envUrl, webFileSample, resolved);
 
@@ -365,16 +453,20 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   //   classified.cloudFlowLinks.length → componenttype 29 via the workflow
   //                            (the type-33 ppc binding is already in ppcs.length)
   //   classified.botConsumers.length → counted once (as ppc type 27 in ppcs.length)
+  //   botsAndComponents.bots.length → componenttype 10137 (Bot)
+  //   botsAndComponents.botComponents.length → componenttype 10193 (Bot Component)
   //
-  // Bots (type 10137) and bot topics (type 10193) are separate entity rows not
-  // reachable from ppcs; they're captured under inSolution when --solutionId is
-  // passed but can't be discovered site-wide without a bot-specific query.
-  // That's a known undercount bound; it does not affect the solution-owned count.
+  // Before adding bot queries on 2026-04-22, bots + bot components were a known
+  // undercount. Live SIP site had 4 bots + 30 components missing from siteTotal,
+  // making orphansOnSite (46) misleadingly small. With bot queries enabled,
+  // siteTotal now includes them and orphansOnSite reflects reality.
   const siteTotalComponents =
     ppcs.length +
     tables.length +
     envVarCount +
-    classified.cloudFlowLinks.length;
+    classified.cloudFlowLinks.length +
+    (botsAndComponents.bots.length || 0) +
+    (botsAndComponents.botComponents.length || 0);
 
   return {
     siteName: siteName || null,
@@ -385,6 +477,8 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     componentCountSiteTotal: siteTotalComponents,
     componentCountInSolution: inSolution ? inSolution.total : null,
     orphansOnSite: inSolution ? Math.max(siteTotalComponents - inSolution.total, 0) : null,
+    botCountScoped: botsAndComponents.bots.length || 0,
+    botComponentCountScoped: botsAndComponents.botComponents.length || 0,
     inSolution: inSolution
       ? {
           total: inSolution.total,
