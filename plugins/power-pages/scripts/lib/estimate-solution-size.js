@@ -409,8 +409,14 @@ function estimateTotalSize({ classified, tables, schemaAttrCount, webFilesAggreg
  * componenttype so the caller can distinguish "site-total" from "in-solution"
  * numbers. Used to fix the common confusion where the site has 908 ppcs but
  * only 361 are actually owned by the solution being planned.
+ *
+ * When `sitePpcIdSet` is provided (the set of powerpagecomponent ids actually
+ * linked to the target site), the returned object also includes a
+ * `crossSitePpcs` warning — type-10373 rows in the solution that do NOT belong
+ * to the expected site. Safety check for solutions that accidentally contain
+ * ppcs from multiple sites.
  */
-async function countSolutionMembership(envUrl, solutionId, token) {
+async function countSolutionMembership(envUrl, solutionId, token, sitePpcIdSet = null) {
   const url = `${envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq ${solutionId}&$select=objectid,componenttype&$top=5000`;
   const res = await makeRequest({
     url,
@@ -433,10 +439,25 @@ async function countSolutionMembership(envUrl, solutionId, token) {
   for (const r of rows) {
     byType[r.componenttype] = (byType[r.componenttype] || 0) + 1;
   }
+
+  // Cross-site safety check: if the caller gave us the set of ppc ids on the
+  // target site, flag any type-10373 row in the solution whose objectid isn't
+  // in that set. 100% overlap is the healthy case; any miss means this
+  // solution contains ppcs from a different site (rare, but possible when a
+  // user manually adds components across sites).
+  let crossSitePpcs = [];
+  if (sitePpcIdSet && sitePpcIdSet.size > 0) {
+    const solPpcs = rows
+      .filter((r) => r.componenttype === 10373)
+      .map((r) => (r.objectid || '').toLowerCase());
+    crossSitePpcs = solPpcs.filter((id) => id && !sitePpcIdSet.has(id));
+  }
+
   return {
     total: rows.length,
     byComponentType: byType,
     objectIds: rows.map((r) => (r.objectid || '').toLowerCase()),
+    crossSitePpcs,
   };
 }
 
@@ -486,8 +507,15 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // Optional: when caller passes --solutionId, also report what's actually
   // in the solution vs. site-total. Fixes the 908-on-site / 361-in-solution
   // ambiguity that previously caused plan docs to overstate solution size.
+  //
+  // Also provides the site's ppc id set as a cross-site safety check — if any
+  // type-10373 rows in the solution aren't on this site, we surface that as
+  // a warning in the output rather than silently miscounting.
+  const sitePpcIdSet = new Set(
+    ppcs.map((p) => (p.powerpagecomponentid || '').toLowerCase()).filter(Boolean),
+  );
   const inSolutionRaw = solutionId
-    ? await countSolutionMembership(envUrl, solutionId, resolved)
+    ? await countSolutionMembership(envUrl, solutionId, resolved, sitePpcIdSet)
     : null;
 
   // Exclude bundle chunks from inSolution too so the comparison stays
@@ -566,6 +594,11 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
           byComponentType: inSolution.byComponentType,
           totalRawIncludingBundleChunks: inSolution.totalRawIncludingBundleChunks,
           bundleChunksInSolution: inSolution.bundleChunksInSolution,
+          crossSitePpcCount: (inSolution.crossSitePpcs || []).length,
+          crossSitePpcWarning:
+            inSolution.crossSitePpcs && inSolution.crossSitePpcs.length > 0
+              ? `⚠ ${inSolution.crossSitePpcs.length} powerpagecomponent row(s) in this solution do not belong to site ${websiteRecordId}. The solution may contain components from a different site. Re-check the site scope before exporting.`
+              : null,
           // objectIds intentionally omitted from JSON output to keep it small;
           // callers that need diffing should use discover-site-components.js.
         }
@@ -626,5 +659,7 @@ module.exports = {
   estimateSolutionSize,
   estimateTotalSize,
   classifyPPCs,
+  countSolutionMembership,
+  isProbablyBundleChunk,
   BYTES_PER,
 };

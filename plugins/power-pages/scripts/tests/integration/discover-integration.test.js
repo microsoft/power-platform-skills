@@ -129,6 +129,65 @@ test('integration: discover survives an empty site (no components, no solutionId
   }
 });
 
+test('integration: countSolutionMembership cross-site safety check flags ppcs not on target site', async () => {
+  const { countSolutionMembership } = require('../../lib/estimate-solution-size');
+  const mock = await startMock([
+    {
+      method: 'GET',
+      matcher: '/solutioncomponents?',
+      body: {
+        value: [
+          { objectid: 'ppc-on-site-1', componenttype: 10373 },
+          { objectid: 'ppc-on-site-2', componenttype: 10373 },
+          { objectid: 'ppc-from-OTHER-site', componenttype: 10373 }, // ← cross-site
+          { objectid: 'table-1', componenttype: 1 }, // not a ppc — not checked
+          { objectid: 'website-1', componenttype: 10374 },
+        ],
+      },
+    },
+  ]);
+  try {
+    const sitePpcIdSet = new Set(['ppc-on-site-1', 'ppc-on-site-2']);
+    const result = await countSolutionMembership(
+      mock.baseUrl,
+      'sol-xyz',
+      'fake-token',
+      sitePpcIdSet,
+    );
+    assert.equal(result.total, 5);
+    assert.equal(result.byComponentType[10373], 3);
+    assert.deepEqual(result.crossSitePpcs, ['ppc-from-other-site'],
+      'the ppc not in the site set should be flagged, and the check is case-insensitive');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('integration: countSolutionMembership returns empty crossSitePpcs when sitePpcIdSet is null', async () => {
+  const { countSolutionMembership } = require('../../lib/estimate-solution-size');
+  const mock = await startMock([
+    {
+      method: 'GET',
+      matcher: '/solutioncomponents?',
+      body: {
+        value: [{ objectid: 'x', componenttype: 10373 }],
+      },
+    },
+  ]);
+  try {
+    const result = await countSolutionMembership(
+      mock.baseUrl,
+      'sol-xyz',
+      'fake-token',
+      null,
+    );
+    assert.deepEqual(result.crossSitePpcs, [],
+      'no cross-site check when caller did not supply the site set');
+  } finally {
+    await mock.close();
+  }
+});
+
 test('integration: discover with publisherPrefix queries env vars + tables endpoints', async () => {
   const mock = await startMock([
     { method: 'GET', matcher: '/powerpagecomponents', body: { value: [] } },
