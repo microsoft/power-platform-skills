@@ -56,6 +56,7 @@ function parseArgs(argv) {
     publisherPrefix: null,
     siteName: null,
     datamodelManifest: null,
+    solutionId: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
@@ -64,6 +65,7 @@ function parseArgs(argv) {
     else if (args[i] === '--publisherPrefix' && args[i + 1]) out.publisherPrefix = args[++i];
     else if (args[i] === '--siteName' && args[i + 1]) out.siteName = args[++i];
     else if (args[i] === '--datamodelManifest' && args[i + 1]) out.datamodelManifest = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
   }
   return out;
 }
@@ -273,7 +275,43 @@ function estimateTotalSize({ classified, tables, schemaAttrCount, webFilesAggreg
   return total / (1024 * 1024);
 }
 
-async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest }) {
+/**
+ * Queries solutioncomponents for a specific solution and aggregates counts by
+ * componenttype so the caller can distinguish "site-total" from "in-solution"
+ * numbers. Used to fix the common confusion where the site has 908 ppcs but
+ * only 361 are actually owned by the solution being planned.
+ */
+async function countSolutionMembership(envUrl, solutionId, token) {
+  const url = `${envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq ${solutionId}&$select=objectid,componenttype&$top=5000`;
+  const res = await makeRequest({
+    url,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      Prefer: 'odata.maxpagesize=5000',
+    },
+    timeout: 30000,
+  });
+  if (res.error || res.statusCode < 200 || res.statusCode >= 300) {
+    // Don't fail the whole estimate — just omit the inSolution block.
+    return null;
+  }
+  const parsed = JSON.parse(res.body);
+  const rows = parsed.value || [];
+  const byType = {};
+  for (const r of rows) {
+    byType[r.componenttype] = (byType[r.componenttype] || 0) + 1;
+  }
+  return {
+    total: rows.length,
+    byComponentType: byType,
+    objectIds: rows.map((r) => (r.objectid || '').toLowerCase()),
+  };
+}
+
+async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest, solutionId }) {
   if (!envUrl || !websiteRecordId) {
     throw new Error('--envUrl and --websiteRecordId are required');
   }
@@ -308,15 +346,33 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     envVarCount,
   });
 
+  // Optional: when caller passes --solutionId, also report what's actually
+  // in the solution vs. site-total. Fixes the 908-on-site / 361-in-solution
+  // ambiguity that previously caused plan docs to overstate solution size.
+  const inSolution = solutionId
+    ? await countSolutionMembership(envUrl, solutionId, resolved)
+    : null;
+
+  const siteTotalComponents =
+    ppcs.length + tables.length + schemaAttrCount + envVarCount;
+
   return {
     siteName: siteName || null,
     publisherPrefix: publisherPrefix || null,
+    solutionId: solutionId || null,
     totalSizeMB: round1(totalSizeMB),
-    componentCount:
-      ppcs.length +
-      tables.length +
-      schemaAttrCount +
-      envVarCount,
+    componentCount: siteTotalComponents,
+    componentCountSiteTotal: siteTotalComponents,
+    componentCountInSolution: inSolution ? inSolution.total : null,
+    orphansOnSite: inSolution ? Math.max(siteTotalComponents - inSolution.total, 0) : null,
+    inSolution: inSolution
+      ? {
+          total: inSolution.total,
+          byComponentType: inSolution.byComponentType,
+          // objectIds intentionally omitted from JSON output to keep it small;
+          // callers that need diffing should use discover-site-components.js.
+        }
+      : null,
     tableCount: tables.length,
     schemaAttrCount,
     webFilesAggregateMB: round1(webFilesAggregateBytes / (1024 * 1024)),

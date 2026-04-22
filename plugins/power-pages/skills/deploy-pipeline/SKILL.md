@@ -602,15 +602,17 @@ Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
 
-**7.7 Check site activation** (only if deployment **Succeeded** and solution has Power Pages components):
+**7.7 Check site activation** (only if deployment **Succeeded** and this is a Power Pages project):
 
-Query the source environment to check whether the solution contains a website component (componentType `10374`):
+> **Trigger rule (updated 2026-04-22):** run this check whenever the source project's `powerpages.config.json` has a `websiteRecordId` — i.e. this project is a Power Pages site project. The earlier rule ("only if the solution we just deployed contains a website componentType 10374") misses a real-world case: the site may pre-exist on the target and the solution we deployed may only contain tables/flows/bots. A Power Pages project's post-deploy is always incomplete if its site isn't activated on the target, regardless of which specific solution was shipped this time.
+
+Read `websiteRecordId` from `powerpages.config.json`. If the field is absent, skip the rest of 7.7 (this is a non-Power-Pages ALM run — e.g. a pure data-model solution).
+
+Optional secondary check: query the source solution for a website componentType `10374` only to **log** whether the site was included in this specific solution — informational, not gating:
 ```
 GET {sourceEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}' and componenttype eq 10374&$select=objectid
 Authorization: Bearer {SOURCE_TOKEN}
 ```
-
-If no results, skip the rest of 7.7.
 
 If found, temporarily switch PAC CLI to the target environment so `check-activation-status.js` queries the correct env:
 ```bash

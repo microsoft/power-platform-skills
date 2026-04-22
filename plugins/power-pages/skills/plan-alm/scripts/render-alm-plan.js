@@ -62,6 +62,13 @@ const breakdown = data.breakdown || {};
 
 const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 const componentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+// Optional two-number semantics (estimator output when --solutionId was passed):
+// siteTotal = everything on the site in Dataverse. inSolution = what the target
+// solution actually contains. orphans = siteTotal - inSolution.
+const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? componentCount);
+const componentCountInSolution = (data.componentCountInSolution == null) ? null : Number(data.componentCountInSolution);
+const orphansOnSite = (data.orphansOnSite == null) ? null : Number(data.orphansOnSite);
+const hasSolutionMembershipBreakout = componentCountInSolution !== null;
 const SIZE_LIMIT_MB = 95;
 const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
 const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
@@ -314,10 +321,26 @@ function buildAssetAdvisoryCallout() {
 </div>`;
 }
 
+function buildSolutionMembershipBanner() {
+  // When the estimator had a --solutionId context, show the site-vs-solution
+  // split so reviewers don't conflate "908 components on the site" with "908
+  // components in the solution about to ship."
+  if (!hasSolutionMembershipBreakout) return '';
+  const orphansClass = (orphansOnSite && orphansOnSite > 0) ? 'warn' : 'pass';
+  const orphansNote = (orphansOnSite && orphansOnSite > 0)
+    ? ` · ${orphansOnSite.toLocaleString()} orphan(s) on the site are NOT in this solution — run <code>/power-pages:setup-solution</code> in sync mode to adopt them.`
+    : ` · solution is fully in sync with the site.`;
+  return `<div class="note-box ${orphansClass}" style="margin-bottom:16px;">
+  <strong>Solution membership vs. site inventory.</strong>
+  The site currently holds <strong>${componentCountSiteTotal.toLocaleString()}</strong> components in Dataverse; the target solution owns <strong>${componentCountInSolution.toLocaleString()}</strong> of them.${orphansNote}
+</div>`;
+}
+
 function buildSolutionsHtml() {
   if (proposedSolutions.length === 0) {
     return '<div class="note-box neutral">Solution structure will be determined during Setup Solution.</div>';
   }
+  const membershipHtml = buildSolutionMembershipBanner();
   const calloutHtml = buildAssetAdvisoryCallout();
   const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387', '#5c2d91'];
   const cards = proposedSolutions.map((sol, i) => {
@@ -351,7 +374,7 @@ function buildSolutionsHtml() {
   </div>
 </div>`;
   }).join('\n');
-  return `${calloutHtml}${cards}`;
+  return `${membershipHtml}${calloutHtml}${cards}`;
 }
 
 function buildPipelinesTabTitle() {
