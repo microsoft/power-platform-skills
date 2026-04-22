@@ -267,6 +267,29 @@ async function countEnvVarDefinitions(envUrl, publisherPrefix, token) {
   return items.length;
 }
 
+// Detects Vite/Rollup/Webpack code-bundle chunks emitted by
+// `pac pages upload-code-site`. Each rebuild uploads new hash-suffixed files
+// and leaves the prior batch behind — so the total accumulates even though
+// only the latest batch is referenced by index.html. For plan-alm purposes,
+// these dead entries are noise, not real site inventory.
+//
+// Patterns matched:
+//   Home-BPuZZDcA.js        (Vite dynamic chunks)
+//   index-DyzztwOp.js       (main entry)
+//   chunk-RxR9EgHz.js       (generic chunk)
+//   vendor.a1b2c3d4.js      (older Webpack pattern)
+//   style.Z0qHD57j.css
+//
+// Heuristic: name contains `-` or `.` separator followed by 7–14 chars of
+// [A-Za-z0-9_-] followed by a `.js`/`.mjs`/`.cjs`/`.css`/`.map` extension.
+// Includes sourcemaps since those also accumulate. Keeps static assets like
+// `logo.svg`, `favicon.ico`, `hero.jpg` — no hash suffix.
+const BUNDLE_CHUNK_NAME = /[-.][A-Za-z0-9_-]{7,14}\.(?:js|mjs|cjs|css|map)$/;
+function isProbablyBundleChunk(name) {
+  if (!name) return false;
+  return BUNDLE_CHUNK_NAME.test(String(name));
+}
+
 function classifyPPCs(ppcs) {
   const byType = new Map();
   for (const c of ppcs) {
@@ -275,15 +298,30 @@ function classifyPPCs(ppcs) {
     byType.get(t).push(c);
   }
 
-  // Canonical type numbers for known Power Pages components
+  // Canonical `powerpagecomponenttype` picklist values (authoritative: MS Learn,
+  // cross-checked against the PPC_TYPE_LABELS enum in discover-site-components.js).
+  // Earlier versions of this file had swapped constants (WEB_FILE=2, WEB_PAGE=4,
+  // WEB_TEMPLATE=11) which actually pointed at Web Page, Web Link Set, and Web
+  // Role respectively — making webFileCount / webFilesAggregateMB catastrophically
+  // wrong on any site. Fixed 2026-04-22.
+  const PUBLISHING_STATE = 1;
+  const WEB_PAGE = 2;
+  const WEB_FILE = 3;
+  const WEB_LINK_SET = 4;
+  const WEB_LINK = 5;
+  const PAGE_TEMPLATE = 6;
+  const CONTENT_SNIPPET = 7;
+  const WEB_TEMPLATE = 8;
   const SITE_SETTING = 9;
-  const WEB_ROLE = 16;
-  const TABLE_PERMISSION = 18;
+  const WEB_ROLE = 11;
+  const SITE_MARKER = 13;
   const BOT_CONSUMER = 27;
   const CLOUD_FLOW_LINK = 33;
-  const WEB_FILE = 2;
-  const WEB_PAGE = 4;
-  const WEB_TEMPLATE = 11;
+  const TABLE_PERMISSION = 18; // note: 18 is Table Permission per the docs
+
+  const rawWebFiles = byType.get(WEB_FILE) || [];
+  const bundleChunks = rawWebFiles.filter((f) => isProbablyBundleChunk(f.name));
+  const liveWebFiles = rawWebFiles.filter((f) => !isProbablyBundleChunk(f.name));
 
   return {
     siteSettings: byType.get(SITE_SETTING) || [],
@@ -291,9 +329,20 @@ function classifyPPCs(ppcs) {
     tablePermissions: byType.get(TABLE_PERMISSION) || [],
     botConsumers: byType.get(BOT_CONSUMER) || [],
     cloudFlowLinks: byType.get(CLOUD_FLOW_LINK) || [],
-    webFiles: byType.get(WEB_FILE) || [],
+    // webFiles now excludes bundle chunks — the real "content" web files only
+    // (images, fonts, static assets). Bundle chunks are surfaced separately so
+    // they can be reported (and optionally cleaned up) but not counted as
+    // meaningful site inventory for planning purposes.
+    webFiles: liveWebFiles,
+    bundleChunks,
     webPages: byType.get(WEB_PAGE) || [],
     webTemplates: byType.get(WEB_TEMPLATE) || [],
+    publishingStates: byType.get(PUBLISHING_STATE) || [],
+    webLinks: byType.get(WEB_LINK) || [],
+    webLinkSets: byType.get(WEB_LINK_SET) || [],
+    pageTemplates: byType.get(PAGE_TEMPLATE) || [],
+    contentSnippets: byType.get(CONTENT_SNIPPET) || [],
+    siteMarkers: byType.get(SITE_MARKER) || [],
     all: ppcs,
     byType,
   };
@@ -437,9 +486,31 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // Optional: when caller passes --solutionId, also report what's actually
   // in the solution vs. site-total. Fixes the 908-on-site / 361-in-solution
   // ambiguity that previously caused plan docs to overstate solution size.
-  const inSolution = solutionId
+  const inSolutionRaw = solutionId
     ? await countSolutionMembership(envUrl, solutionId, resolved)
     : null;
+
+  // Exclude bundle chunks from inSolution too so the comparison stays
+  // apples-to-apples with siteTotal. Without this, solutions that shipped
+  // last week's bundle chunks (still living in Dataverse even though
+  // superseded on-site) make inSolution look artificially larger.
+  let inSolution = inSolutionRaw;
+  let bundleChunksInSolution = 0;
+  if (inSolutionRaw && classified.bundleChunks.length > 0) {
+    const chunkIdSet = new Set(
+      classified.bundleChunks.map((c) => (c.powerpagecomponentid || '').toLowerCase()),
+    );
+    const inSolIds = new Set(inSolutionRaw.objectIds || []);
+    for (const id of chunkIdSet) {
+      if (inSolIds.has(id)) bundleChunksInSolution += 1;
+    }
+    inSolution = {
+      ...inSolutionRaw,
+      total: Math.max(inSolutionRaw.total - bundleChunksInSolution, 0),
+      totalRawIncludingBundleChunks: inSolutionRaw.total,
+      bundleChunksInSolution,
+    };
+  }
 
   // Component count must match what Dataverse `solutioncomponents` counts —
   // each table is ONE component (attributes ride along, not counted separately).
@@ -460,8 +531,14 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // undercount. Live SIP site had 4 bots + 30 components missing from siteTotal,
   // making orphansOnSite (46) misleadingly small. With bot queries enabled,
   // siteTotal now includes them and orphansOnSite reflects reality.
+  //
+  // Subtract bundle chunks (Vite/Rollup hashed .js/.css). Those accumulate as
+  // dead orphans with every `pac pages upload-code-site` rebuild and don't
+  // represent real site inventory — they're noise, not content.
+  const bundleChunkCount = classified.bundleChunks.length;
   const siteTotalComponents =
-    ppcs.length +
+    ppcs.length -
+    bundleChunkCount +
     tables.length +
     envVarCount +
     classified.cloudFlowLinks.length +
@@ -479,10 +556,16 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     orphansOnSite: inSolution ? Math.max(siteTotalComponents - inSolution.total, 0) : null,
     botCountScoped: botsAndComponents.bots.length || 0,
     botComponentCountScoped: botsAndComponents.botComponents.length || 0,
+    bundleChunkCount,
+    bundleChunkNote: bundleChunkCount > 0
+      ? `${bundleChunkCount} hashed bundle chunks (Vite/Rollup) excluded from siteTotal — they're stale orphans from prior pac pages upload-code-site runs. Cleanable via dedicated cleanup pass (not yet implemented).`
+      : null,
     inSolution: inSolution
       ? {
           total: inSolution.total,
           byComponentType: inSolution.byComponentType,
+          totalRawIncludingBundleChunks: inSolution.totalRawIncludingBundleChunks,
+          bundleChunksInSolution: inSolution.bundleChunksInSolution,
           // objectIds intentionally omitted from JSON output to keep it small;
           // callers that need diffing should use discover-site-components.js.
         }
