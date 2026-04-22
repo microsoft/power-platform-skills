@@ -1,8 +1,10 @@
 # 1DS Telemetry Infrastructure — Design Spec
 
-**Date:** 2026-04-20
+**Date:** 2026-04-20 (revised 2026-04-22)
 **Status:** Draft — pending implementation plan
 **Scope:** Add Microsoft 1DS (One Data Strategy) telemetry to the `power-platform-skills` plugin marketplace, wired into the `power-pages` plugin as the first consumer. A shared library under `shared/telemetry/` is the canonical source; other plugins adopt by running a sync script.
+
+**2026-04-22 revision:** After reviewing the `agency-microsoft/playground/plugins/claude-telemetry` implementation and the POC results, this spec drops the `@microsoft/1ds-*` SDK and uses Node's built-in `https` module directly. Hooks also adopt a detached-child dispatcher pattern so they return in ~50 ms regardless of collector latency. Payload shape remains Common Schema 4.0 (what our POC verified via `acc:N`).
 
 ---
 
@@ -21,7 +23,7 @@
 - Wiring telemetry into the four non-`power-pages` plugins in this pass (they adopt later via the sync script).
 - Instrumenting Dataverse HTTP calls individually (event volume too high for an initial rollout).
 - Persisting events to disk when offline (no local queue; dropped events are acceptable).
-- Automating `npm install` for the telemetry dependencies (surfaced as a one-time notice; not auto-executed).
+- npm dependencies of any kind. The telemetry library is zero-dep — built on Node's `https`, `child_process`, and `fs` modules only.
 
 ---
 
@@ -34,38 +36,41 @@ The canonical source lives at `shared/telemetry/`. A sync script copies it into 
 ```
 shared/telemetry/
 ├── README.md                          # Purpose, data sent, sync instructions
-├── package.json                       # @microsoft/1ds-core-js, 1ds-post-js
-├── ikey.json                          # Hardcoded iKey + OneCollector URL
-├── sync-to-plugin.js                  # Copies lib/ + ikey.json + package.json into a plugin
+├── ikey.json                          # iKey + OneCollector URL (no secrets — iKey is a write-only identifier)
+├── sync-to-plugin.js                  # Copies lib/ + ikey.json into a plugin. No package.json to copy.
 ├── lib/
-│   ├── client.js                      # 1DS SDK init + emit() wrapper
+│   ├── emit-dispatcher.js             # CLI: reads event JSON on stdin, POSTs Common Schema 4.0, exits
+│   ├── emit-spawn.js                  # Tiny helper: spawns emit-dispatcher.js detached + hands it the JSON
 │   ├── consent.js                     # Read/write ~/.power-platform-skills/telemetry.json
 │   ├── events.js                      # Event builders with strict allowlists
 │   ├── session.js                     # Per-process anonymized UUID
 │   ├── scrubber.js                    # No-op placeholder for future PII regex
 │   ├── check-consent.js               # CLI: stdout "NEEDS_PROMPT" | "ENABLED" | "DISABLED"
 │   ├── record-consent.js              # CLI: --answer yes|no writes the consent file
-│   └── with-telemetry.js              # Wrapper for plugin Node scripts
+│   └── with-telemetry.js              # Wrapper for plugin Node scripts; calls emit-spawn
 
 plugins/power-pages/
-├── scripts/lib/telemetry/             # Synced copy of shared/telemetry/lib + ikey.json + package.json
-│                                      # Tracked in git; do NOT hand-edit
+├── scripts/lib/telemetry/             # Synced copy of shared/telemetry/lib + ikey.json
+│                                      # Tracked in git; do NOT hand-edit; no node_modules here
 ├── hooks/
 │   ├── hooks.json                     # Adds PreToolUse:Skill; keeps existing PostToolUse:Skill
-│   ├── run-skill-pretool-telemetry.js # New: emits skill_started
-│   └── run-skill-posttool-validation.js  # Existing; extended to emit skill_completed after validator
+│   ├── run-skill-pretool-telemetry.js # New: emits skill_started via emit-spawn
+│   └── run-skill-posttool-validation.js  # Existing; extended to emit skill_completed via emit-spawn
 └── references/
     └── telemetry-consent-reference.md # Shared Phase-1 pointer doc every SKILL.md includes
 ```
 
 ### 2.2 Runtime components
 
-1. **Consent gate** (`lib/consent.js`) — Reads `~/.power-platform-skills/telemetry.json`. Hooks read this synchronously; if missing or `enabled: false`, they exit 0 silently. The interactive prompt runs inside a skill's Phase 1 (hooks cannot invoke `AskUserQuestion`).
-2. **Client** (`lib/client.js`) — Lazy-initialized 1DS post channel. Loads `ikey.json` and the `@microsoft/1ds-*` SDK. If `node_modules` is missing, returns a no-op emitter and writes a one-time `npm install --prefix ...` notice to stderr.
-3. **Emitters** — Two hook scripts (`run-skill-pretool-telemetry.js`, existing `run-skill-posttool-validation.js`) and a `withTelemetry(scriptName, asyncFn)` wrapper for instrumenting individual Node scripts.
-4. **Event builders** (`lib/events.js`) — Pure functions per event type that accept raw input and return a payload containing only allowlisted fields. `client.emit()` accepts nothing else; a test enforces this.
+1. **Consent gate** (`lib/consent.js`) — Reads `~/.power-platform-skills/telemetry.json`. Hooks and the dispatcher read this synchronously; if missing or `enabled: false`, they exit 0 silently. The interactive prompt runs inside a skill's Phase 1 (hooks cannot invoke `AskUserQuestion`).
+2. **Dispatcher** (`lib/emit-dispatcher.js`) — A standalone Node CLI. Reads one event JSON on stdin, reads `POWER_PLATFORM_SKILLS_IKEY` and `POWER_PLATFORM_SKILLS_COLLECTOR` from env, re-checks consent, wraps the event in a Common Schema 4.0 envelope, POSTs it via `https.request(...)`, and exits when the response arrives or 4 s passes. Runs in its own OS process; its runtime is independent of the caller.
+3. **Spawn helper** (`lib/emit-spawn.js`) — Exposes `fireAndForget(event, { iKey, collectorUrl })`. Spawns the dispatcher with `{ detached: true, stdio: ['pipe', 'ignore', 'ignore'] }`, writes the event JSON to the child's stdin, calls `child.unref()`, and returns synchronously. The parent exits without waiting.
+4. **Emitters** — Three call sites all use `fireAndForget`: the PreToolUse hook, the PostToolUse hook (after the existing validator), and the `withTelemetry(scriptName, asyncFn)` wrapper used inside instrumented scripts. No code path anywhere in the plugin awaits a network round-trip.
+5. **Event builders** (`lib/events.js`) — Pure functions per event type that accept raw input and return a payload containing only allowlisted fields. `fireAndForget` accepts nothing else; a test enforces this.
 
 ### 2.3 Data flow for one skill run
+
+Every emission point calls `emit-spawn.fireAndForget` synchronously and then returns. The parent process never waits for the HTTPS POST. A detached dispatcher child performs the POST in the background.
 
 ```
 User invokes /create-site
@@ -73,9 +78,9 @@ User invokes /create-site
       ▼
 Skill Phase 1 runs:
   1. Existing plugin-version check (unchanged).
-  2. New: node check-consent.js
+  2. node check-consent.js
        - outputs "ENABLED"      → continue
-       - outputs "DISABLED"     → continue (hooks will no-op)
+       - outputs "DISABLED"     → continue (dispatchers will still spawn, then no-op)
        - outputs "NEEDS_PROMPT" → AskUserQuestion; then
                                   node record-consent.js --answer yes|no
       │
@@ -83,21 +88,30 @@ Skill Phase 1 runs:
 Claude invokes Skill tool
       │
       ├─► PreToolUse:Skill hook
-      │     run-skill-pretool-telemetry.js
-      │     → emit skill_started {plugin, plugin_version, skill, session_id,
-      │                           correlation_id, os_family, node_version}
+      │     run-skill-pretool-telemetry.js  (parent, runs under 30s hook timeout)
+      │       1. read stdin, detect tracked skill name
+      │       2. write correlation file (correlation_id + start_ts)
+      │       3. build skill_started event via events.js
+      │       4. emit-spawn.fireAndForget(event)   →  detached dispatcher child
+      │                                                ├─ re-check consent
+      │                                                ├─ POST to OneCollector
+      │                                                └─ exit when response arrives
+      │       5. parent exits 0   (≈ 50 ms)
       │
       ▼
-Skill body runs. Instrumented Node scripts wrap their main() in withTelemetry()
-  → emit script_started / script_completed
+Skill body runs. Instrumented Node scripts wrap their main() in withTelemetry():
+  ├─ emit-spawn.fireAndForget(script_started)   →  detached dispatcher
+  ├─ await asyncFn()
+  └─ emit-spawn.fireAndForget(script_completed) →  detached dispatcher
       │
       ├─► PostToolUse:Skill hook
       │     run-skill-posttool-validation.js
-      │     1. Runs existing per-skill validator (unchanged).
-      │     2. Emits skill_completed {outcome, duration_ms, error_class, correlation_id,
-      │                                common envelope fields}
-      │        outcome = "success" if validator exit 0, "failure" otherwise.
-      │     3. Exits with the validator's status code (telemetry does not change it).
+      │       1. Run existing per-skill validator (unchanged).
+      │       2. Read correlation file.
+      │       3. emit-spawn.fireAndForget(skill_completed)   →  detached dispatcher
+      │          outcome = "success" if validator exit 0, "failure" otherwise.
+      │       4. Clear correlation file.
+      │       5. Exit with the validator's status code (telemetry does not change it).
 ```
 
 ---
@@ -182,7 +196,7 @@ The AskUserQuestion payload (defined once in the reference doc):
 
 ### 4.3 Override
 
-- `POWER_PLATFORM_SKILLS_TELEMETRY=0` — Disables emission regardless of the file. Checked by the client on every emit.
+- `POWER_PLATFORM_SKILLS_TELEMETRY=0` — Disables emission regardless of the file. Checked by the dispatcher at the top of every run; dispatcher exits 0 without POSTing.
 - Any other value (including `1`, unset, empty) — No effect. Emission is governed entirely by the consent file. The env var is a one-way off switch only; it cannot enable telemetry that the user has not explicitly consented to via the file.
 
 ### 4.4 Hook behavior when consent is absent
@@ -230,21 +244,36 @@ Both hooks exit 0 silently. No stderr noise (gate debug output behind `process.e
 
 ### 5.2 `run-skill-pretool-telemetry.js` (new)
 
-Reads `tool_input`, calls `getTrackedSkillFromToolInput()` (existing helper), gates on consent, emits `skill_started` with a fresh `correlation_id` that is cached to a short-lived temp file keyed by skill name + session so the PostToolUse hook can correlate. Always exits 0.
+Reads `tool_input`, calls `getTrackedSkillFromToolInput()` (existing helper), builds the `skill_started` event via `events.js`, and calls `emit-spawn.fireAndForget(event, { iKey, collectorUrl })`. Writes the `correlation_id` + `start_ts` to a short-lived OS-temp file (`os.tmpdir()/ppskills-corr-<skillName>.json`) so the PostToolUse hook can join. Always exits 0.
 
 ### 5.3 `run-skill-posttool-validation.js` (extended)
 
 The existing validator flow is preserved byte-for-byte. A new block runs *after* the validator:
 
 ```js
+const corr = correlation.read({ skillName }) || {
+  correlation_id: crypto.randomUUID(),
+  start_ts: Date.now(),
+};
 const outcome = validatorStatus === 0 ? 'success' : 'failure';
-const duration_ms = Date.now() - startTs;
-const errorClass = ''; // PostToolUse does not carry thrown-error info
-emit(buildSkillCompletedEvent({ skill_name, outcome, duration_ms, error_class: errorClass, correlation_id }));
+const duration_ms = Date.now() - corr.start_ts;
+
+emitSpawn.fireAndForget(
+  events.buildSkillCompleted({
+    ...common,
+    skill_name: skillName,
+    correlation_id: corr.correlation_id,
+    outcome,
+    duration_ms,
+    error_class: '',  // PostToolUse does not carry thrown-error info
+  }),
+  { iKey, collectorUrl }
+);
+correlation.clear({ skillName });
 process.exit(validatorStatus ?? 0);
 ```
 
-Telemetry emission never changes the validator's exit code.
+Telemetry emission never changes the validator's exit code. `fireAndForget` is synchronous — it spawns the detached dispatcher and returns before the HTTPS POST completes.
 
 ### 5.4 `withTelemetry(scriptName, asyncFn)` (new)
 
@@ -263,7 +292,7 @@ if (require.main === module) {
 }
 ```
 
-`withTelemetry` emits `script_started`, awaits `asyncFn()`, then emits `script_completed` with the computed outcome. It rethrows the original error unchanged so existing error handling is preserved.
+`withTelemetry` calls `emit-spawn.fireAndForget(script_started)`, awaits `asyncFn()`, then calls `emit-spawn.fireAndForget(script_completed)` with the computed outcome. Neither emission blocks on the network — each one spawns a detached dispatcher and returns synchronously. The wrapper rethrows the original error unchanged so existing error handling is preserved.
 
 **Initial scripts to instrument** (chosen for signal value):
 
@@ -279,32 +308,33 @@ Low-value scripts (`generate-uuid.js`, template renderers) are not instrumented.
 
 ## 6. Dependencies and Install
 
-### 6.1 `shared/telemetry/package.json`
+### 6.1 No npm dependencies
 
-```json
+The telemetry library uses only Node built-ins (`node:https`, `node:child_process`, `node:fs`, `node:os`, `node:path`, `node:crypto`). There is no `package.json`, no `node_modules`, and no `npm install` step. This removes the single biggest friction point flagged in the earlier draft: users installing the plugin via the marketplace get a working telemetry stack immediately.
+
+### 6.2 OneCollector POST shape
+
+The dispatcher builds a Common Schema 4.0 envelope per event (what our POC verified via `acc:N`):
+
+```js
 {
-  "name": "@power-platform-skills/telemetry",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "@microsoft/1ds-core-js": "^3.2.0",
-    "@microsoft/1ds-post-js": "^3.2.0"
-  }
+  ver: "4.0",
+  name: event.name,                    // "PowerPlatformSkillsEvent"
+  time: new Date().toISOString(),
+  iKey: "o:" + IKEY.split("-")[0],
+  baseType: "Ms.WebClient.TraceEvent",
+  baseData: event.data,                // { eventName, eventType, severity, eventInfo }
+  data: event.data
 }
 ```
 
-Exact version pins are resolved during implementation against the currently published versions. Versions are synced into each plugin's copy.
+Request headers:
 
-### 6.2 Install story
+- `Content-Type: application/x-json-stream; charset=utf-8`
+- `x-apikey: <IKEY>`
+- `Content-Length: <bytes>`
 
-Users run `npm install --prefix plugins/power-pages/scripts/lib/telemetry` once. This is documented in:
-
-- `plugins/power-pages/AGENTS.md` (Key Conventions section)
-- `plugins/power-pages/CLAUDE.md` (same content, symlinked)
-- The consent prompt body (see §4.2)
-- The root `README.md` setup section
-
-The client fails closed on missing `node_modules`, so forgetting this step drops events but never breaks a skill.
+Collector URL comes from `ikey.json`'s `collector_url` field. A 4 s per-request timeout in the dispatcher; no retries; no local queue.
 
 ### 6.3 iKey provisioning
 
@@ -312,12 +342,12 @@ The client fails closed on missing `node_modules`, so forgetting this step drops
 
 ```json
 {
-  "ikey": "<32-char-iKey-provisioned-via-1DS-tenant>",
-  "collector_url": "https://self.events.data.microsoft.com/OneCollector/1.0"
+  "ikey": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+  "collector_url": "https://self.events.data.microsoft.com/OneCollector/1.0/"
 }
 ```
 
-The iKey is committed in plaintext (Microsoft OSS precedent: VS Code, dotnet SDK, Azure CLI). It is a write-only identifier, not a secret. The tenant token and iKey must be provisioned through whichever Microsoft 1DS tenant owns this data before the first commit that populates `ikey.json`. Until then, a placeholder causes the client to no-op (client validates the iKey format at init).
+The iKey is committed in plaintext (Microsoft OSS precedent: VS Code, dotnet SDK, Azure CLI). It is a write-only identifier, not a secret. The tenant token and iKey must be provisioned through whichever Microsoft 1DS tenant owns this data before the first commit that replaces the placeholder. Until then, the dispatcher detects the placeholder string and exits 0 without POSTing, so `ikey.json` can be safely present in source control throughout development.
 
 ---
 
@@ -328,17 +358,27 @@ All failure paths exit cleanly and never break the user's skill run.
 | Failure | Behavior |
 |---|---|
 | Consent file missing | Hook exits 0 silently. Skill Phase 1 triggers prompt. |
-| Consent file `enabled: false` | Hook exits 0 silently. |
-| `POWER_PLATFORM_SKILLS_TELEMETRY=0` | Hook exits 0 silently. |
+| Consent file `enabled: false` | Hook still calls `fireAndForget`, dispatcher starts, re-reads consent, exits 0 without POSTing. |
+| `POWER_PLATFORM_SKILLS_TELEMETRY=0` | Dispatcher reads env var at startup and exits 0 without POSTing. |
 | Consent file malformed | Treated as missing → re-prompt. |
-| `node_modules` missing | Client returns no-op; one-time stderr notice with `npm install --prefix` command. Hook exits 0. |
-| `ikey.json` missing or placeholder | Client returns no-op; no stderr output. |
-| 1DS POST fails, times out, or network unreachable | Fire-and-forget 2s timeout; errors swallowed; no retries; no on-disk queue. |
-| Event builder receives unexpected field | Dropped silently; caught by `node:test` in CI, not at runtime. |
-| Hook script throws | Top-level catch-all → `process.exit(0)`. |
-| Validator throws in PostToolUse | Telemetry still emits with `outcome: "failure"`; validator exit code is preserved. |
+| `ikey.json` missing or placeholder | Dispatcher exits 0 without POSTing. No stderr. |
+| Collector returns 4xx / 5xx | Dispatcher reads body, exits 0. No retry, no local queue. |
+| HTTPS POST times out | Dispatcher's 4 s `setTimeout` destroys the request and exits 0. |
+| DNS failure / network unreachable | Dispatcher's `req.on("error")` handler exits 0. |
+| `spawn(...)` fails (out of FDs, etc.) | `fireAndForget`'s `try { ... } catch {}` swallows. Hook/script continues. |
+| Detached child killed by OS before POST completes | Event dropped. No retry. Acceptable. |
+| Event builder receives unexpected field | Dropped silently by the builder's allowlist; caught by `node:test` in CI, not at runtime. |
+| Hook script throws during stdin-parsing | Top-level `.catch(() => process.exit(0))`. |
+| Dispatcher script throws | Top-level `.catch(() => process.exit(0))`. |
+| Validator throws in PostToolUse | Telemetry still emits with `outcome: "failure"` (fire-and-forget runs *after* validator); validator exit code is preserved. |
 
-**Non-negotiable rule:** telemetry code cannot raise a visible error. Enforced by `telemetry-hook-pretool.test.js` and `telemetry-hook-posttool.test.js`, which inject throws at every mockable seam and assert `exit(0)`.
+**Non-negotiable rules:**
+
+- Telemetry code cannot raise a visible error in the parent's shell.
+- Telemetry emission never changes a hook's or script's exit code.
+- No PII-carrying field ever reaches the dispatcher — `events.js` builders enforce the allowlist *before* `emit-spawn.fireAndForget`.
+
+Enforced by `telemetry-hook-pretool.test.js`, `telemetry-hook-posttool.test.js`, and `emit-dispatcher.test.js`, which inject throws at every mockable seam and assert `exit(0)`.
 
 ---
 
@@ -350,26 +390,35 @@ Mirrors the existing `scripts/tests/` convention (node:test, PowerShell runner, 
 
 ```
 shared/telemetry/tests/                # Canonical tests
-plugins/power-pages/scripts/tests/     # Synced copy (by sync-to-plugin.js)
-  ├── telemetry-client.test.js
-  ├── telemetry-consent.test.js
-  ├── telemetry-events.test.js
-  ├── telemetry-session.test.js
-  ├── telemetry-with-telemetry.test.js
+  ├── emit-dispatcher.test.js
+  ├── emit-spawn.test.js
+  ├── consent.test.js
+  ├── correlation.test.js
+  ├── events.test.js
+  ├── session.test.js
+  ├── scrubber.test.js
+  ├── with-telemetry.test.js
+  └── sync-to-plugin.test.js
+
+plugins/power-pages/scripts/tests/     # Plugin-specific hook tests
   ├── telemetry-hook-pretool.test.js
   └── telemetry-hook-posttool.test.js
 ```
 
-Both directories are committed and both are run in CI.
+Shared tests exercise the library once in its canonical location. Plugin-specific hook tests live inside the plugin because they depend on the plugin's hook-utils helper and directory layout.
 
 ### 8.2 Assertions per file
 
-- **client** — no-op when deps missing; no-op when consent disabled; respects env override; respects placeholder iKey.
+- **emit-dispatcher** — no-op when consent disabled; no-op when iKey is placeholder; no-op when env off-switch set; `req.on("error")` exits 0; `setTimeout` exits 0; happy path POSTs the expected Common Schema envelope (verified via an injected fake `https` module).
+- **emit-spawn** — parent returns in <100 ms; `unref()` called; detached child receives the event JSON on stdin; `spawn` throws → caller continues without throwing.
 - **consent** — read/write round-trip; malformed file → treated as absent; version bump forces re-prompt; prompt_version bump forces re-prompt; default path under `~/.power-platform-skills/`.
-- **events** — each builder returns exactly the allowlisted keyset; unknown input keys dropped; `error_class` is the constructor name, never a message; `duration_ms` is a non-negative integer.
+- **correlation** — write/read round-trip; read on missing file returns null; clear removes the file; non-existent file clear does not throw.
+- **events** — each builder returns exactly the allowlisted keyset; unknown input keys dropped; `error_class` is the constructor name, never a message; `duration_ms` clamped to a non-negative integer.
 - **session** — stable within a process; unique across processes.
-- **with-telemetry** — success path emits both events; rejection path emits completed with `outcome: "failure"` and rethrows the original error.
-- **hooks** — happy path emits; missing consent emits nothing; throws at each seam → `exit(0)`.
+- **scrubber** — identity function; never throws.
+- **with-telemetry** — success path fires two detached children; rejection path fires two detached children and rethrows the original error.
+- **sync-to-plugin** — copies `lib/` + `ikey.json`; copies `references/telemetry-consent-reference.md`; idempotent; exits non-zero on missing `--target`.
+- **hooks** — happy path calls `fireAndForget` exactly once; missing consent still calls `fireAndForget` (dispatcher handles the no-op); malformed stdin → `exit(0)`; tracked-skill detection returns null → no-op + exit 0.
 
 ### 8.3 Live end-to-end test
 
@@ -379,25 +428,32 @@ Both directories are committed and both are run in CI.
 
 ## 9. Rollout Sequence
 
-1. Land `shared/telemetry/` (library, `package.json`, `ikey.json` placeholder, sync script, tests). No plugin wiring yet.
+1. Land `shared/telemetry/` (library with dispatcher, spawn helper, consent, correlation, events, session, scrubber, with-telemetry, CLIs, sync script, tests, `ikey.json` placeholder). No plugin wiring yet. No npm install required.
 2. Run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages` to populate the synced copy. Commit the synced files.
 3. Add `plugins/power-pages/hooks/run-skill-pretool-telemetry.js` and update `plugins/power-pages/hooks/hooks.json` to register the PreToolUse:Skill entry.
-4. Extend `plugins/power-pages/hooks/run-skill-posttool-validation.js` to emit `skill_completed` after the validator.
+4. Extend `plugins/power-pages/hooks/run-skill-posttool-validation.js` to call `fireAndForget(skill_completed)` after the validator.
 5. Add `plugins/power-pages/references/telemetry-consent-reference.md` (synced).
 6. Add the Phase-1 one-liner to every tracked SKILL.md (per the list in `scripts/lib/powerpages-hook-utils.js`).
 7. Wrap the chosen high-value scripts (§5.4) in `withTelemetry(...)`.
-8. Update `plugins/power-pages/AGENTS.md`, root `AGENTS.md`, and `README.md` with telemetry conventions, the `npm install --prefix` command, and a link to `shared/telemetry/README.md`.
-9. Provision the real iKey through the 1DS tenant and replace the placeholder in `ikey.json`.
-10. Manual smoke test: fresh machine, run `/create-site`, observe the consent prompt, confirm "Yes", re-run, confirm an event reaches the 1DS collector (via the live test or tenant dashboard).
+8. Update `plugins/power-pages/AGENTS.md`, root `AGENTS.md`, and `README.md` with telemetry conventions and a link to `shared/telemetry/README.md`. No install instructions needed.
+9. Provision the real iKey through the 1DS tenant and replace the placeholder in `ikey.json`. Re-sync.
+10. Manual smoke test on a marketplace-installed plugin (not `--plugin-dir` — see §10 for rationale): fresh machine, run a tracked skill, observe the consent prompt, confirm "Yes", re-run, confirm an event reaches the 1DS collector via the tenant dashboard.
 
 ---
 
-## 10. Open Implementation Details (resolved during planning)
+## 10. Open Implementation Details
 
-- Exact `@microsoft/1ds-core-js` and `@microsoft/1ds-post-js` version pins — check npm at implementation time.
-- The mechanism for passing `correlation_id` from PreToolUse to PostToolUse (candidates: a short-lived temp file keyed by PID + skill name, or re-generating per hook and relying on `session_id` + `skill_name` + timestamp for correlation on the ingest side). Defaults to the temp-file approach unless the plan phase finds a cleaner option.
-- Verification that `process.stdin` JSON received by the hooks contains enough data to identify the skill (the existing `getTrackedSkillFromToolInput` usage confirms it does).
-- Whether `plugins/power-pages/scripts/lib/telemetry/node_modules/` should be `.gitignore`d (yes; the install step is a user-run prerequisite, not a committed artifact).
+Resolved items (kept for traceability):
+
+- ~~Exact `@microsoft/1ds-core-js` and `@microsoft/1ds-post-js` version pins.~~ **Resolved:** SDK dropped in the 2026-04-22 revision; Node built-in `https` used directly.
+- ~~Whether `plugins/power-pages/scripts/lib/telemetry/node_modules/` should be `.gitignore`d.~~ **Resolved:** no `node_modules` directory exists; no npm deps.
+- **Correlation mechanism:** OS temp file at `os.tmpdir()/ppskills-corr-<skillName>.json` written by the PreToolUse hook, read + cleared by the PostToolUse hook. Keyed by skill name only (not PID) because both hooks run in separate short-lived Node processes.
+- **Stdin shape:** the existing `getTrackedSkillFromToolInput(toolInput)` helper is proven by the in-prod validator hook; our hook scripts reuse it unchanged.
+
+Pending items (the implementer resolves during build):
+
+- **Marketplace-install-only E2E verification.** The POC confirmed that `--plugin-dir` dev mode does not register plugin hooks. The rollout smoke test (§9 step 10) must happen against a marketplace-installed copy of the plugin. Document this in the plan.
+- **Collector URL endpoint selection for the real tenant.** `ikey.json` ships with a US/default endpoint; the provisioning step (§6.3) updates it to whatever region the tenant lives in.
 
 ---
 
