@@ -14,50 +14,51 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { findPath, getPacAuthInfo, getAuthToken, makeRequest, CLOUD_TO_API } = require('./lib/validation-helpers');
+const { runInstrumented } = require('./lib/telemetry-runner');
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj));
   process.exit(obj.success ? 0 : 1);
 }
 
-// --- Parse --projectRoot argument ---
-const args = process.argv.slice(2);
-const rootIdx = args.indexOf('--projectRoot');
-const projectRoot = rootIdx !== -1 ? args[rootIdx + 1] : process.cwd();
+async function main() {
+  // --- Parse --projectRoot argument ---
+  const args = process.argv.slice(2);
+  const rootIdx = args.indexOf('--projectRoot');
+  const projectRoot = rootIdx !== -1 ? args[rootIdx + 1] : process.cwd();
 
-// --- Read siteName from powerpages.config.json ---
-const configPath = findPath(projectRoot, 'powerpages.config.json');
-if (!configPath) {
-  output({ success: false, error: 'powerpages.config.json not found' });
-}
+  // --- Read siteName from powerpages.config.json ---
+  const configPath = findPath(projectRoot, 'powerpages.config.json');
+  if (!configPath) {
+    output({ success: false, error: 'powerpages.config.json not found' });
+  }
 
-let siteName;
-try {
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  siteName = config.siteName;
-} catch {
-  output({ success: false, error: 'Failed to parse powerpages.config.json' });
-}
-if (!siteName) {
-  output({ success: false, error: 'siteName not found in powerpages.config.json' });
-}
+  let siteName;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    siteName = config.siteName;
+  } catch {
+    output({ success: false, error: 'Failed to parse powerpages.config.json' });
+  }
+  if (!siteName) {
+    output({ success: false, error: 'siteName not found in powerpages.config.json' });
+  }
 
-// --- Get PAC auth info ---
-const pacInfo = getPacAuthInfo();
-if (!pacInfo) {
-  output({ success: false, error: 'PAC CLI not authenticated' });
-}
+  // --- Get PAC auth info ---
+  const pacInfo = getPacAuthInfo();
+  if (!pacInfo) {
+    output({ success: false, error: 'PAC CLI not authenticated' });
+  }
 
-const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
+  const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
 
-// --- Get Power Platform API token ---
-const token = getAuthToken(ppApiBaseUrl);
-if (!token) {
-  output({ success: false, error: 'Failed to get Azure CLI access token. Ensure you are logged in with: az login' });
-}
+  // --- Get Power Platform API token ---
+  const token = getAuthToken(ppApiBaseUrl);
+  if (!token) {
+    output({ success: false, error: 'Failed to get Azure CLI access token. Ensure you are logged in with: az login' });
+  }
 
-// --- Find the website and restart it to clear cache ---
-(async () => {
+  // --- Find the website and restart it to clear cache ---
   // Get websites for this environment
   const listResult = await makeRequest({
     url: `${ppApiBaseUrl}/powerpages/environments/${pacInfo.environmentId}/websites?api-version=2022-03-01-preview`,
@@ -119,4 +120,13 @@ if (!token) {
   } else {
     output({ success: false, error: `Restart returned HTTP ${restartResult.statusCode}: ${restartResult.body}` });
   }
-})();
+}
+
+if (require.main === module) {
+  runInstrumented('clear-site-cache', main).catch((err) => {
+    process.stderr.write(String((err && err.stack) || err) + '\n');
+    process.exit(1);
+  });
+}
+
+module.exports = { main };
