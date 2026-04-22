@@ -1011,15 +1011,23 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 The OWIN OpenID Connect middleware defaults `CallbackPath` to `/signin-oidc` for **every** OIDC provider. If you configure two OIDC providers (e.g., Entra External ID + Okta) without setting unique CallbackPath values, they will both claim `/signin-oidc` and authentication will silently fail for one.
 
-**When creating site settings for a second (or later) OIDC provider:**
+**Use the ProviderName directly as the CallbackPath suffix** — this is deterministic and guarantees uniqueness because ProviderName is already unique (per the `{ProviderName}` naming convention: `OpenIdConnect_1`, `OpenIdConnect_2`, `EntraExternalId`, etc.).
 
-1. Read existing site settings in `.powerpages-site/site-settings/` matching `Authentication/OpenIdConnect/*/CallbackPath` and `Authentication/OpenIdConnect/*/RedirectUri`
-2. Derive a unique suffix for the new provider (e.g., `-extid`, `-okta`, based on ProviderName)
-3. Set `CallbackPath` to `/signin-oidc-<suffix>` (unique across all OIDC providers)
-4. Set `RedirectUri` to `{site-url}/signin-oidc-<suffix>` (must match CallbackPath)
-5. Tell the user to add this exact redirect URI to their identity provider's app registration
+**For every OIDC provider** (including Entra External ID), use this exact pattern:
 
-For the first/only OIDC provider, you can use the OWIN default `/signin-oidc` — but explicitly setting it is still recommended for clarity.
+- `CallbackPath` = `/signin-{ProviderName-lowercased}` (e.g., `/signin-entraexternalid`, `/signin-openidconnect_1`)
+- `RedirectUri` = `{site-url}/signin-{ProviderName-lowercased}` (must match CallbackPath exactly)
+
+Example for two OIDC providers:
+
+| ProviderName | CallbackPath | RedirectUri |
+|--------------|--------------|-------------|
+| `EntraExternalId` | `/signin-entraexternalid` | `https://contoso.powerappsportals.com/signin-entraexternalid` |
+| `OpenIdConnect_1` (Okta) | `/signin-openidconnect_1` | `https://contoso.powerappsportals.com/signin-openidconnect_1` |
+
+**Before creating** site settings, read existing `.powerpages-site/site-settings/` and verify no other `Authentication/OpenIdConnect/*/CallbackPath` or `RedirectUri` setting has the same value. If a collision exists (because the same ProviderName was reused), increment the numeric suffix on the ProviderName (e.g., `OpenIdConnect_1` → `OpenIdConnect_2`) and re-derive the CallbackPath.
+
+**Tell the user to register the exact RedirectUri** in their identity provider's app registration (Microsoft Entra admin center → App registrations → Redirect URIs).
 
 **How values are sourced:**
 - **Non-secret values** (authority URL, site URL, redirect URIs, AuthenticationType) → filled automatically from information gathered during the flow. The user should NOT need to edit any files.
@@ -1089,20 +1097,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<authority-url-from-user>" \
   --description "Provider identifier for ExternalLogin"
 
-# RedirectUri — MUST be unique across all OIDC providers (see collision note above)
+# RedirectUri — use /signin-{ProviderName-lowercased} for guaranteed uniqueness
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<site-url>/signin-oidc-<unique-suffix>" \
-  --description "OAuth callback URL — unique per provider"
+  --value "<site-url>/signin-{ProviderName-lowercased}" \
+  --description "OAuth callback URL — unique per provider (matches CallbackPath)"
 
-# CallbackPath — REQUIRED when multiple OIDC providers are configured
-# OWIN defaults ALL OIDC providers to /signin-oidc, causing collisions
+# CallbackPath — required to prevent collision when multiple OIDC providers exist
+# OWIN defaults ALL OIDC providers to /signin-oidc
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
-  --value "/signin-oidc-<unique-suffix>" \
-  --description "Unique callback path for this OIDC provider"
+  --value "/signin-{ProviderName-lowercased}" \
+  --description "Unique callback path derived from ProviderName"
 
 # ExternalLogoutEnabled — set to false when using RPInitiatedLogout (they are mutually exclusive)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1155,20 +1163,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<authority-url-from-user>" \
   --description "Provider identifier for ExternalLogin — must match authority URL exactly"
 
-# RedirectUri — MUST be unique across all OIDC providers (see collision note below)
+# RedirectUri — use /signin-{ProviderName-lowercased} for guaranteed uniqueness
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<site-url>/signin-oidc-<unique-suffix>" \
-  --description "OAuth callback URL — unique per provider"
+  --value "<site-url>/signin-{ProviderName-lowercased}" \
+  --description "OAuth callback URL — unique per provider (matches CallbackPath)"
 
-# CallbackPath — REQUIRED when multiple OIDC providers are configured to prevent collision
+# CallbackPath — required to prevent collision when multiple OIDC providers exist
 # OWIN defaults ALL OIDC providers to /signin-oidc, so a unique path per provider is needed
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
-  --value "/signin-oidc-<unique-suffix>" \
-  --description "Unique callback path for this OIDC provider"
+  --value "/signin-{ProviderName-lowercased}" \
+  --description "Unique callback path derived from ProviderName"
 
 # ExternalLogoutEnabled — set to false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
