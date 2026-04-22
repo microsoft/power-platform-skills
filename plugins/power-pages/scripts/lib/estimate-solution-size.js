@@ -115,11 +115,14 @@ async function collectPaginated(envUrl, path, token, maxPages = 20) {
  * don't inflate this site's count.
  *
  * Each bot has child `botcomponent` rows (topics, entities, gpt defs). Both
- * bots and bot components become separate `solutioncomponents` rows when added
- * to a solution — componenttype 10192 for Bot and 10193 for Bot Component.
- * (componenttype 10137 is Connection Reference, NOT a bot type — earlier
- * comments in this module had those swapped.) Counting them here closes the
- * siteTotal gap that previously made orphansOnSite look artificially small.
+ * bots and bot components become separate `solutioncomponents` rows when
+ * added to a solution (the Bot and BotComponent types; integer values are
+ * dynamic per tenant — resolve via `discover-component-types.js` before any
+ * mutation). Observed values in current tenants are 10192 for Bot and 10193
+ * for BotComponent; 10137 is Connection Reference (not a bot type), which
+ * earlier comments here had swapped. Counting bots + bot components here
+ * closes the siteTotal gap that previously made orphansOnSite look
+ * artificially small.
  *
  * Pagination ceilings (from collectPaginated below): bots up to 1,500 records
  * (3 pages × $top=500), botcomponents up to 25,000 (5 × 5,000). Hitting either
@@ -564,23 +567,42 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // Earlier versions added `schemaAttrCount` which inflated the total by 3–5×
   // on schema-heavy sites (e.g. 503 attrs pushed the count from 405 → 908).
   //
-  // Each term maps to a distinct `solutioncomponents` row that would be added
-  // when the site is solutionized. Solutioncomponents componenttype values are:
+  // Each term in the sum below maps to a category of `solutioncomponents` row
+  // that would be created if the site's artifacts were added to a solution.
   //
-  //   1       Entity (table) — columns ride along, never counted separately
-  //   29      Workflow (cloud flow — the workflow entity itself)
-  //   10137   Connection Reference
-  //   10192   Bot (Power Virtual Agent / Copilot Studio agent)
-  //   10193   Bot Component (agent topics, entities, gpt defs)
-  //   10373   Power Page Component (unified site-component type — pages, files,
-  //           templates, roles, settings, permissions, bot consumers,
-  //           cloud flow bindings, server logic all share this type)
-  //   10374   Website (the site record)
-  //   380     Environment Variable Definition
+  // On componenttype integers: the Dataverse `solutioncomponent.componenttype`
+  // picklist is officially **dynamic per tenant** — AddSolutionComponent
+  // expects the caller to resolve values at runtime, which is what
+  // `scripts/lib/discover-component-types.js` does. `countSolutionMembership`
+  // in this file is deliberately resolver-free: it tallies whatever values
+  // Dataverse returns in `byComponentType`, no hardcoded integers. Observed
+  // values in current tenants (2026-04-22) are
+  //   1=Entity, 29=Workflow, 380=EnvVarDef, 10137=ConnectionReference,
+  //   10192=Bot, 10193=BotComponent, 10373=PowerPageComponent, 10374=Website
+  // but callers MUST NOT rely on those in mutation paths — use the resolver.
   //
-  // ppcs.length already includes type-27 bot consumers and type-33 cloud flow
-  // bindings under the umbrella of type-10373. cloudFlowLinks.length below
-  // refers to the 1:1 paired type-29 workflow record, not a double-count.
+  // Site-inventory terms:
+  //   ppcs.length          — rows in powerpagecomponents for this website.
+  //                          Already contains type-27 bot consumers and
+  //                          type-33 cloud flow bindings (they're all ppcs).
+  //                          When exported to a solution they become the
+  //                          umbrella PowerPageComponent solutioncomponents
+  //                          type — one row each.
+  //   tables.length        — custom tables matching publisherPrefix.
+  //   envVarCount          — envvar definitions matching publisherPrefix.
+  //   cloudFlowLinks       — classified.cloudFlowLinks is type-33 ppcs but
+  //                          we're using its length as a 1:1 proxy for the
+  //                          Workflow entity count. Not a double-count with
+  //                          ppcs.length: that sum covers the ppc binding,
+  //                          this term covers the distinct Workflow record.
+  //   bots / botComponents — resolved by schema-name match through the
+  //                          site's type-27 ppcs; adds the env-level Bot +
+  //                          BotComponent entity rows.
+  //
+  // For the live SIP reference site in dev (org1e98cc97), this sum evaluates
+  // to 393 + 11 + 1 + 2 + 2 + 30 = 439. Connection references (4) and the
+  // website record itself (1) are NOT included — they're env-/site-level
+  // artifacts and not derivable without separate queries.
   //
   // Raw site inventory — every ppc and related artifact, no filtering. Matches
   // the Dataverse view of the site. Bundle-chunk noise is surfaced separately
