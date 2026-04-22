@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const consentLib = require("../lib/consent");
 
@@ -81,4 +82,39 @@ test("env var POWER_PLATFORM_SKILLS_TELEMETRY=1 does NOT force-enable", () => {
     env: { POWER_PLATFORM_SKILLS_TELEMETRY: "1" },
   });
   assert.equal(result.state, "unset");
+});
+
+test("check-consent CLI prints NEEDS_PROMPT when file missing", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  const cli = path.resolve(__dirname, "../lib/check-consent.js");
+  const { stdout, status } = spawnSync(process.execPath, [cli], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), "NEEDS_PROMPT");
+});
+
+test("check-consent CLI prints ENABLED when file has enabled=true", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  consentLib.write({ configDir: tmp, enabled: true });
+  const cli = path.resolve(__dirname, "../lib/check-consent.js");
+  const { stdout, status } = spawnSync(process.execPath, [cli], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), "ENABLED");
+});
+
+test("check-consent CLI prints DISABLED when file has enabled=false", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  consentLib.write({ configDir: tmp, enabled: false });
+  const cli = path.resolve(__dirname, "../lib/check-consent.js");
+  const { stdout, status } = spawnSync(process.execPath, [cli], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), "DISABLED");
 });
