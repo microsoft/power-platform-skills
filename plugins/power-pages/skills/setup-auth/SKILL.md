@@ -237,6 +237,7 @@ All values below come from the Microsoft Entra admin center — **App registrati
 | What is the Client ID (Application ID)? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
 | What is the OpenID Connect metadata document URL? (from the Endpoints blade — e.g., `https://contoso.ciamlogin.com/{tenant-id}/v2.0/.well-known/openid-configuration`) | *(free text)* |
 | What display name should the login button show? (e.g., `Microsoft Entra External ID` or `Sign in with External ID`. **Do NOT use "Sign in with Microsoft"** — that conflicts with the Microsoft Account social provider.) | *(free text)* |
+| Does your Entra External ID app registration use a client secret? (Entra External ID public clients typically use PKCE without a client secret. Only select Yes if your app registration has one configured.) | No (Recommended for public clients), Yes |
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
 
@@ -1186,7 +1187,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
-> **ClientSecret for Entra External ID:** Use the same environment variable pattern as OIDC (see Phase 8.1.1). Create an env var for `ClientSecret` and link it via `--envVarSchema`.
+> **ClientSecret for Entra External ID:** Only needed if the user confirmed in Phase 2.1 that their app registration uses a client secret. Public clients using PKCE do NOT need a ClientSecret — skip Phase 8.1.1 for this provider entirely. If a secret is needed, use the same environment variable pattern as OIDC (see Phase 8.1.1).
 
 **SAML2** — create settings for the provider:
 
@@ -1316,6 +1317,18 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 ```
 
 #### 8.1.1 Handle Secrets via Azure Key Vault
+
+**Only run this phase if a provider requires a secret.** Skip entirely when none of the configured providers need one.
+
+Providers that **may** require a secret:
+- **OpenID Connect (Generic)** — usually yes (confidential client)
+- **Entra External ID** — only if the user confirmed in Phase 2.1 that their app registration uses a client secret. Public clients using PKCE do NOT need a secret — skip for them.
+- **Microsoft Account / Facebook / Google** — yes (social OAuth requires app secret)
+- **SAML2 / WS-Federation** — no (certificate-based, not secrets)
+- **Local Authentication** — no
+- **Microsoft Entra ID** — no (configured via Power Pages admin center)
+
+**If no provider requires a secret, skip this entire phase 8.1.1 and proceed to the invitation/2FA blocks.**
 
 For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YAML files or as plain-text environment variables**. Use Azure Key Vault to store secrets, then reference them via Dataverse environment variables with `--type secret`.
 
