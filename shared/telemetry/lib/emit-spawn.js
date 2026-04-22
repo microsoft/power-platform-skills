@@ -12,11 +12,18 @@ function fireAndForget(event, opts = {}) {
   const fakeProbe = opts.fakeProbe || "";
 
   try {
-    const child = spawn("node", [DISPATCHER], {
+    const child = spawn(process.execPath, [DISPATCHER], {
       detached: true,
       stdio: ["pipe", "ignore", "ignore"],
       env: {
-        ...process.env,
+        // Pass only the minimum env the dispatcher needs. Avoid spreading
+        // process.env so secrets (AZURE_CLIENT_SECRET, GITHUB_TOKEN, etc.)
+        // never reach the telemetry child.
+        PATH: process.env.PATH || "",
+        SystemRoot: process.env.SystemRoot || "",
+        HOME: process.env.HOME || "",
+        USERPROFILE: process.env.USERPROFILE || "",
+        APPDATA: process.env.APPDATA || "",
         POWER_PLATFORM_SKILLS_IKEY: iKey,
         POWER_PLATFORM_SKILLS_COLLECTOR: collectorUrl,
         POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,

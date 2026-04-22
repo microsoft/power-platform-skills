@@ -25,7 +25,6 @@ function mkConsent(tmp, enabled) {
 }
 
 test("fireAndForget returns synchronously (<100 ms)", () => {
-  const tmp = mkTmp();
   const start = Date.now();
   fireAndForget(
     { name: "PowerPlatformSkillsEvent", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } },
@@ -59,11 +58,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
   assert.equal(body.data.eventName, "hello");
 });
 
-test("fireAndForget does not throw when spawn fails (missing dispatcher path)", () => {
-  // Rename the dispatcher so spawn will fail
-  const { fireAndForget: broken } = require("../lib/emit-spawn");
-  // Intentionally pass a malformed event that would crash if JSON.stringify throws
-  // (it won't — objects with cycles would, but we just verify no throw on happy path)
-  broken({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
+test("fireAndForget does not throw on empty-opts invocation", () => {
+  fireAndForget({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
   // No assertion needed: test passes if no throw.
 });
