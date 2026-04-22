@@ -756,11 +756,10 @@ export async function forgotPassword(email: string): Promise<void> {
  *   4. email (fallback if userName is empty for some reason)
  *   5. 'User' (final fallback)
  *
- * Why the fallbacks: `firstName`, `lastName`, and `email` on window.Microsoft.Dynamic365.Portal.User
- * are populated from Dataverse contact columns via per-provider RegistrationClaimsMapping
- * (e.g., `firstname=given_name`). They may be empty if the claim mapping is not configured,
- * the IdP doesn't emit the claim, or the contact already had a (possibly empty) value.
- * Only `contactId` and `userName` are guaranteed.
+ * Why the fallbacks: Power Pages populates `firstName`, `lastName`, and `email` from standard
+ * OIDC claims (`given_name`, `family_name`, `email`) by default — no explicit RegistrationClaimsMapping
+ * is needed for these standard claims. However, a field can still be empty if the IdP did not emit
+ * the claim. Only `contactId` and `userName` are truly guaranteed to be populated.
  */
 export function getUserDisplayName(): string {
   const user = getCurrentUser();
