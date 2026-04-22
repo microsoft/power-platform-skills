@@ -118,3 +118,35 @@ test("check-consent CLI prints DISABLED when file has enabled=false", () => {
   assert.equal(status, 0);
   assert.equal(stdout.trim(), "DISABLED");
 });
+
+test("record-consent CLI --answer yes writes enabled=true", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  const cli = path.resolve(__dirname, "../lib/record-consent.js");
+  const { status } = spawnSync(process.execPath, [cli, "--answer", "yes"], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.equal(status, 0);
+  assert.equal(consentLib.read({ configDir: tmp }).state, "enabled");
+});
+
+test("record-consent CLI --answer no writes enabled=false", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  const cli = path.resolve(__dirname, "../lib/record-consent.js");
+  const { status } = spawnSync(process.execPath, [cli, "--answer", "no"], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.equal(status, 0);
+  assert.equal(consentLib.read({ configDir: tmp }).state, "disabled");
+});
+
+test("record-consent CLI exits non-zero on invalid --answer", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
+  const cli = path.resolve(__dirname, "../lib/record-consent.js");
+  const { status } = spawnSync(process.execPath, [cli, "--answer", "maybe"], {
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp },
+    encoding: "utf8",
+  });
+  assert.notEqual(status, 0);
+});
