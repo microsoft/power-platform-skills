@@ -193,6 +193,8 @@ Tell the user:
 >
 > **Restart Claude Code to activate it.** Remember to use `claude --continue` to resume this session without losing context.
 >
+> **Important: Keep your Power Apps Studio browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. If you close the tab, the coauthoring session ends and `compile_canvas` / `sync_canvas` will fail. You won't be able to see generated changes or save your app without it.
+>
 > After restarting, verify the setup:
 > - `canvas-authoring` should appear in the MCP server list
 > - Ask Claude: "List available Canvas App controls" — should invoke `list_controls`
@@ -202,6 +204,8 @@ If TOOL_TYPE is `vscode-copilot`:
 Tell the user:
 
 > ✅ Canvas Authoring MCP server configured (`canvas-authoring`, configPath: `{CONFIG_PATH}`).
+>
+> **Important: Keep your Power Apps Studio browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. If you close the tab, the coauthoring session ends and `compile_canvas` / `sync_canvas` will fail. You won't be able to see generated changes or save your app without it.
 >
 > After saving, verify the setup:
 > - `canvas-authoring` should appear in the MCP server list
@@ -213,7 +217,9 @@ Tell the user:
 
 > ✅ Canvas Authoring MCP server configured (`canvas-authoring`, configPath: `{CONFIG_PATH}`).
 >
-> **Restart GitHub Copilot CLI to activate it.** 
+> **Restart GitHub Copilot CLI to activate it.**
+>
+> **Important: Keep your Power Apps Studio browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. If you close the tab, the coauthoring session ends and `compile_canvas` / `sync_canvas` will fail. You won't be able to see generated changes or save your app without it.
 >
 > After restarting, verify the setup:
 > - `canvas-authoring` should appear in the MCP server list
