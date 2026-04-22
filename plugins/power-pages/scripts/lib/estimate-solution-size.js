@@ -284,7 +284,7 @@ async function countEnvVarDefinitions(envUrl, publisherPrefix, token) {
 // [A-Za-z0-9_-] followed by a `.js`/`.mjs`/`.cjs`/`.css`/`.map` extension.
 // Includes sourcemaps since those also accumulate. Keeps static assets like
 // `logo.svg`, `favicon.ico`, `hero.jpg` — no hash suffix.
-const BUNDLE_CHUNK_NAME = /[-.][A-Za-z0-9_-]{7,14}\.(?:js|mjs|cjs|css|map)$/;
+const BUNDLE_CHUNK_NAME = /[-.][A-Za-z0-9_-]{7,14}\.(?:js|mjs|cjs|css)(?:\.map)?$/;
 function isProbablyBundleChunk(name) {
   if (!name) return false;
   return BUNDLE_CHUNK_NAME.test(String(name));

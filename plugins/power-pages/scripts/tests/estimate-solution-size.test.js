@@ -5,18 +5,23 @@ const { classifyPPCs, estimateTotalSize, BYTES_PER } = require('../lib/estimate-
 
 // --- classifyPPCs -----------------------------------------------------------
 
-test('classifyPPCs buckets components by known Power Pages type numbers', () => {
+test('classifyPPCs buckets components by authoritative powerpagecomponenttype picklist values', () => {
+  // Picklist values sourced from MS Learn / PPC_TYPE_LABELS. Earlier iterations
+  // of this test asserted against swapped constants (WEB_FILE=2, WEB_PAGE=4,
+  // WEB_TEMPLATE=11) which happened to hide a real bug where web file sizing
+  // was silently querying web pages. Fixed 2026-04-22.
   const ppcs = [
-    { powerpagecomponentid: 'a', powerpagecomponenttype: 9 },  // Site Setting
-    { powerpagecomponentid: 'b', powerpagecomponenttype: 9 },
-    { powerpagecomponentid: 'c', powerpagecomponenttype: 16 }, // Web Role
-    { powerpagecomponentid: 'd', powerpagecomponenttype: 18 }, // Table Permission
-    { powerpagecomponentid: 'e', powerpagecomponenttype: 27 }, // Bot Consumer
-    { powerpagecomponentid: 'f', powerpagecomponenttype: 33 }, // Cloud Flow Link
-    { powerpagecomponentid: 'g', powerpagecomponenttype: 2 },  // Web File
-    { powerpagecomponentid: 'h', powerpagecomponenttype: 4 },  // Web Page
-    { powerpagecomponentid: 'i', powerpagecomponenttype: 11 }, // Web Template
-    { powerpagecomponentid: 'j', powerpagecomponenttype: 999 }, // unknown
+    { powerpagecomponentid: 'a', name: 'FeatureFlag', powerpagecomponenttype: 9 },   // Site Setting
+    { powerpagecomponentid: 'b', name: 'SearchEnabled', powerpagecomponenttype: 9 },
+    { powerpagecomponentid: 'c', name: 'Admin', powerpagecomponenttype: 11 },        // Web Role
+    { powerpagecomponentid: 'd', name: 'Contact permission', powerpagecomponenttype: 18 }, // Table Permission
+    { powerpagecomponentid: 'e', name: 'Bot Consumer', powerpagecomponenttype: 27 }, // Bot Consumer
+    { powerpagecomponentid: 'f', name: 'FlowBinding', powerpagecomponenttype: 33 },  // Cloud Flow
+    { powerpagecomponentid: 'g', name: 'hero.jpg', powerpagecomponenttype: 3 },      // Web File (static asset)
+    { powerpagecomponentid: 'g2', name: 'Home-BPuZZDcA.js', powerpagecomponenttype: 3 }, // Web File (bundle chunk)
+    { powerpagecomponentid: 'h', name: 'Home', powerpagecomponenttype: 2 },          // Web Page
+    { powerpagecomponentid: 'i', name: 'layout', powerpagecomponenttype: 8 },        // Web Template
+    { powerpagecomponentid: 'j', name: '?', powerpagecomponenttype: 999 },           // unknown
   ];
   const c = classifyPPCs(ppcs);
   assert.equal(c.siteSettings.length, 2);
@@ -24,12 +29,38 @@ test('classifyPPCs buckets components by known Power Pages type numbers', () => 
   assert.equal(c.tablePermissions.length, 1);
   assert.equal(c.botConsumers.length, 1);
   assert.equal(c.cloudFlowLinks.length, 1);
-  assert.equal(c.webFiles.length, 1);
+  // webFiles is now the "real content" bucket — bundle chunks are split out.
+  assert.equal(c.webFiles.length, 1, 'hero.jpg is a real web file');
+  assert.equal(c.bundleChunks.length, 1, 'Home-BPuZZDcA.js is a hash-suffixed chunk');
   assert.equal(c.webPages.length, 1);
   assert.equal(c.webTemplates.length, 1);
-  assert.equal(c.all.length, 10);
+  assert.equal(c.all.length, 11);
   // Unknown types stay in byType but don't appear in any named bucket.
   assert.ok(c.byType.has(999));
+});
+
+test('classifyPPCs isProbablyBundleChunk heuristic identifies Vite/Rollup chunks without false positives on real assets', () => {
+  const samples = [
+    // Should be flagged as chunks
+    { name: 'Home-BPuZZDcA.js', powerpagecomponenttype: 3 },
+    { name: 'index-DyzztwOp.js', powerpagecomponenttype: 3 },
+    { name: 'purchaseOrderService-CEILvOTp.js', powerpagecomponenttype: 3 },
+    { name: 'chunk-RxR9EgHz.mjs', powerpagecomponenttype: 3 },
+    { name: 'vendor.a1b2c3d4.js', powerpagecomponenttype: 3 },
+    { name: 'style.Z0qHD57j.css', powerpagecomponenttype: 3 },
+    { name: 'index-DyzztwOp.js.map', powerpagecomponenttype: 3 },
+    // Should NOT be flagged
+    { name: 'hero.jpg', powerpagecomponenttype: 3 },
+    { name: 'logo.svg', powerpagecomponenttype: 3 },
+    { name: 'favicon.ico', powerpagecomponenttype: 3 },
+    { name: 'app.js', powerpagecomponenttype: 3 },
+    { name: 'style.css', powerpagecomponenttype: 3 },
+    { name: 'robots.txt', powerpagecomponenttype: 3 },
+    { name: 'fonts/Inter-Regular.woff2', powerpagecomponenttype: 3 },
+  ];
+  const c = classifyPPCs(samples);
+  assert.equal(c.bundleChunks.length, 7, 'should flag all 7 hash-suffixed chunks');
+  assert.equal(c.webFiles.length, 7, 'should keep all 7 real assets as web files');
 });
 
 test('classifyPPCs returns empty arrays when a type is missing', () => {
