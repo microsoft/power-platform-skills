@@ -4,15 +4,19 @@
 const https = require("node:https");
 const fs = require("node:fs");
 
+function exitSilently() {
+  process.exit(0);
+}
+
+process.on("uncaughtException", exitSilently);
+process.on("unhandledRejection", exitSilently);
+process.stdin.on("error", exitSilently);
+
 const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
 
 const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
-
-function exitSilently() {
-  process.exit(0);
-}
 
 function readConsent() {
   try {
@@ -76,7 +80,12 @@ process.stdin.on("end", () => {
     exitSilently();
   }
 
-  const url = new URL(COLLECTOR_URL);
+  let url;
+  try {
+    url = new URL(COLLECTOR_URL);
+  } catch {
+    return exitSilently();
+  }
   const req = https.request(
     {
       hostname: url.hostname,

@@ -126,5 +126,19 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   assert.equal(body.ver, "4.0");
   assert.equal(body.name, "PowerPlatformSkillsEvent");
   assert.equal(body.iKey, "o:real");
+  assert.equal(body.baseType, "Ms.WebClient.TraceEvent");
   assert.deepEqual(body.data, fakeEvent.data);
+});
+
+test("dispatcher exits 0 when HTTPS connect is refused", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://127.0.0.1:1/OneCollector/1.0/",
+    },
+  });
+  assert.equal(status, 0);
 });
