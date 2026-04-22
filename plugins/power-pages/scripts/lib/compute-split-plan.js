@@ -47,9 +47,9 @@ function buildSizeAnalysis(estimate, thresholds) {
       tier: classifyTier(estimate.totalSizeMB, 60, thresholds.maxSolutionSizeMB),
     },
     componentCount: {
-      value: estimate.componentCount,
+      value: estimate.componentCountSiteTotal,
       tier: classifyTier(
-        estimate.componentCount,
+        estimate.componentCountSiteTotal,
         thresholds.warnComponentCount,
         thresholds.maxComponentCount,
       ),
@@ -174,7 +174,7 @@ function selectStrategy(estimate, config) {
   // Hard-flag counts still route to Strategy 2 — a split is the best option we have. The
   // hard-flag warning is added separately in buildRecommendations.
   const isComponentHeavy =
-    estimate.componentCount > t.maxComponentCount ||
+    estimate.componentCountSiteTotal > t.maxComponentCount ||
     (estimate.cloudFlowCount > t.changeFreqMinFlows && estimate.totalSizeMB > t.changeFreqMinSizeMB);
   const hasManyEnvVars = estimate.envVarCount > t.maxEnvVarCount;
 
@@ -201,7 +201,7 @@ function partitionBySingle(estimate, meta) {
       description:
         'All components packaged in a single managed solution. Estimated size is within recommended thresholds.',
       sizeMB: estimate.totalSizeMB,
-      componentCount: estimate.componentCount,
+      componentCount: estimate.componentCountSiteTotal,
       components: [],
     },
   ];
@@ -209,7 +209,7 @@ function partitionBySingle(estimate, meta) {
 
 function partitionByLayer(estimate, meta) {
   const coreSize = Math.max(estimate.totalSizeMB - estimate.webFilesAggregateMB, 0);
-  const coreCount = Math.max(estimate.componentCount - (estimate.webFileCount || 0), 0);
+  const coreCount = Math.max(estimate.componentCountSiteTotal - (estimate.webFileCount || 0), 0);
   return [
     {
       uniqueName: `${meta.baseName}_Core`,
@@ -237,11 +237,11 @@ function partitionByLayer(estimate, meta) {
 }
 
 function partitionByChangeFrequency(estimate, meta) {
-  const foundationCount = Math.ceil(estimate.componentCount * 0.15);
+  const foundationCount = Math.ceil(estimate.componentCountSiteTotal * 0.15);
   const integrationCount = estimate.cloudFlowCount + estimate.botCount;
-  const configCount = Math.ceil(estimate.componentCount * 0.1);
+  const configCount = Math.ceil(estimate.componentCountSiteTotal * 0.1);
   const contentCount = Math.max(
-    estimate.componentCount - foundationCount - integrationCount - configCount,
+    estimate.componentCountSiteTotal - foundationCount - integrationCount - configCount,
     0,
   );
 
@@ -336,7 +336,7 @@ function partitionBySchema(estimate, meta, config) {
       'Site artifacts — web roles, permissions, settings, flows, pages. Imports after all domain solutions.',
     sizeMB: round(siteSizeMB),
     componentCount: Math.max(
-      estimate.componentCount - domainSolutions.reduce((s, d) => s + d.componentCount, 0),
+      estimate.componentCountSiteTotal - domainSolutions.reduce((s, d) => s + d.componentCount, 0),
       0,
     ),
     components: [],
@@ -453,11 +453,11 @@ function buildRecommendations(estimate, strategy, config) {
         'Schema-heavy solution detected. Expected import time per stage: 2–10+ hours. Test in staging first and do not schedule production deploys during peak hours.',
     });
   }
-  if (estimate.componentCount > t.hardFlagComponentCount) {
+  if (estimate.componentCountSiteTotal > t.hardFlagComponentCount) {
     recs.push({
       type: 'error',
       message:
-        `Component count (${estimate.componentCount.toLocaleString()}) exceeds the hard-flag threshold of ${t.hardFlagComponentCount.toLocaleString()}. Splitting alone is unlikely to be sufficient — archive historical data, remove unused components, or consolidate before proceeding.`,
+        `Component count (${estimate.componentCountSiteTotal.toLocaleString()}) exceeds the hard-flag threshold of ${t.hardFlagComponentCount.toLocaleString()}. Splitting alone is unlikely to be sufficient — archive historical data, remove unused components, or consolidate before proceeding.`,
     });
   }
   if (estimate.totalSizeMB > t.maxSolutionSizeMB) {

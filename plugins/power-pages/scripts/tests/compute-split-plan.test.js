@@ -27,7 +27,7 @@ function baseEstimate(overrides = {}) {
     siteName: 'Test',
     publisherPrefix: 'tst',
     totalSizeMB: 40,
-    componentCount: 1500,
+    componentCountSiteTotal: 1500,
     tableCount: 3,
     schemaAttrCount: 60,
     webFilesAggregateMB: 4,
@@ -56,7 +56,7 @@ test('Scenario B (Feedback Portal): Size red + web-heavy → Strategy 1 Layer', 
   const est = baseEstimate({
     totalSizeMB: 142,
     webFilesAggregateMB: 110,
-    componentCount: 2100,
+    componentCountSiteTotal: 2100,
   });
   const { primary } = selectStrategy(est, baseConfig());
   assert.equal(primary, 'strategy-1-layer');
@@ -67,7 +67,7 @@ test('Scenario C (Prabhat 34x950 schema): schema red → Strategy 3 Schema Segme
     totalSizeMB: 68,
     tableCount: 34,
     schemaAttrCount: 32300,
-    componentCount: 35000,
+    componentCountSiteTotal: 35000,
   });
   const { primary } = selectStrategy(est, baseConfig());
   assert.equal(primary, 'strategy-3-schema-segmentation');
@@ -85,7 +85,7 @@ test('Scenario D (Brad 1400 env vars): only envVarCount red → Strategy 4 alone
 test('Scenario E (component-heavy with many flows): Strategy 2 Change-Frequency', () => {
   const est = baseEstimate({
     totalSizeMB: 74,
-    componentCount: 7200,
+    componentCountSiteTotal: 7200,
     cloudFlowCount: 12,
   });
   const { primary } = selectStrategy(est, baseConfig());
@@ -143,7 +143,7 @@ test('computeSplitPlan produces 2 partition solutions + 1 Future buffer for Laye
 
 test('computeSplitPlan produces 4 partition solutions + 1 Future buffer for Change-Frequency split', () => {
   const result = computeSplitPlan({
-    estimate: baseEstimate({ totalSizeMB: 74, componentCount: 7200, cloudFlowCount: 12 }),
+    estimate: baseEstimate({ totalSizeMB: 74, componentCountSiteTotal: 7200, cloudFlowCount: 12 }),
     config: baseConfig(),
     meta: { baseName: 'Test', siteName: 'Test Site' },
   });
@@ -251,7 +251,7 @@ test('Future buffer uses consistent naming and is always the last entry', () => 
   // Run multiple strategies; Future should always come last with the same suffix.
   const cases = [
     { label: 'layer', est: baseEstimate({ totalSizeMB: 142, webFilesAggregateMB: 110 }) },
-    { label: 'change-freq', est: baseEstimate({ totalSizeMB: 74, componentCount: 7200, cloudFlowCount: 12 }) },
+    { label: 'change-freq', est: baseEstimate({ totalSizeMB: 74, componentCountSiteTotal: 7200, cloudFlowCount: 12 }) },
     { label: 'schema', est: baseEstimate({ tableCount: 34, schemaAttrCount: 32000 }) },
   ];
   for (const c of cases) {
@@ -336,7 +336,7 @@ test('Strategy 3 surfaces the 10+ hour warning in recommendations', () => {
 
 test('buildSizeAnalysis tags signals as green/yellow/red', () => {
   const analysis = buildSizeAnalysis(
-    baseEstimate({ totalSizeMB: 100, componentCount: 7000, schemaAttrCount: 200 }),
+    baseEstimate({ totalSizeMB: 100, componentCountSiteTotal: 7000, schemaAttrCount: 200 }),
     DEFAULTS,
   );
   assert.equal(analysis.totalSizeMB.tier, 'red');
@@ -349,14 +349,14 @@ test('buildSizeAnalysis tags signals as green/yellow/red', () => {
 test('Hard-flag component count still routes to Strategy 2 (not silent single)', () => {
   // 12,000 components is above hardFlagComponentCount (10,000) — earlier code
   // fell through to `single`. Now it should still recommend a split.
-  const est = baseEstimate({ componentCount: 12000 });
+  const est = baseEstimate({ componentCountSiteTotal: 12000 });
   const { primary } = selectStrategy(est, baseConfig());
   assert.equal(primary, 'strategy-2-change-frequency');
 });
 
 test('Hard-flag component count emits an error-type recommendation', () => {
   const result = computeSplitPlan({
-    estimate: baseEstimate({ componentCount: 12000 }),
+    estimate: baseEstimate({ componentCountSiteTotal: 12000 }),
     config: baseConfig(),
     meta: { baseName: 'Test', siteName: 'Test Site' },
   });
@@ -367,7 +367,7 @@ test('Hard-flag component count emits an error-type recommendation', () => {
 // --- Size / count consistency in Change-Frequency partition ----------------
 
 test('partitionByChangeFrequency sums sizeMB back to totalSizeMB (±0.5)', () => {
-  const est = baseEstimate({ totalSizeMB: 74, componentCount: 7200, cloudFlowCount: 12 });
+  const est = baseEstimate({ totalSizeMB: 74, componentCountSiteTotal: 7200, cloudFlowCount: 12 });
   const solutions = partitionByChangeFrequency(est, { baseName: 'T', siteName: 'T' });
   const sum = solutions.reduce((s, sol) => s + sol.sizeMB, 0);
   assert.ok(

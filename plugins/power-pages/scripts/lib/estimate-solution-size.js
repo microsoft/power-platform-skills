@@ -109,14 +109,20 @@ async function collectPaginated(envUrl, path, token, maxPages = 20) {
  * Discovers bots + bot components linked to the site.
  *
  * Power Pages bot linkage: each site has `powerpagecomponent` rows of type 27
- * (Bot Consumer). Each consumer references a bot by its schemaname stored in
- * the ppc `name` field. We use those names to scope the bot query so we only
- * count bots actually attached to this site, not every bot in the env.
+ * (Bot Consumer). Each consumer carries the bot schemaname in its `content`
+ * JSON (the `name` column is literally the string "Bot Consumer"). We scope
+ * the bot query by those schemanames so env-wide bots from other projects
+ * don't inflate this site's count.
  *
  * Each bot has child `botcomponent` rows (topics, entities, gpt defs). Both
  * bots and bot components become separate `solutioncomponents` rows when added
  * to a solution (types 10137 and 10193). Counting them here closes the
  * siteTotal gap that previously made orphansOnSite look artificially small.
+ *
+ * Pagination ceilings (from collectPaginated below): bots up to 1,500 records
+ * (3 pages × $top=500), botcomponents up to 25,000 (5 × 5,000). Hitting either
+ * is so unusual in real tenants that we log a WARN rather than paginating
+ * forever; caller can see the warning in stderr and bump the limits if needed.
  */
 async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
   if (!botConsumerPpcs || botConsumerPpcs.length === 0) {
@@ -160,27 +166,41 @@ async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
   // stays well inside URL-length limits for realistic consumer counts (<50).
   const safeNames = unique.map((n) => n.replace(/'/g, "''"));
   const botFilter = safeNames.map((n) => `schemaname eq '${n}'`).join(' or ');
+  const BOTS_TOP = 500;
+  const BOTS_MAX_PAGES = 3;
   const botsPath =
-    `bots?$filter=${botFilter}&$select=botid,name,schemaname&$top=500`;
+    `bots?$filter=${botFilter}&$select=botid,name,schemaname&$top=${BOTS_TOP}`;
   let bots = [];
   try {
-    bots = await collectPaginated(envUrl, botsPath, token, 3);
+    bots = await collectPaginated(envUrl, botsPath, token, BOTS_MAX_PAGES);
   } catch {
     // Bots may be unavailable in some tenants (privilege / feature gating).
     // Don't fail the whole estimate — surface as zero and move on.
     return { bots: [], botComponents: [] };
   }
+  if (bots.length >= BOTS_TOP * BOTS_MAX_PAGES) {
+    process.stderr.write(
+      `estimate-solution-size: WARN — bot query returned ${bots.length} rows, at pagination cap (${BOTS_TOP * BOTS_MAX_PAGES}). Counts may be undercounted; raise BOTS_MAX_PAGES if your tenant has more bots referenced by this site.\n`,
+    );
+  }
   if (bots.length === 0) return { bots: [], botComponents: [] };
 
   const botIds = bots.map((b) => b.botid).filter(Boolean);
   const compFilter = botIds.map((id) => `_parentbotid_value eq ${id}`).join(' or ');
+  const COMPS_TOP = 5000;
+  const COMPS_MAX_PAGES = 5;
   const compsPath =
-    `botcomponents?$filter=${compFilter}&$select=botcomponentid&$top=5000`;
+    `botcomponents?$filter=${compFilter}&$select=botcomponentid&$top=${COMPS_TOP}`;
   let botComponents = [];
   try {
-    botComponents = await collectPaginated(envUrl, compsPath, token, 5);
+    botComponents = await collectPaginated(envUrl, compsPath, token, COMPS_MAX_PAGES);
   } catch {
     botComponents = [];
+  }
+  if (botComponents.length >= COMPS_TOP * COMPS_MAX_PAGES) {
+    process.stderr.write(
+      `estimate-solution-size: WARN — bot component query returned ${botComponents.length} rows, at pagination cap (${COMPS_TOP * COMPS_MAX_PAGES}). Counts may be undercounted; raise COMPS_MAX_PAGES if your tenant's bots have more topics.\n`,
+    );
   }
   return { bots, botComponents };
 }
@@ -545,15 +565,32 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // Earlier versions added `schemaAttrCount` which inflated the total by 3–5×
   // on schema-heavy sites (e.g. 503 attrs pushed the count from 405 → 908).
   //
-  // Each constant here maps directly to a `componenttype`:
-  //   ppcs.length          → componenttype 10373 (site sub-components)
-  //   tables.length        → componenttype 1 (Entity) — attributes NOT added
-  //   envVarCount          → componenttype 380 (env var definition)
-  //   classified.cloudFlowLinks.length → componenttype 29 via the workflow
-  //                            (the type-33 ppc binding is already in ppcs.length)
-  //   classified.botConsumers.length → counted once (as ppc type 27 in ppcs.length)
-  //   botsAndComponents.bots.length → componenttype 10137 (Bot)
-  //   botsAndComponents.botComponents.length → componenttype 10193 (Bot Component)
+  // Each term maps to a distinct `solutioncomponents` row that would be added
+  // when the site is solutionized:
+  //
+  //   ppcs.length                               → type 10373 rows (includes
+  //                                                type-27 bot consumers and
+  //                                                type-33 cloud flow bindings,
+  //                                                which themselves import as
+  //                                                type 10373 sub-components)
+  //   tables.length                             → type 1 rows (Entity). Columns
+  //                                                ride along — do NOT add
+  //                                                schemaAttrCount here.
+  //   envVarCount                               → type 380 rows
+  //   classified.cloudFlowLinks.length          → type 29 rows (the workflow
+  //                                                entity itself). Each cloud
+  //                                                flow contributes TWO distinct
+  //                                                solutioncomponents rows: one
+  //                                                type-10373 (the ppc binding,
+  //                                                already in ppcs.length) and
+  //                                                one type-29 (added here).
+  //                                                Since type-33 ppc bindings
+  //                                                pair 1:1 with workflows,
+  //                                                cloudFlowLinks.length is the
+  //                                                workflow count. NOT a double-
+  //                                                count despite the name.
+  //   botsAndComponents.bots.length             → type 10137 rows
+  //   botsAndComponents.botComponents.length    → type 10193 rows
   //
   // Before adding bot queries on 2026-04-22, bots + bot components were a known
   // undercount. Live SIP site had 4 bots + 30 components missing from siteTotal,
@@ -578,7 +615,11 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     publisherPrefix: publisherPrefix || null,
     solutionId: solutionId || null,
     totalSizeMB: round1(totalSizeMB),
-    componentCount: siteTotalComponents,
+    // Canonical field for "components the site would export as solutioncomponents
+    // rows." Earlier revisions exposed a duplicate `componentCount` alias; it was
+    // dropped on 2026-04-22 since ALM skills are still in feature-branch development
+    // and don't need the legacy alias. Consumers (compute-split-plan, render-alm-plan)
+    // read `componentCountSiteTotal` directly.
     componentCountSiteTotal: siteTotalComponents,
     componentCountInSolution: inSolution ? inSolution.total : null,
     orphansOnSite: inSolution ? Math.max(siteTotalComponents - inSolution.total, 0) : null,
