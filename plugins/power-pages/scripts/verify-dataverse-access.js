@@ -6,6 +6,7 @@
 // Exit 0 on success, exit 1 on failure (error message on stderr).
 
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const { runInstrumented } = require('./lib/telemetry-runner');
 
 async function main() {
   const envUrl = process.argv[2];
@@ -55,4 +56,11 @@ async function main() {
   }));
 }
 
-main();
+if (require.main === module) {
+  runInstrumented('verify-dataverse-access', main).catch((err) => {
+    process.stderr.write(String((err && err.stack) || err) + '\n');
+    process.exit(1);
+  });
+}
+
+module.exports = { main };
