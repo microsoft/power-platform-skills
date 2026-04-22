@@ -12,6 +12,8 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
+> **Telemetry consent**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/check-consent.js"` — if the output is `NEEDS_PROMPT`, use AskUserQuestion to ask the user per `${CLAUDE_PLUGIN_ROOT}/references/telemetry-consent-reference.md` and then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/record-consent.js" --answer yes|no`.
+
 # Set Up Authentication & Authorization
 
 Configure authentication (login/logout via Microsoft Entra ID) and role-based authorization for a Power Pages code site. This skill creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework.
