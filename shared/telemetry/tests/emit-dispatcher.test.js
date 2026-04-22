@@ -1,0 +1,130 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const DISPATCHER = path.resolve(__dirname, "../lib/emit-dispatcher.js");
+
+function mkConsent(enabled) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disp-"));
+  if (enabled !== undefined) {
+    fs.writeFileSync(
+      path.join(tmp, "telemetry.json"),
+      JSON.stringify({
+        version: 1,
+        prompt_version: 1,
+        enabled,
+        consented_at: new Date().toISOString(),
+      })
+    );
+  }
+  return tmp;
+}
+
+function runDispatcher({ event, env }) {
+  return spawnSync(process.execPath, [DISPATCHER], {
+    input: JSON.stringify(event),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: env.configDir,
+      POWER_PLATFORM_SKILLS_IKEY: env.iKey || "",
+      POWER_PLATFORM_SKILLS_COLLECTOR: env.collectorUrl || "",
+      POWER_PLATFORM_SKILLS_TELEMETRY: env.off ? "0" : "",
+      POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
+    },
+  });
+}
+
+const fakeEvent = {
+  name: "PowerPlatformSkillsEvent",
+  data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" },
+};
+
+test("dispatcher exits 0 when iKey is placeholder", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING", collectorUrl: "https://x" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when collector URL missing", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when consent disabled", () => {
+  const tmp = mkConsent(false);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when consent unset", () => {
+  const tmp = mkConsent(undefined);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x", off: true },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 on malformed stdin", () => {
+  const tmp = mkConsent(true);
+  const { status } = spawnSync(process.execPath, [DISPATCHER], {
+    input: "not json",
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp,
+      POWER_PLATFORM_SKILLS_IKEY: "real-ikey",
+      POWER_PLATFORM_SKILLS_COLLECTOR: "https://x",
+    },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher writes a probe file when fake-https points to one (happy path)", () => {
+  const tmp = mkConsent(true);
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "expected dispatcher to write probe file");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa");
+  assert.equal(probe.headers["Content-Type"], "application/x-json-stream; charset=utf-8");
+  const body = JSON.parse(probe.body);
+  assert.equal(body.ver, "4.0");
+  assert.equal(body.name, "PowerPlatformSkillsEvent");
+  assert.equal(body.iKey, "o:real");
+  assert.deepEqual(body.data, fakeEvent.data);
+});
