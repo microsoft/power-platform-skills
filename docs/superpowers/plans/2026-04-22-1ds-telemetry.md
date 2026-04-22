@@ -1,14 +1,16 @@
 # 1DS Telemetry Implementation Plan
 
+> **Revised 2026-04-22:** The spec was revised to drop the `@microsoft/1ds-*` SDK and adopt a detached-child dispatcher pattern for fire-and-forget emission. Affected tasks: 1.1, 1.7, 1.8, 1.11, 2.1, 2.3, 3.1, 3.2, 5.1, 6.1, 6.3, 7.1, 7.2. Unchanged: 0.x, 1.2–1.6, 1.9–1.10, 2.2, 3.3, 4.x, 5.2–5.6, 6.2, 6.4.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship 1DS telemetry to the `power-pages` plugin using a shared library at `shared/telemetry/` that other plugins can later adopt via a sync script.
 
-**Architecture:** Canonical source of truth at `shared/telemetry/`; per-plugin synced copy at `plugins/<plugin>/scripts/lib/telemetry/`. Hooks (`PreToolUse:Skill` and `PostToolUse:Skill`) and a `withTelemetry()` wrapper emit events to 1DS. Consent gathered by an interactive prompt on first skill run; persisted at `~/.power-platform-skills/telemetry.json`. Fail-closed everywhere.
+**Architecture:** Canonical source of truth at `shared/telemetry/`; per-plugin synced copy at `plugins/<plugin>/scripts/lib/telemetry/`. Hooks (`PreToolUse:Skill` and `PostToolUse:Skill`) and a `withTelemetry()` wrapper all emit events through a detached-child dispatcher so the caller never blocks on a network round-trip. Consent gathered by an interactive prompt on first skill run; persisted at `~/.power-platform-skills/telemetry.json`. Fail-closed everywhere.
 
-**Tech Stack:** Node 22, `@microsoft/1ds-core-js`@^4.3.3, `@microsoft/1ds-post-js`@^4.3.3, `node:test`, existing `scripts/lib/powerpages-hook-utils.js`.
+**Tech Stack:** Node 22 built-ins only (`node:https`, `node:child_process`, `node:fs`, `node:os`, `node:path`, `node:crypto`), `node:test`, existing `scripts/lib/powerpages-hook-utils.js`. **No npm dependencies.**
 
-**Reference:** Spec at `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md`. Working POC at `poc/1ds-telemetry/` — implementers should read the POC's `hook-lib.js` and `emit.js` for the proven init + fetch-override + flush patterns before writing `shared/telemetry/lib/client.js`.
+**Reference:** Spec at `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md`. Working POC at `poc/1ds-telemetry/` — the POC's `emit.js` (SDK-based) is for historical context only; the real shipping code uses Node's built-in `https`. The POC's demonstration of the Common Schema 4.0 envelope shape is still accurate and worth reading.
 
 ---
 
@@ -17,9 +19,9 @@
 - **Test runner:** `node --test <file>` (no external deps). All tests use `node:test` + `node:assert/strict`.
 - **Style:** CommonJS (`require`/`module.exports`), matches every other Node script in `plugins/power-pages/scripts/`.
 - **Commits:** Conventional-ish subject lines consistent with the repo (`feat(telemetry): ...`, `test(telemetry): ...`, `docs(telemetry): ...`). Always include the `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` trailer — matches the POC commit and prior repo practice.
-- **No placeholders:** every string value in the code is real. Where the spec leaves something open (SDK version, iKey), the plan picks a concrete value.
-- **Dead code:** never check in `node_modules/` under `shared/telemetry/` or `plugins/power-pages/scripts/lib/telemetry/`. Both are gitignored.
-- **Pre/post probe flow:** tests avoid hitting the real 1DS collector. A mock HTTP layer is injected via the `httpXHROverride` slot.
+- **No placeholders:** every string value in the code is real. Where the spec leaves something open (iKey), the plan picks a concrete value.
+- **No npm dependencies:** the telemetry library uses only Node built-ins. There is no `package.json`, no `node_modules`, no `npm install` step anywhere in the telemetry tree.
+- **Testing network code:** the dispatcher takes the `https` module through a shim that tests replace with a fake. Tests never POST to the real 1DS collector.
 
 ---
 
@@ -28,12 +30,11 @@
 ```
 shared/telemetry/
 ├── README.md
-├── package.json
 ├── ikey.json
 ├── sync-to-plugin.js
-├── .gitignore                             # ignores node_modules/
 ├── lib/
-│   ├── client.js                          # 1DS init + emit wrapper + env-var off-switch
+│   ├── emit-dispatcher.js                 # CLI: stdin JSON event → HTTPS POST → exit
+│   ├── emit-spawn.js                      # Helper: spawns emit-dispatcher.js detached
 │   ├── consent.js                         # Read/write consent config file
 │   ├── correlation.js                     # Pre→Post correlation via OS temp file
 │   ├── events.js                          # 4 event builders with strict allowlists
@@ -41,11 +42,12 @@ shared/telemetry/
 │   ├── scrubber.js                        # No-op placeholder
 │   ├── check-consent.js                   # CLI: prints NEEDS_PROMPT | ENABLED | DISABLED
 │   ├── record-consent.js                  # CLI: --answer yes|no
-│   └── with-telemetry.js                  # Wrapper for plugin Node scripts
+│   └── with-telemetry.js                  # Wrapper for plugin Node scripts; calls emit-spawn
 ├── references/
 │   └── telemetry-consent-reference.md
 └── tests/
-    ├── client.test.js
+    ├── emit-dispatcher.test.js
+    ├── emit-spawn.test.js
     ├── consent.test.js
     ├── correlation.test.js
     ├── events.test.js
@@ -80,7 +82,7 @@ plugins/power-pages/
 - [ ] **Step 1: Verify Node 22 is available**
 
 Run: `node --version`
-Expected: `v22.*` or newer. If older, stop and ask the user to upgrade — the 1DS SDK ESM imports assume modern Node.
+Expected: `v22.*` or newer. If older, stop and ask the user to upgrade — the dispatcher uses Node's built-in `https` module plus `fetch`-like ergonomics that assume a modern Node.
 
 - [ ] **Step 2: Verify working tree is clean before starting**
 
@@ -96,8 +98,6 @@ Build `shared/telemetry/` with tests in sequence. No plugin wiring yet. At the e
 ### Task 1.1: Scaffold `shared/telemetry/` directory
 
 **Files:**
-- Create: `shared/telemetry/.gitignore`
-- Create: `shared/telemetry/package.json`
 - Create: `shared/telemetry/ikey.json`
 
 - [ ] **Step 1: Create the directory structure**
@@ -107,33 +107,9 @@ Run:
 mkdir -p shared/telemetry/lib shared/telemetry/tests shared/telemetry/references
 ```
 
-- [ ] **Step 2: Write `shared/telemetry/.gitignore`**
+- [ ] **Step 2: Write `shared/telemetry/ikey.json` (placeholder)**
 
-```
-node_modules/
-```
-
-- [ ] **Step 3: Write `shared/telemetry/package.json`**
-
-```json
-{
-  "name": "@power-platform-skills/telemetry",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Shared 1DS telemetry library for power-platform-skills plugins. Synced into each consuming plugin via sync-to-plugin.js.",
-  "dependencies": {
-    "@microsoft/1ds-core-js": "^4.3.3",
-    "@microsoft/1ds-post-js": "^4.3.3"
-  },
-  "scripts": {
-    "test": "node --test tests/*.test.js"
-  }
-}
-```
-
-- [ ] **Step 4: Write `shared/telemetry/ikey.json` (placeholder)**
-
-The iKey is a placeholder string. Task 7.1 replaces it with the real provisioned iKey before any live emission happens. Client logic treats placeholder as "no iKey" → no-op emit.
+The iKey is a placeholder string. Task 7.1 replaces it with the real provisioned iKey before any live emission happens. The dispatcher treats this placeholder as "no iKey" → no-op emit.
 
 ```json
 {
@@ -142,20 +118,12 @@ The iKey is a placeholder string. Task 7.1 replaces it with the real provisioned
 }
 ```
 
-- [ ] **Step 5: Install deps**
-
-Run:
-```bash
-cd shared/telemetry && npm install && cd ../..
-```
-Expected: `added 8 packages`. No errors. `package-lock.json` written.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add shared/telemetry/.gitignore shared/telemetry/package.json shared/telemetry/package-lock.json shared/telemetry/ikey.json
+git add shared/telemetry/ikey.json
 git commit -m "$(cat <<'EOF'
-feat(telemetry): scaffold shared/telemetry package
+feat(telemetry): scaffold shared/telemetry directory
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -882,17 +850,17 @@ EOF
 
 ---
 
-### Task 1.7: `client.js` — 1DS init + emit wrapper (fail closed on missing deps or placeholder iKey)
+### Task 1.7: `emit-dispatcher.js` — standalone dispatcher child
 
 **Files:**
-- Create: `shared/telemetry/lib/client.js`
-- Create: `shared/telemetry/tests/client.test.js`
+- Create: `shared/telemetry/lib/emit-dispatcher.js`
+- Create: `shared/telemetry/tests/emit-dispatcher.test.js`
 
-Reference: `poc/1ds-telemetry/hook-lib.js` for the proven fetch-override pattern. Do not copy verbatim — this module has a cleaner surface (no diagnostic file logging, no inline event builders).
+The dispatcher runs as a detached child process. Reads one event JSON on stdin, re-checks consent, reads iKey + collector URL from env vars, POSTs a Common Schema 4.0 envelope to OneCollector via Node's built-in `https`, exits 0. Fails closed on every error path.
 
 - [ ] **Step 1: Write the failing test**
 
-Path: `shared/telemetry/tests/client.test.js`
+Path: `shared/telemetry/tests/emit-dispatcher.test.js`
 
 ```js
 "use strict";
@@ -902,11 +870,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
-const { createClient } = require("../lib/client");
+const DISPATCHER = path.resolve(__dirname, "../lib/emit-dispatcher.js");
 
 function mkConsent(enabled) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-client-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disp-"));
   if (enabled !== undefined) {
     fs.writeFileSync(
       path.join(tmp, "telemetry.json"),
@@ -921,221 +890,379 @@ function mkConsent(enabled) {
   return tmp;
 }
 
-test("client is no-op when consent is unset", async () => {
-  const tmp = mkConsent(undefined);
-  const client = createClient({ configDir: tmp, iKey: "ik", collectorUrl: "http://unused" });
-  await client.emitAndFlush({ name: "X", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } });
-  // If it tried to POST, fetch would be called. We inject a failing fetch to verify not-called.
-  assert.equal(client.posted, 0);
-});
-
-test("client is no-op when consent disabled", async () => {
-  const tmp = mkConsent(false);
-  const client = createClient({ configDir: tmp, iKey: "ik", collectorUrl: "http://unused" });
-  await client.emitAndFlush({ name: "X", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } });
-  assert.equal(client.posted, 0);
-});
-
-test("client is no-op when iKey is the placeholder", async () => {
-  const tmp = mkConsent(true);
-  const client = createClient({
-    configDir: tmp,
-    iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
-    collectorUrl: "http://unused",
-  });
-  await client.emitAndFlush({ name: "X", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } });
-  assert.equal(client.posted, 0);
-});
-
-test("client is no-op when POWER_PLATFORM_SKILLS_TELEMETRY=0", async () => {
-  const tmp = mkConsent(true);
-  const client = createClient({
-    configDir: tmp,
-    iKey: "ik",
-    collectorUrl: "http://unused",
-    env: { POWER_PLATFORM_SKILLS_TELEMETRY: "0" },
-  });
-  await client.emitAndFlush({ name: "X", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } });
-  assert.equal(client.posted, 0);
-});
-
-test("client posts via injected fetch when consent enabled and iKey real", async () => {
-  const tmp = mkConsent(true);
-  let called = 0;
-  const injectedFetch = async () => {
-    called += 1;
-    return {
-      status: 200,
-      headers: { forEach: () => {} },
-      body: true,
-      text: async () => '{"acc":1}',
-    };
-  };
-  const client = createClient({
-    configDir: tmp,
-    iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-    collectorUrl: "http://unused",
-    fetchImpl: injectedFetch,
-  });
-  await client.emitAndFlush({
-    name: "PowerPlatformSkillsEvent",
-    data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" },
-  });
-  assert.ok(called >= 1, `expected fetch called at least once, got ${called}`);
-  assert.equal(client.posted, 1);
-});
-
-test("client never throws when fetch rejects", async () => {
-  const tmp = mkConsent(true);
-  const client = createClient({
-    configDir: tmp,
-    iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-    collectorUrl: "http://unused",
-    fetchImpl: async () => {
-      throw new Error("network down");
+function runDispatcher({ event, env }) {
+  return spawnSync(process.execPath, [DISPATCHER], {
+    input: JSON.stringify(event),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: env.configDir,
+      POWER_PLATFORM_SKILLS_IKEY: env.iKey || "",
+      POWER_PLATFORM_SKILLS_COLLECTOR: env.collectorUrl || "",
+      POWER_PLATFORM_SKILLS_TELEMETRY: env.off ? "0" : "",
+      POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
     },
   });
-  // Must not throw
-  await client.emitAndFlush({
-    name: "PowerPlatformSkillsEvent",
-    data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" },
+}
+
+const fakeEvent = {
+  name: "PowerPlatformSkillsEvent",
+  data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" },
+};
+
+test("dispatcher exits 0 when iKey is placeholder", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING", collectorUrl: "https://x" },
   });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when collector URL missing", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when consent disabled", () => {
+  const tmp = mkConsent(false);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when consent unset", () => {
+  const tmp = mkConsent(undefined);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x", off: true },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher exits 0 on malformed stdin", () => {
+  const tmp = mkConsent(true);
+  const { status } = spawnSync(process.execPath, [DISPATCHER], {
+    input: "not json",
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp,
+      POWER_PLATFORM_SKILLS_IKEY: "real-ikey",
+      POWER_PLATFORM_SKILLS_COLLECTOR: "https://x",
+    },
+  });
+  assert.equal(status, 0);
+});
+
+test("dispatcher writes a probe file when fake-https points to one (happy path)", () => {
+  const tmp = mkConsent(true);
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "expected dispatcher to write probe file");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa");
+  assert.equal(probe.headers["Content-Type"], "application/x-json-stream; charset=utf-8");
+  const body = JSON.parse(probe.body);
+  assert.equal(body.ver, "4.0");
+  assert.equal(body.name, "PowerPlatformSkillsEvent");
+  assert.equal(body.iKey, "o:real");
+  assert.equal(body.baseType, "Ms.WebClient.TraceEvent");
+  assert.deepEqual(body.data, fakeEvent.data);
+});
+```
+
+- [ ] **Step 2: Run — expect FAIL (module not found)**
+
+Run: `node --test shared/telemetry/tests/emit-dispatcher.test.js`
+
+- [ ] **Step 3: Implement `emit-dispatcher.js`**
+
+Path: `shared/telemetry/lib/emit-dispatcher.js`
+
+```js
+#!/usr/bin/env node
+"use strict";
+
+const https = require("node:https");
+const fs = require("node:fs");
+
+const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
+
+const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
+const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
+const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
+
+function exitSilently() {
+  process.exit(0);
+}
+
+function readConsent() {
+  try {
+    const consent = require("./consent");
+    return consent.read({
+      configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined,
+    });
+  } catch {
+    return { state: "unset" };
+  }
+}
+
+function buildEnvelope(event) {
+  return {
+    ver: "4.0",
+    name: event.name,
+    time: new Date().toISOString(),
+    iKey: "o:" + IKEY.split("-")[0],
+    baseType: "Ms.WebClient.TraceEvent",
+    baseData: event.data,
+    data: event.data,
+  };
+}
+
+function writeProbe(path, { headers, body }) {
+  try {
+    fs.writeFileSync(path, JSON.stringify({ headers, body }), "utf8");
+  } catch {
+    // ignore
+  }
+}
+
+// ---- Gate checks -----------------------------------------------------------
+if (!IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL) exitSilently();
+if (readConsent().state !== "enabled") exitSilently();
+
+// ---- Read stdin ------------------------------------------------------------
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => (raw += c));
+process.stdin.on("end", () => {
+  let event;
+  try {
+    event = JSON.parse(raw);
+  } catch {
+    exitSilently();
+  }
+
+  const envelope = buildEnvelope(event);
+  const body = JSON.stringify(envelope);
+  const headers = {
+    "Content-Type": "application/x-json-stream; charset=utf-8",
+    "x-apikey": IKEY,
+    "Content-Length": Buffer.byteLength(body),
+  };
+
+  // Test seam: if POWER_PLATFORM_SKILLS_FAKE_HTTPS is set, write the probe
+  // payload to that file and exit without calling the real network.
+  if (FAKE_PROBE) {
+    writeProbe(FAKE_PROBE, { headers, body });
+    exitSilently();
+  }
+
+  const url = new URL(COLLECTOR_URL);
+  const req = https.request(
+    {
+      hostname: url.hostname,
+      path: url.pathname + (url.search || ""),
+      method: "POST",
+      headers,
+    },
+    (res) => {
+      res.on("data", () => {});
+      res.on("end", exitSilently);
+    }
+  );
+  req.on("error", exitSilently);
+  req.setTimeout(4000, () => {
+    req.destroy();
+    exitSilently();
+  });
+  req.write(body);
+  req.end();
+});
+```
+
+- [ ] **Step 4: Run — expect PASS (7 tests)**
+
+Run: `node --test shared/telemetry/tests/emit-dispatcher.test.js`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add shared/telemetry/lib/emit-dispatcher.js shared/telemetry/tests/emit-dispatcher.test.js
+git commit -m "$(cat <<'EOF'
+feat(telemetry): add standalone emit-dispatcher child CLI
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 1.7b: `emit-spawn.js` — tiny helper that spawns the detached dispatcher
+
+**Files:**
+- Create: `shared/telemetry/lib/emit-spawn.js`
+- Create: `shared/telemetry/tests/emit-spawn.test.js`
+
+- [ ] **Step 1: Write the failing test**
+
+Path: `shared/telemetry/tests/emit-spawn.test.js`
+
+```js
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const { fireAndForget } = require("../lib/emit-spawn");
+
+function mkTmp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-spawn-"));
+}
+
+function mkConsent(tmp, enabled) {
+  fs.writeFileSync(
+    path.join(tmp, "telemetry.json"),
+    JSON.stringify({
+      version: 1,
+      prompt_version: 1,
+      enabled,
+      consented_at: new Date().toISOString(),
+    })
+  );
+}
+
+test("fireAndForget returns synchronously (<100 ms)", () => {
+  const tmp = mkTmp();
+  const start = Date.now();
+  fireAndForget(
+    { name: "PowerPlatformSkillsEvent", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } },
+    { iKey: "real-ikey", collectorUrl: "https://example.invalid/" }
+  );
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 100, `expected <100ms, got ${elapsed}ms`);
+});
+
+test("dispatcher child receives the event and writes the probe", async () => {
+  const tmp = mkTmp();
+  mkConsent(tmp, true);
+  const probe = path.join(tmp, "probe.json");
+  fireAndForget(
+    { name: "PowerPlatformSkillsEvent", data: { eventName: "hello", eventType: "Trace", severity: "Info", eventInfo: "{}" } },
+    {
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      configDir: tmp,
+      fakeProbe: probe,
+    }
+  );
+  // Wait up to 2s for the child to write the probe.
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(probe)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(fs.existsSync(probe), "probe file was not written");
+  const contents = JSON.parse(fs.readFileSync(probe, "utf8"));
+  const body = JSON.parse(contents.body);
+  assert.equal(body.data.eventName, "hello");
+});
+
+test("fireAndForget does not throw when spawn fails (missing dispatcher path)", () => {
+  // Rename the dispatcher so spawn will fail
+  const { fireAndForget: broken } = require("../lib/emit-spawn");
+  // Intentionally pass a malformed event that would crash if JSON.stringify throws
+  // (it won't — objects with cycles would, but we just verify no throw on happy path)
+  broken({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
+  // No assertion needed: test passes if no throw.
 });
 ```
 
 - [ ] **Step 2: Run — expect FAIL**
 
-- [ ] **Step 3: Implement `client.js`**
+Run: `node --test shared/telemetry/tests/emit-spawn.test.js`
 
-Path: `shared/telemetry/lib/client.js`
+- [ ] **Step 3: Implement `emit-spawn.js`**
+
+Path: `shared/telemetry/lib/emit-spawn.js`
 
 ```js
 "use strict";
 
-const consentLib = require("./consent");
+const { spawn } = require("node:child_process");
+const path = require("node:path");
 
-const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
+const DISPATCHER = path.resolve(__dirname, "emit-dispatcher.js");
 
-function loadSdk() {
+function fireAndForget(event, opts = {}) {
+  const iKey = opts.iKey || "";
+  const collectorUrl = opts.collectorUrl || "";
+  const configDir = opts.configDir || "";
+  const fakeProbe = opts.fakeProbe || "";
+
   try {
-    const core = require("@microsoft/1ds-core-js");
-    const post = require("@microsoft/1ds-post-js");
-    return { core, post };
+    const child = spawn("node", [DISPATCHER], {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_IKEY: iKey,
+        POWER_PLATFORM_SKILLS_COLLECTOR: collectorUrl,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe,
+      },
+    });
+    try {
+      child.stdin.write(JSON.stringify(event));
+      child.stdin.end();
+    } catch {
+      // child may have already exited; swallow.
+    }
+    child.unref();
   } catch {
-    return null;
+    // spawn failed — fail closed.
   }
 }
 
-function makeFetchOverride(fetchImpl, counter) {
-  return {
-    sendPOST: (payload, oncomplete) => {
-      const body =
-        typeof payload.data === "string"
-          ? payload.data
-          : new TextDecoder().decode(payload.data);
-      Promise.resolve()
-        .then(() =>
-          fetchImpl(payload.urlString, {
-            method: "POST",
-            headers: payload.headers,
-            body,
-          })
-        )
-        .then(async (response) => {
-          const headers = {};
-          try {
-            response.headers.forEach((v, n) => {
-              headers[n] = v;
-            });
-          } catch {}
-          let text = "";
-          if (response.body) {
-            try {
-              text = await response.text();
-            } catch {}
-          }
-          counter.posted += 1;
-          oncomplete(response.status, headers, text);
-        })
-        .catch(() => {
-          // Swallow. Never throw out of the emit path.
-          oncomplete(0, {});
-        });
-    },
-  };
-}
-
-function createClient({
-  configDir,
-  iKey,
-  collectorUrl,
-  fetchImpl,
-  env,
-} = {}) {
-  const consent = consentLib.read({ configDir, env });
-  const counter = { posted: 0 };
-
-  const disabled =
-    consent.state !== "enabled" ||
-    !iKey ||
-    iKey === PLACEHOLDER_IKEY;
-
-  const sdk = disabled ? null : loadSdk();
-  let coreInstance = null;
-
-  if (sdk) {
-    try {
-      coreInstance = new sdk.core.AppInsightsCore();
-      const channel = new sdk.post.PostChannel();
-      const fImpl = fetchImpl || globalThis.fetch;
-      coreInstance.initialize(
-        {
-          instrumentationKey: iKey,
-          loggingLevelConsole: 0,
-          disableDbgExt: true,
-          endpointUrl: collectorUrl,
-          extensions: [channel],
-          extensionConfig: {
-            [channel.identifier]: {
-              alwaysUseXhrOverride: true,
-              httpXHROverride: makeFetchOverride(fImpl, counter),
-            },
-          },
-        },
-        []
-      );
-    } catch {
-      coreInstance = null;
-    }
-  }
-
-  async function emitAndFlush(event, { flushMs = 3000 } = {}) {
-    if (!coreInstance) return;
-    try {
-      coreInstance.track(event);
-      coreInstance.flush();
-    } catch {
-      // fail closed
-    }
-    await new Promise((resolve) => setTimeout(resolve, flushMs));
-  }
-
-  return { emitAndFlush, get posted() { return counter.posted; } };
-}
-
-module.exports = { createClient, PLACEHOLDER_IKEY };
+module.exports = { fireAndForget };
 ```
 
-- [ ] **Step 4: Run — expect PASS (6 tests)**
-
-Run: `node --test shared/telemetry/tests/client.test.js`
+- [ ] **Step 4: Run — expect PASS (3 tests)**
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add shared/telemetry/lib/client.js shared/telemetry/tests/client.test.js
+git add shared/telemetry/lib/emit-spawn.js shared/telemetry/tests/emit-spawn.test.js
 git commit -m "$(cat <<'EOF'
-feat(telemetry): add 1DS client with consent/placeholder/env gating
+feat(telemetry): add emit-spawn helper for detached dispatcher
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1150,6 +1277,8 @@ EOF
 - Create: `shared/telemetry/lib/with-telemetry.js`
 - Create: `shared/telemetry/tests/with-telemetry.test.js`
 
+The wrapper calls `emit-spawn.fireAndForget` for both `script_started` and `script_completed`. Neither call awaits the network. A test-only `emitter` option lets tests capture the events synchronously.
+
 - [ ] **Step 1: Write the failing test**
 
 Path: `shared/telemetry/tests/with-telemetry.test.js`
@@ -1162,62 +1291,86 @@ const assert = require("node:assert/strict");
 
 const { withTelemetry } = require("../lib/with-telemetry");
 
-function fakeClient() {
+function recorder() {
   const events = [];
   return {
     events,
-    async emitAndFlush(e) {
-      events.push(e);
-    },
+    emit: (e) => events.push(e),
   };
 }
 
 test("success path emits script_started and script_completed", async () => {
-  const client = fakeClient();
+  const rec = recorder();
   const result = await withTelemetry(
     "verify-dataverse-access",
     async () => 42,
-    { clientFactory: () => client, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
   );
   assert.equal(result, 42);
-  assert.equal(client.events.length, 2);
-  assert.equal(client.events[0].data.eventName, "script_started");
-  assert.equal(client.events[1].data.eventName, "script_completed");
-  const info1 = JSON.parse(client.events[1].data.eventInfo);
-  assert.equal(info1.outcome, "success");
-  assert.equal(info1.error_class, "");
+  assert.equal(rec.events.length, 2);
+  assert.equal(rec.events[0].data.eventName, "script_started");
+  assert.equal(rec.events[1].data.eventName, "script_completed");
+  const info = JSON.parse(rec.events[1].data.eventInfo);
+  assert.equal(info.outcome, "success");
+  assert.equal(info.error_class, "");
 });
 
 test("failure path emits script_completed with outcome=failure and rethrows", async () => {
-  const client = fakeClient();
+  const rec = recorder();
   await assert.rejects(
     withTelemetry(
       "x",
       async () => {
-        const e = new TypeError("boom");
-        throw e;
+        throw new TypeError("boom");
       },
-      { clientFactory: () => client, pluginName: "power-pages", pluginVersion: "1.2.2" }
+      { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
     ),
     TypeError
   );
-  assert.equal(client.events.length, 2);
-  const info = JSON.parse(client.events[1].data.eventInfo);
+  assert.equal(rec.events.length, 2);
+  const info = JSON.parse(rec.events[1].data.eventInfo);
   assert.equal(info.outcome, "failure");
   assert.equal(info.error_class, "TypeError");
 });
 
 test("same correlation_id on started and completed", async () => {
-  const client = fakeClient();
+  const rec = recorder();
   await withTelemetry(
     "x",
     async () => null,
-    { clientFactory: () => client, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
   );
-  const a = JSON.parse(client.events[0].data.eventInfo).correlation_id;
-  const b = JSON.parse(client.events[1].data.eventInfo).correlation_id;
+  const a = JSON.parse(rec.events[0].data.eventInfo).correlation_id;
+  const b = JSON.parse(rec.events[1].data.eventInfo).correlation_id;
   assert.equal(a, b);
   assert.ok(a.length >= 32);
+});
+
+test("emit is called synchronously before asyncFn starts (fire-and-forget)", async () => {
+  const rec = recorder();
+  let asyncFnSeenEventsAtStart = -1;
+  await withTelemetry(
+    "x",
+    async () => {
+      asyncFnSeenEventsAtStart = rec.events.length;
+      return null;
+    },
+    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
+  );
+  // script_started must have been emitted before asyncFn ran.
+  assert.equal(asyncFnSeenEventsAtStart, 1);
+});
+
+test("throwing emitter does not break the wrapper", async () => {
+  const throwingEmitter = () => {
+    throw new Error("emit blew up");
+  };
+  const result = await withTelemetry(
+    "x",
+    async () => 99,
+    { emitter: throwingEmitter, pluginName: "power-pages", pluginVersion: "1.2.2" }
+  );
+  assert.equal(result, 99);
 });
 ```
 
@@ -1232,12 +1385,10 @@ Path: `shared/telemetry/lib/with-telemetry.js`
 
 const crypto = require("node:crypto");
 const { getSessionId } = require("./session");
-const {
-  buildScriptStarted,
-  buildScriptCompleted,
-} = require("./events");
+const { buildScriptStarted, buildScriptCompleted } = require("./events");
+const { fireAndForget } = require("./emit-spawn");
 
-function common({ pluginName, pluginVersion }) {
+function commonFields({ pluginName, pluginVersion }) {
   return {
     plugin_name: pluginName,
     plugin_version: pluginVersion,
@@ -1247,26 +1398,29 @@ function common({ pluginName, pluginVersion }) {
   };
 }
 
+function defaultEmitter(event, spawnOpts) {
+  fireAndForget(event, spawnOpts);
+}
+
 async function withTelemetry(scriptName, asyncFn, opts = {}) {
-  const clientFactory = opts.clientFactory;
   const pluginName = opts.pluginName;
   const pluginVersion = opts.pluginVersion;
+  const emitter = opts.emitter || defaultEmitter;
+  const spawnOpts = opts.spawnOpts || {};
   const correlationId = crypto.randomUUID();
-  const client = clientFactory ? clientFactory() : null;
   const startTs = Date.now();
 
-  if (client) {
-    try {
-      await client.emitAndFlush(
-        buildScriptStarted({
-          ...common({ pluginName, pluginVersion }),
-          script_name: scriptName,
-          correlation_id: correlationId,
-        })
-      );
-    } catch {
-      // fail closed
-    }
+  try {
+    emitter(
+      buildScriptStarted({
+        ...commonFields({ pluginName, pluginVersion }),
+        script_name: scriptName,
+        correlation_id: correlationId,
+      }),
+      spawnOpts
+    );
+  } catch {
+    // fail closed — never let telemetry throw
   }
 
   let outcome = "success";
@@ -1280,21 +1434,20 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
     caught = err;
   } finally {
     const duration_ms = Date.now() - startTs;
-    if (client) {
-      try {
-        await client.emitAndFlush(
-          buildScriptCompleted({
-            ...common({ pluginName, pluginVersion }),
-            script_name: scriptName,
-            correlation_id: correlationId,
-            outcome,
-            duration_ms,
-            error_class: errorClass,
-          })
-        );
-      } catch {
-        // fail closed
-      }
+    try {
+      emitter(
+        buildScriptCompleted({
+          ...commonFields({ pluginName, pluginVersion }),
+          script_name: scriptName,
+          correlation_id: correlationId,
+          outcome,
+          duration_ms,
+          error_class: errorClass,
+        }),
+        spawnOpts
+      );
+    } catch {
+      // fail closed
     }
     if (caught) throw caught;
   }
@@ -1303,14 +1456,14 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
 module.exports = { withTelemetry };
 ```
 
-- [ ] **Step 4: Run — expect PASS (3 tests)**
+- [ ] **Step 4: Run — expect PASS (5 tests)**
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add shared/telemetry/lib/with-telemetry.js shared/telemetry/tests/with-telemetry.test.js
 git commit -m "$(cat <<'EOF'
-feat(telemetry): add withTelemetry wrapper for script instrumentation
+feat(telemetry): add withTelemetry wrapper using fireAndForget
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1518,7 +1671,7 @@ Expected: clean — this milestone produced only `shared/telemetry/` additions (
 - Create: `shared/telemetry/sync-to-plugin.js`
 - Create: `shared/telemetry/tests/sync-to-plugin.test.js`
 
-Sync copies `lib/`, `ikey.json`, `package.json`, `package-lock.json`, and `references/` into `<target>/scripts/lib/telemetry/` (library + manifests) and `<target>/references/` (doc) for a given plugin root. It overwrites; it does not merge.
+Sync copies `lib/`, `ikey.json`, and `references/` into `<target>/scripts/lib/telemetry/` (library) and `<target>/references/` (doc) for a given plugin root. It overwrites; it does not merge. No `package.json` to copy — the library has no npm dependencies.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1548,7 +1701,7 @@ function mkTargetPlugin() {
 
 const syncScript = path.resolve(__dirname, "../sync-to-plugin.js");
 
-test("sync copies lib/, ikey.json, package.json into <plugin>/scripts/lib/telemetry/", () => {
+test("sync copies lib/ and ikey.json into <plugin>/scripts/lib/telemetry/", () => {
   const target = mkTargetPlugin();
   const { status, stderr } = spawnSync(
     process.execPath,
@@ -1557,10 +1710,11 @@ test("sync copies lib/, ikey.json, package.json into <plugin>/scripts/lib/teleme
   );
   assert.equal(status, 0, stderr);
   const synced = path.join(target, "scripts", "lib", "telemetry");
-  assert.ok(fs.existsSync(path.join(synced, "package.json")));
   assert.ok(fs.existsSync(path.join(synced, "ikey.json")));
-  assert.ok(fs.existsSync(path.join(synced, "lib", "client.js")));
+  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-dispatcher.js")));
+  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-spawn.js")));
   assert.ok(fs.existsSync(path.join(synced, "lib", "check-consent.js")));
+  assert.ok(!fs.existsSync(path.join(synced, "package.json")), "no package.json should be synced");
 });
 
 test("sync copies references/telemetry-consent-reference.md into <plugin>/references/", () => {
@@ -1590,7 +1744,7 @@ test("sync is idempotent", () => {
   const target = mkTargetPlugin();
   spawnSync(process.execPath, [syncScript, "--target", target]);
   spawnSync(process.execPath, [syncScript, "--target", target]);
-  const p = path.join(target, "scripts", "lib", "telemetry", "lib", "client.js");
+  const p = path.join(target, "scripts", "lib", "telemetry", "lib", "emit-dispatcher.js");
   assert.ok(fs.existsSync(p));
 });
 
@@ -1644,17 +1798,12 @@ function safeCopyFile(from, to) {
   if (fs.existsSync(from)) copyFile(from, to);
 }
 
-// 1. Library + manifests → <target>/scripts/lib/telemetry/
+// 1. Library + iKey config → <target>/scripts/lib/telemetry/
 const telemetryDst = path.join(target, "scripts", "lib", "telemetry");
 fs.mkdirSync(telemetryDst, { recursive: true });
 
 copyDir(path.join(source, "lib"), path.join(telemetryDst, "lib"));
 copyFile(path.join(source, "ikey.json"), path.join(telemetryDst, "ikey.json"));
-copyFile(path.join(source, "package.json"), path.join(telemetryDst, "package.json"));
-safeCopyFile(
-  path.join(source, "package-lock.json"),
-  path.join(telemetryDst, "package-lock.json")
-);
 
 // 2. Reference doc → <target>/references/
 safeCopyFile(
@@ -1746,21 +1895,8 @@ EOF
 **Files:**
 - Create (via sync): `plugins/power-pages/scripts/lib/telemetry/**`
 - Create (via sync): `plugins/power-pages/references/telemetry-consent-reference.md`
-- Modify: `plugins/power-pages/.gitignore` (or create if absent — verify first)
 
-- [ ] **Step 1: Check for an existing plugin-level `.gitignore`**
-
-Run: `cat plugins/power-pages/.gitignore 2>/dev/null || echo "(none)"`
-
-- [ ] **Step 2: Add node_modules ignore for the synced telemetry dir**
-
-If plugin-level `.gitignore` exists, append:
-```
-scripts/lib/telemetry/node_modules/
-```
-If none exists, create `plugins/power-pages/.gitignore` with exactly that line.
-
-- [ ] **Step 3: Run the sync**
+- [ ] **Step 1: Run the sync**
 
 Run:
 ```bash
@@ -1768,25 +1904,21 @@ node shared/telemetry/sync-to-plugin.js --target plugins/power-pages
 ```
 Expected: `Synced shared/telemetry → plugins/power-pages/scripts/lib/telemetry` (exit 0).
 
-- [ ] **Step 4: Inspect what got created**
+- [ ] **Step 2: Inspect what got created**
 
-Run: `ls plugins/power-pages/scripts/lib/telemetry/ && ls plugins/power-pages/scripts/lib/telemetry/lib/ && ls plugins/power-pages/references/telemetry-consent-reference.md`
-Expected to see `package.json`, `ikey.json`, `lib/` with all 9 files, and the reference doc.
+Run: `ls plugins/power-pages/scripts/lib/telemetry/ && ls plugins/power-pages/scripts/lib/telemetry/lib/`
+Expected to see `ikey.json` and `lib/` containing: `emit-dispatcher.js`, `emit-spawn.js`, `consent.js`, `correlation.js`, `events.js`, `session.js`, `scrubber.js`, `check-consent.js`, `record-consent.js`, `with-telemetry.js`. No `package.json`, no `node_modules`.
 
-- [ ] **Step 5: Install deps in the synced copy**
+- [ ] **Step 3: Verify consent ref doc synced**
 
-Run:
-```bash
-cd plugins/power-pages/scripts/lib/telemetry && npm install && cd ../../../../..
-```
-Expected: `added 8 packages`. No errors.
+Run: `ls plugins/power-pages/references/telemetry-consent-reference.md`
+Expected: file exists.
 
-- [ ] **Step 6: Commit (synced files + gitignore; NOT node_modules)**
+- [ ] **Step 4: Commit (synced files only)**
 
 ```bash
 git add plugins/power-pages/scripts/lib/telemetry/ \
-        plugins/power-pages/references/telemetry-consent-reference.md \
-        plugins/power-pages/.gitignore
+        plugins/power-pages/references/telemetry-consent-reference.md
 git commit -m "$(cat <<'EOF'
 feat(power-pages): sync shared telemetry library into plugin
 
@@ -1905,9 +2037,9 @@ const fs = require("node:fs");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let clientLib, eventsLib, correlationLib, sessionLib;
+let emitSpawn, eventsLib, correlationLib, sessionLib;
 try {
-  clientLib = require(path.join(TELEMETRY_DIR, "lib", "client"));
+  emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   correlationLib = require(path.join(TELEMETRY_DIR, "lib", "correlation"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
@@ -1969,21 +2101,26 @@ function readStdin() {
   const { correlation_id } = correlationLib.write({ skillName });
 
   const { ikey, collectorUrl } = readIkey();
-  const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined;
-  const client = clientLib.createClient({ configDir, iKey: ikey, collectorUrl });
+  const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 
-  await client.emitAndFlush(
-    eventsLib.buildSkillStarted({
-      plugin_name: "power-pages",
-      plugin_version: readPluginVersion(),
-      session_id: sessionLib.getSessionId(),
-      os_family: process.platform,
-      node_version: "v" + String(process.versions.node).split(".")[0],
-      skill_name: skillName,
-      correlation_id,
-    })
-  );
+  try {
+    emitSpawn.fireAndForget(
+      eventsLib.buildSkillStarted({
+        plugin_name: "power-pages",
+        plugin_version: readPluginVersion(),
+        session_id: sessionLib.getSessionId(),
+        os_family: process.platform,
+        node_version: "v" + String(process.versions.node).split(".")[0],
+        skill_name: skillName,
+        correlation_id,
+      }),
+      { iKey: ikey, collectorUrl, configDir }
+    );
+  } catch {
+    // fail closed
+  }
 
+  // Parent exits immediately; dispatcher child carries the POST.
   process.exit(0);
 })().catch(() => process.exit(0));
 ```
@@ -2156,7 +2293,7 @@ process.stdin.on('end', async () => {
 
   // Telemetry emission: fail-closed, never changes exit code.
   try {
-    const clientLib = require(path.join(TELEMETRY_DIR, 'lib', 'client'));
+    const emitSpawn = require(path.join(TELEMETRY_DIR, 'lib', 'emit-spawn'));
     const eventsLib = require(path.join(TELEMETRY_DIR, 'lib', 'events'));
     const correlationLib = require(path.join(TELEMETRY_DIR, 'lib', 'correlation'));
     const sessionLib = require(path.join(TELEMETRY_DIR, 'lib', 'session'));
@@ -2186,17 +2323,11 @@ process.stdin.on('end', async () => {
       start_ts: startTs,
     };
 
-    const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined;
-    const client = clientLib.createClient({
-      configDir,
-      iKey: ikeyCfg.ikey,
-      collectorUrl: ikeyCfg.collector_url,
-    });
-
+    const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || '';
     const outcome =
       !validatorRan || validatorStatus === 0 ? 'success' : 'failure';
 
-    await client.emitAndFlush(
+    emitSpawn.fireAndForget(
       eventsLib.buildSkillCompleted({
         plugin_name: 'power-pages',
         plugin_version: pluginVersion,
@@ -2208,7 +2339,8 @@ process.stdin.on('end', async () => {
         outcome,
         duration_ms: Date.now() - (corr.start_ts || startTs),
         error_class: '',
-      })
+      }),
+      { iKey: ikeyCfg.ikey, collectorUrl: ikeyCfg.collector_url, configDir }
     );
 
     correlationLib.clear({ skillName });
@@ -2396,7 +2528,7 @@ Every wrapped script gets a small boilerplate block at the bottom that calls `wi
 - Create: `plugins/power-pages/scripts/lib/telemetry-runner.js`
 - Create: `plugins/power-pages/scripts/tests/telemetry-runner.test.js`
 
-This small helper centralises the plugin-version read + ikey load + client creation so each instrumented script has a one-line invocation.
+This small helper centralises the plugin-version read + ikey load so each instrumented script has a one-line invocation. No client creation needed — the synced `with-telemetry.js` already calls `emit-spawn.fireAndForget` by default.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2454,7 +2586,6 @@ function readPluginVersion() {
 function loadTelemetryDeps() {
   try {
     return {
-      client: require(path.join(TELEMETRY_DIR, "lib", "client")),
       withTelemetry: require(path.join(TELEMETRY_DIR, "lib", "with-telemetry"))
         .withTelemetry,
       ikeyCfg: JSON.parse(
@@ -2470,17 +2601,16 @@ async function runInstrumented(scriptName, asyncFn) {
   const deps = loadTelemetryDeps();
   if (!deps) return asyncFn();
 
-  const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined;
+  const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 
   return deps.withTelemetry(scriptName, asyncFn, {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
-    clientFactory: () =>
-      deps.client.createClient({
-        configDir,
-        iKey: deps.ikeyCfg.ikey,
-        collectorUrl: deps.ikeyCfg.collector_url,
-      }),
+    spawnOpts: {
+      iKey: deps.ikeyCfg.ikey,
+      collectorUrl: deps.ikeyCfg.collector_url,
+      configDir,
+    },
   });
 }
 
@@ -2711,18 +2841,13 @@ After the "Common Review Pitfalls" section and before "Maintaining This File", i
 ```markdown
 ## Telemetry
 
-This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; the synced copy at `scripts/lib/telemetry/` is the live code.
+This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; the synced copy at `scripts/lib/telemetry/` is the live code. Zero npm dependencies — nothing to install.
 
 - **DO NOT hand-edit** files under `scripts/lib/telemetry/`. Edit `shared/telemetry/` and re-run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages`.
-- **First-time setup (one-time per clone):**
-  ```bash
-  npm install --prefix plugins/power-pages/scripts/lib/telemetry
-  ```
-  Without this, telemetry emission is a no-op — the rest of the plugin still works.
 - **Consent:** every tracked skill runs the Phase-1 one-liner from `references/telemetry-consent-reference.md`. Never emit without the user's explicit consent.
 - **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the reference doc.
 - **Env off-switch:** `POWER_PLATFORM_SKILLS_TELEMETRY=0` disables emission regardless of the consent file.
-- **Fail closed:** telemetry code must never change a script's exit code or break a skill run.
+- **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.
 
 See `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md` for the full design.
 ```
@@ -2732,7 +2857,7 @@ See `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md` for the full des
 ```bash
 git add plugins/power-pages/AGENTS.md
 git commit -m "$(cat <<'EOF'
-docs(power-pages): document telemetry conventions and install step
+docs(power-pages): document telemetry conventions
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -2816,8 +2941,9 @@ File paths, cwd, env vars (except the telemetry off-switch), tenant IDs, site na
 
 ```bash
 node shared/telemetry/sync-to-plugin.js --target plugins/<plugin-name>
-cd plugins/<plugin-name>/scripts/lib/telemetry && npm install
 ```
+
+No install step — the library has no npm dependencies.
 
 ## Layout
 
@@ -2930,27 +3056,25 @@ claude plugins update power-pages
 ```
 Or the equivalent command for the install flow the marketplace uses. Confirm the cached copy at `~/.claude/plugins/cache/power-platform-claude-plugins-official/power-pages/<new-version>/` now has a `hooks/` directory and matches the repo.
 
-- [ ] **Step 3: Install deps for the synced telemetry module**
+- [ ] **Step 3: Invoke a tracked skill**
 
-```bash
-npm install --prefix ~/.claude/plugins/cache/power-platform-claude-plugins-official/power-pages/<new-version>/scripts/lib/telemetry
-```
+In a fresh `claude` session (not `--plugin-dir`), run a short tracked skill such as `/power-pages:audit-permissions` and stop it at the first prompt. No npm install needed — telemetry has no dependencies.
 
-- [ ] **Step 4: Invoke a tracked skill**
-
-In a fresh `claude` session (not `--plugin-dir`), run a short tracked skill such as `/power-pages:audit-permissions` and stop it at the first prompt.
-
-- [ ] **Step 5: Confirm consent prompt appears on first run**
+- [ ] **Step 4: Confirm consent prompt appears on first run**
 
 Expected: skill's Phase 1 prints an `AskUserQuestion` about telemetry. Answer "Yes".
 
-- [ ] **Step 6: Invoke the same skill again**
+- [ ] **Step 5: Invoke the same skill again**
 
 Consent is now recorded. No prompt this time.
 
-- [ ] **Step 7: Confirm events reach the collector**
+- [ ] **Step 6: Confirm events reach the collector**
 
 Check the 1DS tenant dashboard (Geneva/Aria) for two `PowerPlatformSkillsEvent` rows per invocation: one `skill_started`, one `skill_completed`, same `correlation_id`.
+
+- [ ] **Step 7: Confirm fire-and-forget timing**
+
+Between invoking a tracked skill and the hook returning, there should be no perceptible delay (<100 ms for the hook itself). The POST lands in the background.
 
 - [ ] **Step 8: Confirm fail-closed behaviour**
 
@@ -3005,15 +3129,15 @@ Before executing, confirmed:
    - §3 event schema → Task 1.6.
    - §4 consent flow → Task 1.3, 1.9, 1.10, 2.2, M4 (skill wiring).
    - §5 hook wiring → M3 + Task 5.1.
-   - §6 deps / iKey → Task 1.1, Task 7.1.
+   - §6 dispatcher / iKey → Task 1.1 (scaffold), Task 1.7 (emit-dispatcher), Task 7.1 (real iKey).
    - §7 failure modes → exercised by every test (fail-closed assertions throughout).
    - §8 testing → tests accompany every implementation task.
    - §9 rollout → M3 + M4 + M6 + M7 mirror the spec's ten rollout steps.
-   - §10 open items → SDK versions pinned in 1.1, correlation mechanism chosen in 1.4, node_modules gitignored in 2.3, iKey provisioning in 7.1.
+   - §10 open items → correlation mechanism chosen in 1.4, iKey provisioning in 7.1. SDK-version and node_modules questions no longer apply after the 2026-04-22 revision.
    - §11 out-of-scope → kept out (no canvas/mcp/model/code-apps work).
 
 2. **Placeholder scan.** No TBD/TODO strings. Every code block is complete. The only template gap is `<provisioned-ikey-here>` in Task 7.1, which is explicitly called out as a human-provisioning step.
 
-3. **Type/name consistency.** Checked `COLLECTOR_EVENT_NAME`, `SCHEMA_VERSION`, `PROMPT_VERSION`, `POWER_PLATFORM_SKILLS_CONFIG_DIR`, `POWER_PLATFORM_SKILLS_TELEMETRY`, `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` — all spelled identically everywhere they appear. Event-builder names (`buildSkillStarted`, `buildSkillCompleted`, `buildScriptStarted`, `buildScriptCompleted`) match between `events.js`, `with-telemetry.js`, and the hook scripts.
+3. **Type/name consistency.** Checked `COLLECTOR_EVENT_NAME`, `SCHEMA_VERSION`, `PROMPT_VERSION`, `POWER_PLATFORM_SKILLS_CONFIG_DIR`, `POWER_PLATFORM_SKILLS_TELEMETRY`, `POWER_PLATFORM_SKILLS_IKEY`, `POWER_PLATFORM_SKILLS_COLLECTOR`, `POWER_PLATFORM_SKILLS_FAKE_HTTPS`, `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` — all spelled identically everywhere they appear. Event-builder names (`buildSkillStarted`, `buildSkillCompleted`, `buildScriptStarted`, `buildScriptCompleted`) match between `events.js`, `with-telemetry.js`, and the hook scripts. `fireAndForget` signature is consistent across `emit-spawn.js`, `with-telemetry.js`, and both hook scripts.
 
 ---
