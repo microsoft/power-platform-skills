@@ -110,6 +110,36 @@ When local authentication is configured, add a "Forgot password?" link in the `L
 
 If `Authentication/Registration/TermsAgreementEnabled` is `true`, after successful authentication (before the session is fully established), the server redirects new users to `/Account/Login/TermsAndConditions`. The user must accept the terms before proceeding. This is a server-rendered page — no client-side code is needed.
 
+### External Authentication Failure (ExternalAuthenticationFailed page)
+
+When an OIDC/SAML2/WS-Fed authentication fails (invalid token, issuer mismatch, IdX errors, user access denied, etc.), the server redirects to a hardcoded path: `/Account/Login/ExternalAuthenticationFailed`. **This path cannot be overridden via site settings or site markers** — it is baked into OWIN startup. The only query parameter ever appended is `?message=access_denied` (for user-denied errors); all other error details are logged to server telemetry only.
+
+**SPA workaround — content snippet redirect:** To keep the user inside the SPA on auth failure, edit the Dataverse content snippets used by this page to inject a `<script>` that redirects to an SPA route with the error:
+
+1. In the Power Pages admin center, edit these two content snippets:
+   - `Account/Register/ExternalAuthenticationFailed` (generic auth failure)
+   - `Account/Register/ExternalAuthenticationFailed/AccessDenied` (user-denied case)
+
+2. Add this script to the HTML content:
+
+   ```html
+   <script>
+     (function() {
+       var params = new URLSearchParams(window.location.search);
+       var code = params.get('message') === 'access_denied' ? 'access_denied' : 'signin_failed';
+       // Redirect to SPA login page with error code
+       window.location.replace('/login?message=' + code);
+     })();
+   </script>
+   ```
+
+3. The SPA `/login` page's `getAuthError()` will pick up the `?message=` query param and display the error inline (via the AUTH_ERROR_MESSAGES map).
+
+**Limitations:**
+- Only `access_denied` vs. generic `signin_failed` distinction is preserved — rich error codes (`AADSTS*`, `IDX*`) are not available client-side
+- The server-rendered error page briefly flashes before the script redirects
+- Operators must still use Kusto/telemetry to investigate actual error causes
+
 ### External Password Reset Flow (OIDC Providers with PasswordResetPolicyId)
 
 For OIDC providers that have a `PasswordResetPolicyId` configured (e.g., Azure AD B2C):
@@ -719,17 +749,33 @@ export async function forgotPassword(email: string): Promise<void> {
 }
 
 /**
- * Returns the user's display name (full name if available, otherwise userName).
+ * Returns the user's display name, using the following fallback order:
+ *   1. firstName + lastName (if both present)
+ *   2. firstName alone (if only first name present)
+ *   3. userName (NameIdentifier/sub claim — always populated after login)
+ *   4. email (fallback if userName is empty for some reason)
+ *   5. 'User' (final fallback)
+ *
+ * Why the fallbacks: `firstName`, `lastName`, and `email` on window.Microsoft.Dynamic365.Portal.User
+ * are populated from Dataverse contact columns via per-provider RegistrationClaimsMapping
+ * (e.g., `firstname=given_name`). They may be empty if the claim mapping is not configured,
+ * the IdP doesn't emit the claim, or the contact already had a (possibly empty) value.
+ * Only `contactId` and `userName` are guaranteed.
  */
 export function getUserDisplayName(): string {
   const user = getCurrentUser();
   if (!user) return '';
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
-  return fullName || user.userName;
+  if (fullName) return fullName;
+  if (user.firstName) return user.firstName;
+  if (user.userName) return user.userName;
+  if (user.email) return user.email;
+  return 'User';
 }
 
 /**
  * Returns the user's initials for avatar display.
+ * Falls back from first+last to first alone to userName/email first character.
  */
 export function getUserInitials(): string {
   const user = getCurrentUser();
@@ -737,7 +783,9 @@ export function getUserInitials(): string {
   if (user.firstName && user.lastName) {
     return `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
   }
-  return (user.userName?.[0] || '').toUpperCase();
+  if (user.firstName) return user.firstName[0].toUpperCase();
+  const fallback = user.userName || user.email || '';
+  return (fallback[0] || '').toUpperCase();
 }
 ```
 
