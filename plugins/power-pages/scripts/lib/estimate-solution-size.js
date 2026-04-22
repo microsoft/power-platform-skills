@@ -353,8 +353,28 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     ? await countSolutionMembership(envUrl, solutionId, resolved)
     : null;
 
+  // Component count must match what Dataverse `solutioncomponents` counts —
+  // each table is ONE component (attributes ride along, not counted separately).
+  // Earlier versions added `schemaAttrCount` which inflated the total by 3–5×
+  // on schema-heavy sites (e.g. 503 attrs pushed the count from 405 → 908).
+  //
+  // Each constant here maps directly to a `componenttype`:
+  //   ppcs.length          → componenttype 10373 (site sub-components)
+  //   tables.length        → componenttype 1 (Entity) — attributes NOT added
+  //   envVarCount          → componenttype 380 (env var definition)
+  //   classified.cloudFlowLinks.length → componenttype 29 via the workflow
+  //                            (the type-33 ppc binding is already in ppcs.length)
+  //   classified.botConsumers.length → counted once (as ppc type 27 in ppcs.length)
+  //
+  // Bots (type 10137) and bot topics (type 10193) are separate entity rows not
+  // reachable from ppcs; they're captured under inSolution when --solutionId is
+  // passed but can't be discovered site-wide without a bot-specific query.
+  // That's a known undercount bound; it does not affect the solution-owned count.
   const siteTotalComponents =
-    ppcs.length + tables.length + schemaAttrCount + envVarCount;
+    ppcs.length +
+    tables.length +
+    envVarCount +
+    classified.cloudFlowLinks.length;
 
   return {
     siteName: siteName || null,
