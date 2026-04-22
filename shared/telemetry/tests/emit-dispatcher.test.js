@@ -142,3 +142,40 @@ test("dispatcher exits 0 when HTTPS connect is refused", () => {
   });
   assert.equal(status, 0);
 });
+
+test("dispatcher appends to events.jsonl when iKey is placeholder + consent enabled", () => {
+  const tmp = mkConsent(true);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      collectorUrl: "https://x",
+    },
+  });
+  assert.equal(status, 0);
+  const logFile = path.join(tmp, "events.jsonl");
+  assert.ok(fs.existsSync(logFile), "expected events.jsonl to be written");
+  const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.name, "PowerPlatformSkillsEvent");
+  assert.equal(parsed.data.eventName, "x");
+});
+
+test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {
+  const tmp = mkConsent(false);
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      collectorUrl: "https://x",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(
+    !fs.existsSync(path.join(tmp, "events.jsonl")),
+    "consent-disabled run must not write local log"
+  );
+});

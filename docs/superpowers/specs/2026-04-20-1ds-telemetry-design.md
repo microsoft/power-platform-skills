@@ -22,7 +22,7 @@
 
 - Wiring telemetry into the four non-`power-pages` plugins in this pass (they adopt later via the sync script).
 - Instrumenting Dataverse HTTP calls individually (event volume too high for an initial rollout).
-- Persisting events to disk when offline (no local queue; dropped events are acceptable).
+- Offline retry queue for events that fail to reach the collector. (Note: there *is* a dev-time local JSON log when the iKey is still the placeholder — see §6.4 — but events are never replayed from it once a real iKey ships. One-way, developer-inspection only.)
 - npm dependencies of any kind. The telemetry library is zero-dep — built on Node's `https`, `child_process`, and `fs` modules only.
 
 ---
@@ -41,6 +41,7 @@ shared/telemetry/
 ├── lib/
 │   ├── emit-dispatcher.js             # CLI: reads event JSON on stdin, POSTs Common Schema 4.0, exits
 │   ├── emit-spawn.js                  # Tiny helper: spawns emit-dispatcher.js detached + hands it the JSON
+│   ├── local-log.js                   # Dev-mode fallback: appends events to ~/.power-platform-skills/events.jsonl when iKey is placeholder
 │   ├── consent.js                     # Read/write ~/.power-platform-skills/telemetry.json
 │   ├── events.js                      # Event builders with strict allowlists
 │   ├── session.js                     # Per-process anonymized UUID
@@ -63,10 +64,11 @@ plugins/power-pages/
 ### 2.2 Runtime components
 
 1. **Consent gate** (`lib/consent.js`) — Reads `~/.power-platform-skills/telemetry.json`. Hooks and the dispatcher read this synchronously; if missing or `enabled: false`, they exit 0 silently. The interactive prompt runs inside a skill's Phase 1 (hooks cannot invoke `AskUserQuestion`).
-2. **Dispatcher** (`lib/emit-dispatcher.js`) — A standalone Node CLI. Reads one event JSON on stdin, reads `POWER_PLATFORM_SKILLS_IKEY` and `POWER_PLATFORM_SKILLS_COLLECTOR` from env, re-checks consent, wraps the event in a Common Schema 4.0 envelope, POSTs it via `https.request(...)`, and exits when the response arrives or 4 s passes. Runs in its own OS process; its runtime is independent of the caller.
+2. **Dispatcher** (`lib/emit-dispatcher.js`) — A standalone Node CLI. Reads one event JSON on stdin, reads `POWER_PLATFORM_SKILLS_IKEY` and `POWER_PLATFORM_SKILLS_COLLECTOR` from env, re-checks consent, and then branches: if the iKey is the placeholder or missing, it appends the event to the local dev log (via `local-log.js`) and exits. Otherwise it wraps the event in a Common Schema 4.0 envelope, POSTs it via `https.request(...)`, and exits when the response arrives or 4 s passes. Runs in its own OS process; its runtime is independent of the caller.
 3. **Spawn helper** (`lib/emit-spawn.js`) — Exposes `fireAndForget(event, { iKey, collectorUrl })`. Spawns the dispatcher with `{ detached: true, stdio: ['pipe', 'ignore', 'ignore'] }`, writes the event JSON to the child's stdin, calls `child.unref()`, and returns synchronously. The parent exits without waiting.
-4. **Emitters** — Three call sites all use `fireAndForget`: the PreToolUse hook, the PostToolUse hook (after the existing validator), and the `withTelemetry(scriptName, asyncFn)` wrapper used inside instrumented scripts. No code path anywhere in the plugin awaits a network round-trip.
-5. **Event builders** (`lib/events.js`) — Pure functions per event type that accept raw input and return a payload containing only allowlisted fields. `fireAndForget` accepts nothing else; a test enforces this.
+4. **Local log** (`lib/local-log.js`) — Dev-mode fallback the dispatcher calls when iKey is the placeholder. Exposes `appendLocal(event, { configDir })`. Appends one JSON line per event to `~/.power-platform-skills/events.jsonl`, creating the directory if missing and rotating to `events.<YYYYMMDDHHMMSS>.old` when the file exceeds 10 MB. Every fs call is wrapped in try/catch; the helper never throws.
+5. **Emitters** — Three call sites all use `fireAndForget`: the PreToolUse hook, the PostToolUse hook (after the existing validator), and the `withTelemetry(scriptName, asyncFn)` wrapper used inside instrumented scripts. No code path anywhere in the plugin awaits a network round-trip.
+6. **Event builders** (`lib/events.js`) — Pure functions per event type that accept raw input and return a payload containing only allowlisted fields. `fireAndForget` accepts nothing else; a test enforces this.
 
 ### 2.3 Data flow for one skill run
 

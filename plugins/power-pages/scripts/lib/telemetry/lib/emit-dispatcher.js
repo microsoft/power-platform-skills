@@ -3,6 +3,7 @@
 
 const https = require("node:https");
 const fs = require("node:fs");
+const path = require("node:path");
 
 function exitSilently() {
   process.exit(0);
@@ -41,16 +42,28 @@ function buildEnvelope(event) {
   };
 }
 
-function writeProbe(path, { headers, body }) {
+function writeProbe(filePath, { headers, body }) {
   try {
-    fs.writeFileSync(path, JSON.stringify({ headers, body }), "utf8");
+    fs.writeFileSync(filePath, JSON.stringify({ headers, body }), "utf8");
   } catch {
     // ignore
   }
 }
 
-// ---- Gate checks -----------------------------------------------------------
-if (!IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL) exitSilently();
+function writeLocalLog(event) {
+  try {
+    const { appendLocal } = require("./local-log");
+    const consentLib = require("./consent");
+    const configDir =
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR ||
+      consentLib.defaultConfigDir();
+    appendLocal(event, { configDir });
+  } catch {
+    // fail closed
+  }
+}
+
+// ---- Consent gate (applies to BOTH network POST and local log) -------------
 if (readConsent().state !== "enabled") exitSilently();
 
 // ---- Read stdin ------------------------------------------------------------
@@ -62,9 +75,17 @@ process.stdin.on("end", () => {
   try {
     event = JSON.parse(raw);
   } catch {
-    exitSilently();
+    return exitSilently();
   }
 
+  // Placeholder / unprovisioned mode → append to local dev log and exit.
+  const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;
+  if (keyMissing) {
+    writeLocalLog(event);
+    return exitSilently();
+  }
+
+  // Real iKey → Common Schema envelope → HTTPS POST.
   const envelope = buildEnvelope(event);
   const body = JSON.stringify(envelope);
   const headers = {
@@ -77,7 +98,7 @@ process.stdin.on("end", () => {
   // payload to that file and exit without calling the real network.
   if (FAKE_PROBE) {
     writeProbe(FAKE_PROBE, { headers, body });
-    exitSilently();
+    return exitSilently();
   }
 
   let url;
