@@ -60,8 +60,7 @@ This is functionally equivalent to `pac code push` and bypasses the Mac auth iss
 
 ### Step 4: Update Memory Bank
 
-If `memory-bank.md` exists, increment the version (e.g., `v1.0.0` → `v1.1.0`) and update:
+If `memory-bank.md` exists, update:
 
-- Current version
 - Last deployed timestamp
 - App URL (if captured)

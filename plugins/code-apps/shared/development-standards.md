@@ -2,12 +2,6 @@
 
 Standards that apply to all Power Apps code app skills.
 
-## Versioning
-
-- Always display version at the top of the UI (e.g., `v1.0.0`)
-- Increment the version on each deploy
-- User can opt out of version display
-
 ## Theme
 
 - Default to dark theme (`backgroundColor: '#1e1e1e'`, `color: '#fff'`)
