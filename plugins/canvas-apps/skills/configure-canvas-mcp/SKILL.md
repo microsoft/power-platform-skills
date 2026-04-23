@@ -61,7 +61,7 @@ The options are:
 
 Based on the scope, set the `CONFIG_PATH` variable:
 - **Global**: `~/.copilot/mcp-config.json` (use the user's home directory)
-- **Project**: `.mcp/copilot/mcp.json` (relative to the current working directory)
+- **Project**: `.mcp.json` (relative to the current working directory)
 
 Store this path for use in steps 4 and 5.
 
@@ -143,8 +143,7 @@ claude mcp add --scope {CLAUDE_SCOPE} canvas-authoring \
 **If TOOL_TYPE is `vscode-copilot` or `copilot`:**
 1. Ensure the parent directory exists:
    - If `CONFIG_PATH` is `.vscode/mcp.json`, run: `mkdir -p .vscode`
-   - If `CONFIG_PATH` is `.mcp/copilot/mcp.json`, run: `mkdir -p .mcp/copilot`
-   - If `CONFIG_PATH` is the global `~/.copilot/mcp-config.json`, no directory creation is needed.
+   - If `CONFIG_PATH` is the global `~/.copilot/mcp-config.json` or `.mcp.json`, no directory creation is needed.
 
 2. Read the existing configuration file at `CONFIG_PATH`, or create a new empty config if it doesn't exist:
    ```json
