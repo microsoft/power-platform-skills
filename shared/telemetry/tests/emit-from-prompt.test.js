@@ -54,15 +54,19 @@ test("emits skill_started event with expected payload on match", () => {
   });
   assert.equal(result.emitted, true);
   assert.equal(result.skillName, "add-seo");
-  assert.equal(captured.event.name, "skill_started");
-  assert.equal(captured.event.data.plugin_name, "power-pages");
-  assert.equal(captured.event.data.plugin_version, "1.2.3");
-  assert.equal(captured.event.data.skill_name, "add-seo");
-  assert.equal(typeof captured.event.data.correlation_id, "string");
-  assert.ok(captured.event.data.correlation_id.length > 0);
-  assert.equal(typeof captured.event.data.session_id, "string");
-  assert.equal(typeof captured.event.data.os_family, "string");
-  assert.match(captured.event.data.node_version, /^v\d+$/);
+  assert.equal(captured.event.name, "PagesPowerPlatformExtEvent");
+  assert.equal(captured.event.data.EventName, "skill_started");
+  assert.equal(captured.event.data.EventType, "Trace");
+  assert.equal(captured.event.data.Severity, "Info");
+  const info = captured.event.data.EventInfo;
+  assert.equal(info.plugin_name, "power-pages");
+  assert.equal(info.plugin_version, "1.2.3");
+  assert.equal(info.skill_name, "add-seo");
+  assert.equal(typeof info.correlation_id, "string");
+  assert.ok(info.correlation_id.length > 0);
+  assert.equal(typeof info.session_id, "string");
+  assert.equal(typeof info.os_family, "string");
+  assert.match(info.node_version, /^v\d+$/);
 });
 
 test("passes iKey and collectorUrl from ikey.json into spawn opts", () => {

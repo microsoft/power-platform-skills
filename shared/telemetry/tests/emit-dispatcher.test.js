@@ -40,7 +40,15 @@ function runDispatcher({ event, env }) {
   });
 }
 
-const fakeEvent = { name: "skill_started", data: { plugin_name: "power-pages", skill_name: "add-seo" } };
+const fakeEvent = {
+  name: "PagesPowerPlatformExtEvent",
+  data: {
+    EventName: "skill_started",
+    EventType: "Trace",
+    Severity: "Info",
+    EventInfo: { plugin_name: "power-pages", skill_name: "add-seo" },
+  },
+};
 
 test("dispatcher exits 0 when iKey is placeholder", () => {
   const tmp = mkConsent(true);
@@ -123,7 +131,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.ver, "4.0");
-  assert.equal(body.name, "skill_started");
+  assert.equal(body.name, "PagesPowerPlatformExtEvent");
   assert.equal(body.iKey, "o:real");
   assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(body.data, fakeEvent.data);
@@ -158,7 +166,8 @@ test("dispatcher appends to events.jsonl when iKey is placeholder + consent enab
   const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
-  assert.equal(parsed.name, "skill_started");
+  assert.equal(parsed.name, "PagesPowerPlatformExtEvent");
+  assert.equal(parsed.data.EventName, "skill_started");
 });
 
 test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {

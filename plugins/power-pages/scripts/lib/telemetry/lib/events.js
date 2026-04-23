@@ -1,5 +1,9 @@
 "use strict";
 
+// Table name for the Kusto destination; the 1DS OneCollector routes events
+// with `envelope.name` == this value into the matching typed table.
+const COLLECTOR_EVENT_NAME = "PagesPowerPlatformExtEvent";
+
 const COMMON_FIELDS = [
   "plugin_name",
   "plugin_version",
@@ -33,7 +37,15 @@ function envelope(eventName, info) {
   if (info.duration_ms !== undefined) {
     info.duration_ms = clampDuration(info.duration_ms);
   }
-  return { name: eventName, data: info };
+  return {
+    name: COLLECTOR_EVENT_NAME,
+    data: {
+      EventName: eventName,
+      EventType: "Trace",
+      Severity: "Info",
+      EventInfo: info,
+    },
+  };
 }
 
 function buildSkillStarted(input) {
@@ -59,6 +71,7 @@ function buildScriptCompleted(input) {
 }
 
 module.exports = {
+  COLLECTOR_EVENT_NAME,
   buildSkillStarted,
   buildSkillCompleted,
   buildScriptStarted,

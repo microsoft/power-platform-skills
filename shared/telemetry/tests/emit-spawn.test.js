@@ -24,12 +24,22 @@ function mkConsent(tmp, enabled) {
   );
 }
 
+const sampleEvent = {
+  name: "PagesPowerPlatformExtEvent",
+  data: {
+    EventName: "skill_started",
+    EventType: "Trace",
+    Severity: "Info",
+    EventInfo: { skill_name: "hello" },
+  },
+};
+
 test("fireAndForget returns synchronously (<100 ms)", () => {
   const start = Date.now();
-  fireAndForget(
-    { name: "skill_started", data: { skill_name: "add-seo" } },
-    { iKey: "real-ikey", collectorUrl: "https://example.invalid/" }
-  );
+  fireAndForget(sampleEvent, {
+    iKey: "real-ikey",
+    collectorUrl: "https://example.invalid/",
+  });
   const elapsed = Date.now() - start;
   assert.ok(elapsed < 100, `expected <100ms, got ${elapsed}ms`);
 });
@@ -38,15 +48,12 @@ test("dispatcher child receives the event and writes the probe", async () => {
   const tmp = mkTmp();
   mkConsent(tmp, true);
   const probe = path.join(tmp, "probe.json");
-  fireAndForget(
-    { name: "skill_started", data: { skill_name: "hello" } },
-    {
-      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collectorUrl: "https://example.invalid/OneCollector/1.0/",
-      configDir: tmp,
-      fakeProbe: probe,
-    }
-  );
+  fireAndForget(sampleEvent, {
+    iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+    collectorUrl: "https://example.invalid/OneCollector/1.0/",
+    configDir: tmp,
+    fakeProbe: probe,
+  });
   // Wait up to 2s for the child to write the probe.
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(probe)) break;
@@ -57,8 +64,9 @@ test("dispatcher child receives the event and writes the probe", async () => {
   assert.ok(contents.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(contents.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "skill_started");
-  assert.equal(body.data.skill_name, "hello");
+  assert.equal(body.name, "PagesPowerPlatformExtEvent");
+  assert.equal(body.data.EventName, "skill_started");
+  assert.equal(body.data.EventInfo.skill_name, "hello");
 });
 
 test("fireAndForget does not throw on empty-opts invocation", () => {
