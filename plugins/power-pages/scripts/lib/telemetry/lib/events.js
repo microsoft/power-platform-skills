@@ -1,7 +1,5 @@
 "use strict";
 
-const COLLECTOR_EVENT_NAME = "PowerPlatformSkillsEvent";
-
 const COMMON_FIELDS = [
   "plugin_name",
   "plugin_version",
@@ -18,7 +16,7 @@ const COMPLETED_FIELDS = ["outcome", "duration_ms", "error_class"];
 function pick(input, keys) {
   const out = {};
   for (const k of keys) {
-    if (input[k] !== undefined) {
+    if (input && input[k] !== undefined) {
       out[k] = input[k];
     }
   }
@@ -35,15 +33,7 @@ function envelope(eventName, info) {
   if (info.duration_ms !== undefined) {
     info.duration_ms = clampDuration(info.duration_ms);
   }
-  return {
-    name: COLLECTOR_EVENT_NAME,
-    data: {
-      eventName,
-      eventType: "Trace",
-      severity: "Info",
-      eventInfo: JSON.stringify(info),
-    },
-  };
+  return { name: eventName, data: info };
 }
 
 function buildSkillStarted(input) {
@@ -69,7 +59,6 @@ function buildScriptCompleted(input) {
 }
 
 module.exports = {
-  COLLECTOR_EVENT_NAME,
   buildSkillStarted,
   buildSkillCompleted,
   buildScriptStarted,

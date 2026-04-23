@@ -36,9 +36,7 @@ function buildEnvelope(event) {
     name: event.name,
     time: new Date().toISOString(),
     iKey: "o:" + IKEY.split("-")[0],
-    baseType: "Ms.WebClient.TraceEvent",
-    baseData: event.data,
-    data: event.data,
+    data: event.data || {},
   };
 }
 
@@ -87,7 +85,7 @@ process.stdin.on("end", () => {
 
   // Real iKey → Common Schema envelope → HTTPS POST.
   const envelope = buildEnvelope(event);
-  const body = JSON.stringify(envelope);
+  const body = JSON.stringify(envelope) + "\n";
   const headers = {
     "Content-Type": "application/x-json-stream; charset=utf-8",
     "x-apikey": IKEY,

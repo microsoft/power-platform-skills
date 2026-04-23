@@ -75,11 +75,15 @@ test("hook exits 0 and emits skill_started for a tracked slash command", () => {
     }
     assert.ok(fs.existsSync(probePath), "dispatcher should have written probe");
     const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+    assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated for x-json-stream");
     const body = JSON.parse(probe.body);
-    assert.equal(body.data.eventName, "skill_started");
-    const info = JSON.parse(body.data.eventInfo);
-    assert.equal(info.plugin_name, "power-pages");
-    assert.equal(info.skill_name, "add-seo");
+    assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
+    assert.equal(body.ver, "4.0");
+    assert.equal(body.name, "skill_started");
+    assert.match(body.iKey, /^o:/);
+    assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(body.data.plugin_name, "power-pages");
+    assert.equal(body.data.skill_name, "add-seo");
   } finally {
     fs.writeFileSync(ikeyPath, original);
   }

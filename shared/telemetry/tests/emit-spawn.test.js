@@ -27,7 +27,7 @@ function mkConsent(tmp, enabled) {
 test("fireAndForget returns synchronously (<100 ms)", () => {
   const start = Date.now();
   fireAndForget(
-    { name: "PowerPlatformSkillsEvent", data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" } },
+    { name: "skill_started", data: { skill_name: "add-seo" } },
     { iKey: "real-ikey", collectorUrl: "https://example.invalid/" }
   );
   const elapsed = Date.now() - start;
@@ -39,7 +39,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
   mkConsent(tmp, true);
   const probe = path.join(tmp, "probe.json");
   fireAndForget(
-    { name: "PowerPlatformSkillsEvent", data: { eventName: "hello", eventType: "Trace", severity: "Info", eventInfo: "{}" } },
+    { name: "skill_started", data: { skill_name: "hello" } },
     {
       iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
       collectorUrl: "https://example.invalid/OneCollector/1.0/",
@@ -54,8 +54,11 @@ test("dispatcher child receives the event and writes the probe", async () => {
   }
   assert.ok(fs.existsSync(probe), "probe file was not written");
   const contents = JSON.parse(fs.readFileSync(probe, "utf8"));
+  assert.ok(contents.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(contents.body);
-  assert.equal(body.data.eventName, "hello");
+  assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
+  assert.equal(body.name, "skill_started");
+  assert.equal(body.data.skill_name, "hello");
 });
 
 test("fireAndForget does not throw on empty-opts invocation", () => {

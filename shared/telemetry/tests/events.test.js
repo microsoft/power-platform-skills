@@ -7,7 +7,6 @@ const {
   buildSkillCompleted,
   buildScriptStarted,
   buildScriptCompleted,
-  COLLECTOR_EVENT_NAME,
 } = require("../lib/events");
 
 const common = {
@@ -18,22 +17,14 @@ const common = {
   node_version: "v22",
 };
 
-test("COLLECTOR_EVENT_NAME is the canonical single collector name", () => {
-  assert.equal(COLLECTOR_EVENT_NAME, "PowerPlatformSkillsEvent");
-});
-
-test("buildSkillStarted emits expected shape", () => {
+test("buildSkillStarted emits { name, data } with allowlisted fields only", () => {
   const ev = buildSkillStarted({
     ...common,
     skill_name: "create-site",
     correlation_id: "corr-1",
   });
-  assert.equal(ev.name, COLLECTOR_EVENT_NAME);
-  assert.equal(ev.data.eventName, "skill_started");
-  assert.equal(ev.data.eventType, "Trace");
-  assert.equal(ev.data.severity, "Info");
-  const info = JSON.parse(ev.data.eventInfo);
-  assert.deepEqual(Object.keys(info).sort(), [
+  assert.equal(ev.name, "skill_started");
+  assert.deepEqual(Object.keys(ev.data).sort(), [
     "correlation_id",
     "node_version",
     "os_family",
@@ -42,6 +33,8 @@ test("buildSkillStarted emits expected shape", () => {
     "session_id",
     "skill_name",
   ]);
+  assert.equal(ev.data.plugin_name, "power-pages");
+  assert.equal(ev.data.skill_name, "create-site");
 });
 
 test("buildSkillCompleted includes outcome, duration_ms, error_class", () => {
@@ -53,11 +46,10 @@ test("buildSkillCompleted includes outcome, duration_ms, error_class", () => {
     duration_ms: 1234,
     error_class: "",
   });
-  assert.equal(ev.data.eventName, "skill_completed");
-  const info = JSON.parse(ev.data.eventInfo);
-  assert.equal(info.outcome, "success");
-  assert.equal(info.duration_ms, 1234);
-  assert.equal(info.error_class, "");
+  assert.equal(ev.name, "skill_completed");
+  assert.equal(ev.data.outcome, "success");
+  assert.equal(ev.data.duration_ms, 1234);
+  assert.equal(ev.data.error_class, "");
 });
 
 test("builder drops unknown fields (allowlist enforcement)", () => {
@@ -69,10 +61,9 @@ test("builder drops unknown fields (allowlist enforcement)", () => {
     file_path: "/etc/passwd",
     error_message: "nope",
   });
-  const info = JSON.parse(ev.data.eventInfo);
-  assert.equal(info.tenant_id, undefined);
-  assert.equal(info.file_path, undefined);
-  assert.equal(info.error_message, undefined);
+  assert.equal(ev.data.tenant_id, undefined);
+  assert.equal(ev.data.file_path, undefined);
+  assert.equal(ev.data.error_message, undefined);
 });
 
 test("buildScriptStarted shape", () => {
@@ -81,9 +72,8 @@ test("buildScriptStarted shape", () => {
     script_name: "verify-dataverse-access",
     correlation_id: "c",
   });
-  assert.equal(ev.data.eventName, "script_started");
-  const info = JSON.parse(ev.data.eventInfo);
-  assert.equal(info.script_name, "verify-dataverse-access");
+  assert.equal(ev.name, "script_started");
+  assert.equal(ev.data.script_name, "verify-dataverse-access");
 });
 
 test("buildScriptCompleted enforces non-negative duration_ms", () => {
@@ -95,6 +85,10 @@ test("buildScriptCompleted enforces non-negative duration_ms", () => {
     duration_ms: -5,
     error_class: "TypeError",
   });
-  const info = JSON.parse(ev.data.eventInfo);
-  assert.equal(info.duration_ms, 0);
+  assert.equal(ev.data.duration_ms, 0);
+});
+
+test("builder tolerates empty/undefined input without throwing", () => {
+  assert.deepEqual(buildSkillStarted(), { name: "skill_started", data: {} });
+  assert.deepEqual(buildSkillStarted({}), { name: "skill_started", data: {} });
 });

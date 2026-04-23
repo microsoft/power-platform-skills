@@ -40,10 +40,7 @@ function runDispatcher({ event, env }) {
   });
 }
 
-const fakeEvent = {
-  name: "PowerPlatformSkillsEvent",
-  data: { eventName: "x", eventType: "Trace", severity: "Info", eventInfo: "{}" },
-};
+const fakeEvent = { name: "skill_started", data: { plugin_name: "power-pages", skill_name: "add-seo" } };
 
 test("dispatcher exits 0 when iKey is placeholder", () => {
   const tmp = mkConsent(true);
@@ -122,11 +119,13 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   assert.equal(probe.headers["x-apikey"], "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa");
   assert.equal(probe.headers["Content-Type"], "application/x-json-stream; charset=utf-8");
+  assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated for x-json-stream");
   const body = JSON.parse(probe.body);
+  assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.ver, "4.0");
-  assert.equal(body.name, "PowerPlatformSkillsEvent");
+  assert.equal(body.name, "skill_started");
   assert.equal(body.iKey, "o:real");
-  assert.equal(body.baseType, "Ms.WebClient.TraceEvent");
+  assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(body.data, fakeEvent.data);
 });
 
@@ -159,8 +158,7 @@ test("dispatcher appends to events.jsonl when iKey is placeholder + consent enab
   const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
-  assert.equal(parsed.name, "PowerPlatformSkillsEvent");
-  assert.equal(parsed.data.eventName, "x");
+  assert.equal(parsed.name, "skill_started");
 });
 
 test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {

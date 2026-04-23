@@ -22,11 +22,11 @@ test("success path emits script_started and script_completed", async () => {
   );
   assert.equal(result, 42);
   assert.equal(rec.events.length, 2);
-  assert.equal(rec.events[0].data.eventName, "script_started");
-  assert.equal(rec.events[1].data.eventName, "script_completed");
-  const info = JSON.parse(rec.events[1].data.eventInfo);
-  assert.equal(info.outcome, "success");
-  assert.equal(info.error_class, "");
+  assert.equal(rec.events[0].name, "script_started");
+  assert.equal(rec.events[0].data.script_name, "verify-dataverse-access");
+  assert.equal(rec.events[1].name, "script_completed");
+  assert.equal(rec.events[1].data.outcome, "success");
+  assert.equal(rec.events[1].data.error_class, "");
 });
 
 test("failure path emits script_completed with outcome=failure and rethrows", async () => {
@@ -42,9 +42,8 @@ test("failure path emits script_completed with outcome=failure and rethrows", as
     TypeError
   );
   assert.equal(rec.events.length, 2);
-  const info = JSON.parse(rec.events[1].data.eventInfo);
-  assert.equal(info.outcome, "failure");
-  assert.equal(info.error_class, "TypeError");
+  assert.equal(rec.events[1].data.outcome, "failure");
+  assert.equal(rec.events[1].data.error_class, "TypeError");
 });
 
 test("same correlation_id on started and completed", async () => {
@@ -54,8 +53,8 @@ test("same correlation_id on started and completed", async () => {
     async () => null,
     { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
   );
-  const a = JSON.parse(rec.events[0].data.eventInfo).correlation_id;
-  const b = JSON.parse(rec.events[1].data.eventInfo).correlation_id;
+  const a = rec.events[0].data.correlation_id;
+  const b = rec.events[1].data.correlation_id;
   assert.equal(a, b);
   assert.ok(a.length >= 32);
 });
