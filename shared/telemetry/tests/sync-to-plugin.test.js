@@ -34,6 +34,8 @@ test("sync copies lib/ and ikey.json into <plugin>/scripts/lib/telemetry/", () =
   assert.ok(fs.existsSync(path.join(synced, "lib", "emit-dispatcher.js")));
   assert.ok(fs.existsSync(path.join(synced, "lib", "emit-spawn.js")));
   assert.ok(fs.existsSync(path.join(synced, "lib", "check-consent.js")));
+  assert.ok(fs.existsSync(path.join(synced, "lib", "prompt-detector.js")));
+  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-from-prompt.js")));
   assert.ok(!fs.existsSync(path.join(synced, "package.json")), "no package.json should be synced");
 });
 
