@@ -46,7 +46,12 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
 
   const emit = typeof _emit === "function" ? _emit : fireAndForget;
   try {
-    emit(event, { iKey: ikey, collectorUrl });
+    emit(event, {
+      iKey: ikey,
+      collectorUrl,
+      configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
+      fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
+    });
   } catch {
     // fail closed — telemetry never propagates errors
   }

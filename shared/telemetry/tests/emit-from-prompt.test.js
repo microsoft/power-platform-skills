@@ -82,6 +82,50 @@ test("passes iKey and collectorUrl from ikey.json into spawn opts", () => {
   assert.equal(captured.spawnOpts.collectorUrl, "https://collector.example/");
 });
 
+test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and _FAKE_HTTPS into spawn opts", () => {
+  const telemetryDir = mkTelemetryDir({ ikey: "x", collector_url: "https://x" });
+  const prevCfg = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const prevProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = "/tmp/fake-config";
+  process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS = "/tmp/fake-probe.json";
+  const captured = {};
+  try {
+    callWithStub({
+      promptText: "/power-pages:add-seo",
+      telemetryDir,
+      captured,
+    });
+  } finally {
+    if (prevCfg === undefined) delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    else process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = prevCfg;
+    if (prevProbe === undefined) delete process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
+    else process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS = prevProbe;
+  }
+  assert.equal(captured.spawnOpts.configDir, "/tmp/fake-config");
+  assert.equal(captured.spawnOpts.fakeProbe, "/tmp/fake-probe.json");
+});
+
+test("spawn opts get empty strings when env vars are unset", () => {
+  const telemetryDir = mkTelemetryDir({ ikey: "x", collector_url: "https://x" });
+  const prevCfg = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const prevProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
+  delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  delete process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
+  const captured = {};
+  try {
+    callWithStub({
+      promptText: "/power-pages:add-seo",
+      telemetryDir,
+      captured,
+    });
+  } finally {
+    if (prevCfg !== undefined) process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = prevCfg;
+    if (prevProbe !== undefined) process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS = prevProbe;
+  }
+  assert.equal(captured.spawnOpts.configDir, "");
+  assert.equal(captured.spawnOpts.fakeProbe, "");
+});
+
 test("tolerates missing ikey.json — falls through to empty ikey/collector", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-efp-noikey-"));
   const captured = {};
