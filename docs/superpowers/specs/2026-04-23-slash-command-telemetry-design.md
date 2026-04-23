@@ -256,8 +256,30 @@ When the real iKey is provisioned and synced, step 6 switches to the HTTPS POST 
 3. Run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages` to propagate.
 4. Verify locally by invoking `/power-pages:add-seo` and confirming a new line appears in `~/.power-platform-skills/events.jsonl`.
 
+## Known Issue — `skill_completed` on the Programmatic Path Has a Semantic Gap
+
+Not introduced by this spec, but worth flagging here so downstream readers interpret the data correctly.
+
+`PostToolUse:Skill` fires when the `Skill` tool *returns its result to the assistant* — i.e., when `SKILL.md` finishes loading into context. The skill's phases, `AskUserQuestion` pauses, and validator-relevant state mutations all happen in the assistant's subsequent turns, after `PostToolUse` has already fired.
+
+Consequently, for programmatically invoked skills:
+
+- **`duration_ms`** measures the time to read `SKILL.md`, not the runtime of the workflow. In practice, near-zero on every run.
+- **`outcome`** is the validator's verdict at the moment the skill was *loaded* — before any of its phases have executed. Validators like `validate-seo.js` / `validate-activation.js` are designed to check post-workflow artifacts, so running them pre-workflow most often produces vacuous "success" regardless of what the skill actually did.
+- **`error_class`** is always `""` because errors raised during the workflow occur after `PostToolUse` has already emitted.
+- **Correlation cleanup is unreliable in practice.** Stale `ppskills-corr-<skill>.json` files were observed in `/tmp` from prior sessions, suggesting the `PostToolUse` hook doesn't always fire (or crashes before `correlationLib.clear`), which in turn means some `skill_started` events never get a matching `skill_completed`.
+
+This spec does not fix that. It ships slash-command `skill_started` telemetry on the narrower scope originally requested, matching the shape of the existing programmatic `skill_started` emission. A future spec should decide whether to:
+
+1. Remove `skill_completed` from both paths — because no hook point in Claude Code reliably corresponds to "skill workflow finished."
+2. Keep `skill_completed` but rename the event and the `duration_ms` / `outcome` fields to reflect what they actually measure (skill load time, validator-on-load verdict).
+3. Introduce a new Claude Code hook (upstream change) that fires on skill-lifecycle end rather than tool-lifecycle end.
+
+Until one of those lands, `skill_completed.duration_ms` and `skill_completed.outcome` should be treated as diagnostic-only, not as usage metrics.
+
 ## Future Work (out of scope for this PR)
 
 - **`invocation_source` field on `skill_started`.** Promote the distinction between `"slash"` and `"skill_tool"` from an inference to a first-class event field. Requires adding the field to the allowlist in `events.js`, updating the builder, extending the telemetry spec, and reissuing consent review if analytics treat the new field as PII-adjacent (it is not, but the review is the process).
 - **Completion signal for slash-invoked skills.** If a reliable signal emerges (e.g., a Claude Code hook that fires on skill-lifecycle end, not session-lifecycle end), revisit emitting `skill_completed` for this path.
+- **Fix `skill_completed` on the programmatic path.** Address the semantic gap documented in *Known Issue* above. Likely a separate spec — the right solution probably requires either removing the event or a Claude Code upstream change.
 - **Generalize to other adopting plugins.** When a second plugin adopts telemetry, the per-plugin `run-user-prompt-telemetry.js` wrapper can be templatized or factored further. For one adopter, the current shape is the right amount of abstraction.
