@@ -20,7 +20,7 @@ Builds and deploys the app in the current directory to Power Platform.
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` in the project root. If found, read it for the project name, environment, and current version. If not found, proceed — the project may have been created without the plugin.
+Check for `memory-bank.md` in the project root. If found, read it for the project name and environment. If not found, proceed — the project may have been created without the plugin.
 
 ### Step 2: Build
 
