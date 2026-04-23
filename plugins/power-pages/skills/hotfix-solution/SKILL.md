@@ -340,6 +340,12 @@ Invoke `AskUserQuestion` immediately — do NOT describe this as chat text:
 - Run `/power-pages:import-solution` to deploy the full base solution to a new environment
 - Run `/power-pages:setup-pipeline` to automate hotfix deployments in CI/CD
 
+### Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "HotfixSolution"`.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Time window — scopes which components are included

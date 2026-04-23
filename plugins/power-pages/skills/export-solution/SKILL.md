@@ -184,6 +184,12 @@ Display a summary:
 - Run `/power-pages:import-solution` to deploy this zip to another environment
 - Run `/power-pages:setup-pipeline` to automate this process in CI/CD
 
+### Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ExportSolution"`.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Solution identification — confirm before triggering export

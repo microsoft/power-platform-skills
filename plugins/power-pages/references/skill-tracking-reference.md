@@ -41,6 +41,14 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
 | add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
+| setup-solution | SetupSolution | Site/AI/Skills/SetupSolution |
+| export-solution | ExportSolution | Site/AI/Skills/ExportSolution |
+| import-solution | ImportSolution | Site/AI/Skills/ImportSolution |
+| hotfix-solution | HotfixSolution | Site/AI/Skills/HotfixSolution |
+| diagnose-deployment | DiagnoseDeployment | Site/AI/Skills/DiagnoseDeployment |
+| configure-env-variables | ConfigureEnvVariables | Site/AI/Skills/ConfigureEnvVariables |
+| setup-pipeline | SetupPipeline | Site/AI/Skills/SetupPipeline |
+| deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
 
 ## YAML Format
 

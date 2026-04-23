@@ -280,6 +280,12 @@ Next steps:
      (Authentication/Registration/LocalLoginEnabled = false)
 ```
 
+**7.5 Record skill usage:**
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ConfigureEnvVariables"`.
+
 ## Key Decision Points (Wait for User)
 
 | Phase | Decision | Options |

@@ -357,6 +357,12 @@ Display a summary table:
 | Site activation | Activated at `{siteUrl}` / Pending / Not applicable |
 | Import job | `{importJobId}` |
 
+### Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ImportSolution"`.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 1**: Confirm target environment — import is not easily undoable for managed solutions

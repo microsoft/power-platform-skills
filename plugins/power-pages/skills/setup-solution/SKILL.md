@@ -605,6 +605,12 @@ If the user selects **option 3**, show:
 - Run `/power-pages:export-solution` to export a zip for manual import
 - Run `/power-pages:configure-env-variables` if environment-specific values need to be set per stage
 
+### Record Skill Usage
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupSolution"`.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
