@@ -83,7 +83,7 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   const iconSrc = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
   const iconDest = path.join(outputDir, 'power-pages-icon.png');
   try {
-    if (fs.existsSync(iconSrc) && !fs.existsSync(iconDest)) {
+    if (fs.existsSync(iconSrc)) {
       fs.copyFileSync(iconSrc, iconDest);
     }
   } catch {
