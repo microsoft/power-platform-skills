@@ -389,7 +389,9 @@ function buildErDiagram(compact) {
       : (t.columns || []);
 
     cols.forEach(col => {
-      const type = col.type.replace(/[.\s]/g, '_');
+      // Strip any char that isn't valid in a mermaid ATTRIBUTE_WORD — e.g. the
+      // slash in Dataverse "Yes/No" breaks the erDiagram parser.
+      const type = col.type.replace(/[^A-Za-z0-9_]/g, '_');
       const key = col.key || '';
       lines.push('        ' + type + ' ' + col.logicalName + (key ? ' ' + key : ''));
     });
