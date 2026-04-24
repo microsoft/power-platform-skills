@@ -75,6 +75,21 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   }
 
   fs.writeFileSync(outputPath, result, 'utf8');
+
+  // Silently copy the shared Power Pages icon next to the rendered HTML so the
+  // template's <img src="./power-pages-icon.png"> reference resolves when the
+  // file is opened directly (or served from docs/). Copy is best-effort —
+  // rendering still succeeds if the icon is missing.
+  const iconSrc = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
+  const iconDest = path.join(outputDir, 'power-pages-icon.png');
+  try {
+    if (fs.existsSync(iconSrc) && !fs.existsSync(iconDest)) {
+      fs.copyFileSync(iconSrc, iconDest);
+    }
+  } catch {
+    // non-fatal
+  }
+
   console.log(JSON.stringify({ status: 'ok', output: outputPath }));
 }
 
