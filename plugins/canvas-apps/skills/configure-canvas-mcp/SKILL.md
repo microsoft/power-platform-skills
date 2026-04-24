@@ -61,7 +61,7 @@ The options are:
 
 Based on the scope, set the `CONFIG_PATH` variable:
 - **Global**: `~/.copilot/mcp-config.json` (use the user's home directory)
-- **Project**: `.mcp/copilot/mcp.json` (relative to the current working directory)
+- **Project**: `.mcp.json` (relative to the current working directory)
 
 Store this path for use in steps 4 and 5.
 
@@ -88,6 +88,8 @@ Ask the user:
 > Copy the URL from the browser address bar while your app is open in Power Apps Designer (it should look like `https://make.powerapps.com/e/Default-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/canvas/?action=edit&app-id=...`).
 >
 > Make sure coauthoring is enabled in the app (Settings → Updates → Coauthoring).
+>
+> **Keep this browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. Closing the tab ends the coauthoring session, which prevents `compile_canvas` and `sync_canvas` from working and means you can't see or save generated changes.
 
 Then extract from the URL:
 - **ENV_ID**: the path segment between `/e/` and the next `/` (e.g. `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`).
@@ -141,8 +143,7 @@ claude mcp add --scope {CLAUDE_SCOPE} canvas-authoring \
 **If TOOL_TYPE is `vscode-copilot` or `copilot`:**
 1. Ensure the parent directory exists:
    - If `CONFIG_PATH` is `.vscode/mcp.json`, run: `mkdir -p .vscode`
-   - If `CONFIG_PATH` is `.mcp/copilot/mcp.json`, run: `mkdir -p .mcp/copilot`
-   - If `CONFIG_PATH` is the global `~/.copilot/mcp-config.json`, no directory creation is needed.
+   - If `CONFIG_PATH` is the global `~/.copilot/mcp-config.json` or `.mcp.json`, no directory creation is needed.
 
 2. Read the existing configuration file at `CONFIG_PATH`, or create a new empty config if it doesn't exist:
    ```json
@@ -213,7 +214,7 @@ Tell the user:
 
 > ✅ Canvas Authoring MCP server configured (`canvas-authoring`, configPath: `{CONFIG_PATH}`).
 >
-> **Restart GitHub Copilot CLI to activate it.** 
+> **Restart GitHub Copilot CLI to activate it.**
 >
 > After restarting, verify the setup:
 > - `canvas-authoring` should appear in the MCP server list

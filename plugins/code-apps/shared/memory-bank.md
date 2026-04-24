@@ -104,7 +104,6 @@ Update after:
 | Environment    | [ENVIRONMENT_NAME]             |
 | Environment ID | [ENVIRONMENT_GUID]             |
 | App URL        | [APP_URL]                      |
-| Version        | v1.0.0                         |
 | Created Date   | [DATE]                         |
 | Status         | [In Progress/Created/Deployed] |
 
@@ -112,7 +111,6 @@ Update after:
 
 ### Design Preferences
 - Theme: [Dark/Light]
-- Version Display: [Enabled/Disabled]
 
 ### Technical Preferences
 - Data Sources: [Dataverse, Azure DevOps, Teams, Excel, etc.]

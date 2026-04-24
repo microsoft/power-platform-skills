@@ -10,9 +10,6 @@
       <div class="orbit-system">
         <div class="core-glow" />
         <div class="core-shape">
-          <div class="slab" />
-          <div class="slab" />
-          <div class="slab" />
         </div>
         <div class="orbit-ring" />
         <div class="orbit-ring" />
@@ -253,29 +250,8 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 36px; padding: 40px 40px 48px; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 .center-stage::-webkit-scrollbar { display: none; }
 .orbit-system { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; }
-.core-shape { position: absolute; width: 72px; height: 72px; z-index: 5; }
-.core-shape .slab { position: absolute; width: 72px; height: 48px; border-radius: 14px; left: 50%; top: 50%; transform-origin: center center; box-shadow: 0 4px 20px rgba(139, 111, 192, 0.2); }
-.core-shape .slab:nth-child(1) { background: linear-gradient(135deg, var(--pp-lavender), var(--pp-periwinkle)); animation: slabTop 4s ease-in-out infinite; z-index: 3; }
-.core-shape .slab:nth-child(2) { background: linear-gradient(135deg, var(--pp-purple), var(--pp-sky)); animation: slabMid 4s ease-in-out infinite; z-index: 2; }
-.core-shape .slab:nth-child(3) { background: linear-gradient(135deg, var(--pp-violet), var(--pp-purple)); animation: slabBot 4s ease-in-out infinite; z-index: 1; }
-@keyframes slabTop {
-  0%, 100% { transform: translate(-50%, -80%) rotate(-15deg) scale(1); opacity: 0.95; }
-  25% { transform: translate(-50%, -80%) rotate(-20deg) scale(1.05); }
-  50% { transform: translate(-50%, -75%) rotate(-10deg) scale(0.95); opacity: 1; }
-  75% { transform: translate(-50%, -85%) rotate(-18deg) scale(1.02); }
-}
-@keyframes slabMid {
-  0%, 100% { transform: translate(-50%, -50%) rotate(-5deg) scale(1); opacity: 0.85; }
-  25% { transform: translate(-50%, -48%) rotate(-8deg) scale(1.03); }
-  50% { transform: translate(-50%, -52%) rotate(0deg) scale(0.97); opacity: 0.9; }
-  75% { transform: translate(-50%, -50%) rotate(-3deg) scale(1.01); }
-}
-@keyframes slabBot {
-  0%, 100% { transform: translate(-50%, -20%) rotate(5deg) scale(1); opacity: 0.75; }
-  25% { transform: translate(-50%, -18%) rotate(8deg) scale(0.97); }
-  50% { transform: translate(-50%, -22%) rotate(2deg) scale(1.04); opacity: 0.8; }
-  75% { transform: translate(-50%, -16%) rotate(6deg) scale(0.99); }
-}
+.core-shape { position: absolute; width: 120px; height: 120px; z-index: 5; background: url('/power-pages-icon.png') center/contain no-repeat; animation: coreFloat 4s ease-in-out infinite; }
+@keyframes coreFloat { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.025); } }
 .core-glow { position: absolute; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(25px); }
 @keyframes coreGlow { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0.9; } }
 .orbit-ring { position: absolute; border: 1px solid rgba(139, 111, 192, 0.15); border-radius: 50%; animation: ringRotate linear infinite; }

@@ -101,6 +101,10 @@ Read and copy all files from the matching asset template to the project director
 
 Use `Glob` to discover all files in the asset directory, `Read` each file, then `Write` to the project directory preserving the relative path structure.
 
+**Also copy the shared loader icon** that the scaffold references from its CSS (`url('/power-pages-icon.png')`):
+
+`Read` the binary file `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/shared/power-pages-icon.png` and `Write` it to `<PROJECT_ROOT>/public/power-pages-icon.png`. (All four supported frameworks serve `public/` at the web root, so the same `/power-pages-icon.png` URL works for every framework.)
+
 ### 2.2 Replace Placeholders
 
 After copying, replace all `__PLACEHOLDER__` tokens in every file. Use `Edit` with `replace_all: true` on each file.

@@ -34,6 +34,7 @@ each screen in parallel without needing to call MCP tools themselves.
 You will be invoked by the `generate-canvas-app` skill with a prompt that includes:
 
 - The user's app requirements (`$ARGUMENTS`)
+- User preferences collected by the skill's wizard (target users, aesthetic direction, features, reference image observations)
 - The working directory where `.pa.yaml` files should be written
 - The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`), from which you must read `references/TechnicalGuide.md` and `references/DesignGuide.md`
 
@@ -76,12 +77,13 @@ Call `TaskCreate` once per task:
 
 ## Step 4 — Design and Present Plan for Approval
 
-Based on discovery and the user's requirements, reason through:
+Based on discovery, the user preferences passed in the prompt, and the user's requirements, reason through:
 
 - How many screens are needed and what each does
 - Which controls will drive each screen's layout
 - What aesthetic direction fits the app's purpose
 - How data will flow (data sources, collections, or mock data)
+- **Layout strategy** — default to **AutoLayout** (responsive) using `GroupContainer` with `Variant: Horizontal` or `Variant: Vertical`. Only use ManualLayout if the user explicitly requests pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and cross-device apps MUST use AutoLayout.
 
 Enter plan mode (`EnterPlanMode`) and present the following to the user:
 
@@ -234,7 +236,7 @@ App file written: [working directory]/App.pa.yaml
 
 ## Critical Constraints
 
-- **Do NOT ask questions.** The one user interaction is the plan mode approval in Step 4.
+- **Do NOT ask questions.** The one user interaction is the plan mode approval in Step 4. User preferences are passed to you in the prompt — do not re-ask them.
 - **Do NOT write any screen `.pa.yaml` files.** Screen builders own all screen-level files.
 - **Do NOT call `compile_canvas` or instruct any other agent to call it.** Compilation/validation is performed exclusively by the orchestrating `generate-canvas-app` skill after all screens have been generated.
 - **Embed full `describe_control` output** in the plan document — never summarize property names.
