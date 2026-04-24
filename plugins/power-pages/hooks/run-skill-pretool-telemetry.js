@@ -40,7 +40,7 @@ function readIkey() {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
     );
-    return { ikey: cfg.ikey, collectorUrl: cfg.collector_url };
+    return { ikey: cfg.ikey || "", collectorUrl: cfg.collector_url || "" };
   } catch {
     return { ikey: "", collectorUrl: "" };
   }
@@ -72,6 +72,7 @@ function readStdin() {
 
   const { ikey, collectorUrl } = readIkey();
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
+  const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
   try {
     emitSpawn.fireAndForget(
@@ -84,7 +85,7 @@ function readStdin() {
         skill_name: skillName,
         correlation_id,
       }),
-      { iKey: ikey, collectorUrl, configDir }
+      { iKey: ikey, collectorUrl, configDir, fakeProbe }
     );
   } catch {
     // fail closed

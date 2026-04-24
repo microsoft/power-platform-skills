@@ -92,6 +92,7 @@ process.stdin.on('end', async () => {
     };
 
     const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || '';
+    const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || '';
     const outcome =
       !validatorRan || validatorStatus === 0 ? 'success' : 'failure';
 
@@ -108,7 +109,12 @@ process.stdin.on('end', async () => {
         duration_ms: Date.now() - (corr.start_ts || startTs),
         error_class: '',
       }),
-      { iKey: ikeyCfg.ikey, collectorUrl: ikeyCfg.collector_url, configDir }
+      {
+        iKey: ikeyCfg.ikey || '',
+        collectorUrl: ikeyCfg.collector_url || '',
+        configDir,
+        fakeProbe,
+      }
     );
 
     correlationLib.clear({ skillName });

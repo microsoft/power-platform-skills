@@ -316,25 +316,36 @@ The telemetry library uses only Node built-ins (`node:https`, `node:child_proces
 
 ### 6.2 OneCollector POST shape
 
-The dispatcher builds a Common Schema 4.0 envelope per event (what our POC verified via `acc:N`):
+The dispatcher builds this envelope per event (confirmed landing in the `PowerPlatformExtensionEvent` Kusto stream via `acc:1`):
 
 ```js
 {
   ver: "4.0",
-  name: event.name,                    // "PowerPlatformSkillsEvent"
+  name: event.name,                    // "VscodeEvent" — see routing note below
   time: new Date().toISOString(),
   iKey: "o:" + IKEY.split("-")[0],
-  baseType: "Ms.WebClient.TraceEvent",
-  baseData: event.data,                // { eventName, eventType, severity, eventInfo }
-  data: event.data
+  data: event.data                     // { eventName, eventType, severity, eventInfo }
 }
 ```
+
+Body format: `JSON.stringify(envelope) + "\n"` — the trailing newline satisfies the `application/x-json-stream` framing.
 
 Request headers:
 
 - `Content-Type: application/x-json-stream; charset=utf-8`
 - `x-apikey: <IKEY>`
 - `Content-Length: <bytes>`
+
+**Routing note — envelope.name is a registered token, not the Kusto table name.** The tenant-side `EventStreamingAnnotation` binds `(iKey, envelope.name)` tuples to Kusto streams via its `CollectorEventMappingList`. For our tenant:
+
+```
+name="^PowerPlatformExtensionEvent$"       # Kusto stream / table
+CollectorEventMappingList: "ffdb4c99...:VscodeEvent"
+```
+
+So our iKey only matches events whose `envelope.name == "VscodeEvent"`. Any other value (e.g., `"PowerPlatformSkillsEvent"`, `"PagesPowerPlatformExtEvent"`) passes wire-layer validation and returns `acc:1`, but the annotation never matches it and the event is silently dropped. `acc:1` is **not** proof of ingestion — it only confirms the HTTP POST was parseable.
+
+**Field shape.** Kusto column mapping is `data_<camelCase>:<PascalCase>` (e.g., `data_eventName:EventName`). Builders in `events.js` therefore emit camelCase keys under `data`. `eventInfo` is a JSON-stringified object — the Kusto column type is `string`, not `dynamic`, so passing an object would yield column-level type errors.
 
 Collector URL comes from `ikey.json`'s `collector_url` field. A 4 s per-request timeout in the dispatcher; no retries; no local queue.
 
