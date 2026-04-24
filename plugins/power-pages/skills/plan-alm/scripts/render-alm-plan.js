@@ -173,6 +173,15 @@ function buildSizeGauge() {
   const fillColor = exceedsSize
     ? 'linear-gradient(90deg, #ca5010 0%, #d13438 100%)'
     : 'linear-gradient(90deg, #107c10 0%, #0078d4 100%)';
+  // When the fill is narrow (small solutions, e.g. 4.9 MB / 95 MB ≈ 4%), the
+  // inline "4.9 MB" label overflows the pill and renders as a floating chip
+  // that reads like a different number. Drop the inline label below ~15% —
+  // the headline size-gauge-value already shows the exact MB value on the
+  // right, so this isn't a loss of information, just less visual noise.
+  const showInlineLabel = fillPct >= 15;
+  const inlineLabel = showInlineLabel
+    ? `<span class="size-gauge-fill-label">${totalSizeMB.toFixed(1)} MB</span>`
+    : '';
   return `<div class="size-gauge-container">
   <div class="size-gauge-header">
     <div>
@@ -186,7 +195,7 @@ function buildSizeGauge() {
   </div>
   <div class="size-gauge-track">
     <div class="size-gauge-fill" style="width:${fillPct}%;background:${fillColor};">
-      <span class="size-gauge-fill-label">${totalSizeMB.toFixed(1)} MB</span>
+      ${inlineLabel}
     </div>
     <div class="size-gauge-threshold" style="left:${threshPct}%;background:var(--text-bright);">
       <div class="size-gauge-threshold-label">${SIZE_LIMIT_MB} MB limit</div>

@@ -49,12 +49,18 @@ This skill detects the current project state (existing solution, pipeline), asks
 
 Steps:
 
-1. Read `powerpages.config.json` from the project root (use `Glob` to find it). Extract:
-   - `siteName` — the site's display name
-   - `websiteRecordId` — the Power Pages website GUID
-   - `environmentUrl` — dev environment URL
+1. **Resolve the site identity from the local project.** ALM skills are normally invoked from a site-root directory where `pac pages download-code-site` (or a create-site scaffold followed by a deploy) has written `.powerpages-site/website.yml`. That YAML file is the source of truth for `websiteRecordId` and `siteName`.
 
-   If not found, stop with: "powerpages.config.json not found. Run `/power-pages:create-site` first."
+   **Resolution order** (first match wins):
+   1. **`.powerpages-site/website.yml`** (preferred, present for every deployed site) — read with the `Read` tool and extract:
+      - `id` field → `websiteRecordId`
+      - `adx_name` field → `siteName`
+   2. **`powerpages.config.json`** (fallback, used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
+
+   If neither is found, stop with:
+   > "No Power Pages site found in the current directory. Run this skill from your site project root (where `.powerpages-site/` exists after `pac pages download-code-site`). If you haven't created the site yet, run `/power-pages:create-site` first."
+
+   `environmentUrl` is always re-confirmed from `pac env who` in step 4 — it does not need to come from either source.
 
 2. Check for `.solution-manifest.json` in the project root:
    - Store `SOLUTION_DONE = true` if found, `false` otherwise
@@ -517,6 +523,21 @@ Write `.alm-plan-context.json` to the project root (persists so `setup-solution`
 ```
 This file is intentionally NOT deleted — `setup-solution` and other skills read it to skip re-discovery.
 
+### Open the HTML plan in the user's default browser
+
+The inline Markdown summary presented in Phase 4 is intentionally compact — reviewers need to see the full rendered plan (size gauge, signal cards, per-solution breakdown, asset advisory, pipeline stages) before giving informed approval. Launch `docs/alm-plan.html` in the default browser **before** the approval prompt so the user can scan the full plan while reading the CLI summary.
+
+Use a cross-platform launch via Node.js so it works on Windows / macOS / Linux without requiring specific shell features. Run silently — do not block the skill on the browser process:
+
+```bash
+node -e "const {spawn}=require('child_process');const p=require('path').resolve('docs/alm-plan.html');const c=process.platform==='win32'?'cmd':process.platform==='darwin'?'open':'xdg-open';const a=process.platform==='win32'?['/c','start','',p]:[p];spawn(c,a,{stdio:'ignore',detached:true}).unref();" 2>/dev/null || true
+```
+
+Report to the user (single line, not a question):
+> "Opened `docs/alm-plan.html` in your browser. Review it, then answer the approval prompt below."
+
+If the browser fails to launch (unusual — headless environment, restricted sandbox, etc.), do not block. Continue to Phase 4 and rely on the CLI summary.
+
 Mark task 1 as `completed`.
 
 ---
@@ -554,8 +575,29 @@ Options:
 3. **I want to change something** — go back to questions
 
 - **If option 3:** Re-run Phase 2 (ask which section to change, then re-gather those answers). Regenerate the plan (repeat Phase 3). Re-present for approval.
-- **If option 2:** Update HTML plan footer `plan-status` span to "Approved — Deferred" via `Edit` tool. Commit `docs/alm-plan.html` with message `"Add ALM plan for {siteName} (deferred)"`. Show next steps for manual execution. Mark task 2 as `completed`. Exit the skill.
-- **If option 1:** Update the HTML plan `<span class="plan-status">` to "In Execution" via `Edit` tool. Record the approval timestamp in the HTML (`<span id="approval-date">`) by replacing the empty value. Mark task 2 as `completed`.
+- **If option 2:** Capture the approver (see below), stamp `<span id="approved-by">` and `<span id="approval-date">` in the HTML, then update HTML plan footer `plan-status` span to "Approved — Deferred" via `Edit` tool. Commit `docs/alm-plan.html` with message `"Add ALM plan for {siteName} (deferred)"`. Show next steps for manual execution. Mark task 2 as `completed`. Exit the skill.
+- **If option 1:** Capture the approver (see below), stamp the HTML, then update `<span class="plan-status">` to "In Execution" via `Edit` tool. Mark task 2 as `completed`.
+
+**Capturing the approver (both options 1 and 2):**
+
+Capture the name silently using git, falling back to the OS user:
+
+```bash
+node -e "const {execSync}=require('child_process');let n='';try{n=execSync('git config user.name',{encoding:'utf8'}).trim();}catch{};if(!n){n=process.env.USER||process.env.USERNAME||'';}process.stdout.write(n);"
+```
+
+Store the output as `APPROVER`. If `APPROVER` is empty (no git config, no USER env var), ask via `AskUserQuestion`:
+
+> "Who is approving this plan? (needed for the audit trail in docs/alm-plan.html)"
+>
+> Options: 1. *{current system user from `whoami`}* · 2. Other (enter name)
+
+Once `APPROVER` is known, use `Edit` to replace the empty/placeholder value in `docs/alm-plan.html`:
+
+- Find `<span id="approved-by">` (or `<span id="approved-by"></span>` / `<span id="approved-by">__APPROVED_BY__</span>`) and replace its inner text with `APPROVER`.
+- Find `<span id="approval-date">` and replace its inner text with the current ISO timestamp.
+
+Both spans are guaranteed to exist in the template — there is exactly one of each in the "Execution Checklist" tab footer.
 
 ---
 
