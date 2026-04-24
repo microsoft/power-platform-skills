@@ -54,7 +54,7 @@ Steps:
    **Resolution order** (first match wins):
    1. **`.powerpages-site/website.yml`** (preferred, present for every deployed site) — read with the `Read` tool and extract:
       - `id` field → `websiteRecordId`
-      - `adx_name` field → `siteName`
+      - `name` field → `siteName` (the file uses short keys; it is `name:`, not `adx_name:`)
    2. **`powerpages.config.json`** (fallback, used during plugin development from this repo root or for sites scaffolded but not yet deployed) — read `siteName` and `websiteRecordId`.
 
    If neither is found, stop with:
@@ -527,16 +527,31 @@ This file is intentionally NOT deleted — `setup-solution` and other skills rea
 
 The inline Markdown summary presented in Phase 4 is intentionally compact — reviewers need to see the full rendered plan (size gauge, signal cards, per-solution breakdown, asset advisory, pipeline stages) before giving informed approval. Launch `docs/alm-plan.html` in the default browser **before** the approval prompt so the user can scan the full plan while reading the CLI summary.
 
-Use a cross-platform launch via Node.js so it works on Windows / macOS / Linux without requiring specific shell features. Run silently — do not block the skill on the browser process:
+Run this cross-platform opener via Node.js. It uses `Start-Process` on Windows (which respects file associations and is the most reliable launcher — `cmd /c start` can get suppressed by some terminals), `open` on macOS, `xdg-open` on Linux. Always print an absolute `file://` URL after invoking, so if the GUI launch is blocked (sandboxed terminal, SSH session, headless environment), the user can Ctrl/Cmd-click the URL in their terminal to open it manually:
 
 ```bash
-node -e "const {spawn}=require('child_process');const p=require('path').resolve('docs/alm-plan.html');const c=process.platform==='win32'?'cmd':process.platform==='darwin'?'open':'xdg-open';const a=process.platform==='win32'?['/c','start','',p]:[p];spawn(c,a,{stdio:'ignore',detached:true}).unref();" 2>/dev/null || true
+node -e "
+const path = require('path');
+const { spawn } = require('child_process');
+const p = path.resolve('docs/alm-plan.html');
+const fileUrl = 'file:///' + p.replace(/\\\\/g, '/');
+try {
+  if (process.platform === 'win32') {
+    spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Start-Process \"' + p + '\"'], { detached: true, stdio: 'ignore' }).unref();
+  } else if (process.platform === 'darwin') {
+    spawn('open', [p], { detached: true, stdio: 'ignore' }).unref();
+  } else {
+    spawn('xdg-open', [p], { detached: true, stdio: 'ignore' }).unref();
+  }
+} catch (_) {}
+console.log('Plan URL: ' + fileUrl);
+"
 ```
 
-Report to the user (single line, not a question):
-> "Opened `docs/alm-plan.html` in your browser. Review it, then answer the approval prompt below."
+Report to the user (single line — include the file:// URL the script just printed):
+> "Opened `docs/alm-plan.html` in your browser. If it didn't open automatically, use this link: `file:///C:/Projects/.../docs/alm-plan.html`. Review it, then answer the approval prompt below."
 
-If the browser fails to launch (unusual — headless environment, restricted sandbox, etc.), do not block. Continue to Phase 4 and rely on the CLI summary.
+If the browser fails to launch (headless environment, restricted sandbox, Bash-tool runner without GUI), do not block. The printed `file://` URL lets the user open the HTML manually. Continue to Phase 4 and rely on the CLI summary as backup.
 
 Mark task 1 as `completed`.
 
