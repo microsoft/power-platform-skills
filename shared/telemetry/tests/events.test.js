@@ -22,17 +22,19 @@ test("COLLECTOR_EVENT_NAME matches the Kusto table name", () => {
   assert.equal(COLLECTOR_EVENT_NAME, "PagesPowerPlatformExtEvent");
 });
 
-test("buildSkillStarted emits expected shape", () => {
+test("buildSkillStarted emits camelCase data with stringified eventInfo", () => {
   const ev = buildSkillStarted({
     ...common,
     skill_name: "create-site",
     correlation_id: "corr-1",
   });
   assert.equal(ev.name, COLLECTOR_EVENT_NAME);
-  assert.equal(ev.data.EventName, "skill_started");
-  assert.equal(ev.data.EventType, "Trace");
-  assert.equal(ev.data.Severity, "Info");
-  assert.deepEqual(Object.keys(ev.data.EventInfo).sort(), [
+  assert.equal(ev.data.eventName, "skill_started");
+  assert.equal(ev.data.eventType, "Trace");
+  assert.equal(ev.data.severity, "Info");
+  assert.equal(typeof ev.data.eventInfo, "string");
+  const info = JSON.parse(ev.data.eventInfo);
+  assert.deepEqual(Object.keys(info).sort(), [
     "correlation_id",
     "node_version",
     "os_family",
@@ -41,8 +43,6 @@ test("buildSkillStarted emits expected shape", () => {
     "session_id",
     "skill_name",
   ]);
-  assert.equal(ev.data.EventInfo.plugin_name, "power-pages");
-  assert.equal(ev.data.EventInfo.skill_name, "create-site");
 });
 
 test("buildSkillCompleted includes outcome, duration_ms, error_class", () => {
@@ -54,10 +54,11 @@ test("buildSkillCompleted includes outcome, duration_ms, error_class", () => {
     duration_ms: 1234,
     error_class: "",
   });
-  assert.equal(ev.data.EventName, "skill_completed");
-  assert.equal(ev.data.EventInfo.outcome, "success");
-  assert.equal(ev.data.EventInfo.duration_ms, 1234);
-  assert.equal(ev.data.EventInfo.error_class, "");
+  assert.equal(ev.data.eventName, "skill_completed");
+  const info = JSON.parse(ev.data.eventInfo);
+  assert.equal(info.outcome, "success");
+  assert.equal(info.duration_ms, 1234);
+  assert.equal(info.error_class, "");
 });
 
 test("builder drops unknown fields (allowlist enforcement)", () => {
@@ -69,9 +70,10 @@ test("builder drops unknown fields (allowlist enforcement)", () => {
     file_path: "/etc/passwd",
     error_message: "nope",
   });
-  assert.equal(ev.data.EventInfo.tenant_id, undefined);
-  assert.equal(ev.data.EventInfo.file_path, undefined);
-  assert.equal(ev.data.EventInfo.error_message, undefined);
+  const info = JSON.parse(ev.data.eventInfo);
+  assert.equal(info.tenant_id, undefined);
+  assert.equal(info.file_path, undefined);
+  assert.equal(info.error_message, undefined);
 });
 
 test("buildScriptStarted shape", () => {
@@ -80,8 +82,9 @@ test("buildScriptStarted shape", () => {
     script_name: "verify-dataverse-access",
     correlation_id: "c",
   });
-  assert.equal(ev.data.EventName, "script_started");
-  assert.equal(ev.data.EventInfo.script_name, "verify-dataverse-access");
+  assert.equal(ev.data.eventName, "script_started");
+  const info = JSON.parse(ev.data.eventInfo);
+  assert.equal(info.script_name, "verify-dataverse-access");
 });
 
 test("buildScriptCompleted enforces non-negative duration_ms", () => {
@@ -93,11 +96,6 @@ test("buildScriptCompleted enforces non-negative duration_ms", () => {
     duration_ms: -5,
     error_class: "TypeError",
   });
-  assert.equal(ev.data.EventInfo.duration_ms, 0);
-});
-
-test("EventInfo is an object (not a stringified JSON)", () => {
-  const ev = buildSkillStarted({ ...common, skill_name: "x", correlation_id: "c" });
-  assert.equal(typeof ev.data.EventInfo, "object");
-  assert.ok(!Array.isArray(ev.data.EventInfo));
+  const info = JSON.parse(ev.data.eventInfo);
+  assert.equal(info.duration_ms, 0);
 });

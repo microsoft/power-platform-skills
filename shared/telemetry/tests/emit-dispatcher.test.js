@@ -43,10 +43,10 @@ function runDispatcher({ event, env }) {
 const fakeEvent = {
   name: "PagesPowerPlatformExtEvent",
   data: {
-    EventName: "skill_started",
-    EventType: "Trace",
-    Severity: "Info",
-    EventInfo: { plugin_name: "power-pages", skill_name: "add-seo" },
+    eventName: "skill_started",
+    eventType: "Trace",
+    severity: "Info",
+    eventInfo: JSON.stringify({ plugin_name: "power-pages", skill_name: "add-seo" }),
   },
 };
 
@@ -167,7 +167,7 @@ test("dispatcher appends to events.jsonl when iKey is placeholder + consent enab
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
   assert.equal(parsed.name, "PagesPowerPlatformExtEvent");
-  assert.equal(parsed.data.EventName, "skill_started");
+  assert.equal(parsed.data.eventName, "skill_started");
 });
 
 test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {

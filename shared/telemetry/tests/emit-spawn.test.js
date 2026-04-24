@@ -27,10 +27,10 @@ function mkConsent(tmp, enabled) {
 const sampleEvent = {
   name: "PagesPowerPlatformExtEvent",
   data: {
-    EventName: "skill_started",
-    EventType: "Trace",
-    Severity: "Info",
-    EventInfo: { skill_name: "hello" },
+    eventName: "skill_started",
+    eventType: "Trace",
+    severity: "Info",
+    eventInfo: JSON.stringify({ skill_name: "hello" }),
   },
 };
 
@@ -65,8 +65,8 @@ test("dispatcher child receives the event and writes the probe", async () => {
   const body = JSON.parse(contents.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.name, "PagesPowerPlatformExtEvent");
-  assert.equal(body.data.EventName, "skill_started");
-  assert.equal(body.data.EventInfo.skill_name, "hello");
+  assert.equal(body.data.eventName, "skill_started");
+  assert.equal(JSON.parse(body.data.eventInfo).skill_name, "hello");
 });
 
 test("fireAndForget does not throw on empty-opts invocation", () => {

@@ -1,7 +1,7 @@
 "use strict";
 
-// Table name for the Kusto destination; the 1DS OneCollector routes events
-// with `envelope.name` == this value into the matching typed table.
+// 1DS envelope `name` — routes events to the Kusto `PagesPowerPlatformExtEvent` table.
+// Matches the naming used by the power-platform VSCode extension OneDSLogger.
 const COLLECTOR_EVENT_NAME = "PagesPowerPlatformExtEvent";
 
 const COMMON_FIELDS = [
@@ -33,6 +33,10 @@ function clampDuration(ms) {
   return Math.floor(n);
 }
 
+// Shape matches the 1ds-core-js SDK convention used by the power-platform
+// VSCode extension: camelCase data keys, stringified `eventInfo`. The Kusto
+// ingestion mapping populates PascalCase columns (EventName, EventType, etc.)
+// from these camelCase payload keys.
 function envelope(eventName, info) {
   if (info.duration_ms !== undefined) {
     info.duration_ms = clampDuration(info.duration_ms);
@@ -40,10 +44,10 @@ function envelope(eventName, info) {
   return {
     name: COLLECTOR_EVENT_NAME,
     data: {
-      EventName: eventName,
-      EventType: "Trace",
-      Severity: "Info",
-      EventInfo: info,
+      eventName: eventName,
+      eventType: "Trace",
+      severity: "Info",
+      eventInfo: JSON.stringify(info),
     },
   };
 }

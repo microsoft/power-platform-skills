@@ -13,6 +13,10 @@ function recorder() {
   };
 }
 
+function parseInfo(ev) {
+  return JSON.parse(ev.data.eventInfo);
+}
+
 test("success path emits script_started and script_completed", async () => {
   const rec = recorder();
   const result = await withTelemetry(
@@ -23,11 +27,12 @@ test("success path emits script_started and script_completed", async () => {
   assert.equal(result, 42);
   assert.equal(rec.events.length, 2);
   assert.equal(rec.events[0].name, "PagesPowerPlatformExtEvent");
-  assert.equal(rec.events[0].data.EventName, "script_started");
-  assert.equal(rec.events[0].data.EventInfo.script_name, "verify-dataverse-access");
-  assert.equal(rec.events[1].data.EventName, "script_completed");
-  assert.equal(rec.events[1].data.EventInfo.outcome, "success");
-  assert.equal(rec.events[1].data.EventInfo.error_class, "");
+  assert.equal(rec.events[0].data.eventName, "script_started");
+  assert.equal(parseInfo(rec.events[0]).script_name, "verify-dataverse-access");
+  assert.equal(rec.events[1].data.eventName, "script_completed");
+  const completedInfo = parseInfo(rec.events[1]);
+  assert.equal(completedInfo.outcome, "success");
+  assert.equal(completedInfo.error_class, "");
 });
 
 test("failure path emits script_completed with outcome=failure and rethrows", async () => {
@@ -43,8 +48,9 @@ test("failure path emits script_completed with outcome=failure and rethrows", as
     TypeError
   );
   assert.equal(rec.events.length, 2);
-  assert.equal(rec.events[1].data.EventInfo.outcome, "failure");
-  assert.equal(rec.events[1].data.EventInfo.error_class, "TypeError");
+  const info = parseInfo(rec.events[1]);
+  assert.equal(info.outcome, "failure");
+  assert.equal(info.error_class, "TypeError");
 });
 
 test("same correlation_id on started and completed", async () => {
@@ -54,8 +60,8 @@ test("same correlation_id on started and completed", async () => {
     async () => null,
     { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
   );
-  const a = rec.events[0].data.EventInfo.correlation_id;
-  const b = rec.events[1].data.EventInfo.correlation_id;
+  const a = parseInfo(rec.events[0]).correlation_id;
+  const b = parseInfo(rec.events[1]).correlation_id;
   assert.equal(a, b);
   assert.ok(a.length >= 32);
 });

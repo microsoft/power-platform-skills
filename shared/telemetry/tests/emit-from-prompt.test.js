@@ -55,10 +55,11 @@ test("emits skill_started event with expected payload on match", () => {
   assert.equal(result.emitted, true);
   assert.equal(result.skillName, "add-seo");
   assert.equal(captured.event.name, "PagesPowerPlatformExtEvent");
-  assert.equal(captured.event.data.EventName, "skill_started");
-  assert.equal(captured.event.data.EventType, "Trace");
-  assert.equal(captured.event.data.Severity, "Info");
-  const info = captured.event.data.EventInfo;
+  assert.equal(captured.event.data.eventName, "skill_started");
+  assert.equal(captured.event.data.eventType, "Trace");
+  assert.equal(captured.event.data.severity, "Info");
+  assert.equal(typeof captured.event.data.eventInfo, "string");
+  const info = JSON.parse(captured.event.data.eventInfo);
   assert.equal(info.plugin_name, "power-pages");
   assert.equal(info.plugin_version, "1.2.3");
   assert.equal(info.skill_name, "add-seo");

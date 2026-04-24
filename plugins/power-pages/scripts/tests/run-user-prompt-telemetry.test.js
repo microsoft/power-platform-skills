@@ -82,11 +82,13 @@ test("hook exits 0 and emits skill_started for a tracked slash command", () => {
     assert.equal(body.name, "PagesPowerPlatformExtEvent");
     assert.match(body.iKey, /^o:/);
     assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
-    assert.equal(body.data.EventName, "skill_started");
-    assert.equal(body.data.EventType, "Trace");
-    assert.equal(body.data.Severity, "Info");
-    assert.equal(body.data.EventInfo.plugin_name, "power-pages");
-    assert.equal(body.data.EventInfo.skill_name, "add-seo");
+    assert.equal(body.data.eventName, "skill_started");
+    assert.equal(body.data.eventType, "Trace");
+    assert.equal(body.data.severity, "Info");
+    assert.equal(typeof body.data.eventInfo, "string");
+    const info = JSON.parse(body.data.eventInfo);
+    assert.equal(info.plugin_name, "power-pages");
+    assert.equal(info.skill_name, "add-seo");
   } finally {
     fs.writeFileSync(ikeyPath, original);
   }
