@@ -38,9 +38,11 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 9 skills that cover the full lifecycle of a Power Pages code site. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 15 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
-### `/create-site`
+### Site scaffolding and deployment
+
+#### `/create-site`
 
 > "Create a Power Pages site with React for a job board"
 
@@ -51,7 +53,7 @@ Scaffolds a complete code site from a framework template, applies your design di
 - Live browser preview during development
 - Git commits at each milestone
 
-### `/deploy-site`
+#### `/deploy-site`
 
 > "Deploy my site to Power Pages"
 
@@ -61,7 +63,7 @@ Builds your project and uploads it to your Power Pages environment using `pac pa
 - Confirms target environment before deploying
 - Creates `.powerpages-site` folder with deployment artifacts
 
-### `/activate-site`
+#### `/activate-site`
 
 > "Activate my site"
 
@@ -71,7 +73,20 @@ Provisions a website record in your Power Platform environment so your site is a
 - Polls provisioning status until the site is live
 - Provides the final site URL
 
-### `/setup-datamodel`
+#### `/test-site`
+
+> "Test my deployed site at https://contoso.powerappsportals.com"
+
+Runtime-tests a deployed, activated site using a real browser (via the bundled Playwright MCP). Crawls discoverable links, verifies pages render, captures network traffic for API calls, and produces a test report.
+
+- Browser-based navigation and page crawling
+- Network request verification for Web API / Server Logic / Cloud Flow endpoints
+- Console and network error capture
+- Screenshots on failure
+
+### Data modeling
+
+#### `/setup-datamodel`
 
 > "Create Dataverse tables for my site"
 
@@ -82,7 +97,7 @@ Analyzes your site's requirements and creates Dataverse tables, columns, and rel
 - Generates a `.datamodel-manifest.json` used by downstream skills
 - Visualizes the data model as a Mermaid ER diagram
 
-### `/add-sample-data`
+#### `/add-sample-data`
 
 > "Add sample data to my tables"
 
@@ -92,7 +107,19 @@ Populates your Dataverse tables with realistic, contextually appropriate records
 - Generates values that match column types and names (emails, dates, currencies, etc.)
 - Inserts records in dependency order (parent tables first)
 
-### `/integrate-webapi`
+### Backend integration
+
+#### `/integrate-backend`
+
+> "I need to send a confirmation email when someone submits the contact form"
+
+Router skill that analyzes your business problem and recommends the right backend approach — Web API, Server Logic, Cloud Flow, or a combination — then hands off to the specialized skill(s). Use this as the entry point when you're not sure which integration path fits your scenario.
+
+- Generates a visual backend plan (HTML) with the recommended approach and trade-offs
+- Routes to `/integrate-webapi`, `/add-server-logic`, or `/add-cloud-flow`
+- Supports multi-approach plans (e.g., Web API for CRUD + Cloud Flow for notifications)
+
+#### `/integrate-webapi`
 
 > "Connect my site to the Dataverse tables"
 
@@ -113,7 +140,41 @@ The skill first scans your codebase to find components using mock data, placehol
 - Existing components are refactored to use real API calls (mock data and placeholder fetches are replaced)
 - `.powerpages-site/table-permissions/` and `.powerpages-site/site-settings/` directories are populated for deployment
 
-### `/setup-auth`
+#### `/add-server-logic`
+
+> "Move my pricing calculation out of the browser and onto the server"
+
+Creates and manages Power Pages Server Logic — server-side JavaScript that runs securely on the Power Pages runtime. Covers the full lifecycle: gathering requirements, fetching Microsoft Learn docs for reference, implementing the handler, configuring site settings, and deploying.
+
+- Grounded in live Microsoft Learn docs (via the bundled MCP)
+- Generates the server-side handler and its deployment metadata
+- Wires up the client-side call site in your frontend code
+- Handles site-setting flags required to enable Server Logic
+
+#### `/add-cloud-flow`
+
+> "When a user submits an application, kick off my existing approval flow"
+
+Integrates Power Automate cloud flows into a Power Pages site. Discovers flows available in the environment, suggests relevant ones for your intent, identifies scenarios and web roles, creates flow metadata, and generates the client-side code to invoke the flow.
+
+- Lists available cloud flows in the environment
+- Handles both new flow registration and adding already-registered flows to additional pages
+- Generates metadata files and client-side call-site code
+- Configures web role access for the flow
+
+### Security and access
+
+#### `/create-webroles`
+
+> "Create web roles for my site"
+
+Generates web role YAML files in your `.powerpages-site` directory for managing user access.
+
+- Discovers existing roles before creating new ones
+- Generates proper UUIDs for each role
+- Enforces uniqueness constraints (one anonymous role, one authenticated role)
+
+#### `/setup-auth`
 
 > "Set up authentication for my site"
 
@@ -124,17 +185,19 @@ Adds login/logout functionality and role-based authorization to your site.
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)
 
-### `/create-webroles`
+#### `/audit-permissions`
 
-> "Create web roles for my site"
+> "Check my table permissions for security issues"
 
-Generates web role YAML files in your `.powerpages-site` directory for managing user access.
+Audits existing table permissions on a deployed or in-progress site by analyzing them against the site code and live Dataverse metadata. Produces a visual HTML audit report grouped by severity with suggested fixes.
 
-- Discovers existing roles before creating new ones
-- Generates proper UUIDs for each role
-- Enforces uniqueness constraints (one anonymous role, one authenticated role)
+- Findings grouped as critical / warning / info / pass
+- Cross-references code usage, web roles, and Dataverse schema
+- Suggests concrete fixes for each issue
 
-### `/add-seo`
+### Polish
+
+#### `/add-seo`
 
 > "Add SEO to my site"
 
@@ -144,6 +207,18 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
+### Support
+
+#### `/report-issue`
+
+> "Report a bug with the create-site skill"
+
+Collects context about the current session and opens a pre-filled GitHub issue against [microsoft/power-platform-skills](https://github.com/microsoft/power-platform-skills/issues).
+
+- Captures the skill(s) involved and recent error messages
+- Attaches relevant file paths and environment info
+- Opens the issue in your browser for final review
+
 ## Agents
 
 The plugin includes 4 specialized agents that are spawned automatically by skills when needed:
@@ -152,29 +227,40 @@ The plugin includes 4 specialized agents that are spawned automatically by skill
 |---|---|---|
 | **Data Model Architect** | Analyzes your site and proposes a Dataverse data model with an ER diagram | `/setup-datamodel` |
 | **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` |
-| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi` |
+| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi`, `/audit-permissions` |
 | **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` |
 
 The Data Model Architect, Table Permissions, and Web API Settings agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
+
+## Bundled MCP servers
+
+The plugin ships with two MCP servers configured in `.mcp.json` — they start automatically when the plugin loads:
+
+| Server | Purpose | Used by |
+|---|---|---|
+| **playwright** | Headless browser automation for live previews and runtime tests | `/create-site`, `/test-site` |
+| **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs | `/add-server-logic` |
 
 ## Typical Workflow
 
 A common end-to-end workflow looks like this:
 
 ```
-1. /create-site       →  Scaffold + design + build pages
-2. /deploy-site       →  Upload to Power Pages environment
-3. /activate-site     →  Provision a public URL
-4. /setup-datamodel   →  Create Dataverse tables
-5. /add-sample-data   →  Populate tables with test records
-6. /integrate-webapi  →  Configure table permissions, web API site settings and generate API client code
-7. /create-webroles   →  Define access roles
-8. /setup-auth        →  Add login/logout + role-based UI
-9. /add-seo           →  Search engine optimization
-10. /deploy-site      →  Push final changes live
+1.  /create-site        →  Scaffold + design + build pages
+2.  /deploy-site        →  Upload to Power Pages environment
+3.  /activate-site      →  Provision a public URL
+4.  /setup-datamodel    →  Create Dataverse tables
+5.  /add-sample-data    →  Populate tables with test records
+6.  /integrate-backend  →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
+7.  /create-webroles    →  Define access roles
+8.  /setup-auth         →  Add login/logout + role-based UI
+9.  /audit-permissions  →  Verify table permissions are safe
+10. /add-seo            →  Search engine optimization
+11. /deploy-site        →  Push final changes live
+12. /test-site          →  Runtime smoke test on the live URL
 ```
 
-Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing.
+Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/report-issue` opens a pre-filled GitHub issue.
 
 ## Running Without Interruption
 
