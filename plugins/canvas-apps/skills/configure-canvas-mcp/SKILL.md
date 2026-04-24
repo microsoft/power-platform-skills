@@ -103,6 +103,10 @@ Then extract from the URL:
 | ---------------------------- | ---------------- |
 | `make.powerapps.com`         | `prod`           |
 | `make.preview.powerapps.com` | `prod`           |
+| `make.gov.powerapps.us`      | `gov`            |
+| `make.high.powerapps.us`     | `high`           |
+| `make.apps.appsplatform.us`  | `dod`            |
+| `make.powerapps.cn`          | `china`          |
 | Any other hostname           | `test`           |
 
 **Example:**
