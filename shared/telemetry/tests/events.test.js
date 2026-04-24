@@ -18,8 +18,10 @@ const common = {
   node_version: "v22",
 };
 
-test("COLLECTOR_EVENT_NAME matches the Kusto table name", () => {
-  assert.equal(COLLECTOR_EVENT_NAME, "PagesPowerPlatformExtEvent");
+test("COLLECTOR_EVENT_NAME matches the annotation's CollectorEventMappingList entry", () => {
+  // The tenant EventStreamingAnnotation binds iKey + envelope.name to a stream.
+  // Our iKey's mapping entry is "<iKey>:VscodeEvent" — envelope.name must match.
+  assert.equal(COLLECTOR_EVENT_NAME, "VscodeEvent");
 });
 
 test("buildSkillStarted emits camelCase data with stringified eventInfo", () => {

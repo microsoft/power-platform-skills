@@ -1,8 +1,15 @@
 "use strict";
 
-// 1DS envelope `name` — routes events to the Kusto `PagesPowerPlatformExtEvent` table.
-// Matches the naming used by the power-platform VSCode extension OneDSLogger.
-const COLLECTOR_EVENT_NAME = "PagesPowerPlatformExtEvent";
+// 1DS envelope `name` — this is a routing token that the tenant-side
+// EventStreamingAnnotation binds to an output stream. The iKey + envelope.name
+// tuple must appear in the annotation's CollectorEventMappingList or events
+// will be dropped silently after OneCollector returns acc:1 (wire-layer ack).
+//
+// For this tenant, the annotation is:
+//   name="^PowerPlatformExtensionEvent$"
+//   CollectorEventMappingList: "ffdb4c99...:VscodeEvent"
+// so events land in the PowerPlatformExtensionEvent Kusto table.
+const COLLECTOR_EVENT_NAME = "VscodeEvent";
 
 const COMMON_FIELDS = [
   "plugin_name",

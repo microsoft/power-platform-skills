@@ -54,7 +54,7 @@ test("emits skill_started event with expected payload on match", () => {
   });
   assert.equal(result.emitted, true);
   assert.equal(result.skillName, "add-seo");
-  assert.equal(captured.event.name, "PagesPowerPlatformExtEvent");
+  assert.equal(captured.event.name, "VscodeEvent");
   assert.equal(captured.event.data.eventName, "skill_started");
   assert.equal(captured.event.data.eventType, "Trace");
   assert.equal(captured.event.data.severity, "Info");

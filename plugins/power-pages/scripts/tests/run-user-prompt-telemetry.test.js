@@ -79,7 +79,7 @@ test("hook exits 0 and emits skill_started for a tracked slash command", () => {
     const body = JSON.parse(probe.body);
     assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
     assert.equal(body.ver, "4.0");
-    assert.equal(body.name, "PagesPowerPlatformExtEvent");
+    assert.equal(body.name, "VscodeEvent");
     assert.match(body.iKey, /^o:/);
     assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
     assert.equal(body.data.eventName, "skill_started");

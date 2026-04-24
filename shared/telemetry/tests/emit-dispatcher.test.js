@@ -41,7 +41,7 @@ function runDispatcher({ event, env }) {
 }
 
 const fakeEvent = {
-  name: "PagesPowerPlatformExtEvent",
+  name: "VscodeEvent",
   data: {
     eventName: "skill_started",
     eventType: "Trace",
@@ -131,7 +131,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.ver, "4.0");
-  assert.equal(body.name, "PagesPowerPlatformExtEvent");
+  assert.equal(body.name, "VscodeEvent");
   assert.equal(body.iKey, "o:real");
   assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(body.data, fakeEvent.data);
@@ -166,7 +166,7 @@ test("dispatcher appends to events.jsonl when iKey is placeholder + consent enab
   const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
-  assert.equal(parsed.name, "PagesPowerPlatformExtEvent");
+  assert.equal(parsed.name, "VscodeEvent");
   assert.equal(parsed.data.eventName, "skill_started");
 });
 

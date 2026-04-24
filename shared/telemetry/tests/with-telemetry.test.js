@@ -26,7 +26,7 @@ test("success path emits script_started and script_completed", async () => {
   );
   assert.equal(result, 42);
   assert.equal(rec.events.length, 2);
-  assert.equal(rec.events[0].name, "PagesPowerPlatformExtEvent");
+  assert.equal(rec.events[0].name, "VscodeEvent");
   assert.equal(rec.events[0].data.eventName, "script_started");
   assert.equal(parseInfo(rec.events[0]).script_name, "verify-dataverse-access");
   assert.equal(rec.events[1].data.eventName, "script_completed");

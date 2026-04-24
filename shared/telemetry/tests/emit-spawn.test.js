@@ -25,7 +25,7 @@ function mkConsent(tmp, enabled) {
 }
 
 const sampleEvent = {
-  name: "PagesPowerPlatformExtEvent",
+  name: "VscodeEvent",
   data: {
     eventName: "skill_started",
     eventType: "Trace",
@@ -64,7 +64,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
   assert.ok(contents.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(contents.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "PagesPowerPlatformExtEvent");
+  assert.equal(body.name, "VscodeEvent");
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(JSON.parse(body.data.eventInfo).skill_name, "hello");
 });
