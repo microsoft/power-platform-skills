@@ -74,8 +74,6 @@ ones that need answers):
 - **Phone users** → large touch targets, single-column, simplified navigation, AutoLayout (responsive), minimal typing.
 - **Multi-device / unknown** → AutoLayout (responsive) required.
 
-**Layout strategy rule of thumb:** Default to **AutoLayout** (responsive) unless the user explicitly chose desktop-only or requested pixel-perfect positioning. AutoLayout uses `GroupContainer` with `Variant: Horizontal` or `Variant: Vertical` and `LayoutDirection`, which adapts to different screen sizes. ManualLayout uses fixed `X`/`Y`/`Width`/`Height` values that do not reflow.
-
 ---
 
 ## Phase 2 — Plan

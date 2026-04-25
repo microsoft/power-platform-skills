@@ -83,7 +83,7 @@ Based on discovery, the user preferences passed in the prompt, and the user's re
 - Which controls will drive each screen's layout
 - What aesthetic direction fits the app's purpose
 - How data will flow (data sources, collections, or mock data)
-- **Layout strategy** — default to **AutoLayout** (responsive) using `GroupContainer` with `Variant: Horizontal` or `Variant: Vertical`. Only use ManualLayout if the user explicitly requests pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and cross-device apps MUST use AutoLayout.
+- **Layout strategy** — default to **AutoLayout** (responsive) using `GroupContainer` with `Variant: AutoLayout` and `LayoutDirection: =LayoutDirection.Horizontal` or `=LayoutDirection.Vertical`, or if a grid-based layout is appropriate, `Variant: GridLayout`. Only use `Variant: ManualLayout` if the user explicitly requests pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and cross-device apps MUST use AutoLayout.
 
 Enter plan mode (`EnterPlanMode`) and present the following to the user:
 
