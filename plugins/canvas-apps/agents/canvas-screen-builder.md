@@ -9,6 +9,7 @@ color: green
 tools:
   - Read
   - Write
+  - Edit
   - TaskCreate
   - TaskUpdate
 ---

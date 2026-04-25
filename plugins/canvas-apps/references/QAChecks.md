@@ -76,8 +76,7 @@ height. Content that exceeds the viewport is clipped, not scrolled — the whole
 point of the scroll container is defeated.
 
 **Detect:** For every container with `LayoutOverflowY: =LayoutOverflow.Scroll`
-(or `=LayoutOverflow.Hide`), inspect its direct children. Flag any direct child
-that has `FillPortions: =1`.
+inspect its direct children. Flag any direct child that has `FillPortions: =1`.
 
 **Fix:** Change the child's `FillPortions` to `=0`.
 
@@ -93,41 +92,13 @@ fill its own parent). Its direct scrollable child must be `=0`.
 
 ---
 
-## Check 4 — OVERLAY-TRAP (transparent overlay button in AutoLayout parent)
-
-**Problem:** A transparent overlay button (used to make a card or row clickable)
-with `Height: =Parent.Height` and `Width: =Parent.Width` works inside a
-`ManualLayout` parent. Inside an AutoLayout parent, it claims the entire parent
-size as an AutoLayout child and collapses all siblings to 0px. The card renders
-blank.
-
-**Detect:** Find any `Classic/Button` (or `Button`) control whose `Text: =""`,
-`Fill: =RGBA(0,0,0,0)`, and dimensions `=Parent.Width` / `=Parent.Height`
-indicate an overlay. Check its parent. If the parent has a `LayoutDirection`
-property (AutoLayout), it's a trap.
-
-**Fix:** Convert the parent to ManualLayout:
-
-1. Remove `LayoutDirection`, `LayoutGap`, `LayoutAlignItems`,
-   `LayoutJustifyContent`, `LayoutWrap`, `LayoutOverflowY` from the parent
-2. Change `Variant: AutoLayout` to `Variant: ManualLayout` (or ensure the
-   variant reflects manual positioning per the plugin's conventions)
-3. Add explicit `X`, `Y`, `Width`, `Height` to every sibling of the overlay
-4. Ensure the overlay button is the LAST entry in `Children:` so it renders on
-   top
-
-If the parent must stay AutoLayout for layout reasons, remove the overlay
-button entirely — overlays are incompatible with AutoLayout.
-
----
-
-## Check 5 — WRAP-MISSING (single-line label without `Wrap: =false`)
+## Check 4 — WRAP-MISSING (single-line label without `Wrap: =false`)
 
 **Problem:** Power Apps defaults `Wrap` to `true` on `Label` controls. A narrow
 nav item, breadcrumb, badge, or KPI value will wrap its text onto two lines and
 break the intended layout.
 
-**Detect:** For every `Label` (including `ModernLabel`), check whether
+**Detect:** For every `Label` (including `ModernText`), check whether
 `Wrap: =false` is set. Flag any label that looks like a single-line UI element:
 
 - Nav/menu item labels (inside a navigation gallery or sidebar)
@@ -151,7 +122,7 @@ comment text. These should keep the default wrapping behavior.
 
 ---
 
-## Check 6 — NO-HEIGHT-TRAP (`FillPortions: =0` without explicit `Height`)
+## Check 5 — NO-HEIGHT-TRAP (`FillPortions: =0` without explicit `Height`)
 
 **Problem:** When an AutoLayout child has `FillPortions: =0` (or `FillPortions`
 is absent, which defaults to 0) and no explicit `Height`, Power Apps defaults
@@ -183,7 +154,7 @@ proportionally and `Height` should be absent.
 
 ---
 
-## Check 7 — MODERNTEXT-PADDING (ModernText padding defaults to 5)
+## Check 6 — MODERNTEXT-PADDING (ModernText padding defaults to 5)
 
 **Problem:** `ModernText` controls default `PaddingTop`, `PaddingBottom`,
 `PaddingLeft`, and `PaddingRight` to `5`. In most UI contexts (labels in a
@@ -214,7 +185,7 @@ PA default of 5 cannot creep in.
 
 ---
 
-## Check 8 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
+## Check 7 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
 `Height: =value` on the same control confuses the layout engine. The container
