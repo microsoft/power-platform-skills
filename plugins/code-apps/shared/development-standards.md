@@ -9,13 +9,13 @@ Standards that apply to all Power Apps code app skills.
 
 ## Node.js
 
-- **Node.js 22+ is required** -- `@microsoft/power-apps-cli code add-data-source` rejects Node 20 and earlier
+- **Node.js 22+ is required** -- `npx power-apps add-data-source` rejects Node 20 and earlier
 - Check with `node --version` before starting
 - If the user has multiple versions, suggest `nvm use 22`
 
 ## Build & Deploy
 
-- **Always** run `npm run build` before `pac code push` -- never skip the build step
+- **Always** run `npm run build` before `npx power-apps push` -- never skip the build step
 - Verify `dist/` folder contains `index.html` and `assets/` before deploying
 - When adding multiple connectors: do **NOT** deploy after each one — run `npm run build` to verify, then deploy once after all connectors are added
 

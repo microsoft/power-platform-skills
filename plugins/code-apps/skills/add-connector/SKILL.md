@@ -65,10 +65,10 @@ Run the `/list-connections` skill. Find the connector in the output. If none exi
 
 ```bash
 # Non-tabular connectors (Teams, Azure DevOps, etc.)
-pwsh -NoProfile -Command "pac code add-data-source -a <connector-api-name> -c <connection-id>"
+npx power-apps add-data-source -a <connector-api-name> -c <connection-id>
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) -- also need dataset and table
-pwsh -NoProfile -Command "pac code add-data-source -a <connector-api-name> -c <connection-id> -d '<dataset>' -t '<table>'"
+npx power-apps add-data-source -a <connector-api-name> -c <connection-id> -d '<dataset>' -t '<table>'
 ```
 
 **Parameter reference:**

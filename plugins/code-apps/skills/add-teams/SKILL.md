@@ -27,7 +27,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/sh
 Run the `/list-connections` skill. Find the Teams connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
 ```bash
-pwsh -NoProfile -Command "pac code add-data-source -a teams -c <connection-id>"
+npx power-apps add-data-source -a teams -c <connection-id>
 ```
 
 ### Step 3: Configure

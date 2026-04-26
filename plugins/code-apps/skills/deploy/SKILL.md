@@ -40,23 +40,15 @@ Verify `dist/` exists with `index.html` before continuing.
 Ask the user: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit confirmation before proceeding.
 
 ```bash
-pwsh -NoProfile -Command "pac code push"
+npx power-apps push
 ```
 
 Capture the app URL from the output if present.
 
-If deploy fails, report the error and stop — do not retry silently. Common fixes are in the troubleshooting guide:
+If deploy fails, report the error and stop — do not retry silently. Common fixes:
 
-- Auth error → `pwsh -NoProfile -Command "pac auth create"`
-- Environment mismatch → `pwsh -NoProfile -Command "pac env select --environment <id>"`
-
-**Mac fallback — if `pac code push` fails with an auth error on macOS:**
-`pac` has known authentication bugs on Mac that can block the push. Use the npx CLI instead:
-```bash
-npm install -g @microsoft/power-apps-cli   # skip if already installed
-npx power-apps push
-```
-This is functionally equivalent to `pac code push` and bypasses the Mac auth issue.
+- Auth error / token expired → `npx power-apps logout`, then retry — the CLI will re-prompt browser login.
+- Environment mismatch → update `environmentId` in `power.config.json` to the correct value and retry.
 
 ### Step 4: Update Memory Bank
 

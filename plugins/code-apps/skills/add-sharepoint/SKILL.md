@@ -93,13 +93,13 @@ Run the `/list-connections` skill. Find the SharePoint Online connection in the 
 List available SharePoint sites the user has access to:
 
 ```bash
-pwsh -NoProfile -Command "pac code list-datasets -a sharepointonline -c <connection-id>"
+npx power-apps list-datasets -a sharepointonline -c <connection-id>
 ```
 
 Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
 
-**If `pac code list-datasets` fails or returns no results:**
-- Auth error: Run `pwsh -NoProfile -Command "pac auth list"` and re-authenticate if needed.
+**If `npx power-apps list-datasets` fails or returns no results:**
+- Auth error: Run `npx power-apps logout`, then retry — the CLI will re-prompt browser login.
 - Empty list: Confirm the connection ID is for a SharePoint Online connection and the user has access to at least one site. STOP if the list is empty after confirming.
 - Any other non-zero exit: Report the exact error output. STOP.
 
@@ -108,10 +108,10 @@ Present the sites to the user and ask which one(s) they want to connect to. If t
 For each selected site, list the available lists and document libraries:
 
 ```bash
-pwsh -NoProfile -Command "pac code list-tables -a sharepointonline -c <connection-id> -d '<site-url>'"
+npx power-apps list-tables -a sharepointonline -c <connection-id> -d '<site-url>'
 ```
 
-**If `pac code list-tables` fails or returns no results:**
+**If `npx power-apps list-tables` fails or returns no results:**
 - Confirm the site URL from Step 7 is exact (copy from the output — do not retype).
 - If still empty, the user may not have access to that site's lists. Ask them to verify permissions in SharePoint.
 - Any other non-zero exit: Report the exact error output. STOP.
@@ -123,7 +123,7 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 SharePoint is a tabular datasource -- requires `-c` (connection ID), `-d` (site URL), and `-t` (list name):
 
 ```bash
-pwsh -NoProfile -Command "pac code add-data-source -a sharepointonline -c <connection-id> -d '<site-url>' -t '<table-name>'"
+npx power-apps add-data-source -a sharepointonline -c <connection-id> -d '<site-url>' -t '<table-name>'
 ```
 
 Run the command for each list or library the user selected. The `-d` (dataset) is the SharePoint site URL from Step 7, `-t` (table) is the list/library name from Step 8.

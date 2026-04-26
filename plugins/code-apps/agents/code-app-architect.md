@@ -37,14 +37,13 @@ When consulted, you provide guidance on:
 Verify prerequisites before proceeding with any implementation work:
 
 ```bash
-node --version                         # Must be v22+
-pwsh -NoProfile -Command "pac"         # Windows executable — must use pwsh
+node --version   # Must be v22+
 ```
 
 - **Node.js below v22**: Report "Node.js 22+ is required. Upgrade or switch with `nvm use 22`." and STOP.
-- **Missing @microsoft/power-apps-cli**: Report "Install with `npm install -g @microsoft/power-apps-cli`." and STOP.
-- **Missing pac**: Report "Install Power Platform CLI from https://aka.ms/PowerAppsCLI." and STOP.
 - **All present**: Report versions and proceed.
+
+The Power Apps CLI is installed automatically via `npm install` from the app template — no separate install required.
 
 ## Key Considerations for Power Apps Code Apps
 
@@ -66,11 +65,11 @@ pwsh -NoProfile -Command "pac"         # Windows executable — must use pwsh
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
 
-**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `pwsh -NoProfile -Command "pac code add-data-source -a <connector> -c <connection-id>"`.
+**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `npx power-apps add-data-source -a <connector> -c <connection-id>`.
 
 ### Generated Code Pattern
 
-Code apps use `pac code add-data-source` to generate typed services:
+Code apps use `npx power-apps add-data-source` to generate typed services:
 - `src/generated/models/{Table}Model.ts` -- TypeScript interfaces
 - `src/generated/services/{Table}Service.ts` -- CRUD methods
 
@@ -86,10 +85,10 @@ cd {folder}
 npm install
 ```
 
-After scaffolding, initialize with the npm package:
+After scaffolding, initialize:
 
 ```bash
-pwsh -NoProfile -Command "pac code init --displayName '{app-name}' -e <environment-id>"
+npx power-apps init -n '{app-name}' -e <environment-id>
 ```
 
 ### Dataverse Gotchas
@@ -111,25 +110,30 @@ pwsh -NoProfile -Command "pac code init --displayName '{app-name}' -e <environme
 
 Check `power.config.json` in the project root for an `environmentId` — use it if present. Otherwise ask the user which environment to use. Only use a different environment if the user explicitly requests it.
 
-### Running pac on Windows
+### CLI Commands
 
-`pac` is a Windows executable — **not** on the bash PATH. Always call it via PowerShell:
+The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. Use `npx power-apps` from within the project directory — works natively in bash on all platforms:
 
 ```bash
-pwsh -NoProfile -Command "pac auth list"
-pwsh -NoProfile -Command "pac env select --environment <id>"
-pwsh -NoProfile -Command "pac org who"
+npx power-apps push                               # Deploy
+npx power-apps add-data-source -a <api> -c <id>  # Add connector
+npx power-apps list-connections                   # List connections
+npx power-apps list-datasets -a <api> -c <id>    # List datasets
+npx power-apps list-tables -a <api> -c <id> -d <ds>  # List tables
+npx power-apps logout                             # Log out
 ```
 
-Never run `pac <args>` directly in bash (command not found). Never use `cmd /c pac` — CLINK intercepts `cmd.exe` and swallows output.
+**Auth**: MSAL-based — browser popup on first command requiring auth. No separate auth setup needed.
+
+**Environment**: Set once via `npx power-apps init -e <env-id>`, stored in `power.config.json`.
 
 ### Build Requirements
 
 Key rules:
-- Always `npm run build` before `pac code push`
+- Always `npm run build` before `npx power-apps push`
 - Remove unused imports (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
-- Node.js 22+ required — `code add-data-source` rejects older versions
+- Node.js 22+ required — `add-data-source` rejects older versions
 
 ## Response Style
 

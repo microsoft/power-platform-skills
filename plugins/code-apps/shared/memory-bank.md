@@ -118,10 +118,10 @@ Update after:
 ## Completed Steps
 
 ### /create-code-app
-- [x] Prerequisites validated (Node.js, pac CLI)
-- [x] Authenticated and selected environment
+- [x] Prerequisites validated (Node.js)
+- [x] Environment ID confirmed
 - [x] Scaffolded from template
-- [x] Initialized with pac code init
+- [x] Initialized with npx power-apps init
 - [x] Built successfully
 - [x] Deployed to Power Platform
 - App URL: [URL]

@@ -4,7 +4,7 @@ This file provides guidance to AI Agents when working with the **power-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building and deploying Power Apps code apps using React + Vite + TypeScript, connected to Power Platform via connectors (Dataverse, SharePoint, Teams, Azure DevOps, OneDrive, Excel, Office 365, and more). Apps are deployed via PAC CLI (`pac code push`).
+A plugin for building and deploying Power Apps code apps using React + Vite + TypeScript, connected to Power Platform via connectors (Dataverse, SharePoint, Teams, Azure DevOps, OneDrive, Excel, Office 365, and more). Apps are deployed via the Power Apps NPX CLI (`npx power-apps push`).
 
 ## Local Development
 
@@ -89,18 +89,20 @@ Power Apps code apps run in a sandbox — direct HTTP calls (`fetch`, `axios`, G
 
 ### Generated Services
 
-`pac code add-data-source` generates typed TypeScript services in `src/generated/`:
+`npx power-apps add-data-source` generates typed TypeScript services in `src/generated/`:
 - `src/generated/models/{Name}Model.ts` — TypeScript interfaces
 - `src/generated/services/{Name}Service.ts` — CRUD methods
 
 Always use generated services for data access.
 
-### Windows CLI
+### CLI
 
-`pac` is a Windows executable not on the bash PATH. Always invoke via PowerShell:
+The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. All commands use `npx power-apps <verb>` from within the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed.
 
 ```bash
-pwsh -NoProfile -Command "pac code push"
+npx power-apps push                   # Deploy app
+npx power-apps add-data-source -a ... # Add connector
+npx power-apps list-connections       # List connections
 ```
 
 ### Scaffolding
@@ -118,4 +120,4 @@ After modifying this plugin:
 1. Run `claude --debug` to see plugin loading details
 2. Test skill invocation with `/create-code-app`
 3. Verify connector-first guardrails are enforced
-4. Test Windows CLI compatibility (`pac` via `pwsh`)
+4. Test CLI commands (`npx power-apps push`, `npx power-apps add-data-source`, etc.)

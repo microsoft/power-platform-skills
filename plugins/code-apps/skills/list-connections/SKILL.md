@@ -10,7 +10,7 @@ model: haiku
 
 # List Connections
 
-Lists all Power Platform connections in the default environment using the Power Platform CLI (`pac`).
+Lists all Power Platform connections in the current environment using the Power Apps CLI.
 
 ## Workflow
 
@@ -21,14 +21,14 @@ Lists all Power Platform connections in the default environment using the Power 
 ### Step 1: Fetch Connections
 
 ```bash
-pwsh -NoProfile -Command "pac connection list"
+npx power-apps list-connections
 ```
 
-If `pac` is not authenticated, tell the user to run `pwsh -NoProfile -Command "pac auth create"` and try again.
+If the CLI is not authenticated, it will open a browser for login automatically. Complete the login and retry.
 
 **Other failures:**
 - Non-zero exit for any reason other than auth: Report the exact output. STOP.
-- No output or timeout: Run `pwsh -NoProfile -Command "pac env list"` to verify pac can reach the environment, then retry once.
+- No output or empty results: Verify the correct environment ID is set in `power.config.json`, then retry once.
 
 ### Step 2: Present Results
 

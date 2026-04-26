@@ -48,7 +48,11 @@ See [api-authentication-reference.md](./references/api-authentication-reference.
 
 ```powershell
 az account show   # Verify Azure CLI logged in
-pwsh -NoProfile -Command "pac org who"       # Get environment URL
+
+# Find your Dataverse environment URL:
+# In make.powerapps.com → Settings → Developer resources → Web API endpoint
+# It looks like: https://<org-name>.crm.dynamics.com/api/data/v9.2/
+# Use the base URL: https://<org-name>.crm.dynamics.com
 
 $api = Initialize-DataverseApi -EnvironmentUrl "https://<org>.crm.dynamics.com"
 $headers = $api.Headers
@@ -93,7 +97,7 @@ Use safe functions from [table-management-reference.md](./references/table-manag
 For each table:
 
 ```bash
-pwsh -NoProfile -Command "pac code add-data-source -a dataverse -t <table-logical-name>"
+npx power-apps add-data-source -a dataverse -t <table-logical-name>
 ```
 
 Can add multiple tables by running the command for each one.

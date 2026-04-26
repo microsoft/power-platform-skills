@@ -12,20 +12,19 @@
 
 | Problem                 | Solution                                                           |
 | ----------------------- | ------------------------------------------------------------------ |
-| Build fails             | Check Node.js LTS version, run `npm install`                       |
+| Build fails             | Check Node.js 22+ version, run `npm install`                       |
 | Build fails with TS6133 | Unused imports cause errors in strict mode. Remove unused imports. |
-| Auth error              | Run `pwsh -NoProfile -Command "pac auth clear" && pwsh -NoProfile -Command "pac auth create"`        |
+| Auth error              | Run `npx power-apps logout`, then retry — the CLI will re-prompt browser login. |
 | No data                 | Verify user has read access to table, check browser console        |
 | Local testing           | Use same browser profile as Power Platform auth                    |
 
 ## Deploy Errors
 
-| Error                               | Fix                                                                                                                                                                                                     |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "environment config does not match" | Ask the user: **retarget the app** (update `environmentId` in `power.config.json` to match active env) or **switch auth** (run `pwsh -NoProfile -Command "pac auth create"` to match the app's environment). Then retry. |
-| DNS/network error                   | Try different environment or contact admin.                                                                                                                                                             |
-| Auth error                          | Run `pwsh -NoProfile -Command "pac auth create"` and retry.                                                                                                                                                              |
-| Auth error on macOS (pac bug)       | `pac` has known auth bugs on Mac. Use the npx CLI instead: run `npm install -g @microsoft/power-apps-cli` (skip if already installed), then `npx power-apps push`. |
+| Error                               | Fix                                                                                                             |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| "environment config does not match" | Update `environmentId` in `power.config.json` to match the target environment, then retry.                      |
+| DNS/network error                   | Try different environment or contact admin.                                                                      |
+| Auth error / token expired          | Run `npx power-apps logout`, then retry `npx power-apps push` — CLI will prompt re-authentication via browser.  |
 
 ## Resources
 

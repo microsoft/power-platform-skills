@@ -16,11 +16,11 @@ az login
 
 ## Get Environment URL
 
-```bash
-pwsh -NoProfile -Command "pac org who"
-```
+Find your Dataverse environment URL in make.powerapps.com:
 
-Returns information including the environment URL (e.g., `https://orgname.crm.dynamics.com`).
+> **Settings** → **Developer resources** → **Web API endpoint**
+
+It looks like `https://<org-name>.crm.dynamics.com/api/data/v9.2/`. Use the base URL: `https://<org-name>.crm.dynamics.com`.
 
 ## Get Access Token
 
