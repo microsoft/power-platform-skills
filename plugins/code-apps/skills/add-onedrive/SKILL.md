@@ -70,7 +70,7 @@ Use `Grep` to find specific methods in `src/generated/services/OneDriveForBusine
 
 ### Step 4: Build
 
-```powershell
+```bash
 npm run build
 ```
 

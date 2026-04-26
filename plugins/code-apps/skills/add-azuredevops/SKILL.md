@@ -98,7 +98,7 @@ Use `Grep` to find specific methods in `src/generated/services/AzureDevOpsServic
 
 ### Step 5: Build
 
-```powershell
+```bash
 npm run build
 ```
 

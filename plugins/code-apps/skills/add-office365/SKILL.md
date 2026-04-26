@@ -138,7 +138,7 @@ if (result.success) {
 
 ### Step 5: Build
 
-```powershell
+```bash
 npm run build
 ```
 

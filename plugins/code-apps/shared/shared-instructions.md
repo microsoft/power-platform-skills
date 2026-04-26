@@ -133,7 +133,8 @@ The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed locally a
 
 ```bash
 npx power-apps init -n '<app-name>' -e <env-id>        # Initialize project, create power.config.json
-npx power-apps push                                     # Build and deploy app to Power Platform
+npx power-apps push                                     # Deploy app to Power Platform (run npm run build first)
+npx power-apps run                                      # Start local dev server
 npx power-apps add-data-source -a <api> [-c <conn-id>] [-d <dataset>] [-t <table>]
 npx power-apps list-connections                         # List connections in current environment
 npx power-apps list-datasets -a <api> -c <conn-id>     # List datasets for a connector

@@ -177,7 +177,7 @@ Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineS
 
 ### Step 11: Build
 
-```powershell
+```bash
 npm run build
 ```
 

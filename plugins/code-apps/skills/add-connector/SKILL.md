@@ -102,7 +102,7 @@ Help the user write code using the generated service methods.
 
 ### Step 5: Build
 
-```powershell
+```bash
 npm run build
 ```
 

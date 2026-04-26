@@ -24,7 +24,7 @@ Check for `memory-bank.md` in the project root. If found, read it for the projec
 
 ### Step 2: Build
 
-```powershell
+```bash
 npm run build
 ```
 

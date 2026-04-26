@@ -77,7 +77,7 @@ Use `Grep` to find specific methods in the generated service file (generated fil
 
 ### Step 4: Build
 
-```powershell
+```bash
 npm run build
 ```
 

@@ -53,7 +53,7 @@ Use `Grep` to find specific methods in `src/generated/services/TeamsService.ts` 
 
 ### Step 4: Build
 
-```powershell
+```bash
 npm run build
 ```
 

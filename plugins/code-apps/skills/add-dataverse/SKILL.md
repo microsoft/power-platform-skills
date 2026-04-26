@@ -132,7 +132,7 @@ const accounts = result.data || [];
 
 ### Step 7: Build
 
-```powershell
+```bash
 npm run build
 ```
 
