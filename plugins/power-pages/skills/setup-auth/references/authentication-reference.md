@@ -746,6 +746,56 @@ export async function forgotPassword(email: string): Promise<void> {
   }
 
   // No errors = success. The server sent the email.
+  // The calling component should handle .then() to show a "check your email" confirmation.
+}
+
+// --- Reset Password ---
+// MVC form POST. The user arrives at the SPA /reset-password page via the header template
+// redirect (server's /Account/Login/ResetPassword → SPA /reset-password).
+// UserId and Code come from the URL query params set by the email reset link.
+
+export async function resetPassword(
+  userId: string,
+  code: string,
+  password: string,
+  confirmPassword: string
+): Promise<void> {
+  if (isDevelopment) {
+    alert('Dev mode: Password would be reset.');
+    window.location.href = '/login';
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', token);
+  body.set('UserId', userId);
+  body.set('Code', code);
+  body.set('Password', password);       // Note: Password here, NOT PasswordValue (different from login)
+  body.set('ConfirmPassword', confirmPassword);
+
+  const response = await fetch('/Account/Login/ResetPassword', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'follow',
+  });
+
+  if (response.redirected) {
+    window.location.href = '/login?message=password_reset_success';
+    return;
+  }
+
+  const html = await response.text();
+  const errors = parseServerErrors(html);
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  // If no errors and not redirected, assume success
+  window.location.href = '/login?message=password_reset_success';
 }
 
 /**
@@ -2059,6 +2109,89 @@ The `TermsPublicationDate` site setting controls re-acceptance:
 - **Set to a date**: users who accepted after that date are not re-prompted. Bump the date to force everyone to re-accept when terms are updated.
 
 The server stores acceptance on the contact record's `msdyn_portaltermsagreementdate` field.
+
+---
+
+## Reset Password Flow for SPA Sites
+
+### The Problem
+
+The password reset email sends the user to `/Account/Login/ResetPassword?UserId=...&Code=...` — a server-rendered page outside the SPA. The user leaves the SPA experience.
+
+### The Solution: Header Template Redirect
+
+Add a client-side redirect script to the **Header web template** (`.powerpages-site/web-templates/header/Header.webtemplate.source.html`). This template loads on ALL server-rendered pages. The script detects the reset password URL and redirects to the SPA equivalent before the user sees the server page.
+
+```html
+<div/>
+<script>
+  (function () {
+    var path = window.location.pathname.toLowerCase();
+    var search = window.location.search;
+    var spaBase = window.location.origin;
+    var redirects = {
+      '/account/login/resetpassword': '/reset-password'
+    };
+    for (var serverPath in redirects) {
+      if (path === serverPath) {
+        window.location.replace(spaBase + redirects[serverPath] + search);
+        return;
+      }
+    }
+  })();
+</script>
+```
+
+> **Deployment note**: `pac pages upload-code-site` may NOT upload web template content changes to Dataverse. After deployment, verify the header template content manually in the Portal Management app or Power Apps maker portal. If missing, add it manually.
+
+### React: ResetPassword Page Component
+
+Create `src/pages/ResetPassword.tsx`:
+
+- Read `UserId` and `Code` from URL query params
+- If either is missing, show "Invalid Reset Link" with a link to `/forgot-password`
+- Show new password + confirm password with validate-on-blur (same password strength rules as registration)
+- Call `resetPassword(userId, code, password, confirmPassword)` on submit
+- On success → redirect to `/login?message=password_reset_success`
+
+### Login Page: Password Reset Success Message
+
+The Login page must check for `?message=password_reset_success` on mount:
+
+```typescript
+const params = new URLSearchParams(window.location.search)
+if (params.get('message') === 'password_reset_success') {
+  setSuccessMessage('Your password has been reset. Please sign in with your new password.')
+}
+```
+
+Display it as a green success banner above the form (distinct from the red error banner).
+
+### Forgot Password Page: Success State
+
+The ForgotPassword page must handle both `.then()` and `.catch()` from `forgotPassword()`:
+
+```typescript
+forgotPassword(email).then(() => {
+  setIsSubmitting(false)
+  setEmailSent(true)       // triggers success UI
+}).catch(err => {
+  setServerError(err.message)
+  setIsSubmitting(false)
+})
+```
+
+When `emailSent` is true, replace the form with a success confirmation: green checkmark icon, "Check your email" heading, and a "Back to sign in" link. Do NOT only handle `.catch()` — the button gets stuck in "Sending..." if `.then()` is not handled.
+
+### Complete Password Reset Flow
+
+1. User clicks "Forgot password?" on login → SPA `/forgot-password`
+2. Enters email → `forgotPassword()` POSTs to server → success message "Check your email"
+3. User opens email → clicks reset link → browser goes to `/Account/Login/ResetPassword?UserId=...&Code=...`
+4. **Header template script fires** → `window.location.replace` to `/reset-password?UserId=...&Code=...`
+5. SPA loads → ResetPassword page reads params → shows new password form
+6. User submits → `resetPassword()` POSTs to server → redirect to `/login?message=password_reset_success`
+7. Login page shows green "Password has been reset" banner
 
 ---
 

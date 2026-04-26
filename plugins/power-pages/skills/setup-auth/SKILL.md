@@ -523,7 +523,8 @@ Create the auth service file based on the detected framework and selected identi
 - `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message
 - `parseServerErrors(html)` — **Required for local auth.** Parses validation errors from server HTML responses (`.validation-summary-errors li`, `.alert-danger li`, `.field-validation-error`). Used by login and register to show server errors in the SPA.
 - `register(fields, returnUrl?, invitationCode?)` — **Required when local auth is configured.** POSTs registration form to `/Account/Login/Register` with anti-forgery token, email or username (based on `LocalLoginByEmail` choice from Phase 2.1), password, confirmPassword, and optional invitationCode. When `LocalLoginByEmail` is `true`, sends `Email` field. When `false`, sends `Username` field. See `authentication-reference.md` for the full implementation.
-- `forgotPassword(email)` — **Required when local auth is configured.** MVC form POST to `/Account/Login/ForgotPassword` with `Email` + anti-forgery token. Server sends a password reset email. Uses `fetch()` like login.
+- `forgotPassword(email)` — **Required when local auth is configured.** MVC form POST to `/Account/Login/ForgotPassword` with `Email` + anti-forgery token. Server sends a password reset email. Uses `fetch()` like login. Returns a promise — on success (`.then()`), show a "check your email" confirmation. On failure (`.catch()`), show the error.
+- `resetPassword(userId, code, password, confirmPassword)` — **Required when local auth is configured.** MVC form POST to `/Account/Login/ResetPassword` with `UserId`, `Code`, `Password`, `ConfirmPassword`, `__RequestVerificationToken`. The `UserId` and `Code` come from the URL query params (set by the email reset link). On success, redirects to `/login?message=password_reset_success`.
 - `TermsRequiredError` — **Required when terms are enabled.** Custom error class thrown when the server redirects to the terms page after login or registration. The login/registration page catches this and navigates to the SPA `/terms` page.
 - `acceptTerms(returnUrl?)` — **Required when terms are enabled.** Fetches the server terms page (GET `/Account/Login/TermsAndConditions`) to get the anti-forgery token, then POSTs acceptance (`IsTermsAndConditionsAccepted=true`, `IsFacebook=False`, `UseExternalSignInAsync=False`, `IsInternalAADUser=False`). Uses the response URL dynamically (server may serve terms from `/Account/Login/TermsAndConditions` or `/TermsAndConditions`).
 - `getUserDisplayName()` — prefers full name, falls back to userName
@@ -761,13 +762,15 @@ The forgot password page must:
 
 - Show an email input field
 - Call `forgotPassword(email)` from authService on submit
+- **Handle both success and error**: Use `.then()` for success (show "Check your email" confirmation with green checkmark, hide the form) and `.catch()` for errors (show error inline, reset button). Do NOT only handle `.catch()` — the button will get stuck in "Sending..." state if `.then()` is not handled.
+- Track `emailSent` state — when true, replace the form with a success message: "We've sent a password reset link to your email address. Please check your inbox and follow the instructions." with a "Back to sign in" link
 - Display server errors inline (the `forgotPassword()` function uses fetch and throws parsed errors)
 - Include a "Back to sign in" link to `/login`
 - Use the same validate-on-blur pattern as login and registration (validate email format on blur, clear on change)
 
 The login page's "Forgot password?" link should point to `/forgot-password` (SPA route), NOT `/Account/Login/ForgotPassword` (server URL).
 
-After the server processes the request, it sends a reset email. The reset link in the email goes to the server-rendered `/Account/Login/ResetPassword` page — this step stays server-side since the user arrives from their email client, not from the SPA.
+After the server processes the request, it sends a reset email. The reset link in the email points to the server's `/Account/Login/ResetPassword?UserId=...&Code=...` — but this gets intercepted by the Header template redirect script (see Phase 5.1.6) and redirected to the SPA `/reset-password` page.
 
 #### 5.1.4 Validation Pattern for All Auth Pages (Local Auth Only)
 
@@ -826,6 +829,58 @@ The terms page must:
 - **React**: Create `src/pages/Terms.tsx` and add `<Route path="/terms" element={<Terms />} />` to the router
 
 > **Content updates**: When the site creator wants to change the terms text, they update the constants in the Terms page component and redeploy. The content snippets in Dataverse (`Account/Signin/TermsAndConditionsCopy` etc.) must also be updated to match — the server-rendered terms page reads from snippets, and the SPA reads from the hardcoded constants. Both must stay in sync.
+
+#### 5.1.6 Create Reset Password Page + Header Template Redirect (Local Auth Only)
+
+**If local authentication is configured AND `ResetPasswordEnabled` is `true`**, create a full SPA reset password experience. This involves two pieces:
+
+**1. Header Template Redirect Script**
+
+The password reset email sends the user to `/Account/Login/ResetPassword?UserId=...&Code=...` — a server-rendered page. To keep the user in the SPA, add a client-side redirect script to the **Header web template** (`.powerpages-site/web-templates/header/Header.webtemplate.source.html`). The header template loads on ALL server-rendered pages, so the script runs before the user sees the server page.
+
+> **IMPORTANT**: `pac pages upload-code-site` may NOT upload web template changes. The header template content must be added **manually in Dataverse** (via the Portal Management app or Power Apps maker portal) or via `pac paportal upload`. Verify after deployment that the script is present in the Dataverse web template record.
+
+Add this script to the header template:
+
+```html
+<div/>
+<script>
+  (function () {
+    var path = window.location.pathname.toLowerCase();
+    var search = window.location.search;
+    var spaBase = window.location.origin;
+    var redirects = {
+      '/account/login/resetpassword': '/reset-password'
+    };
+    for (var serverPath in redirects) {
+      if (path === serverPath) {
+        window.location.replace(spaBase + redirects[serverPath] + search);
+        return;
+      }
+    }
+  })();
+</script>
+```
+
+This is extensible — additional server-to-SPA redirects can be added to the `redirects` object (e.g., for email confirmation pages).
+
+**2. SPA Reset Password Page**
+
+Create a `/reset-password` page that:
+
+- Reads `UserId` and `Code` from the URL query params (preserved by the header redirect)
+- Shows "Invalid Reset Link" with a link to `/forgot-password` if either param is missing
+- Shows new password + confirm password fields with validate-on-blur (password strength validation same as registration)
+- Calls `resetPassword(userId, code, password, confirmPassword)` from authService on submit
+- On success, redirects to `/login?message=password_reset_success`
+- On error, shows server errors inline
+
+The `resetPassword()` function is an MVC form POST (no ViewState) to `/Account/Login/ResetPassword` with fields: `__RequestVerificationToken`, `UserId`, `Code`, `Password`, `ConfirmPassword`. Note: the password field is `Password` here (NOT `PasswordValue` like login — different endpoints use different field names).
+
+**Login page must handle the success message**: Check for `?message=password_reset_success` in the URL on mount and display a green success banner: "Your password has been reset. Please sign in with your new password."
+
+**Framework-specific implementation:**
+- **React**: Create `src/pages/ResetPassword.tsx` and add `<Route path="/reset-password" element={<ResetPassword />} />` to the router
 
 #### 5.2 Integrate into Navigation
 
@@ -939,6 +994,8 @@ Confirm the following files were created:
 - Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) — only when local auth with reset password is configured
 - Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) — integrated into Layout
 - Terms page (e.g., `src/pages/Terms.tsx` for React) — only when terms are enabled
+- Reset password page (e.g., `src/pages/ResetPassword.tsx` for React) — only when local auth with reset password is configured
+- Header template redirect script — must be manually verified in Dataverse
 
 Read each file and verify it contains the expected exports and functions:
 
@@ -1558,6 +1615,8 @@ Present a summary of everything created:
 | Session KeepAlive | `src/hooks/useSessionKeepAlive.ts` (or framework equivalent) — integrated in Layout | Created |
 | Terms Page | `src/pages/Terms.tsx` (or framework equivalent) — when terms enabled | Created (if applicable) |
 | Terms Snippet | `Account/Signin/TermsAndConditionsCopy` content snippet | Created (if applicable) |
+| Reset Password Page | `src/pages/ResetPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| Header Redirect | `.powerpages-site/web-templates/header/` — redirects server pages to SPA | Created (must verify in Dataverse) |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy
