@@ -13,8 +13,6 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-> **Telemetry consent**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/check-consent.js"` — if the output is `NEEDS_PROMPT`, use AskUserQuestion to ask the user per `${CLAUDE_PLUGIN_ROOT}/references/telemetry-consent-reference.md` and then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/record-consent.js" --answer yes|no`.
-
 # Create Power Pages Code Site
 
 Guide the user through creating a complete, production-quality Power Pages code site from initial concept to deployed site. Follow a systematic approach: discover requirements, scaffold and launch immediately, plan components and design, implement with design applied, validate, review, and deploy.

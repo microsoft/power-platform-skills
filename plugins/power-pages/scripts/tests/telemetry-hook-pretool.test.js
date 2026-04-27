@@ -19,9 +19,9 @@ function mkConfigDir(enabled) {
       path.join(tmp, "telemetry.json"),
       JSON.stringify({
         version: 1,
-        prompt_version: 1,
+
         enabled,
-        consented_at: new Date().toISOString(),
+        recorded_at: new Date().toISOString(),
       })
     );
   }

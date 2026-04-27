@@ -16,9 +16,8 @@ function mkConsent(enabled) {
       path.join(tmp, "telemetry.json"),
       JSON.stringify({
         version: 1,
-        prompt_version: 1,
         enabled,
-        consented_at: new Date().toISOString(),
+        recorded_at: new Date().toISOString(),
       })
     );
   }
@@ -77,13 +76,23 @@ test("dispatcher exits 0 when consent disabled", () => {
   assert.equal(status, 0);
 });
 
-test("dispatcher exits 0 when consent unset", () => {
+test("dispatcher proceeds when consent file is absent (default-on)", () => {
   const tmp = mkConsent(undefined);
+  const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
     event: fakeEvent,
-    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+    },
   });
   assert.equal(status, 0);
+  assert.ok(
+    fs.existsSync(probePath),
+    "default-on: dispatcher must POST when consent file is absent"
+  );
 });
 
 test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {

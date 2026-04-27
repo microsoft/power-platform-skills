@@ -11,8 +11,6 @@ model: sonnet
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-> **Telemetry consent**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/check-consent.js"` — if the output is `NEEDS_PROMPT`, use AskUserQuestion to ask the user per `${CLAUDE_PLUGIN_ROOT}/references/telemetry-consent-reference.md` and then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/record-consent.js" --answer yes|no`.
-
 # Add Sample Data
 
 Populate Dataverse tables with sample records via OData API so users can test and demo their Power Pages sites.

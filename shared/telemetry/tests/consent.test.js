@@ -13,17 +13,18 @@ function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-consent-"));
 }
 
-test("read returns { state: 'unset' } when file missing", () => {
+test("read returns { state: 'enabled' } when file is missing (default-on)", () => {
   const tmp = mkTmp();
   const result = consentLib.read({ configDir: tmp });
-  assert.deepEqual(result, { state: "unset" });
+  assert.equal(result.state, "enabled");
+  assert.equal(result.record, null);
 });
 
-test("read returns { state: 'unset' } when file is malformed JSON", () => {
+test("read returns { state: 'enabled' } when file is malformed JSON (default-on)", () => {
   const tmp = mkTmp();
   fs.writeFileSync(path.join(tmp, "telemetry.json"), "{not json");
   const result = consentLib.read({ configDir: tmp });
-  assert.equal(result.state, "unset");
+  assert.equal(result.state, "enabled");
 });
 
 test("write followed by read round-trips", () => {
@@ -33,8 +34,7 @@ test("write followed by read round-trips", () => {
   assert.equal(result.state, "enabled");
   assert.equal(result.record.enabled, true);
   assert.equal(result.record.version, 1);
-  assert.equal(result.record.prompt_version, 1);
-  assert.ok(result.record.consented_at);
+  assert.ok(result.record.recorded_at);
 });
 
 test("write enabled=false produces state: 'disabled'", () => {
@@ -45,24 +45,24 @@ test("write enabled=false produces state: 'disabled'", () => {
   assert.equal(result.record.enabled, false);
 });
 
-test("read treats schema version bump as 'unset' (forces re-prompt)", () => {
+test("explicit opt-out is preserved across schema versions", () => {
   const tmp = mkTmp();
   fs.writeFileSync(
     path.join(tmp, "telemetry.json"),
-    JSON.stringify({ version: 2, enabled: true, prompt_version: 1, consented_at: "x" })
+    JSON.stringify({ version: 99, enabled: false })
   );
   const result = consentLib.read({ configDir: tmp });
-  assert.equal(result.state, "unset");
+  assert.equal(result.state, "disabled");
 });
 
-test("read treats prompt_version bump as 'unset' (forces re-prompt)", () => {
+test("future schema version with enabled=true falls back to default-on", () => {
   const tmp = mkTmp();
   fs.writeFileSync(
     path.join(tmp, "telemetry.json"),
-    JSON.stringify({ version: 1, enabled: true, prompt_version: 2, consented_at: "x" })
+    JSON.stringify({ version: 99, enabled: true })
   );
   const result = consentLib.read({ configDir: tmp });
-  assert.equal(result.state, "unset");
+  assert.equal(result.state, "enabled");
 });
 
 test("env var POWER_PLATFORM_SKILLS_TELEMETRY=0 overrides to 'disabled'", () => {
@@ -75,16 +75,16 @@ test("env var POWER_PLATFORM_SKILLS_TELEMETRY=0 overrides to 'disabled'", () => 
   assert.equal(result.state, "disabled");
 });
 
-test("env var POWER_PLATFORM_SKILLS_TELEMETRY=1 does NOT force-enable", () => {
+test("env var POWER_PLATFORM_SKILLS_TELEMETRY=1 has no effect (file missing → enabled by default)", () => {
   const tmp = mkTmp();
   const result = consentLib.read({
     configDir: tmp,
     env: { POWER_PLATFORM_SKILLS_TELEMETRY: "1" },
   });
-  assert.equal(result.state, "unset");
+  assert.equal(result.state, "enabled");
 });
 
-test("check-consent CLI prints NEEDS_PROMPT when file missing", () => {
+test("check-consent CLI prints ENABLED when file is missing (default-on)", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
   const cli = path.resolve(__dirname, "../lib/check-consent.js");
   const { stdout, status } = spawnSync(process.execPath, [cli], {
@@ -92,7 +92,7 @@ test("check-consent CLI prints NEEDS_PROMPT when file missing", () => {
     encoding: "utf8",
   });
   assert.equal(status, 0);
-  assert.equal(stdout.trim(), "NEEDS_PROMPT");
+  assert.equal(stdout.trim(), "ENABLED");
 });
 
 test("check-consent CLI prints ENABLED when file has enabled=true", () => {

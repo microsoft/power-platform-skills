@@ -1,10 +1,12 @@
 # 1DS Telemetry Infrastructure — Design Spec
 
-**Date:** 2026-04-20 (revised 2026-04-22)
+**Date:** 2026-04-20 (revised 2026-04-22, 2026-04-27)
 **Status:** Draft — pending implementation plan
 **Scope:** Add Microsoft 1DS (One Data Strategy) telemetry to the `power-platform-skills` plugin marketplace, wired into the `power-pages` plugin as the first consumer. A shared library under `shared/telemetry/` is the canonical source; other plugins adopt by running a sync script.
 
 **2026-04-22 revision:** After reviewing the `agency-microsoft/playground/plugins/claude-telemetry` implementation and the POC results, this spec drops the `@microsoft/1ds-*` SDK and uses Node's built-in `https` module directly. Hooks also adopt a detached-child dispatcher pattern so they return in ~50 ms regardless of collector latency. Payload shape remains Common Schema 4.0 (what our POC verified via `acc:N`).
+
+**2026-04-27 revision (consent posture):** The interactive first-run prompt is removed. Anonymous, allowlist-only telemetry is now **default-on**. Users opt out via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch) or `record-consent.js --answer no` (persistent opt-out file at `~/.power-platform-skills/telemetry.json`). The Phase-1 consent one-liner is removed from every tracked SKILL.md. `check-consent.js` now emits a binary `ENABLED` / `DISABLED` (no more `NEEDS_PROMPT`). See §4 below for the rewritten flow.
 
 ---
 
@@ -14,7 +16,7 @@
 
 - Emit Microsoft 1DS telemetry events for skill lifecycle and Node script outcomes in the `power-pages` plugin.
 - Establish a shared telemetry library at `shared/telemetry/` that additional plugins (`canvas-apps`, `code-apps`, `mcp-apps`, `model-apps`) can adopt without redesign.
-- Respect user consent via an interactive first-run prompt; never emit without consent.
+- Default-on for anonymous, allowlist-only telemetry. Provide a documented opt-out path (env kill switch + persistent consent file). *(Revised 2026-04-27 — was: interactive first-run prompt.)*
 - Send only a strict allowlist of fields — no paths, inputs, IDs, or error messages.
 - Fail closed: telemetry code never blocks or breaks a skill run.
 
@@ -155,57 +157,67 @@ Builders in `events.js` pick only allowlisted keys; unknown fields are dropped. 
 
 ---
 
-## 4. Consent Flow
+## 4. Privacy Posture: Default-on with Opt-out
 
-### 4.1 Consent file
+### 4.1 Posture
 
-Location: `~/.power-platform-skills/telemetry.json`
+Anonymous telemetry is **enabled by default**. There is no first-run prompt. The user opts out at any time via either of two paths (§4.3, §4.4). The full opt-out documentation is at `shared/telemetry/references/telemetry-consent-reference.md` (synced into each adopting plugin's `references/`) and linked from the plugin README and AGENTS.md.
+
+The posture is defensible because:
+
+- **Allowlist enforcement.** Only the fields in §3.1 reach the dispatcher; `events.js` builders drop everything else at construction time, and CI tests assert the keyset per event.
+- **No PII surface.** No paths, IDs, hostnames, error messages, tool inputs, or env vars. See §3.3 for the negative list.
+- **Two opt-out paths.** Env kill switch + persistent consent file. Both are honored by the dispatcher on every emission.
+- **Documented.** The opt-out reference doc is shipped to users in every adopting plugin and linked from the README.
+
+### 4.2 Consent file
+
+Location: `~/.power-platform-skills/telemetry.json`. The file is **not required for telemetry to work** — its sole purpose is to record an explicit opt-out (or an explicit re-opt-in after opting out).
 
 ```json
 {
   "version": 1,
-  "enabled": true,
-  "consented_at": "2026-04-20T18:04:00Z",
-  "prompt_version": 1
+  "enabled": false,
+  "recorded_at": "2026-04-27T18:04:00Z"
 }
 ```
 
-- `version` — Schema version. A bump (e.g., to `2`) forces re-prompt on the next skill run.
-- `prompt_version` — Version of the consent prompt text. Bump to force re-prompt (e.g., when the privacy statement URL changes).
-- `enabled` — Boolean. Only `true` permits emission.
-- `consented_at` — ISO 8601 timestamp.
+- `version` — Schema version. Reserved for future structural changes.
+- `enabled` — Boolean. `false` = opted out (the only persistent way to disable). `true` = explicit re-opt-in (functionally equivalent to no file).
+- `recorded_at` — ISO 8601 timestamp; informational.
 
-A malformed or unreadable file is treated as "absent" → prompt again.
+**Read semantics:**
 
-### 4.2 Prompt
+| File state | Result |
+|---|---|
+| Missing | `enabled` (default-on) |
+| Malformed JSON | `enabled` (default-on) |
+| Parseable, `enabled: false` | `disabled` (opt-out preserved across schema versions) |
+| Parseable, `enabled: true` (or no `enabled` key) | `enabled` |
 
-The prompt is declared once in `shared/telemetry/references/telemetry-consent-reference.md` (synced into each plugin's `references/`). Every tracked SKILL.md adds this one-liner in Phase 1, immediately after the existing plugin-version check:
+Explicit opt-out wins over schema mismatches — a future `version: 2` bump cannot silently re-enable an opted-out user.
 
-```markdown
-> **Telemetry consent**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/check-consent.js"` —
-> if it outputs `NEEDS_PROMPT`, use AskUserQuestion to ask the user per
-> `${CLAUDE_PLUGIN_ROOT}/references/telemetry-consent-reference.md` and then run
-> `node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/record-consent.js" --answer yes|no`.
+### 4.3 Opt-out — environment kill switch
+
+```
+POWER_PLATFORM_SKILLS_TELEMETRY=0
 ```
 
-The AskUserQuestion payload (defined once in the reference doc):
+Checked unconditionally by the dispatcher at the top of every run, before the consent module is even loaded. The dispatcher exits 0 without POSTing. Any other value (`1`, empty, unset) has no effect — the env var is opt-out only.
 
-- **Question:** "Share anonymous usage telemetry with Microsoft?"
-- **Body:** "The power-pages plugin can send anonymous usage signals (skill name, success/failure, duration, OS family, plugin version) to Microsoft to help improve these tools. No paths, inputs, tenant data, or error messages are sent. The full field list is at `shared/telemetry/README.md` in the repo. Your answer is saved at `~/.power-platform-skills/telemetry.json`; edit that file any time to change it."
-- **Options:**
-  - `"Yes, enable telemetry"`
-  - `"No, keep it off"`
+### 4.4 Opt-out — persistent consent file
 
-### 4.3 Override
+```
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/record-consent.js" --answer no
+```
 
-- `POWER_PLATFORM_SKILLS_TELEMETRY=0` — Disables emission regardless of the file. Checked by the dispatcher at the top of every run; dispatcher exits 0 without POSTing.
-- Any other value (including `1`, unset, empty) — No effect. Emission is governed entirely by the consent file. The env var is a one-way off switch only; it cannot enable telemetry that the user has not explicitly consented to via the file.
+Writes `{"enabled": false}` to the consent file. Honored on every subsequent run regardless of schema version.
 
-### 4.4 Hook behavior when consent is absent
+To re-enable: `record-consent.js --answer yes`, or simply delete the file.
 
-Both hooks exit 0 silently. No stderr noise (gate debug output behind `process.env.DEBUG`, matching the existing `run-skill-posttool-validation.js` convention). The prompt runs exclusively inside the skill body.
+### 4.5 Hook behavior
 
-**Consequence:** the *very first* skill invocation on a fresh machine emits no events — the consent prompt happens during that run. Every subsequent run emits normally.
+There is no Phase-1 consent check in skills. Hooks call `fireAndForget` unconditionally. The dispatcher, running in the detached child, gates emission against the env var and consent file as the *only* policy enforcement point. This keeps the SKILL.md surface clean and centralizes the policy in one file.
 
 ---
 
@@ -370,10 +382,10 @@ All failure paths exit cleanly and never break the user's skill run.
 
 | Failure | Behavior |
 |---|---|
-| Consent file missing | Hook exits 0 silently. Skill Phase 1 triggers prompt. |
+| Consent file missing | Default-on: dispatcher proceeds with POST. No prompt. |
 | Consent file `enabled: false` | Hook still calls `fireAndForget`, dispatcher starts, re-reads consent, exits 0 without POSTing. |
 | `POWER_PLATFORM_SKILLS_TELEMETRY=0` | Dispatcher reads env var at startup and exits 0 without POSTing. |
-| Consent file malformed | Treated as missing → re-prompt. |
+| Consent file malformed | Treated as missing → default-on. |
 | `ikey.json` missing or placeholder | Dispatcher exits 0 without POSTing. No stderr. |
 | Collector returns 4xx / 5xx | Dispatcher reads body, exits 0. No retry, no local queue. |
 | HTTPS POST times out | Dispatcher's 4 s `setTimeout` destroys the request and exits 0. |
@@ -476,4 +488,4 @@ Pending items (the implementer resolves during build):
 - Dataverse API-call–level telemetry.
 - Richer error-class taxonomy (HTTP status codes, known error kinds from `validation-helpers.js`).
 - A local event queue for offline runs.
-- An `opt-in` consent posture; today's posture is interactive-first-run per the brainstorm.
+- An `opt-in` consent posture (default-off requiring user to explicitly enable). The 2026-04-27 revision adopted default-on with documented opt-out instead.

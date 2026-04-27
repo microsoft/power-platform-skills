@@ -20,13 +20,18 @@ const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
 function readConsent() {
+  // Honor the env kill switch even if the consent module fails to load.
+  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") {
+    return { state: "disabled" };
+  }
   try {
     const consent = require("./consent");
     return consent.read({
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined,
     });
   } catch {
-    return { state: "unset" };
+    // Default-on: if the consent module itself fails to load, assume enabled.
+    return { state: "enabled" };
   }
 }
 

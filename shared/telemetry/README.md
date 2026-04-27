@@ -20,11 +20,11 @@ Every event carries a fixed allowlist:
 
 File paths, cwd, env vars (except the telemetry off-switch), tenant IDs, site names, Dataverse URLs, error messages, stack traces, skill arguments, tool inputs, usernames, hostnames.
 
-## Consent
+## Privacy posture
 
-- Stored at `~/.power-platform-skills/telemetry.json`.
-- Gathered interactively on first tracked-skill run.
-- Override: `POWER_PLATFORM_SKILLS_TELEMETRY=0` disables emission regardless of the file.
+- **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
+- **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch) or by writing `{"enabled": false}` to `~/.power-platform-skills/telemetry.json` (use `record-consent.js --answer no`).
+- See `references/telemetry-consent-reference.md` for the full opt-out documentation.
 
 ## Syncing into a plugin
 

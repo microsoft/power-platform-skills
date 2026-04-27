@@ -83,7 +83,7 @@ These patterns have caused repeated PR review feedback. Check for them before su
 This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; the synced copy at `scripts/lib/telemetry/` is the live code. Zero npm dependencies — nothing to install.
 
 - **DO NOT hand-edit** files under `scripts/lib/telemetry/`. Edit `shared/telemetry/` and re-run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages`.
-- **Consent:** every tracked skill runs the Phase-1 one-liner from `references/telemetry-consent-reference.md`. Never emit without the user's explicit consent.
+- **Privacy posture:** anonymous telemetry is **default-on**. There is no Phase-1 consent prompt in skills. Users opt out via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch) or `record-consent.js --answer no` (persistent opt-out). See `references/telemetry-consent-reference.md`.
 - **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the reference doc.
 - **Env off-switch:** `POWER_PLATFORM_SKILLS_TELEMETRY=0` disables emission regardless of the consent file.
 - **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.

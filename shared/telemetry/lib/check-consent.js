@@ -6,12 +6,8 @@ const consent = require("./consent");
 const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined;
 const result = consent.read({ configDir });
 
-const word =
-  result.state === "enabled"
-    ? "ENABLED"
-    : result.state === "disabled"
-    ? "DISABLED"
-    : "NEEDS_PROMPT";
+// Default posture is enabled. Output is now binary: ENABLED or DISABLED.
+const word = result.state === "disabled" ? "DISABLED" : "ENABLED";
 
 process.stdout.write(word + "\n");
 process.exit(0);
