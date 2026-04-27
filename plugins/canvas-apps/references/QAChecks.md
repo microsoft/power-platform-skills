@@ -29,7 +29,7 @@ All checks are safe: they tighten existing YAML, never delete semantic content.
 100 on `GroupContainer`. In a sidebar, header, or narrow cell, these defaults
 silently push the container wider/taller than intended and clip siblings.
 
-**Detect:** For every control with `Control: GroupContainer*`, check whether
+**Detect:** For every control with `Control: GroupContainer`, check whether
 `LayoutMinWidth: =0` and `LayoutMinHeight: =0` are present in `Properties:`.
 
 **Fix:** Add either property if missing:
