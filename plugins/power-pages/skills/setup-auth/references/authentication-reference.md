@@ -2118,13 +2118,24 @@ The server stores acceptance on the contact record's `msdyn_portaltermsagreement
 
 The password reset email sends the user to `/Account/Login/ResetPassword?UserId=...&Code=...` — a server-rendered page outside the SPA. The user leaves the SPA experience.
 
-### The Solution: Header Template Redirect
+### The Solution: Code-Site-Shell-Header Template
 
-Add a client-side redirect script to the **Header web template** (`.powerpages-site/web-templates/header/Header.webtemplate.source.html`). This template loads on ALL server-rendered pages. The script detects the reset password URL and redirects to the SPA equivalent before the user sees the server page.
+> **Why not use the original Header template?** The `pac pages upload-code-site` command intentionally replaces the "Header" and "Footer" web template content with `<div/>` on every upload. Any redirect script added to the Header template gets wiped. The solution is to create a separate web template and point the website record to it.
 
+Create a new web template `Code-Site-Shell-Header` in `.powerpages-site/web-templates/code-site-shell-header/`:
+
+**`Code-Site-Shell-Header.webtemplate.yml`:**
+```yaml
+id: <generate-a-new-uuid>
+name: Code-Site-Shell-Header
+```
+
+**`Code-Site-Shell-Header.webtemplate.source.html`:**
 ```html
 <div/>
 <script>
+  // Code Site Shell Header — Server-to-SPA redirect for auth pages.
+  // Uses a separate template because pac pages upload-code-site wipes the original Header.
   (function () {
     var path = window.location.pathname.toLowerCase();
     var search = window.location.search;
@@ -2142,7 +2153,15 @@ Add a client-side redirect script to the **Header web template** (`.powerpages-s
 </script>
 ```
 
-> **Deployment note**: `pac pages upload-code-site` may NOT upload web template content changes to Dataverse. After deployment, verify the header template content manually in the Portal Management app or Power Apps maker portal. If missing, add it manually.
+Then update **`website.yml`** to point `headerwebtemplateid` to the new template's UUID:
+
+```yaml
+headerwebtemplateid: <new-template-uuid-from-yml>
+```
+
+The original "Header" template stays as `<div/>` — the upload command keeps wiping it, which is fine. The `Code-Site-Shell-Header` survives uploads because the command only targets templates named "Header" and "Footer".
+
+The `redirects` object is extensible — add more server-to-SPA mappings as needed (e.g., email confirmation pages).
 
 ### React: ResetPassword Page Component
 

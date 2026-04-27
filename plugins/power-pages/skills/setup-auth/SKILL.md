@@ -834,17 +834,27 @@ The terms page must:
 
 **If local authentication is configured AND `ResetPasswordEnabled` is `true`**, create a full SPA reset password experience. This involves two pieces:
 
-**1. Header Template Redirect Script**
+**1. Code-Site-Shell-Header Template**
 
-The password reset email sends the user to `/Account/Login/ResetPassword?UserId=...&Code=...` — a server-rendered page. To keep the user in the SPA, add a client-side redirect script to the **Header web template** (`.powerpages-site/web-templates/header/Header.webtemplate.source.html`). The header template loads on ALL server-rendered pages, so the script runs before the user sees the server page.
+The password reset email sends the user to `/Account/Login/ResetPassword?UserId=...&Code=...` — a server-rendered page. To keep the user in the SPA, we need a client-side redirect script that runs on server-rendered pages.
 
-> **IMPORTANT**: `pac pages upload-code-site` may NOT upload web template changes. The header template content must be added **manually in Dataverse** (via the Portal Management app or Power Apps maker portal) or via `pac paportal upload`. Verify after deployment that the script is present in the Dataverse web template record.
+> **Why a new template?** The `pac pages upload-code-site` command intentionally replaces the original "Header" and "Footer" web template content with `<div/>` on every upload. Any script added to the Header template gets wiped. The workaround is to create a **separate** web template (`Code-Site-Shell-Header`) and point the website record to it instead.
 
-Add this script to the header template:
+Create a new web template in `.powerpages-site/web-templates/code-site-shell-header/`:
 
+**`Code-Site-Shell-Header.webtemplate.yml`:**
+```yaml
+id: <generate-a-new-uuid>
+name: Code-Site-Shell-Header
+```
+
+**`Code-Site-Shell-Header.webtemplate.source.html`:**
 ```html
 <div/>
 <script>
+  // Code Site Shell Header — Server-to-SPA redirect for auth pages.
+  // This template runs on server-rendered pages and redirects to SPA equivalents.
+  // Uses a separate template because pac pages upload-code-site wipes the original Header.
   (function () {
     var path = window.location.pathname.toLowerCase();
     var search = window.location.search;
@@ -861,6 +871,14 @@ Add this script to the header template:
   })();
 </script>
 ```
+
+Then update **`website.yml`** to point `headerwebtemplateid` to the new template's ID:
+
+```yaml
+headerwebtemplateid: <new-template-uuid>
+```
+
+The original "Header" template stays as `<div/>` (the upload command will keep wiping it, which is fine). The `Code-Site-Shell-Header` template survives uploads because the command only targets the templates named "Header" and "Footer".
 
 This is extensible — additional server-to-SPA redirects can be added to the `redirects` object (e.g., for email confirmation pages).
 
@@ -995,7 +1013,8 @@ Confirm the following files were created:
 - Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) — integrated into Layout
 - Terms page (e.g., `src/pages/Terms.tsx` for React) — only when terms are enabled
 - Reset password page (e.g., `src/pages/ResetPassword.tsx` for React) — only when local auth with reset password is configured
-- Header template redirect script — must be manually verified in Dataverse
+- Code-Site-Shell-Header template (`.powerpages-site/web-templates/code-site-shell-header/`) with redirect script
+- `website.yml` updated to point `headerwebtemplateid` to Code-Site-Shell-Header
 
 Read each file and verify it contains the expected exports and functions:
 
@@ -1616,7 +1635,7 @@ Present a summary of everything created:
 | Terms Page | `src/pages/Terms.tsx` (or framework equivalent) — when terms enabled | Created (if applicable) |
 | Terms Snippet | `Account/Signin/TermsAndConditionsCopy` content snippet | Created (if applicable) |
 | Reset Password Page | `src/pages/ResetPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
-| Header Redirect | `.powerpages-site/web-templates/header/` — redirects server pages to SPA | Created (must verify in Dataverse) |
+| Shell Header | `Code-Site-Shell-Header` web template — redirects server auth pages to SPA | Created (survives uploads) |
 | Site Setting | `ProfileRedirectEnabled = false` | Created |
 
 #### 8.4 Ask to Deploy
