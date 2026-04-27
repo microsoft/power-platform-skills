@@ -217,22 +217,6 @@ against the parent's available space.
 
 ## Check 9 — CONTROL-VERSION-SUFFIX (`Control:` value contains `@version`)
 
-**Problem:** Power Apps YAML sometimes emits control type names with a version
-suffix, e.g. `Control: Text@2.0.0` or `Control: Button@1.1`. The versioned form
-is not valid in hand-authored `.pa.yaml` files and causes compilation errors or
-unexpected behaviour when the targeted runtime differs.
+**Detect:** For every `Control:` property, flag any value that contains an `@` character (e.g. `Control: Text@2.0.0`).
 
-**Detect:** For every `Control:` property in the YAML, check whether the value
-contains an `@` character (e.g. `Control: Text@2.0.0`).
-
-**Fix:** Strip the `@…` suffix and keep only the bare control name:
-
-```yaml
-# Before:
-Control: Text@2.0.0
-# After:
-Control: Text
-```
-
-**Exception:** None. Control type names must never carry a version suffix in
-`.pa.yaml` source files.
+**Fix:** Strip the `@…` suffix, keeping only the bare control name (`Control: Text`).
