@@ -87,9 +87,6 @@ FillPortions: =1
 FillPortions: =0
 ```
 
-**Exception:** Only the scroll container itself uses `FillPortions: =1` (to
-fill its own parent). Its direct scrollable child must be `=0`.
-
 ---
 
 ## Check 4 — WRAP-MISSING (single-line label without `Wrap: =false`)
@@ -154,15 +151,15 @@ proportionally and `Height` should be absent.
 
 ---
 
-## Check 6 — MODERNTEXT-PADDING (ModernText padding defaults to 5)
+## Check 6 — TEXT-PADDING (ModernText, Label padding defaults to 5)
 
-**Problem:** `ModernText` controls default `PaddingTop`, `PaddingBottom`,
+**Problem:** `ModernText` and `Label` controls default `PaddingTop`, `PaddingBottom`,
 `PaddingLeft`, and `PaddingRight` to `5`. In most UI contexts (labels in a
 table row, card header text, inline metadata, KPI values), the 5px default is
 unintended and breaks alignment with adjacent controls or adds stray visual
 space in tight layouts.
 
-**Detect:** For every control with `Control: ModernText*`, check whether all
+**Detect:** For every control with `Control: ModernText` or `Control: Label`, check whether all
 four padding properties — `PaddingTop`, `PaddingBottom`, `PaddingLeft`, and
 `PaddingRight` — are explicitly set in `Properties:`. Flag any that are
 absent.
@@ -188,8 +185,8 @@ PA default of 5 cannot creep in.
 ## Check 7 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
-`Height: =value` on the same control confuses the layout engine. The container
-renders one size at design time and another at runtime.
+`Height: =value` on the same control within a vertical AutoLayout container confuses the layout engine.
+The container renders one size at design time and another at runtime.
 
 **Detect:** For every control, check whether it has both:
 - `FillPortions` with a value greater than 0, AND
@@ -199,8 +196,21 @@ renders one size at design time and another at runtime.
 **Fix:** Remove the `Height` property. PA computes it from `FillPortions`
 against the parent's available space.
 
-**Exception:** This rule also applies on the horizontal axis — a control with
-`FillPortions > 0` in a horizontal AutoLayout container should not have an
-explicit `Width`. Apply the same fix.
+---
+
+## Check 8 — FILLPORTIONS-WIDTH-CONFLICT (both set on the same control)
+
+**Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
+`Width: =value` on the same control within a horizontal AutoLayout container
+confuses the layout engine. The container renders one size at design time and
+another at runtime.
+
+**Detect:** For every control, check whether it has both:
+- `FillPortions` with a value greater than 0, AND
+- An explicit `Width` (any non-formula numeric or a formula that doesn't
+  reference Parent)
+
+**Fix:** Remove the `Width` property. PA computes it from `FillPortions`
+against the parent's available space.
 
 ---
