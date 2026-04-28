@@ -19,7 +19,7 @@ html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
-.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#7b5ea7,#5a9bd5);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 .topbar-sep{opacity:0.5;}
@@ -128,7 +128,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 <body>
 <div class="topbar">
   <div class="topbar-left">
-    <div class="logo">PP</div>
+    <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
     <div>
       <div class="topbar-title">__PLAN_TITLE__</div>
       <div class="topbar-sub">
@@ -160,7 +160,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <p class="section-desc">Implementation plan for <code>__SITE_NAME__</code></p>
 
       <div class="summary-box" id="summaryBox"></div>
-      <script id="summaryRaw" type="text/plain">__SUMMARY__</script>
+      <script id="summaryData" type="application/json">__SUMMARY_DATA__</script>
 
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-num" id="statPages">0</div><div class="stat-label">Pages</div></div>
@@ -271,8 +271,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
-// --- Summary (read from text/plain rawtext so &, <, > are safe) ---
-document.getElementById('summaryBox').textContent = document.getElementById('summaryRaw').textContent;
+// --- Summary ---
+document.getElementById('summaryBox').textContent = JSON.parse(document.getElementById('summaryData').textContent).text || '';
 
 // --- Overview stats ---
 document.getElementById('statPages').textContent = PAGES.length;

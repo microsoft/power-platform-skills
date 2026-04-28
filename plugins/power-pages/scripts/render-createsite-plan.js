@@ -15,6 +15,7 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const { renderTemplate, parseArgs } = require('./lib/render-template');
 
 const args = parseArgs(process.argv);
@@ -54,6 +55,13 @@ const requiredKeys = [
   'DEPLOYMENT_DATA',
 ];
 
+function withDerivedTemplateData(dataObject) {
+  return {
+    ...dataObject,
+    SUMMARY_DATA: { text: String(dataObject.SUMMARY ?? '') },
+  };
+}
+
 if (args['data-inline']) {
   let dataObject;
   try {
@@ -62,7 +70,8 @@ if (args['data-inline']) {
     console.error('Error: --data-inline value is not valid JSON');
     process.exit(1);
   }
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject, requiredKeys });
+  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject: withDerivedTemplateData(dataObject), requiredKeys });
 } else {
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataPath: path.resolve(args.data), requiredKeys });
+  const dataObject = JSON.parse(fs.readFileSync(path.resolve(args.data), 'utf8'));
+  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject: withDerivedTemplateData(dataObject), requiredKeys });
 }

@@ -87,6 +87,13 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Directory/);
   assert.match(html, /Navbar/);
   assert.match(html, /Deploy now to Power Pages/);
+  assert.match(html, /<img class="logo" src="\.\/power-pages-icon\.png" alt="Power Pages" \/>/);
+
+  const iconPath = path.join(tempDir, 'power-pages-icon.png');
+  const sourceIcon = path.join(
+    __dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png'
+  );
+  assert.deepEqual(fs.readFileSync(iconPath), fs.readFileSync(sourceIcon), 'icon bytes should match shared asset');
 });
 
 test('render-createsite-plan renders HTML from --data-inline JSON', () => {
@@ -153,6 +160,7 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
 
   const malicious = {
     ...SAMPLE_DATA,
+    SUMMARY: 'Summary with </script><script>window.__summaryPwned=1;</script> and <strong>markup</strong>.',
     PAGES_DATA: [
       {
         name: '</script><script>window.__pwned=1;</script>',
@@ -178,6 +186,11 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
     !/<\/script>[^<]*window\.__pwned/i.test(html),
     'rendered HTML leaks a literal </script> inside injected data'
   );
+  assert.ok(
+    !html.includes('</script><script>window.__summaryPwned=1;</script>'),
+    'rendered HTML leaks a literal </script> from SUMMARY'
+  );
+  assert.match(html, /"text":"Summary with \\u003c\/script>\\u003cscript>window\.__summaryPwned=1;\\u003c\/script>/);
   assert.match(html, /\\u003c\/script>/);
 });
 

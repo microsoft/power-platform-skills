@@ -45,7 +45,7 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   }
 
   // Replace all __KEY__ placeholders with corresponding values from the data object.
-  // For non-string values (arrays/objects serialized to JSON), escape `<` as `<`
+  // For non-string values (arrays/objects serialized to JSON), escape `<` as `\u003c`
   // so a literal `</script>` inside string data cannot close a containing <script> tag.
   // String values are left as-is — they must be placed in safe HTML text contexts only
   // (see plugins/power-pages/AGENTS.md for the convention).
