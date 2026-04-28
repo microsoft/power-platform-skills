@@ -47,7 +47,11 @@ test('throws when required args are missing', async () => {
   await assert.rejects(() => detect({ token: 't', userId: 'u', bapToken: 'b' }), /--envUrl is required/);
   await assert.rejects(() => detect({ envUrl: 'https://x', userId: 'u', bapToken: 'b' }), /--token .* is required/);
   await assert.rejects(() => detect({ envUrl: 'https://x', token: 't', bapToken: 'b' }), /--userId is required/);
-  await assert.rejects(() => detect({ envUrl: 'https://x', token: 't', userId: 'u' }), /--bapToken is required/);
+  // bapToken is now optional in auto/pac modes; only required when source=bap
+  await assert.rejects(
+    () => detect({ envUrl: 'https://x', token: 't', userId: 'u', source: 'bap' }),
+    /--bapToken is required/,
+  );
 });
 
 test('AvailableUsingCustomHost: org-setting bound to a non-Platform env', async (t) => {
@@ -286,6 +290,39 @@ test('cache fast-path: bypassed by --no-cache flag', async (t) => {
   });
 
   assert.equal(bindingCalled, true, '--no-cache should force full resolution');
+});
+
+test('source: pac — works without --bapToken when source=pac (new tenant scenario)', async (t) => {
+  const tmp = makeTmpDir();
+  const pacOut = `[
+    {"EnvironmentId":"9f930375","EnvironmentUrl":"https://stage1.crm5.dynamics.com/","DisplayName":"Stage-1","Type":"Developer","OrganizationId":"o1"},
+    {"EnvironmentId":"6c93b05a","EnvironmentUrl":"https://stage2.crm5.dynamics.com/","DisplayName":"Stage-2","Type":"Developer","OrganizationId":"o2"}
+  ]`;
+  withMockedHttp(t, [
+    // No org binding on dev env
+    { match: (u) => u.includes('/GetOrgDbOrgSetting'), respond: () => ({ statusCode: 200, body: JSON.stringify({ SettingValue: '' }) }) },
+    // Per-env solutions probes — neither env has Pipelines installed
+    { match: (u) => u.includes('/solutions'), respond: () => ({ statusCode: 200, body: JSON.stringify({ value: [] }) }) },
+    { match: (u) => u.includes('/WhoAmI'), respond: () => ({ statusCode: 200, body: JSON.stringify({ UserId: 'u' }) }) },
+  ]);
+
+  const result = await detect({
+    envUrl: 'https://stage1.crm5.dynamics.com',
+    token: 'dv',
+    userId: 'u',
+    // NO bapToken — auto/pac mode handles it
+    source: 'pac',
+    skus: ['Developer'], // Dev/demo tenants: must opt-in to non-Production skus
+    projectRoot: tmp,
+    pacExecImpl: async () => ({ stdout: pacOut, stderr: '' }),
+    getTokenImpl: () => 't',
+  });
+
+  // Expected: no Pipelines anywhere → resolutionStatus: NoHost
+  assert.equal(result.resolutionStatus, 'NoHost');
+  assert.equal(result.actionTaken, 'none');
+  assert.ok(Array.isArray(result.candidates.eligibleForAppInstall));
+  assert.equal(result.candidates.eligibleForAppInstall.length, 2); // both Stage-1 and Stage-2 eligible
 });
 
 test('cache fast-path: stale cache (>24h) is ignored', async (t) => {

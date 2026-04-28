@@ -56,16 +56,88 @@ test('returns { found: false, reason: 404-ambiguous } on 404', async (t) => {
   assert.equal(result.envId, 'abc-123');
 });
 
-test('throws specific error on 403', async (t) => {
+test('throws specific error on 403 (source: bap)', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const orig = helpers.makeRequest;
   helpers.makeRequest = async () => ({ statusCode: 403, body: 'Forbidden' });
   t.after(() => { helpers.makeRequest = orig; });
 
   await assert.rejects(
-    () => resolveEnvById({ bapToken: 'fake', envId: 'abc-123' }),
+    () => resolveEnvById({ bapToken: 'fake', envId: 'abc-123', source: 'bap' }),
     /403.*caller lacks permission/,
   );
+});
+
+test('auto: 403 from BAP falls back to PAC', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async () => ({ statusCode: 403, body: 'Forbidden' });
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const pacOut = `[{"EnvironmentId":"abc-123","EnvironmentUrl":"https://x.crm5.dynamics.com/","DisplayName":"X","Type":"Production","OrganizationId":"o1"}]`;
+  const result = await resolveEnvById({
+    bapToken: 'fake', envId: 'abc-123', source: 'auto',
+    pacExecImpl: async () => ({ stdout: pacOut, stderr: '' }),
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.sourceUsed, 'pac');
+  assert.equal(result.fallbackReason, 'bap-rejected-403');
+  assert.equal(result.displayName, 'X');
+});
+
+test('auto: 401 from BAP falls back to PAC', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async () => ({ statusCode: 401, body: 'Unauthorized' });
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const pacOut = `[{"EnvironmentId":"abc-123","EnvironmentUrl":"https://x.crm5.dynamics.com/","DisplayName":"X","Type":"Production","OrganizationId":"o1"}]`;
+  const result = await resolveEnvById({
+    bapToken: 'fake', envId: 'abc-123', source: 'auto',
+    pacExecImpl: async () => ({ stdout: pacOut, stderr: '' }),
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.fallbackReason, 'bap-rejected-401');
+});
+
+test('auto: surfaces original BAP error when PAC also fails', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async () => ({ statusCode: 401, body: 'Unauthorized' });
+  t.after(() => { helpers.makeRequest = orig; });
+
+  await assert.rejects(
+    () => resolveEnvById({
+      bapToken: 'fake', envId: 'abc-123', source: 'auto',
+      pacExecImpl: async () => { throw new Error('pac not signed in'); },
+    }),
+    /401/,
+  );
+});
+
+test('source: pac uses pac shim only', async () => {
+  const pacOut = `[{"EnvironmentId":"abc-123","EnvironmentUrl":"https://x.crm5.dynamics.com/","DisplayName":"X","Type":"Production","OrganizationId":"o1","DomainName":"x"}]`;
+  const result = await resolveEnvById({
+    envId: 'abc-123', source: 'pac',
+    pacExecImpl: async () => ({ stdout: pacOut, stderr: '' }),
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.sourceUsed, 'pac');
+  assert.equal(result.envId, 'abc-123');
+  assert.equal(result.instanceUrl, 'https://x.crm5.dynamics.com/');
+  assert.equal(result.instanceApiUrl, 'https://x.api.crm5.dynamics.com');
+  assert.equal(result.environmentSku, 'Production');
+});
+
+test('source: pac returns not-in-pac-list when env not visible', async () => {
+  const pacOut = `[]`;
+  const result = await resolveEnvById({
+    envId: 'abc-123', source: 'pac',
+    pacExecImpl: async () => ({ stdout: pacOut, stderr: '' }),
+  });
+  assert.equal(result.found, false);
+  assert.equal(result.reason, 'not-in-pac-list');
+  assert.equal(result.sourceUsed, 'pac');
 });
 
 test('throws on unexpected non-2xx', async (t) => {
@@ -92,8 +164,8 @@ test('throws on transport error', async (t) => {
   );
 });
 
-test('throws when --bapToken is missing', async () => {
-  await assert.rejects(() => resolveEnvById({ envId: 'abc-123' }), /--bapToken is required/);
+test('throws when --source bap and --bapToken is missing', async () => {
+  await assert.rejects(() => resolveEnvById({ envId: 'abc-123', source: 'bap' }), /--bapToken is required/);
 });
 
 test('throws when --envId is missing', async () => {

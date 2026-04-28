@@ -41,6 +41,7 @@
 const { execSync } = require('child_process');
 const helpers = require('./validation-helpers');
 const { verifyHostReadiness } = require('./verify-host-readiness');
+const { listEnvsViaPac } = require('./pac-bap-shim');
 
 const DEFAULT_API_VERSION = '2020-06-01';
 const DEFAULT_BAP_BASE = 'https://api.bap.microsoft.com';
@@ -70,6 +71,7 @@ function parseArgs(argv) {
   let firstHitWins = false;
 
   let includeName = null;
+  let source = 'auto'; // auto | bap | pac
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--bapToken' && args[i + 1]) bapToken = args[++i];
@@ -81,13 +83,15 @@ function parseArgs(argv) {
     else if (args[i] === '--bapBase' && args[i + 1]) bapBase = args[++i];
     else if (args[i] === '--firstHitWins') firstHitWins = true;
     else if (args[i] === '--includeName' && args[i + 1]) includeName = args[++i];
+    else if (args[i] === '--source' && args[i + 1]) source = args[++i];
   }
 
   if (!skus) skus = DEFAULT_SKUS;
-  return { bapToken, skus, maxEnvsToProbe, maxConcurrency, probeTimeoutMs, apiVersion, bapBase, firstHitWins, includeName };
+  return { bapToken, skus, maxEnvsToProbe, maxConcurrency, probeTimeoutMs, apiVersion, bapBase, firstHitWins, includeName, source };
 }
 
 async function listBapEnvs(bapToken, apiVersion, bapBase) {
+  if (!bapToken) throw new Error('BAP token required for source=bap');
   const cleanBase = bapBase.replace(/\/+$/, '');
   const url = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/environments?api-version=${encodeURIComponent(apiVersion)}&$expand=${encodeURIComponent('properties.linkedEnvironmentMetadata,properties.permissions')}`;
 
@@ -98,14 +102,65 @@ async function listBapEnvs(bapToken, apiVersion, bapBase) {
     timeout: 30000,
   });
 
-  if (res.error) throw new Error(`BAP env-list failed: ${res.error}`);
-  if (res.statusCode !== 200) throw new Error(`BAP env-list returned ${res.statusCode}: ${res.body.slice(0, 300)}`);
+  if (res.error) {
+    const err = new Error(`BAP env-list failed: ${res.error}`);
+    err.statusCode = null;
+    throw err;
+  }
+  if (res.statusCode !== 200) {
+    const err = new Error(`BAP env-list returned ${res.statusCode}: ${res.body.slice(0, 300)}`);
+    err.statusCode = res.statusCode;
+    throw err;
+  }
 
   let data;
   try { data = JSON.parse(res.body); } catch (e) {
     throw new Error(`Failed to parse BAP env-list response: ${e.message}`);
   }
   return Array.isArray(data.value) ? data.value : [];
+}
+
+// Picks the right env-list source: BAP HTTP, PAC CLI shim, or auto-detect.
+// Returns { envs, sourceUsed, fallbackReason? }.
+async function listEnvsBySource({ source, bapToken, apiVersion, bapBase, listImpl, pacExecImpl }) {
+  // listImpl is the test-injection point (from BAP path). When provided, we
+  // honor it as a "BAP-source mock" since most existing tests use it that way.
+  if (listImpl) {
+    return { envs: await listImpl({ bapToken, apiVersion, bapBase }), sourceUsed: 'bap-mock' };
+  }
+
+  if (source === 'pac') {
+    const envs = await listEnvsViaPac({ execImpl: pacExecImpl });
+    return { envs, sourceUsed: 'pac' };
+  }
+
+  if (source === 'bap') {
+    const envs = await listBapEnvs(bapToken, apiVersion, bapBase);
+    return { envs, sourceUsed: 'bap' };
+  }
+
+  // auto: try BAP first if a token is available, else PAC
+  if (!bapToken) {
+    const envs = await listEnvsViaPac({ execImpl: pacExecImpl });
+    return { envs, sourceUsed: 'pac', fallbackReason: 'no-bap-token-provided' };
+  }
+  try {
+    const envs = await listBapEnvs(bapToken, apiVersion, bapBase);
+    return { envs, sourceUsed: 'bap' };
+  } catch (e) {
+    // 401/403/auth errors → fallback to PAC. Other errors (network, parse) bubble up.
+    const sc = e.statusCode;
+    if (sc === 401 || sc === 403) {
+      try {
+        const envs = await listEnvsViaPac({ execImpl: pacExecImpl });
+        return { envs, sourceUsed: 'pac', fallbackReason: `bap-rejected-${sc}` };
+      } catch (pacErr) {
+        // Both failed — surface BAP error which is more diagnostic
+        throw e;
+      }
+    }
+    throw e;
+  }
 }
 
 function getDataverseToken(originUrl, getTokenImpl) {
@@ -278,19 +333,28 @@ async function listTenantEnvs(opts = {}) {
     bapBase = DEFAULT_BAP_BASE,
     firstHitWins = false,
     includeName = null,
+    source = 'auto',
     // Test injection points:
-    listImpl = null,    // ({ bapToken, apiVersion, bapBase }) => Promise<envs>
+    listImpl = null,    // ({ bapToken, apiVersion, bapBase }) => Promise<envs>  (BAP-source mock)
     getTokenImpl = null,
     verifyImpl = null,
+    pacExecImpl = null, // PAC-source mock (replaces execFile)
   } = opts;
 
-  if (!bapToken) throw new Error('--bapToken is required');
+  if (source === 'bap' && !bapToken && !listImpl) {
+    throw new Error('--bapToken is required when --source bap');
+  }
 
   const startedAt = Date.now();
 
-  const envs = listImpl
-    ? await listImpl({ bapToken, apiVersion, bapBase })
-    : await listBapEnvs(bapToken, apiVersion, bapBase);
+  const { envs, sourceUsed, fallbackReason } = await listEnvsBySource({
+    source,
+    bapToken,
+    apiVersion,
+    bapBase,
+    listImpl,
+    pacExecImpl,
+  });
 
   const { candidates, totalEnvsInTenant, envsAfterFilter } = preFilter(envs, skus, includeName);
 
@@ -324,6 +388,8 @@ async function listTenantEnvs(opts = {}) {
     skusFilter: skus,
     firstHitWins,
     includeNameFilter: includeName || null,
+    sourceUsed,
+    fallbackReason: fallbackReason || null,
   };
 
   for (let i = 0; i < toProbe.length; i++) {

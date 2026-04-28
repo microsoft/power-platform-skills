@@ -61,6 +61,7 @@ function parseArgs(argv) {
     maxEnvsToProbe: null,
     skus: null,
     minPipelinesVersion: null,
+    source: 'auto',
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -77,6 +78,7 @@ function parseArgs(argv) {
     else if (a === '--maxEnvsToProbe' && next) opts.maxEnvsToProbe = Number(args[++i]);
     else if (a === '--skus' && next) opts.skus = args[++i].split(',').map((s) => s.trim()).filter(Boolean);
     else if (a === '--minPipelinesVersion' && next) opts.minPipelinesVersion = args[++i];
+    else if (a === '--source' && next) opts.source = args[++i];
   }
   return opts;
 }
@@ -156,16 +158,20 @@ async function detect(opts = {}) {
     maxEnvsToProbe = null,
     skus = null,
     minPipelinesVersion = null,
+    source = 'auto',
     // Test injection points:
     getTokenImpl = null,
     listImpl = null,
     verifyImpl = null,
+    pacExecImpl = null,
   } = opts;
 
   if (!envUrl) throw new Error('--envUrl is required');
   if (!token) throw new Error('--token (dev env Dataverse token) is required');
   if (!userId) throw new Error('--userId is required');
-  if (!bapToken) throw new Error('--bapToken is required');
+  // BAP token is only required for source=bap. In source=pac or source=auto-with-PAC-fallback,
+  // detection works without BAP — the shim uses PAC CLI for env list/get.
+  if (source === 'bap' && !bapToken) throw new Error('--bapToken is required when --source bap');
 
   const startedAt = Date.now();
   const baseOut = {
@@ -209,8 +215,8 @@ async function detect(opts = {}) {
   if (binding.bound) {
     baseOut.sourceEnvId = binding.hostEnvId; // hostEnvId here is the env GUID stored in the org setting
 
-    // Phase 2.2 — resolve via BAP
-    const env = await resolveEnvById({ bapToken, envId: binding.hostEnvId });
+    // Phase 2.2 — resolve via BAP (or PAC fallback)
+    const env = await resolveEnvById({ bapToken, envId: binding.hostEnvId, source, pacExecImpl });
     if (!env.found) {
       // 404-ambiguous: source env's binding points at an env we can't see.
       baseOut.resolutionStatus = 'OrgSettingStale';
@@ -255,9 +261,11 @@ async function detect(opts = {}) {
       maxEnvsToProbe: maxEnvsToProbe || undefined,
       firstHitWins: true,
       includeName,
+      source,
       listImpl,
       getTokenImpl,
       verifyImpl,
+      pacExecImpl,
     });
 
     baseOut.candidates = {
