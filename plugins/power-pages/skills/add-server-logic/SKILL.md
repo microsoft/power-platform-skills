@@ -1211,17 +1211,17 @@ After deployment (or if skipped), remind the user:
 
 ## Troubleshooting Server Logic Execution Errors
 
-When a deployed server logic endpoint returns an error or unexpected response, the underlying cause is usually hidden inside the `X-Ms-UserTrace` response header — a base64-encoded blob containing the runtime diagnostic logs (script-validation failures, sandbox exceptions, connector errors, timeout messages). The Power Pages design studio diagnostics view shows the same data, but inspecting the response header is the fastest path when iterating against a live site.
+When a deployed server logic endpoint returns an error or unexpected response, the underlying cause is usually hidden inside the `X-Ms-UserTrace` response header — a base64-encoded blob containing the runtime diagnostic logs. The Power Pages Edge browser extension shows the same data, but inspecting the response header is the fastest path when iterating against a live site.
 
 Use this flow whenever a server logic call fails or returns a different response than expected:
 
 ### 1. Open the Live Site in a Browser via Playwright
 
-Use the Playwright MCP tools (`mcp__plugin_power-pages_playwright__browser_navigate`, `browser_snapshot`, `browser_click`, etc.) to drive the site:
+Use the Playwright MCP tools to drive the site:
 
 1. Navigate to the deployed site URL (the `websiteUrl` returned by `/activate-site` or shown in the Power Pages admin center).
-2. Sign in if the endpoint requires authentication.
-3. Trigger the action that calls the failing server logic endpoint (click the button, submit the form, etc.) — or call the endpoint directly via `mcp__plugin_power-pages_playwright__browser_evaluate` with `fetch()`.
+2. Ask the user to sign in if the endpoint requires authentication and wait for confirmation.
+3. Trigger the action that calls the failing server logic endpoint (click the button, submit the form, etc.) — or call the endpoint directly with `fetch()`.
 
 ### 2. Capture the Network Response
 
@@ -1241,23 +1241,9 @@ return { status: res.status, body: await res.text(), trace };
 
 ### 3. Decode the `X-Ms-UserTrace` Header
 
-The header value is base64-encoded JSON. Decode it via Bash:
+The header value is base64-encoded JSON. Decode it.
 
-```bash
-echo '<X-Ms-UserTrace value>' | base64 -d
-```
-
-The decoded payload contains the diagnostic log entries — including the actual error message, the prohibited pattern (if script validation failed), the connector error (if Dataverse/HttpClient failed), or the stack trace (if the function threw at runtime).
-
-### 4. Common Errors and Fixes
-
-| Decoded message | Likely cause | Fix |
-|-----------------|--------------|-----|
-| `Script validation failed: prohibited pattern found - Pattern: with\s*\(` | Source contains the substring `with(` (often inside `startswith(` / `endswith(`) | See [Prohibited Script Patterns](#prohibited-script-patterns) in Phase 5 |
-| `Script validation failed: prohibited pattern found - Pattern: <other>` | Other prohibited construct in the script | Inspect the regex, locate the matching substring, and rewrite to avoid it |
-| Empty result set from `Server.Connector.Dataverse.RetrieveMultipleRecords` | Missing or insufficient table permissions | Re-run the table permissions setup (Phase 6) — Dataverse connector respects table permissions and silently returns 0 records when they are missing |
-| HTTP 401 / 403 | Missing web role or anonymous access blocked by governance | Verify `adx_serverlogic_adx_webrole` in the metadata YAML and the user's web roles |
-| HTTP 500 with stack trace in `X-Ms-UserTrace` | Runtime exception inside the function | Read the trace, fix the bug, redeploy via `/deploy-site` and clear cache |
+The decoded payload contains the diagnostic log entries — including the actual error message, the prohibited pattern (if script validation failed).
 
 After fixing, redeploy via `/deploy-site` and restart the site so the change is picked up immediately.
 
