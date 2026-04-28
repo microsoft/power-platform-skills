@@ -79,7 +79,7 @@ Always query the Dataverse OData API to discover what already exists in the envi
 
 Run `pac env who` and parse the `Environment URL` field:
 
-```powershell
+```bash
 pac env who
 ```
 
@@ -331,7 +331,7 @@ Include these rationale categories:
 
 2. Run the render script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-data-model-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 

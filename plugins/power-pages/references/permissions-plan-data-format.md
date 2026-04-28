@@ -124,7 +124,7 @@ Use HTML entity references for icons if needed: `&#x1F6E1;&#xFE0F;` (shield), `&
 
 Run the render script (it creates the output directory if needed):
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-permissions-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 

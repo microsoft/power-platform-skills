@@ -161,7 +161,7 @@ Rename `gitignore` → `.gitignore` in the project root (stored without dot pref
 
 Run `npm install` **before** initializing git so that `package-lock.json` is included in the initial commit:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm install
 ```
@@ -170,7 +170,7 @@ npm install
 
 Initialize a git repo and make the first commit. This captures all template files AND `package-lock.json` in one clean baseline:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 git init
 git add -A
@@ -183,7 +183,7 @@ From this point, **commit after every significant milestone** so any breaking ch
 
 **This MUST happen now — before any planning or customization begins.** The dev server gives the user a live preview while features and design are being planned:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm run dev
 ```
@@ -426,7 +426,7 @@ Use high-quality photos from Unsplash wherever the site needs visual content. Do
 
 Commit after **every individual page and component** so breaking changes can be reverted. Each page and each component gets its own commit — do NOT batch multiple pages or components into a single commit.
 
-```powershell
+```bash
 git add -A
 git commit -m "<short description of what was added/changed>"
 ```
@@ -441,7 +441,7 @@ git commit -m "<short description of what was added/changed>"
 
 **If something breaks**, revert to the last good commit:
 
-```powershell
+```bash
 git revert HEAD
 ```
 
@@ -477,7 +477,7 @@ Once the scaffold loader is gone, `public/scaffold-status.json` is just dead wei
 
 Install `playwright` as a dev dependency in the project so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm install --save-dev playwright
 ```
@@ -486,7 +486,7 @@ npm install --save-dev playwright
 
 Run the audit script via `Bash`, passing the dev server URL and all site routes:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
@@ -511,7 +511,7 @@ For each violation found, identify the source file and apply the fix:
 
 After fixing each group of related violations, commit:
 
-```powershell
+```bash
 git add -A
 git commit -m "Fix accessibility: <violation description>"
 ```

@@ -95,8 +95,8 @@ This applies anywhere a record literal appears inline: `Default`, `Selected`, `I
 | Use Case | Control Type | Variant |
 |----------|--------------|---------|
 | Precise positioning | `GroupContainer` | `ManualLayout` |
-| Horizontal Responsive layout | `GroupContainer` | `Horizontal` with `LayoutDirection: =LayoutDirection.Horizontal` |
-| Vertical Responsive layout | `GroupContainer` | `Vertical` with `LayoutDirection: =LayoutDirection.Vertical` |
+| Horizontal Responsive layout | `GroupContainer` | `AutoLayout` with `LayoutDirection: =LayoutDirection.Horizontal` |
+| Vertical Responsive layout | `GroupContainer` | `AutoLayout` with `LayoutDirection: =LayoutDirection.Vertical` |
 
 ⚠️ **`GroupContainer` has no `OnSelect` — it cannot be clicked.** This is a common dead end when building card UI: the container lays out perfectly but tapping it does nothing.
 

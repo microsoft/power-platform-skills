@@ -30,7 +30,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 /* Top Bar */
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
-.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
 
@@ -158,7 +158,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   <!-- Top Bar -->
   <div class="topbar">
     <div class="topbar-left">
-      <div class="logo">PP</div>
+      <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
       <div>
         <div class="topbar-title">Data Model Plan</div>
         <div class="topbar-sub">__SITE_NAME__</div>
@@ -389,7 +389,9 @@ function buildErDiagram(compact) {
       : (t.columns || []);
 
     cols.forEach(col => {
-      const type = col.type.replace(/[.\s]/g, '_');
+      // Strip any char that isn't valid in a mermaid ATTRIBUTE_WORD — e.g. the
+      // slash in Dataverse "Yes/No" breaks the erDiagram parser.
+      const type = col.type.replace(/[^A-Za-z0-9_]/g, '_');
       const key = col.key || '';
       lines.push('        ' + type + ' ' + col.logicalName + (key ? ' ' + key : ''));
     });

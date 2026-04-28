@@ -339,13 +339,13 @@ For each table that needs Web API access, prepare the exact `create-site-setting
 
 **1. Enable setting:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/enabled" --value "true" --description "Enable Web API access for <table_logical_name> table" --type "boolean"
 ```
 
 **2. Fields setting:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
@@ -355,13 +355,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 Example (with lookup column `cra5b_productcategoryid`):
 
-```powershell
+```bash
 --value "_cra5b_productcategoryid_value,cra5b_description,cra5b_name,cra5b_price,cra5b_productcategoryid,cra5b_productid"
 ```
 
 **3. Optionally**, if `Webapi/error/innererror` does not already exist, suggest it for debugging:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
@@ -399,7 +399,7 @@ Use `EnterPlanMode` to present the complete proposal (sections 6.1, 6.2, and the
 
 After the user approves the plan, create the site setting files using the `create-site-setting.js` script. Run each invocation prepared in section 6.1:
 
-```powershell
+```bash
 # Enable setting
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
 

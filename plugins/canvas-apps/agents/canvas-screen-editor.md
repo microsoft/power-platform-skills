@@ -77,6 +77,24 @@ specification exactly:
 Write the simplest working version of each formula. The compiler will catch syntax errors —
 reserve your reasoning for logic correctness that the compiler cannot catch.
 
+## Step 3.5 — Self-QA
+
+After applying your changes (Modify) or writing the new screen (Add), run the runtime-anti-pattern
+checks that `compile_canvas` does not catch.
+
+1. Read `${CLAUDE_PLUGIN_ROOT}/references/QAChecks.md`
+2. Re-read the `.pa.yaml` file you just edited or wrote
+3. Apply each check in order; for every issue found, fix it inline using `Edit`
+4. Track the count and a one-line description of every fix applied
+
+**Scope for Modify actions:** focus QA checks on controls and containers you changed or added.
+Do not rewrite pre-existing issues that are unrelated to this edit — the user did not ask for
+them. If a check matches a control you did not touch, skip it.
+
+**Scope for Add actions:** apply all checks to the full new screen, same as the builder.
+
+Do NOT call `compile_canvas` here — the orchestrating skill owns compilation.
+
 ## Step 4 — Return Result
 
 Mark the task complete. Return a concise result to the orchestrating skill:
@@ -85,6 +103,8 @@ Mark the task complete. Return a concise result to the orchestrating skill:
 Screen: [Screen Name]
 Action: [Modify / Add]
 File: [working directory]/[ScreenName].pa.yaml
+QA fixes applied: [N]
+  - [one-line description per fix, or "clean" if N=0]
 Status: Done
 Changes applied: [brief list of what was changed/added]
 ```

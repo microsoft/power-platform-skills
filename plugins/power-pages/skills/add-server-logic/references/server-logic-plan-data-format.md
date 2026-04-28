@@ -152,7 +152,7 @@ When `SECRETS_DATA` is `null` or `useKeyVault` is `false`, the banner and per-ca
 
 Do **not** write the HTML manually. Use the render script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 

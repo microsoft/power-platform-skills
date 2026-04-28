@@ -32,9 +32,9 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 **Actions**:
 
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
 
-**Output**: Verified PAC CLI auth, valid Azure CLI token, confirmed API access, `$envUrl` stored
+**Output**: Verified PAC CLI auth, valid Azure CLI token, confirmed API access, `<envUrl>` noted
 
 ---
 

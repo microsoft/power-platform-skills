@@ -45,7 +45,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 
 Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
-```powershell
+```bash
 pac help
 ```
 
@@ -53,7 +53,7 @@ pac help
 
 1. Tell the user: "PAC CLI is not installed. You can install it by running:"
 
-   ```powershell
+   ```bash
    dotnet tool install --global Microsoft.PowerApps.CLI.Tool
    ```
 
@@ -64,7 +64,7 @@ pac help
 
 Run `pac auth who` to check current authentication status.
 
-```powershell
+```bash
 pac auth who
 ```
 
@@ -80,7 +80,7 @@ pac auth who
 
 Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
 
-```powershell
+```bash
 az account show
 ```
 
@@ -90,7 +90,7 @@ az account show
 
 Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
@@ -132,7 +132,7 @@ Read the file and extract the `siteName` field. If not found, ask the user for t
 
 Run the subdomain generator script to create a random suggestion:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/generate-subdomain.js"
 ```
 
@@ -158,7 +158,7 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 
 Run `pac pages list` to get the website record ID:
 
-```powershell
+```bash
 pac pages list
 ```
 
@@ -204,7 +204,7 @@ Present all activation parameters to the user using `AskUserQuestion`:
 
 Run the shared activation script, passing all parameters gathered in Phases 1–2:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
 ```
 

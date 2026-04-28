@@ -166,7 +166,6 @@ pwsh -NoProfile -Command "pac code push"
 - Project path, app name, environment ID, app URL
 - Completed steps: scaffold, init, baseline deploy
 - Data sources planned (from Step 2)
-- Version: v1.0.0
 
 This ensures progress is saved even if the session ends unexpectedly.
 
@@ -198,8 +197,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 2. **Build components**: Create React components for each screen/feature in the plan
 3. **Connect data**: Wire components to generated services (use `*Service.getAll()`, `*Service.create()`, etc.)
 4. **Apply theme**: Use the user's theme preference (default: dark theme per development standards)
-5. **Add version display**: Show app version in the UI (per development standards)
-6. **Iterate with user**: Show progress, ask for feedback, adjust as needed
+5. **Iterate with user**: Show progress, ask for feedback, adjust as needed
 
 **Key rules:**
 
@@ -222,14 +220,11 @@ Ask the user: _"Ready to deploy to [environment name]? This will update the live
 pwsh -NoProfile -Command "pac code push"
 ```
 
-Increment version (e.g., v1.0.0 → v1.1.0) and update version display in the app.
-
 ### Step 11: Summary
 
 Provide:
 
 - App name, environment, app URL, project location
-- Version deployed
 - What was built: features, data sources, components
 - Next steps: how to iterate (`npm run build && pac code push`), how to add more data sources
 - Suggest what else the app could do:
@@ -249,7 +244,6 @@ Update the memory bank (created in Step 7) with final state:
 - All completed steps (scaffold, data sources, implementation, deploy)
 - Features implemented and components created
 - Data sources connected
-- Current version
 - Suggested next steps
 
 ---
@@ -315,7 +309,7 @@ pwsh -NoProfile -Command "pac code push"
 ```
 Task Tracker is live.
 
-App: Task Tracker v1.0.0
+App: Task Tracker
 Environment: <your-environment-name> (<environment-id>)
 URL: https://apps.powerapps.com/play/e/<environment-id>/app/<app-id>
 Project: ~/powerapps-task-tracker-20260302/
@@ -344,7 +338,6 @@ What you can add next:
 - App name: Task Tracker
 - Environment: <your-environment-name> (<environment-id>)
 - App URL: https://apps.powerapps.com/play/e/<environment-id>/app/<app-id>
-- Version: v1.0.0
 
 ## Completed Steps
 

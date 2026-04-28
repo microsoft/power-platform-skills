@@ -110,6 +110,50 @@ test('render-cloudflow-plan fails with invalid --data-inline JSON', () => {
   assert.match(result.stderr, /not valid JSON/);
 });
 
+test('render-cloudflow-plan copies power-pages-icon.png next to the HTML', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cloudflow-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const iconPath = path.join(tempDir, 'power-pages-icon.png');
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(SAMPLE_DATA)],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  assert.ok(fs.existsSync(iconPath), 'icon should be copied alongside the rendered HTML');
+  const sourceIcon = path.join(
+    __dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png'
+  );
+  assert.deepEqual(fs.readFileSync(iconPath), fs.readFileSync(sourceIcon), 'icon bytes should match shared asset');
+});
+
+test('render-cloudflow-plan overwrites a stale power-pages-icon.png on re-render', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cloudflow-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const iconPath = path.join(tempDir, 'power-pages-icon.png');
+
+  // Pre-seed a stale/dummy icon that render should overwrite.
+  fs.writeFileSync(iconPath, Buffer.from([0x00, 0x01, 0x02]));
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(SAMPLE_DATA)],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const sourceIcon = path.join(
+    __dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png'
+  );
+  assert.deepEqual(
+    fs.readFileSync(iconPath),
+    fs.readFileSync(sourceIcon),
+    'stale icon should have been overwritten with the shared asset'
+  );
+});
+
 test('render-cloudflow-plan refuses to overwrite existing file', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cloudflow-plan-'));
   const dataPath = path.join(tempDir, 'data.json');

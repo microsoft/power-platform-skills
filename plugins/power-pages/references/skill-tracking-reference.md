@@ -10,7 +10,7 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 
 Run the shared tracking script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 

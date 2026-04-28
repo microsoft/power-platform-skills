@@ -9,6 +9,7 @@ color: green
 tools:
   - Read
   - Write
+  - Edit
   - TaskCreate
   - TaskUpdate
 ---
@@ -61,6 +62,18 @@ Follow the conventions from the plan document's TechnicalGuide Key Conventions s
 Write the simplest working version of each formula. The compiler will catch syntax errors —
 reserve your reasoning for logic correctness that the compiler cannot catch.
 
+## Step 3.5 — Self-QA
+
+After writing the file, run the runtime-anti-pattern checks that `compile_canvas` does not
+catch.
+
+1. Read `${CLAUDE_PLUGIN_ROOT}/references/QAChecks.md`
+2. Re-read the `.pa.yaml` file you just wrote
+3. Apply each check in order; for every issue found, fix it inline using `Edit`
+4. Track the count and a one-line description of every fix applied
+
+Do NOT call `compile_canvas` here — the orchestrating skill owns compilation.
+
 ## Step 4 — Return Result
 
 Mark the task complete. Return a concise result to the orchestrating skill:
@@ -68,6 +81,8 @@ Mark the task complete. Return a concise result to the orchestrating skill:
 ```
 Screen: [Screen Name]
 File: [working directory]/[ScreenName].pa.yaml
+QA fixes applied: [N]
+  - [one-line description per fix, or "clean" if N=0]
 Status: Written
 ```
 

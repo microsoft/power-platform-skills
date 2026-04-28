@@ -45,22 +45,13 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 
 #### 1.1 Locate Project
 
-Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root.
-
-```powershell
-# Check current directory and subdirectories
-Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
-```
+Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root. Use your file-search tool (e.g., `Glob` with patterns `powerpages.config.json` and `*/powerpages.config.json`) rather than a shell-specific command.
 
 **If not found**: Tell the user to create a site first with `/create-site`.
 
 #### 1.2 Read Existing Config
 
-Read `powerpages.config.json` to get the site name and config:
-
-```powershell
-Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
-```
+Read `powerpages.config.json` to get the site name and config.
 
 #### 1.3 Detect Framework & Discover Routes
 
@@ -315,7 +306,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 Stage the specific SEO files and commit:
 
-```powershell
+```bash
 git add public/robots.txt public/sitemap.xml public/favicon.svg index.html
 git commit -m "Add SEO: robots.txt, sitemap.xml, meta tags, favicon"
 ```

@@ -48,11 +48,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
-3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create it:
-
-   ```powershell
-   New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/web-roles" -Force
-   ```
+3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create the `<PROJECT_ROOT>/.powerpages-site/web-roles/` directory.
 
 4. **If both exist:** Proceed to Phase 2.
 
@@ -133,7 +129,7 @@ For each new web role the user approved, create a YAML file in `.powerpages-site
 
 For each role, generate a UUID using the Node script. **NEVER generate UUIDs yourself — always use the script.**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 

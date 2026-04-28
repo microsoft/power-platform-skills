@@ -336,7 +336,7 @@ Find the site's navigation component and integrate the auth button:
 
 Stage and commit the auth files:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add authentication service and auth UI component"
 ```
@@ -399,7 +399,7 @@ Based on the user's choices, wrap the appropriate components:
 
 Stage and commit:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add role-based access control to site components"
 ```
@@ -438,7 +438,7 @@ Read each file and verify it contains the expected exports and functions:
 
 Run the project build to catch any import errors, type errors, or missing dependencies:
 
-```powershell
+```bash
 npm run build
 ```
 
@@ -448,7 +448,7 @@ If the build fails, fix the issues before proceeding.
 
 Start the dev server and verify the auth button appears in the navigation:
 
-```powershell
+```bash
 npm run dev
 ```
 
@@ -480,7 +480,7 @@ The site needs the `Authentication/Registration/ProfileRedirectEnabled` setting 
 
 Check if `.powerpages-site/site-settings/` exists. If it does, create the site setting file:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 

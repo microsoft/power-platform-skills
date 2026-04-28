@@ -68,7 +68,7 @@ Use the **Explore agent** to quickly scan the site for existing backend integrat
 
 Check whether the user's Dataverse environment has existing custom actions that could be leveraged in the integration:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
 ```
 
@@ -270,7 +270,7 @@ Prepare a JSON object with these keys:
 
 Write the plan to `<PROJECT_ROOT>/docs/backend-plan.html` (create `docs/` if needed). Use the render script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-backend-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 

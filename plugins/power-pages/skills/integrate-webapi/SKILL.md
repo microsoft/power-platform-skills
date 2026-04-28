@@ -53,21 +53,13 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 
 ### 1.1 Locate Project
 
-Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root.
-
-```powershell
-Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
-```
+Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root. Use your file-search tool (e.g., `Glob` with patterns `powerpages.config.json` and `*/powerpages.config.json`) rather than a shell-specific command.
 
 **If not found**: Tell the user to create a site first with `/create-site`.
 
 ### 1.2 Read Existing Config
 
-Read `powerpages.config.json` to get the site name:
-
-```powershell
-Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
-```
+Read `powerpages.config.json` to get the site name.
 
 ### 1.3 Detect Framework
 
@@ -219,7 +211,7 @@ After each agent completes (or after all parallel agents complete), verify the o
 
 After all integrations are complete, stage and commit:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add Web API integration for [table names]"
 ```
@@ -252,7 +244,7 @@ Also verify:
 
 Run the project build to catch any import errors, type errors, or missing dependencies:
 
-```powershell
+```bash
 npm run build
 ```
 
@@ -390,7 +382,7 @@ After parsing the user's diagram, create the YAML files using the deterministic 
 
 If the plan requires new web roles that don't already exist, create them first (their UUIDs are needed for table permissions):
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/create-webroles/scripts/create-web-role.js" --projectRoot "<PROJECT_ROOT>" --name "<Role Name>" [--anonymous] [--authenticated]
 ```
 
@@ -402,7 +394,7 @@ For each table permission in the plan. Process **parent permissions before child
 
 **For Global/Contact/Account/Self scope:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Global" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Contact" --contactRelationshipName "<lookup_to_contact>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1,uuid2>" --scope "Account" --accountRelationshipName "<lookup_to_account>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
@@ -411,7 +403,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<
 
 **For Parent scope** (requires parent permission UUID and relationship name):
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" --projectRoot "<PROJECT_ROOT>" --permissionName "<Permission Name>" --tableName "<table_logical_name>" --webRoleIds "<uuid1>" --scope "Parent" --parentPermissionId "<parent-uuid>" --parentRelationshipName "<relationship_name>" [--read] [--create] [--write] [--delete] [--append] [--appendto]
 ```
 
@@ -423,19 +415,19 @@ For each site setting in the plan:
 
 **Enabled setting (boolean):**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
 ```
 
 **Fields setting (string — use the validated column names from the diagram):**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<comma-separated-validated-columns>" --description "Allowed fields for <table> Web API access"
 ```
 
 **Inner error setting (boolean, optional for debugging):**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
@@ -449,7 +441,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJ
 
 Stage and commit the permission and settings files:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add table permissions and Web API site settings for [table names]"
 ```

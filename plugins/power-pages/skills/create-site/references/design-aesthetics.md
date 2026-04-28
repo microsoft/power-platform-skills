@@ -179,7 +179,7 @@ Refine the overall visual rhythm:
 
 Commit after each major design subsection:
 
-```powershell
+```bash
 git add -A
 git commit -m "<short description of design change>"
 ```

@@ -34,7 +34,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
 2. Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
-   ```powershell
+   ```bash
    pac help
    ```
 
@@ -46,7 +46,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
    2. Fetch installation instructions from `https://aka.ms/PowerPlatformCLI` using the following approach:
       - Tell the user: "PAC CLI is not installed. You can install it by running:"
 
-        ```powershell
+        ```bash
         dotnet tool install --global Microsoft.PowerApps.CLI.Tool
         ```
 
@@ -67,7 +67,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
 1. Run `pac auth who` to check the current authentication status.
 
-   ```powershell
+   ```bash
    pac auth who
    ```
 
@@ -93,7 +93,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
    3. Once the user provides the URL, run the authentication command:
 
-      ```powershell
+      ```bash
       pac auth create --environment "<USER_PROVIDED_URL>"
       ```
 
@@ -127,7 +127,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
    1. Run `pac org list` to retrieve all available environments:
 
-      ```powershell
+      ```bash
       pac org list
       ```
 
@@ -135,7 +135,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
    3. Use `AskUserQuestion` to present the available environments as options (pick up to 4 most relevant, or let user specify).
    4. Once the user selects an environment, switch to it:
 
-      ```powershell
+      ```bash
       pac org select --environment "<SELECTED_ENV_ID_OR_URL>"
       ```
 
@@ -182,7 +182,7 @@ If `.powerpages-site` does **not** exist (first deployment), skip this step — 
 
 Before uploading, ensure the site is built:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm run build
 ```
@@ -193,7 +193,7 @@ If the build fails, stop and help the user fix the build errors before retrying.
 
 Run the upload command:
 
-```powershell
+```bash
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 ```
 
@@ -233,7 +233,7 @@ Review the output from the `pac pages upload-code-site` command in Phase 4 (or P
 
 Stage and commit deployment artifacts:
 
-```powershell
+```bash
 git add -A
 git commit -m "Deploy site to Power Pages"
 ```
@@ -242,7 +242,7 @@ git commit -m "Deploy site to Power Pages"
 
 Run the activation status check:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
@@ -279,7 +279,7 @@ Use `AskUserQuestion` to confirm before proceeding:
 
 **If "Yes"**: Run the cache-clearing script, passing the project root:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
@@ -321,7 +321,7 @@ Use `AskUserQuestion`:
 
 1. Run `pac env list-settings` to retrieve the current environment settings:
 
-   ```powershell
+   ```bash
    pac env list-settings
    ```
 
@@ -331,7 +331,7 @@ Use `AskUserQuestion`:
 
 4. Update the setting:
 
-   ```powershell
+   ```bash
    pac env update-settings --name blockedattachments --value "<UPDATED_LIST_WITHOUT_JS>"
    ```
 
@@ -341,7 +341,7 @@ Use `AskUserQuestion`:
 
 Run the upload command again:
 
-```powershell
+```bash
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
 ```
 
@@ -365,21 +365,13 @@ Error: Unable to upload webfile name 'index.html' with record Id <GUID> as '.htm
 
 ### Fix
 
-1. Locate the environment-specific manifest file in the `.powerpages-site` folder. It follows the naming pattern `<environment-host>-manifest.yml` (e.g., `demo1.crm.dynamics.com-manifest.yml`). List the folder contents to find it:
+1. Locate the environment-specific manifest file in the `.powerpages-site` folder. It follows the naming pattern `<environment-host>-manifest.yml` (e.g., `demo1.crm.dynamics.com-manifest.yml`). Use your file-search tool (e.g., `Glob` with pattern `<PROJECT_ROOT>/.powerpages-site/*-manifest.yml`) to find it.
 
-   ```powershell
-   Get-ChildItem -Path "<PROJECT_ROOT>/.powerpages-site" -Filter "*-manifest.yml"
-   ```
-
-2. Delete the manifest file:
-
-   ```powershell
-   Remove-Item -Path "<PROJECT_ROOT>/.powerpages-site/<environment-host>-manifest.yml"
-   ```
+2. Delete the manifest file at `<PROJECT_ROOT>/.powerpages-site/<environment-host>-manifest.yml`.
 
 3. Retry the upload:
 
-   ```powershell
+   ```bash
    pac pages upload-code-site --rootPath "<PROJECT_ROOT>"
    ```
 

@@ -94,8 +94,8 @@ Build a map of: which tables are referenced in code, which CRUD operations are p
 
 Run the shared validator against the existing site:
 
-```powershell
-$schemaValidation = node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>"
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Parse the JSON output and carry the findings into the audit. Treat:
@@ -106,10 +106,10 @@ Parse the JSON output and carry the findings into the audit. Treat:
 
 These findings should be included in the final audit report even if the later code/Dataverse analysis also finds additional issues.
 
-After Step 3.1 determines `$envUrl`, if this audit is running locally with Dataverse access available, rerun the shared validator with live relationship verification enabled and merge any additional findings:
+After Step 3.1 determines the environment URL, if this audit is running locally with Dataverse access available, rerun the shared validator with live relationship verification enabled and merge any additional findings:
 
-```powershell
-$schemaValidation = node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "$envUrl"
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "<envUrl>"
 ```
 
 Use this Dataverse-backed relationship validation only for local runs. Do **not** require it in CI or other offline contexts.
@@ -122,21 +122,21 @@ Use deterministic Node.js scripts for all Dataverse API calls. These scripts han
 
 ### 3.1 Get Environment URL
 
-```powershell
+```bash
 pac env who
 ```
 
-Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store as `$envUrl`.
+Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`) and use it as `<envUrl>` in subsequent script calls.
 
 ### 3.2 Query Lookup Columns
 
 For each table that has permissions with `create` or `write` enabled, use the lookup query script:
 
-```powershell
-$lookups = node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-lookups.js" --envUrl "$envUrl" --table "<table_logical_name>"
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-lookups.js" --envUrl "<envUrl>" --table "<table_logical_name>"
 ```
 
-The script returns a JSON array of `{ logicalName, targets }` for each lookup column.
+The script returns a JSON array of `{ logicalName, targets }` for each lookup column. Capture this output for the maps described below.
 
 After querying **all** tables with create or write permissions, build two maps from the combined results:
 
@@ -155,8 +155,8 @@ Both maps are used in Sections H and H2:
 
 For tables with parent-scope permissions, verify the relationship names using the relationship query script:
 
-```powershell
-$rels = node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-relationships.js" --envUrl "$envUrl" --table "<parent_table>"
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-relationships.js" --envUrl "<envUrl>" --table "<parent_table>"
 ```
 
 The script returns a JSON array of `{ schemaName, referencedEntity, referencingEntity, referencingAttribute }`. Use `schemaName` to validate the `parentrelationship` value in parent-scope permissions.
@@ -465,7 +465,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
 
 Run the render script (it creates the output directory if needed):
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 

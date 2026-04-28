@@ -22,6 +22,7 @@ Test a deployed, activated Power Pages site at runtime. Navigate the site in a b
 
 - **Non-destructive**: This skill is read-only — it does not create, modify, or delete any files or data. It only observes the site via the browser.
 - **API-first testing**: The primary goal beyond page loads is verifying that all `/_api/` (Web API / OData) requests return successful responses.
+- **Response-shape discovery**: For `/_api/serverlogics/` endpoints the test run must also capture and report the actual response body shape so frontend integrations can be written against the real response, not a guessed one. If frontend parsing or field access does not match the observed shape, report the mismatch and describe the parsing or field-access changes needed — this skill does not modify any code.
 - **User-controlled authentication**: Never attempt to log in automatically. Always ask the user to log in via the browser window when authentication is required.
 - **Bounded crawling**: Cap page crawling at 25 pages to prevent infinite loops on sites with dynamic or paginated URLs.
 
@@ -58,7 +59,7 @@ If no URL was provided, attempt auto-detection:
 
 2. Run the activation status check script:
 
-   ```powershell
+   ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
    ```
 
@@ -320,6 +321,44 @@ For each captured API request, evaluate:
 | 500 | **Fail** | Server error — internal Dataverse or plugin error |
 | Other 4xx/5xx | **Fail** | Unexpected error |
 
+#### 5.3b Inspect Server Logic Response Shapes
+
+Server logic endpoints (`/_api/serverlogics/<name>`) commonly return a standard envelope whose `data` field is typically a string on success, but it is not guaranteed to be one in every response — in failure or edge cases `data` may be `null`, absent, a non-JSON string, or another non-string value. When the server logic returns serialized JSON (common), `data` must be parsed to reveal the actual payload — and that payload itself may be nested further. Frontend code often parses to the wrong level, reads the wrong keys, or treats `data` as the final object, producing silent UI failures. Test-site must surface the exact observed shape so the frontend can be corrected rather than assuming `data` is always directly parseable.
+
+For each `/_api/serverlogics/` request observed on any tested page:
+
+1. Record the endpoint name from the URL (`/_api/serverlogics/<endpointName>`), the HTTP method, query string parameters, and HTTP status code.
+2. When the request was a GET (no CSRF token required), re-execute it from the browser with `browser_evaluate` so the full response body is captured. Progressively parse the payload — keep parsing string-typed fields until further parsing fails — and record the shape at each level. Use a script of this form, replacing the URL with the observed one:
+
+    ```javascript
+    async () => {
+      const res = await fetch('<observed-url>', { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+      const status = res.status;
+      const text = await res.text();
+      const levels = [];
+      let current;
+      try { current = JSON.parse(text); } catch { return { status, rawSample: text.slice(0, 2000) }; }
+      levels.push({ type: Array.isArray(current) ? 'array' : typeof current, keys: current && typeof current === 'object' && !Array.isArray(current) ? Object.keys(current) : null, firstItemKeys: Array.isArray(current) && current[0] && typeof current[0] === 'object' ? Object.keys(current[0]) : null });
+      // Progressively parse common nested-string fields (data, Body, body, payload, result)
+      const nestedKeys = ['data', 'Body', 'body', 'payload', 'result'];
+      while (current && typeof current === 'object') {
+        const next = nestedKeys.find(k => typeof current[k] === 'string');
+        if (!next) break;
+        let parsed;
+        try { parsed = JSON.parse(current[next]); } catch { break; }
+        levels.push({ parsedFrom: next, type: Array.isArray(parsed) ? 'array' : typeof parsed, keys: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed) : null, firstItemKeys: Array.isArray(parsed) && parsed[0] && typeof parsed[0] === 'object' ? Object.keys(parsed[0]) : null });
+        current = parsed;
+      }
+      return { status, levels, rawSample: text.slice(0, 2000) };
+    }
+    ```
+
+3. For non-GET server logic requests, do **not** re-execute them (they may mutate data). Rely on the already-captured `browser_network_requests` entry and report whatever response metadata is available. Note in the report that the body was not re-captured.
+4. Build a "Server Logic Response Shapes" section for the Phase 6 report. For each endpoint record: endpoint name, HTTP method, status, the chain of parse levels (what key was parsed at each step, resulting type, keys at that level, and first-item keys when the level is an array), and a raw sample (first ~2000 chars, matching the slice in the script above). If `envelope.success === false` and `envelope.error` is present, report the error verbatim.
+5. Compare the observed shape to how the frontend actually consumes it (service files, hooks, components found in the repo). If there is a mismatch — e.g. the UI reads `envelope.data.value` as an object but the actual payload is a string that needs parsing, or expects a field name that doesn't appear in the observed keys — identify the mismatch and recommend the minimal frontend change needed to match the real shape. Be specific about the parsing or field access change required, but do **not** modify frontend code or create a commit in this skill; leave implementation to a separate editing/remediation skill or phase.
+
+Record the findings and any recommended frontend fixes for the Phase 6 report.
+
 #### 5.4 Provide Actionable Guidance for Failures
 
 For each failed API request, provide specific remediation:
@@ -451,6 +490,27 @@ API endpoints tested: 3 | Passed: 2 | Failed: 1
 ```
 
 If no API requests were captured, note: "No API requests (`/_api/` or OData) were detected during testing. This site may not use the Web API, or API calls may require specific user interactions to trigger."
+
+#### 6.3b Present Server Logic Response Shapes
+
+If any `/_api/serverlogics/` requests were captured in Phase 5.3b, add a dedicated subsection so the frontend integration can be written against the real response. Show the full chain of parse levels — one block per distinct endpoint:
+
+```
+## Server Logic Response Shapes
+
+### /_api/serverlogics/<endpoint-name>  (GET, 200)
+
+- Level 0 (raw body): object, keys: [requestId, success, serverLogicName, data, error]
+- Level 1 (parsed from `data`): object, keys: [status, items, count]
+- Level 1 `items` property: array; first item keys: [id, name, ...]
+- Raw sample: `{"requestId":"...","success":true,"data":"{\"status\":\"success\",\"items\":[{\"id\":\"...\",\"name\":\"...\"}],\"count\":1}", ...}`
+
+Frontend parsing required:
+    const level1 = JSON.parse(envelope.data);
+    const items  = level1.items;
+```
+
+If a frontend mismatch was detected, list the files and lines that would need to change and the specific parsing/field access correction required — do not apply or commit the change in this skill. This section is the primary deliverable when a developer asks "I don't know what shape my server logic returns — what does the frontend need to do?"
 
 #### 6.4 Present Authenticated Test Results (If Applicable)
 

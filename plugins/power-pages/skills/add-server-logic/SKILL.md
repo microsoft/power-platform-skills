@@ -167,7 +167,7 @@ If any planned server logic item involves Dataverse operations, check whether th
 
 **Step 1 — Fetch custom actions:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
 ```
 
@@ -345,7 +345,7 @@ Create the `docs/` folder if it does not already exist. Keep this HTML file insi
 
 Do **not** hand-author the HTML. Use the render script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-serverlogic-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
@@ -662,6 +662,12 @@ function get() {
 - The server logic can add additional validation, transformation, or logging around the custom action call — it doesn't have to be a pass-through
 - When Custom API response properties are known (from Phase 2.1.2), map them to the response object for clarity
 
+#### Dataverse Response Shape (Critical for Frontend Integration)
+
+When a function returns the result of a `Server.Connector.Dataverse.*` method, the client sees a double-wrapped payload — the most common cause of broken frontend integrations. Before writing the function, pick one of three response shapes and record the choice for Phase 9: **Approach A — raw passthrough** (return the connector result as-is), **Approach B — envelope that wraps the connector result** (return `{ status, data: result }` without unwrapping `Body`), or **Approach C — fully normalized** (parse `Body` server-side and return a feature-specific shape — recommended for non-generic endpoints).
+
+See `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/references/frontend-integration-reference.md` → "Dataverse Connector Response Format" for the double-wrapping explanation, the `CreateRecord` / `entityid` header behavior, and server- and client-side examples for each shape.
+
 #### Referencing Secrets in Code
 
 When the server logic needs a secret value identified in Phase 2.3, **never hardcode the value**. Instead, read it at runtime from a site setting backed by an environment variable:
@@ -680,7 +686,7 @@ Do **not** duplicate Microsoft Learn SDK usage patterns inline in this skill. Us
 
 For each approved server logic item where the plan status is `create`, generate the metadata file with the deterministic writer script instead of hand-authoring the YAML. The script generates the UUID, writes the fields in the correct order, and returns the created file path as JSON. **Skip this step for `update` / `reuse` items** — the YAML already exists and should be updated manually if needed.
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/scripts/create-serverlogic-metadata.js" --projectRoot "<PROJECT_ROOT>" --name "<name>" --displayName "<human-readable display name>" --description "<description of what this server logic does>" --webRoleIds "<uuid1,uuid2,uuid3>"
 ```
 
@@ -810,7 +816,7 @@ If the user chose Azure Key Vault in Phase 2.3.1:
 
 **Step 1 — List available Key Vaults:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/list-azure-keyvaults.js"
 ```
 
@@ -842,7 +848,7 @@ Use `AskUserQuestion`:
 |----------|---------|
 | What name, resource group, and Azure region would you like for the new Key Vault? | Vault names must be 3-24 characters, globally unique, start with a letter, and contain only alphanumerics and hyphens. Suggest a name based on the project/site name. |
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-azure-keyvault.js" \
   --name "<vault-name>" \
   --resourceGroup "<resource-group>" \
@@ -900,7 +906,7 @@ Tell the user the Secret Identifier URI looks like `https://<vault-name>.vault.a
 
 After the user shares the `secretUri` output from each command, create an environment variable definition in Dataverse that references the Key Vault secret. Use the `secret` type:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
@@ -912,7 +918,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 
 For each environment variable, create a site setting YAML that maps to it:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
@@ -929,7 +935,7 @@ If the user chose not to use Azure Key Vault:
 
 For each secret identified in Phase 2.3, create the environment variable in Dataverse with a placeholder value:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" \
   --schemaName "<prefix_SecretName>" \
   --displayName "<Secret Display Name>" \
@@ -938,7 +944,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "<ENV_URL>" 
 
 **Step 2 — Create site setting for the environment variable:**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<SiteSetting/Name>" \
@@ -990,7 +996,7 @@ The following site settings control server logic behavior. Only create settings 
 
 Use the existing site setting creation script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "ServerLogic/AllowedDomains" --value "api.example.com,api.other.com" --description "Restrict server logic external API calls to these domains"
 ```
 
@@ -1043,6 +1049,8 @@ Following the reference:
 - Replace placeholder data, mock handlers, or temporary actions when they are meant to be backed by the new server logic endpoints
 - Add or preserve loading, success, empty, and error states so the UI behaves like a finished feature
 - **For validate-and-execute endpoints**: The frontend must call the server logic endpoint for the protected operation (e.g., status transition) — it must NOT make a separate Web API PATCH for the same field. Ensure the UI for that operation (e.g., a "Submit" or "Approve" button) calls the server logic service function, not the Web API service
+- **For Dataverse-backed endpoints**: Match the frontend parsing to the response shape chosen in Phase 5.3. See "Dataverse Connector Response Format" in the frontend integration reference for the exact parsing per shape.
+- **If the response shape is unclear**: Do not guess. After the site is deployed, invoke `/test-site` against the live site so the actual server logic response can be captured from the network tab and used to drive the integration
 
 ### 9.4 Git Commit
 
