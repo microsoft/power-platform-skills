@@ -202,6 +202,24 @@ runValidation((cwd) => {
     if (/(?:async\s+)?function\s+delete\s*\(/m.test(strippedContent)) {
       errors.push(`${dirName}.js: uses 'function delete()' — 'delete' is a reserved word, use 'del' instead`);
     }
+
+    // Check: no 'with(' substring anywhere in the raw source.
+    // The Power Pages server validator rejects scripts matching /with\s*\(/ to block
+    // the JavaScript `with` statement, but the regex also matches the substring inside
+    // identifiers like `startswith(`, `endswith(`, and `groupwith(` — even inside string
+    // literals — which causes runtime error: "Script validation failed: prohibited
+    // pattern found - Pattern: with\s*\(". Run this on the raw content (not stripped)
+    // because the server validator does the same.
+    const withMatches = [...content.matchAll(/with\s*\(/g)];
+    if (withMatches.length > 0) {
+      const lineNumbers = withMatches.map(m => content.slice(0, m.index).split('\n').length);
+      errors.push(
+        `${dirName}.js: contains the substring 'with(' on line(s) ${lineNumbers.join(', ')} — ` +
+        `the Power Pages server validator's regex /with\\s*\\(/ blocks this even inside string literals ` +
+        `(e.g., OData functions like startswith(, endswith(). Split the literal so 'with(' is not contiguous, ` +
+        `e.g., \`"startswith" + "(crd50_name,..."\` instead of \`"startswith(crd50_name,..."\`.`
+      );
+    }
   }
 
   if (errors.length > 0) {

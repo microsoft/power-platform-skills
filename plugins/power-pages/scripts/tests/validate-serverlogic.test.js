@@ -228,3 +228,42 @@ test('yml name mismatch is flagged', (t) => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /does not match folder name/);
 });
+
+test('startswith( inside string literal is flagged (with-pattern)', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  const startsWithJs = `function get() {
+    try {
+        Server.Logger.Log("test-endpoint GET called");
+        var query = "$filter=startswith(name,'INV-')";
+        return JSON.stringify({ status: "success", query: query });
+    } catch (err) {
+        Server.Logger.Error("test-endpoint GET failed: " + err.message);
+        return JSON.stringify({ status: "error", message: err.message });
+    }
+}`;
+  writeServerLogic(projectRoot, 'test-endpoint', startsWithJs, VALID_YML);
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /contains the substring 'with\('/);
+});
+
+test('split startswith( workaround passes validation', (t) => {
+  const projectRoot = createTempProject(t);
+  setupProject(projectRoot);
+  const splitJs = `function get() {
+    try {
+        Server.Logger.Log("test-endpoint GET called");
+        var query = "$filter=startswith" + "(name,'INV-')";
+        return JSON.stringify({ status: "success", query: query });
+    } catch (err) {
+        Server.Logger.Error("test-endpoint GET failed: " + err.message);
+        return JSON.stringify({ status: "error", message: err.message });
+    }
+}`;
+  writeServerLogic(projectRoot, 'test-endpoint', splitJs, VALID_YML);
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
