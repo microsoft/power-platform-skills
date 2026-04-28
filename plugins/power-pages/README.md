@@ -236,10 +236,10 @@ The Data Model Architect, Table Permissions, and Web API Settings agents are **r
 
 The plugin ships with two MCP servers configured in `.mcp.json` — they start automatically when the plugin loads:
 
-| Server | Purpose | Used by |
-|---|---|---|
-| **playwright** | Headless browser automation for live previews and runtime tests | `/create-site`, `/test-site` |
-| **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs | `/add-server-logic` |
+| Server | Purpose
+|---|---|
+| **playwright** | Headless browser automation for live previews and runtime tests |
+| **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs |
 
 ## Typical Workflow
 
