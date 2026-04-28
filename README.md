@@ -4,7 +4,7 @@ Official agent skills/plugins for Power Platform development by Microsoft.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository is a plugin marketplace for Claude Code and GitHub Copilot, plus a filesystem-based skill and agent distribution for OpenCode. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
 ## Installation
 
@@ -27,13 +27,18 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/mai
 The installer automatically:
 
 - Installs `pac` CLI if not already installed
-- Detects available tools (Claude Code, GitHub Copilot CLI)
-- Registers the plugin marketplace and installs all listed plugins
-- Enables auto-update so plugins stay current
+- Detects available tools (Claude Code, GitHub Copilot CLI, OpenCode)
+- Registers the marketplace and installs all listed plugins for Claude Code and GitHub Copilot
+- Generates namespaced OpenCode skill and agent wrappers under `~/.config/opencode`
+- Enables auto-update where the host supports it
 
 ### Manual Installation
 
-If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
+If you prefer to install manually, use the host-specific flow below.
+
+### Claude Code / GitHub Copilot CLI
+
+Run these commands inside a Claude Code or GitHub Copilot CLI session:
 
 1. Add the marketplace
 
@@ -46,9 +51,31 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
-    /plugin install code-apps@power-platform-skills
+    /plugin install mcp-apps@power-platform-skills
+    /plugin install code-apps-preview@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     ```
+
+### OpenCode
+
+OpenCode does not support the Claude/Copilot marketplace flow for this repository. Run the installer instead:
+
+```bash
+node scripts/install.js
+```
+
+The installer syncs a managed copy of this repository to `~/.config/opencode/power-platform-skills`, then generates global wrappers in:
+
+- `~/.config/opencode/skills/*/SKILL.md`
+- `~/.config/opencode/agents/*.md`
+
+OpenCode skill names are prefixed by plugin to avoid collisions. Common entry points:
+
+- `/power-pages-create-site`
+- `/model-apps-genpage`
+- `/mcp-apps-generate-mcp-app-ui`
+- `/code-apps-create-code-app`
+- `/canvas-apps-generate-canvas-app`
 
 ## Available Plugins
 
@@ -64,13 +91,19 @@ Build and deploy Power Apps generative pages for model-driven apps.
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI
 
-### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
+### [Code Apps](plugins/code-apps/README.md) (`plugins/code-apps`)
 
 Build and deploy Power Apps code apps connected to Power Platform via connectors.
 
 **Stack**: React + Vite + TypeScript, deployed via PAC CLI
 
-### [Canvas Apps](plugins/canvas-apps/AGENTS.md) (`plugins/canvas-apps`)
+### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
+
+Generate self-contained MCP App widgets from tool output.
+
+**Stack**: HTML + MCP Apps protocol + Fluent UI via CDN
+
+### [Canvas Apps](plugins/canvas-apps/README.md) (`plugins/canvas-apps`)
 
 Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 
@@ -81,11 +114,18 @@ Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 To develop and test plugins locally, follow these steps:
 
 1. Clone this repository
-1. Launch Claude Code with plugin path:
+2. Refresh the OpenCode wrappers from the repo root when testing OpenCode locally:
+
+    ```bash
+    node scripts/install.js
+    ```
+
+3. Launch Claude Code with a plugin path when testing the native marketplace plugins directly:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     ```

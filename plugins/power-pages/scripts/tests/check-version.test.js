@@ -40,10 +40,12 @@ test('formatUpdateMessage includes plugin name and both versions', () => {
   assert.ok(msg.includes('power-pages'));
   assert.ok(msg.includes('1.2.0'));
   assert.ok(msg.includes('1.3.0'));
+  assert.ok(msg.includes('Re-run the Power Platform Skills installer'));
 });
 
-test('formatUpdateMessage includes marketplace update then plugin update when marketplace is provided', () => {
+test('formatUpdateMessage includes installer guidance and Claude update commands when marketplace is provided', () => {
   const msg = formatUpdateMessage('power-pages', '1.2.0', '1.3.0', 'power-platform-skills');
+  assert.ok(msg.includes('Re-run the Power Platform Skills installer'));
   assert.ok(msg.includes('claude plugin marketplace update power-platform-skills'));
   assert.ok(msg.includes('claude plugin update power-pages@power-platform-skills'));
   const marketplaceIdx = msg.indexOf('marketplace update');
@@ -54,6 +56,7 @@ test('formatUpdateMessage includes marketplace update then plugin update when ma
 
 test('formatUpdateMessage uses plain name when marketplace is not provided', () => {
   const msg = formatUpdateMessage('power-pages', '1.2.0', '1.3.0');
+  assert.ok(msg.includes('Re-run the Power Platform Skills installer'));
   assert.ok(msg.includes('claude plugin update power-pages'));
   assert.ok(!msg.includes('@'));
   assert.ok(!msg.includes('marketplace update'));

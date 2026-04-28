@@ -29,15 +29,17 @@ function compareSemver(a, b) {
 
 /**
  * Format the update notification as plain text.
- * Includes marketplace update (first) and plugin update (second).
+ * Keeps Claude-specific commands for users on that host, but also points
+ * other hosts such as OpenCode back to the shared installer.
  */
 function formatUpdateMessage(pluginName, localVersion, remoteVersion, marketplaceName) {
   const qualifiedName = marketplaceName ? `${pluginName}@${marketplaceName}` : pluginName;
   let msg = `\nPlugin update available: ${pluginName} ${localVersion} → ${remoteVersion}.\n`;
+  msg += 'Re-run the Power Platform Skills installer to refresh your host configuration.';
   if (marketplaceName) {
-    msg += `Run:\n  claude plugin marketplace update ${marketplaceName}\n  claude plugin update ${qualifiedName}`;
+    msg += `\nClaude Code users can also run:\n  claude plugin marketplace update ${marketplaceName}\n  claude plugin update ${qualifiedName}`;
   } else {
-    msg += `Run: claude plugin update ${qualifiedName}`;
+    msg += `\nClaude Code users can also run:\n  claude plugin update ${qualifiedName}`;
   }
   return msg;
 }

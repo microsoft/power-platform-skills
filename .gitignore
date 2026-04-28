@@ -42,6 +42,7 @@ ENV/
 
 # Local settings
 .claude/settings.local.json
+.opencode/
 
 # OS
 .DS_Store

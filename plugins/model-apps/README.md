@@ -11,6 +11,14 @@ Build and deploy generative pages (genux) for Power Apps model-driven apps. This
 /plugin install model-apps@power-platform-skills
 ```
 
+### OpenCode
+
+```bash
+node scripts/install.js
+```
+
+The installer generates the OpenCode wrapper command `/model-apps-genpage` under `~/.config/opencode/skills`.
+
 ### From a local clone
 
 ```bash
@@ -27,6 +35,8 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 ## Skills
 
 The plugin provides a single skill that covers the full lifecycle of a generative page.
+
+In OpenCode, `/genpage` is installed as `/model-apps-genpage` to keep skill names unique.
 
 ### `/genpage`
 

@@ -11,6 +11,14 @@ Generate interactive MCP App widgets for MCP tools using Claude Code or Visual S
 /plugin install mcp-apps@power-platform-skills
 ```
 
+### OpenCode
+
+```bash
+node scripts/install.js
+```
+
+The installer generates the OpenCode wrapper command `/mcp-apps-generate-mcp-app-ui` under `~/.config/opencode/skills`.
+
 ### From a local clone
 
 ```bash
@@ -25,6 +33,8 @@ Describe the visual you want, paste your tool's JSON output, and get a self-cont
 
 1. Test your custom tool and copy the JSON output (make sure your tool's output is set to JSON)
 2. Run `/generate-mcp-app-ui` and describe the visual you want, pasting your tool's test output
+
+In OpenCode, use `/mcp-apps-generate-mcp-app-ui`.
 
 ### Example
 

@@ -17,6 +17,14 @@ Build Power Apps Canvas Apps with your coding agent as coauthor. This plugin con
 /plugin install canvas-apps@power-platform-skills
 ```
 
+### OpenCode
+
+```bash
+node scripts/install.js
+```
+
+The installer generates namespaced OpenCode skills such as `/canvas-apps-configure-canvas-mcp` and `/canvas-apps-generate-canvas-app`.
+
 ### From a local clone
 
 ```bash
@@ -27,9 +35,11 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
 
 ### `/configure-canvas-mcp`
 
-Register the Canvas Authoring MCP server with Claude Code or GitHub Copilot.
+Register the Canvas Authoring MCP server with Claude Code, GitHub Copilot, or OpenCode.
 
 **Usage:** Invoke directly with `/configure-canvas-mcp`, or use any of the keywords below to trigger the skill automatically:
+
+In OpenCode, use `/canvas-apps-configure-canvas-mcp`.
 
 - `Configure MCP for Canvas Apps`
 - `Set up the Canvas Authoring MCP server`
@@ -41,6 +51,8 @@ Generate a complete Canvas App from a natural language description.
 
 **Usage:** Invoke directly with `/generate-canvas-app`, or use any of the keywords below to trigger the skill automatically:
 
+In OpenCode, use `/canvas-apps-generate-canvas-app`.
+
 - `Create a Canvas App for managing inventory`
 - `I need a Canvas App for tracking employee time off`
 
@@ -49,6 +61,8 @@ Generate a complete Canvas App from a natural language description.
 Edit an existing Canvas App from a natural language description of changes.
 
 **Usage:** Invoke directly with `/edit-canvas-app`, or use any of the keywords below to trigger the skill automatically:
+
+In OpenCode, use `/canvas-apps-edit-canvas-app`.
 
 - `Modify the form in my existing Canvas App to include validation`
 - `Edit my Canvas App to add a new screen for reports`

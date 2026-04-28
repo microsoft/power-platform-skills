@@ -6,10 +6,10 @@
 
 ### Step 1: Check if a version check is needed
 
-Look for the file `~/.claude/.power-apps-last-version-check`. Use Bash to read it if it exists:
+Look for the file `~/.config/power-platform-skills/.code-apps-last-version-check`. Use Bash to read it if it exists:
 
 ```bash
-cat ~/.claude/.power-apps-last-version-check 2>/dev/null
+cat ~/.config/power-platform-skills/.code-apps-last-version-check 2>/dev/null
 ```
 
 - If the file exists and contains today's date (YYYY-MM-DD format), **skip the entire check** and continue with the skill silently.
@@ -27,7 +27,7 @@ Fetch the remote marketplace manifest using Bash:
 curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/.claude-plugin/marketplace.json 2>/dev/null
 ```
 
-Parse the `version` field from the first plugin in the `plugins` array.
+Find the plugin in the `plugins` array whose `name` matches the local plugin name, then parse its `version` field.
 
 ### Step 4: Compare versions
 
@@ -40,7 +40,7 @@ Compare the local version against the remote version using semver rules — spli
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║  UPDATE AVAILABLE: v{local} → v{remote}                    ║
-║  Run: claude plugin update power-apps                       ║
+║  Re-run the Power Platform Skills installer                 ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
@@ -48,13 +48,13 @@ Compare the local version against the remote version using semver rules — spli
 
 ### Step 6: Update the timestamp
 
-Write today's date (YYYY-MM-DD) to `~/.claude/.power-apps-last-version-check` using Bash:
+Write today's date (YYYY-MM-DD) to `~/.config/power-platform-skills/.code-apps-last-version-check` using Bash:
 
 ```bash
-mkdir -p ~/.claude && echo "YYYY-MM-DD" > ~/.claude/.power-apps-last-version-check
+mkdir -p ~/.config/power-platform-skills && echo "YYYY-MM-DD" > ~/.config/power-platform-skills/.code-apps-last-version-check
 ```
 
-> **Note:** Writing to `~/.claude/` is a pre-approved exception to the "confirm before writing outside project root" guardrail. This file is a shared cache and does not affect the user's project.
+> **Note:** Writing to `~/.config/power-platform-skills/` is a pre-approved exception to the "confirm before writing outside project root" guardrail. This file is a shared cache and does not affect the user's project.
 
 ## Error Handling
 

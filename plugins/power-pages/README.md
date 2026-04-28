@@ -13,6 +13,14 @@ Create and deploy Power Pages code sites using modern frontend frameworks. This 
 /plugin install power-pages@power-platform-skills
 ```
 
+### OpenCode
+
+```bash
+node scripts/install.js
+```
+
+The installer generates the OpenCode wrapper command `/power-pages-create-site` and the rest of the Power Pages skills under `~/.config/opencode/skills`.
+
 ### From a local clone
 
 ```bash
@@ -39,6 +47,8 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 ## Skills
 
 The plugin provides 9 skills that cover the full lifecycle of a Power Pages code site. Each skill is invoked conversationally — just describe what you want to do.
+
+In OpenCode, these same skills are installed with a `power-pages-` prefix. For example, `/create-site` becomes `/power-pages-create-site`.
 
 ### `/create-site`
 
