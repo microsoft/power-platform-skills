@@ -186,6 +186,18 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 
 .table-chip{display:inline-block;padding:3px 10px;font-size:11px;font-family:var(--mono);background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);border-radius:10px;margin:2px;}
 
+.host-card{margin-bottom:18px;}
+.host-card .card-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;}
+.host-card .card-value{font-size:15px;font-weight:700;color:var(--text-bright);font-family:var(--mono);word-break:break-all;margin-bottom:4px;}
+.host-card .card-meta{font-size:12px;color:var(--text-dim);}
+.host-card-ok{border-left:3px solid var(--pass-border);}
+.host-card-pending{border-left:3px solid var(--high-border);}
+.host-card-blocked{border-left:3px solid var(--critical-border);}
+
+.checklist-substep-list{list-style:none;padding:0;margin:-2px 0 8px 32px;}
+.checklist-substep{font-size:12px;color:var(--text-dim);padding:6px 14px;background:var(--surface2);border:1px dashed var(--border);border-radius:var(--radius-sm);}
+.checklist-substep .substep-note{font-style:italic;opacity:0.85;margin-left:4px;}
+
 footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);}
 
 @media(max-width:900px){
@@ -286,6 +298,7 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
     <div class="section" id="tab-pipelines">
       <h2>__PIPELINES_TAB_TITLE__</h2>
       <p class="section-desc">__PIPELINES_TAB_DESC__</p>
+      __PIPELINES_HOST_CARD__
       __PIPELINES_HTML__
     </div>
 
@@ -293,6 +306,7 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
       <h2>Execution Checklist</h2>
       <p class="section-desc">Steps invoked by plan-alm after approval.</p>
       __CHECKLIST_HTML__
+      __HOST_CHECKLIST_SUBSTEP__
       <div class="card" style="margin-top:20px;font-size:12px;color:var(--text-dim);">
         <strong>Approved by:</strong> <span id="approved-by">__APPROVED_BY__</span> &nbsp;&middot;&nbsp;
         <strong>Approval date:</strong> <span id="approval-date">__APPROVAL_DATE__</span>

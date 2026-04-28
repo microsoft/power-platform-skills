@@ -450,6 +450,69 @@ function buildPipelinesHtml() {
   return `<div class="pipeline-container">${stagesHtml}</div>`;
 }
 
+function buildHostCardHtml(d) {
+  // Renders the "Pipelines Host" card on the Pipeline tab. Three modes:
+  //   - host-card-ok      → AvailableUsing* statuses (host already established)
+  //   - host-card-pending → AvailableUnboundCustomHost / MultipleUnboundCustomHosts /
+  //                         PlatformHostExistsUnbound / NoHost (will be ensured by setup-pipeline)
+  //   - host-card-blocked → CannotRedirect (defensive — Phase 2 Q4 normally blocks plan generation)
+  // Returns '' when no hostResolution block is present (Manual path or pre-update plans).
+  const hr = d && d.hostResolution;
+  if (!hr || !hr.status) return '';
+  const status = String(hr.status);
+  if (status.startsWith('AvailableUsing')) {
+    const url = hr.hostEnvUrl || '';
+    const meta = [];
+    if (hr.hostType) meta.push(escapeHtml(hr.hostType));
+    if (hr.pipelinesSolutionVersion) meta.push('Pipelines v' + escapeHtml(hr.pipelinesSolutionVersion));
+    meta.push('&#10003; Reachable');
+    return `<div class="card host-card host-card-ok">
+  <div class="card-label">Pipelines Host</div>
+  <div class="card-value">${escapeHtml(url)}</div>
+  <div class="card-meta">${meta.join(' &middot; ')}</div>
+</div>`;
+  }
+  if (hr.willEnsureDuringExecution === true) {
+    let note = '';
+    if (status === 'AvailableUnboundCustomHost') {
+      note = 'Will reuse existing Custom Host' + (hr.hostEnvUrl ? ' <code>' + escapeHtml(hr.hostEnvUrl) + '</code>' : '') + ' (in tenant, not yet bound to dev env).';
+    } else if (status === 'MultipleUnboundCustomHosts') {
+      note = 'Will pick from ' + Number(hr.candidatesCount || 0) + ' existing Custom Hosts at execution time.';
+    } else if (status === 'PlatformHostExistsUnbound') {
+      note = 'Will use existing Platform Host (free, no admin role required).';
+    } else if (status === 'NoHost') {
+      note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+    } else {
+      note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
+    }
+    return `<div class="card host-card host-card-pending">
+  <div class="card-label">Pipelines Host</div>
+  <div class="card-value">Will be ensured during setup-pipeline</div>
+  <div class="card-meta">${note}</div>
+</div>`;
+  }
+  if (status === 'CannotRedirect') {
+    // Defensive: plan-alm Phase 2 Q4 normally blocks plan generation in this state.
+    // If we get here, surface the error visibly so reviewers understand the plan is unsafe.
+    return `<div class="card host-card host-card-blocked">
+  <div class="card-label">Pipelines Host</div>
+  <div class="card-value">Blocked &mdash; CannotRedirect</div>
+  <div class="card-meta">Source env <code>ProjectHostEnvironmentId</code> points at Platform Host but tenant default custom host is set elsewhere. Resolution requires Power Platform admin.</div>
+</div>`;
+  }
+  // Other terminal states (OrgSettingStale / PermissionDenied / DetectionFailed) fall through with no card.
+  return '';
+}
+
+function buildHostChecklistSubBullet(d) {
+  // Renders a sub-bullet under the "Setup pipeline" checklist item when setup-pipeline
+  // will delegate to ensure-pipelines-host at execution time. Display-only — no separate
+  // status tracking; the parent "Setup pipeline" status covers it. The <li> is wrapped
+  // in a <ul> so it is valid HTML when slotted directly into the template.
+  if (!d || !d.hostResolution || d.hostResolution.willEnsureDuringExecution !== true) return '';
+  return `<ul class="checklist-substep-list"><li class="checklist-substep" id="check-ensure-host">&#8627; Ensure Pipelines host <span class="substep-note">(delegated by setup-pipeline)</span></li></ul>`;
+}
+
 function buildChecklistHtml() {
   const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;' };
   const steps = Array.isArray(data.steps) ? data.steps : [];
@@ -496,8 +559,10 @@ const replacements = {
   SOLUTIONS_HTML: buildSolutionsHtml(),
   PIPELINES_TAB_TITLE: buildPipelinesTabTitle(),
   PIPELINES_TAB_DESC: buildPipelinesTabDesc(),
+  PIPELINES_HOST_CARD: buildHostCardHtml(data),
   PIPELINES_HTML: buildPipelinesHtml(),
   CHECKLIST_HTML: buildChecklistHtml(),
+  HOST_CHECKLIST_SUBSTEP: buildHostChecklistSubBullet(data),
   ESTIMATION_METHOD: escapeHtml(data.estimationMethod || 'metadata-based'),
   ESTIMATION_ACCURACY: String(data.estimationAccuracyPct || 15),
 };

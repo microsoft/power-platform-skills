@@ -165,7 +165,7 @@ Steps:
 
 0. **Local cache fast-path.** If `.last-host-check.json` exists in the project root AND `Date.now() - Date.parse(checkedAt) < cacheMaxAgeMs` (default 24h; configurable via `--cacheMaxAgeHours`):
    - Acquire `HOST_TOKEN` for the cached `finalHostEnvUrl` origin.
-   - One cheap probe: `GET {finalHostEnvUrl}/api/data/v9.1/deploymentpipelines?$top=0`
+   - One cheap probe: `GET {finalHostEnvUrl}/api/data/v9.0/solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$select=version&$top=1` (proves Pipelines is installed AND captures version in one round-trip)
      - 200 → cache is valid. Set `RESOLUTION` from the cached file. Set `ACTION_TAKEN = "none"`. Skip Phases 2–5; jump to Phase 6 with a "reused cached host" summary.
      - 404 / 403 / timeout / network → cache is stale or no longer accessible. Continue to Step 1 (full resolution). Do NOT fail — stale cache is expected after env deletion or permission changes.
    - If the file is missing, malformed, older than `cacheMaxAgeMs`, or contains `ready: false` → continue to Step 1.
@@ -608,21 +608,22 @@ If `actionTaken !== "none"`:
 
 ## Integration with existing skills
 
-### setup-pipeline
+### setup-pipeline (✅ wired)
 
-Update `setup-pipeline/SKILL.md` Phase 1 step 4–5 (planned; will be edited during execution):
+`setup-pipeline/SKILL.md` Phase 1 step 4 calls `ensure-pipelines-host-detect.js` (the orchestrator wrapper) and branches on `resolutionStatus`:
+- `AvailableUsing*` → use `finalHostEnvUrl` directly, continue.
+- `*Unbound*` / `NoHost` → delegate to `/power-pages:ensure-pipelines-host` (this skill) for reuse-or-provision; resume after `.last-host-check.json` shows `ready: true`.
+- `CannotRedirect` / `OrgSettingStale` / `PermissionDenied` → stop with the specific admin-resolution message.
 
-- **Before delegating**, attempt `discover-pipelines-host.js` (existing, fast probe). If `found: true` → continue with current flow (DRY).
-- **If `found: false`**, delegate to `/power-pages:ensure-pipelines-host`. Wait for `.last-host-check.json`, then read `finalHostEnvUrl` and continue with Phase 3.
-- Remove the *"ask user for host URL manually"* fallback in current Phase 3 — it's superseded by `ensure-pipelines-host`.
+The old "ask user for host URL manually" fallback in Phase 3 has been removed — `HOST_ENV_URL` is always populated by Phase 1, or the skill stops before Phase 3.
 
 ### deploy-pipeline
 
 No change. `deploy-pipeline` reads `hostEnvUrl` from `.last-pipeline.json` written by `setup-pipeline`.
 
-### plan-alm
+### plan-alm (✅ wired)
 
-In `plan-alm` Phase 1: read `.last-host-check.json` if present (within 24h is "fresh"); otherwise queue `ensure-pipelines-host` as the first sub-skill before `setup-pipeline`.
+`plan-alm` Phase 1 step 12 invokes `ensure-pipelines-host-detect.js` and stores the result as `HOST_RESOLUTION` (skipped when `PIPELINE_DONE = true`). Phase 2 Q4 branches on `HOST_RESOLUTION.status`. The generated `docs/alm-plan.html` includes a "Pipelines Host" card and (when `willEnsureDuringExecution: true`) a sub-bullet under the "Setup pipeline" checklist step. See `references/cicd-pipeline-patterns.md` and the `plan-alm-update-PLAN.md` spec.
 
 ## Threat model — built-in mitigations
 
@@ -630,7 +631,7 @@ In `plan-alm` Phase 1: read `.last-host-check.json` if present (within 24h is "f
 |---|---|
 | Confused-deputy / silent provisioning | Phase 1.4 tenant identity gate + Phase 3 explicit choice + Phase 4.A pre-call confirmation echoing the exact request body |
 | Duplicate host creation | Phase 2.5 tenant-wide enumeration finds any existing Custom Host before Phase 3 offers to create. Phase 3.C-pre / 3.C-pre' surface existing hosts for reuse. User must explicitly decline reuse (option "No") to reach the create-new tree. |
-| Stale local cache → using a deleted host | Phase 1.0 cache fast-path validates with a live `deploymentpipelines?$top=0` probe before reusing — 404/403/timeout falls through to full Phase 2 |
+| Stale local cache → using a deleted host | Phase 1.0 cache fast-path validates with a live `solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$top=1` probe before reusing — 404/403/timeout falls through to full Phase 2 |
 | 404 ambiguity → unintended action | Phase 2.2 disambiguation rule — never act on a single 404; corroborate with list-tenant-envs |
 | Wrong-tenant provisioning | Phase 1.4 echoes tenantId, organizationId, and dev env URL; Phase 4.A echoes tenantId in the pre-call body |
 | `CannotRedirect` masked | Phase 2.3 explicitly detects this and stops with a specific error rather than continuing into a wrong-host write |
@@ -674,7 +675,7 @@ In `plan-alm` Phase 1: read `.last-host-check.json` if present (within 24h is "f
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Check local cache and detect prerequisites | Checking cache and detecting prerequisites | Phase 1.0 read .last-host-check.json; if fresh probe finalHostEnvUrl with deploymentpipelines?$top=0 — on 200 reuse and skip to Phase 6. Otherwise run verify-alm-prerequisites.js + detect-project-context.js; acquire BAP_TOKEN; tenant identity confirmation gate |
+| Check local cache and detect prerequisites | Checking cache and detecting prerequisites | Phase 1.0 read .last-host-check.json; if fresh probe finalHostEnvUrl with solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$top=1 — on 200 reuse and skip to Phase 6. Otherwise run verify-alm-prerequisites.js + detect-project-context.js; acquire BAP_TOKEN; tenant identity confirmation gate |
 | Run resolution order to find host | Running resolution order | GetOrgDbOrgSetting('ProjectHostEnvironmentId'); BAP env GET; if Platform check tenant default custom host; detect CannotRedirect; if no org binding run tenant-wide list+probe via list-tenant-envs.js (parallel max 10) to find existing Custom Hosts and PE; classify into AvailableUnboundCustomHost / MultipleUnboundCustomHosts / PlatformHostExistsUnbound / NoHost |
 | Confirm action with user | Confirming action with user | Branch by resolutionStatus; for AvailableUnboundCustomHost / MultipleUnboundCustomHosts / PlatformHostExistsUnbound surface reuse prompt FIRST; only fall through to NoHost create-new tree if user declines reuse; collect explicit consent for Phase 4.A with pre-call body echo |
 | Execute chosen path | Executing chosen path | Run path A (Custom D365_ProjectHost env-create)/B (manual app install)/C (PPAC New custom host); poll lifecycle ops at Retry-After interval; honor 15-min timeout |
@@ -703,26 +704,27 @@ These need real-environment validation:
     Remaining: validate cap defaults against typical customer tenants (5–50 envs) — should be no-op overhead there.
 11. **`cacheMaxAgeMs` default.** 24h is a starting guess. May need tightening if hosts change frequently in dev tenants. Make it configurable via `--cacheMaxAgeHours` and document.
 
-## Scripts to be Implemented
+## Scripts
 
-(All under `plugins/power-pages/scripts/lib/` unless noted. Each is small, single-purpose Node, parses argv, uses `validation-helpers.js` for HTTPS, prints JSON to stdout, exits 0/1.)
+All shipped under `plugins/power-pages/scripts/lib/` (or as noted). Each is single-purpose Node, parses argv, uses `validation-helpers.js` for HTTPS, prints JSON to stdout.
 
-| Script | Purpose | Args | Output (stdout JSON) |
+| Script | Purpose | Args | Output |
 |---|---|---|---|
-| `check-env-host-binding.js` | Calls `GetOrgDbOrgSetting('ProjectHostEnvironmentId')` on the source env | `--envUrl`, `--token` | `{ bound: bool, hostEnvId: string\|null }` |
-| `resolve-env-by-id.js` | Resolves a BAP env GUID to its instance URL + sku + permissions | `--bapToken`, `--envId` | `{ found: bool, envId, instanceUrl, instanceApiUrl, displayName, environmentSku, isManaged, permissions }`; on 404: `{ found: false, reason: "404-ambiguous" }` |
-| `list-tenant-envs.js` | (a) Lists all BAP envs in the tenant; (b) pre-filters by sku + sorts by lastModifiedTime desc + caps at maxEnvsToProbe; (c) per-env probe `solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$select=version&$top=1` (parallel, max 10 concurrent) to detect Pipelines presence + capture version in one call; (d) classifies each env into existing-PE, existing-custom-host, eligible-for-app-install, inaccessible, not-eligible | `--bapToken`, `--skus` (opt, default `Production`; comma list; PE always included), `--maxEnvsToProbe` (opt, default 50), `--maxConcurrency` (opt, default 10), `--probeTimeoutMs` (opt, default 5000) | `{ existingCustomHosts: [{ envId, instanceApiUrl, displayName, environmentSku, pipelinesSolutionVersion }], existingPlatformHost: {...}\|null, eligibleForAppInstall: [...], inaccessibleEnvs: [{ envId, displayName, reason }], totalEnvsInTenant, envsAfterFilter, envsProbed, probeDurationMs, hitProbeCap: bool }` |
-| `provision-custom-host.js` | Calls BAP env-create with `D365_ProjectHost` template + `Production` sku + `CommonDataService` databaseType. Polls lifecycle op until Succeeded | `--bapToken`, `--displayName`, `--region`, `--correlationId` (opt), `--timeoutSec` (opt, default 900) | `{ status, instanceApiUrl, instanceUrl, envId, displayName, environmentSku, provisioningState, durationSec, correlationId }` |
-| `verify-host-readiness.js` | WhoAmI (JIT for PE-detection case) → deploymentpipelines top=0 → solutions filter for Pipelines unique name | `--hostEnvUrl`, `--hostToken` | `{ ready: bool, pipelinesSolutionVersion: string\|null, checks: { whoami, deploymentpipelines, solutions }, warnings: string[] }` |
-| `validate-ensure-host.js` (skill scripts/) | Stop-hook validator for `.last-host-check.json` schema + `ready: true` invariant; gracefully exits 0 if file missing (not an ensure-host session) | none (auto-discovers project root) | exit 0/1 |
+| `check-env-host-binding.js` | `POST GetOrgDbOrgSetting('ProjectHostEnvironmentId')` on the source env | `--envUrl`, `--token` | `{ bound, hostEnvId }` |
+| `resolve-env-by-id.js` | BAP env GET with `$expand=properties.linkedEnvironmentMetadata,properties.permissions` | `--bapToken`, `--envId` | `{ found, envId, instanceUrl, instanceApiUrl, displayName, environmentSku, isManaged, permissions, ... }`; on 404 returns `{ found: false, reason: "404-ambiguous" }` |
+| `list-tenant-envs.js` | List + per-env Pipelines-presence probe (`solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$select=version&$top=1`), parallel max 10 concurrent. Pre-filter: sku + has-Dataverse + optional `--includeName`. Ranking: name-hint pattern + admin-perms + recency. Cap: `--maxEnvsToProbe` (default 30). | `--bapToken`, `--skus` (default `Production`; PE always included), `--maxEnvsToProbe`, `--maxConcurrency`, `--probeTimeoutMs`, `--includeName`, `--firstHitWins` | `{ existingCustomHosts[], existingPlatformHost, eligibleForAppInstall[], inaccessibleEnvs[], inaccessibilityBreakdown, totalEnvsInTenant, envsAfterFilter, envsProbed, hitProbeCap, earlyExitOnFirstHit, probeDurationMs }` |
+| `verify-host-readiness.js` | `WhoAmI` (proves auth + triggers JIT in PE-detection path) → solutions filter for `msdyn_AppDeploymentAnchor` (one call covers presence + version) | `--hostEnvUrl`, `--hostToken`, `--skipWhoAmI` (opt), `--minPipelinesVersion` (opt) | `{ ready, pipelinesSolutionVersion, checks: { whoami, solutions }, warnings[] }` |
+| `provision-custom-host.js` | POST BAP env-create with `D365_ProjectHost` template + `Production` sku + `CommonDataService` databaseType. Polls lifecycle op via `Location` header at `Retry-After` interval. Handles `properties.provisioningState` / `state` / `status.code` shapes. 5xx-transient retry. 401/403 with explicit guidance. | `--bapToken`, `--displayName`, `--region`, `--correlationId` (opt), `--timeoutSec` (opt, default 900), `--apiVersion` (opt, default 2021-04-01) | `{ status, envId, instanceUrl, instanceApiUrl, displayName, environmentSku, provisioningState, durationSec, correlationId, pollAttempts, locationHeader }` |
+| `ensure-pipelines-host-detect.js` | Detection-only orchestrator wrapper. Runs Phase 1.0 (cache fast-path) + Phase 2 (resolution order including tenant-wide enumeration) + Phase 5 (verify if host found). Always emits `actionTaken: "none"`. Used by `plan-alm` Phase 1 and `setup-pipeline` Phase 1. | `--envUrl`, `--token`, `--userId`, `--bapToken`, `--projectRoot`, `--cacheMaxAgeHours` (opt), `--no-cache`, `--includeName`, `--maxEnvsToProbe`, `--skus`, `--minPipelinesVersion` | `.last-host-check.json` schema |
+| `validate-ensure-host.js` (skill `scripts/`) | PostToolUse Stop-hook validator. Schema v1+v2 forward-compat. Treats `CannotRedirect` / `OrgSettingStale` / `PermissionDenied` as documented terminal-error states (skill ran successfully even if host isn't usable). | n/a (reads stdin JSON `{cwd}`) | exit 0 (approve) or exit 2 (block) |
 
-**Deferred** (will be added when PE provisioning ships):
-- `provision-platform-host.js` — calls `getOrCreate` BAP endpoint with `D365_1stPartyAdminApps` + `Platform` body. Spec is fully defined in *Deferred — Platform Host provisioning* below.
+**Deferred** (will ship when PE provisioning is added):
+- `provision-platform-host.js` — calls `getOrCreate` BAP endpoint with `D365_1stPartyAdminApps` + `Platform` body. Full spec in *Deferred — Platform Host provisioning* below.
 
 Existing helpers reused (no changes):
 - `verify-alm-prerequisites.js`
 - `detect-project-context.js`
-- `discover-pipelines-host.js` (the tenant-default-custom probe; called from Phase 2 step 3)
+- `discover-pipelines-host.js` (the tenant-default-custom-host probe; called from Phase 2 step 3 inside the wrapper)
 - `update-skill-tracking.js`
 
 ## Deferred — Platform Host provisioning
@@ -782,10 +784,12 @@ No code change needed in detection (Phase 2) — that already returns `RESOLUTIO
 
 ## Validation script
 
-`scripts/validate-ensure-host.js` (PostToolUse Stop hook, registered in `hooks/hooks.json`):
+`skills/ensure-pipelines-host/scripts/validate-ensure-host.js` (PostToolUse Stop hook, registered via `TRACKED_SKILLS` in `scripts/lib/powerpages-hook-utils.js`):
 
 - If no `.last-host-check.json` in cwd → exit 0 (not an ensure-host session).
-- If present: validate `schemaVersion === 1` or `2` (forward-compatible), required fields populated (`tenantId`, `sourceEnvUrl`, `resolutionStatus`, `finalHostEnvUrl` — except when `resolutionStatus` is a terminal-error state where `finalHostEnvUrl` may be null), `ready === true` (else exit 1 with reason). The `candidates` block (v2) is optional — its absence does not fail validation.
+- If present: validate `schemaVersion === 1` or `2` (forward-compatible); required fields populated (`tenantId`, `sourceEnvUrl`, `resolutionStatus`); `ready === true` for non-terminal-error statuses; `finalHostEnvUrl` populated when `ready === true`.
+- Terminal-error statuses (`CannotRedirect` / `OrgSettingStale` / `PermissionDenied`) are accepted with `ready: false` — the skill ran successfully and surfaced a state requiring manual / admin resolution.
+- The `candidates` block (v2) is optional — its absence does not fail validation.
 
 The companion prompt-hook checks:
 1. Either (a) Phase 1.0 cache fast-path succeeded and we reused the cached host, OR (b) the full flow ran:

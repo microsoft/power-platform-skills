@@ -590,3 +590,250 @@ test('render-alm-plan: single-solution Pipelines tab keeps simple stage flow', (
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ── Tests 13: hostResolution → "Pipelines Host" card on the Pipeline tab ──────
+
+test('render-alm-plan: hostResolution AvailableUsingCustomHost renders host-card-ok with URL + version', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://pascalepipelineshost.crm.dynamics.com',
+        hostEnvId: '0817fd3d-a664-e99a-a758-dd9dc03ceb01',
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.2.3.4',
+        candidatesCount: 0,
+        willEnsureDuringExecution: false,
+        willProvisionCustom: false,
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // The actual rendered card uses class="card host-card host-card-ok" — search
+    // for the full attribute string so we don't false-match the CSS rules in <head>.
+    assert.ok(html.includes('class="card host-card host-card-ok"'),
+      'Host card element should carry the host-card-ok modifier class');
+    assert.ok(html.includes('pascalepipelineshost.crm.dynamics.com'),
+      'Host URL should appear in the card');
+    assert.ok(html.includes('Pipelines v9.2.3.4'),
+      'Pipelines solution version should be rendered');
+    assert.ok(html.includes('Reachable'),
+      'Card meta should indicate the host is reachable');
+    // Card belongs to the Pipeline tab (between tab-pipelines opener and tab-checklist).
+    const pipeIdx = html.indexOf('id="tab-pipelines"');
+    const checkIdx = html.indexOf('id="tab-checklist"');
+    const cardIdx = html.indexOf('class="card host-card host-card-ok"');
+    assert.ok(pipeIdx !== -1 && checkIdx !== -1 && cardIdx !== -1, 'All markers present');
+    assert.ok(cardIdx > pipeIdx && cardIdx < checkIdx,
+      'Host card should sit inside the Pipelines tab');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: hostResolution willEnsureDuringExecution renders host-card-pending with status-specific note', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        hostEnvId: null,
+        hostType: null,
+        pipelinesSolutionVersion: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: true,
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('class="card host-card host-card-pending"'),
+      'Host card element should carry the host-card-pending modifier class');
+    assert.ok(html.includes('Will be ensured during setup-pipeline'),
+      'Card value should advertise the deferred ensure');
+    assert.ok(html.includes('D365_ProjectHost'),
+      'NoHost note should reference the D365_ProjectHost template');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: hostResolution MultipleUnboundCustomHosts uses candidatesCount in pending note', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'MultipleUnboundCustomHosts',
+        hostEnvUrl: null,
+        hostEnvId: null,
+        hostType: null,
+        pipelinesSolutionVersion: null,
+        candidatesCount: 3,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        userChoseDeferToSetupPipeline: true,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('class="card host-card host-card-pending"'));
+    assert.ok(html.includes('Will pick from 3 existing Custom Hosts'),
+      'Pending note should reference candidatesCount');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: hostResolution CannotRedirect renders host-card-blocked', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'CannotRedirect',
+        hostEnvUrl: null,
+        hostEnvId: null,
+        hostType: null,
+        pipelinesSolutionVersion: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: false,
+        willProvisionCustom: false,
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('class="card host-card host-card-blocked"'),
+      'Host card element should carry the host-card-blocked modifier class');
+    assert.ok(html.includes('CannotRedirect'),
+      'Card should call out the CannotRedirect status');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: hostResolution absent → no Pipelines Host card and no host-checklist substep', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    // No hostResolution provided (Manual path or pre-update plans).
+    const { status } = runScript(makeValidData(), outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Check for the rendered card element (full class attribute) rather than
+    // the bare modifier names, which also appear in the embedded CSS rules.
+    assert.ok(!html.includes('class="card host-card host-card-ok"'),
+      'host-card-ok element should be omitted when hostResolution is absent');
+    assert.ok(!html.includes('class="card host-card host-card-pending"'),
+      'host-card-pending element should be omitted when hostResolution is absent');
+    assert.ok(!html.includes('class="card host-card host-card-blocked"'),
+      'host-card-blocked element should be omitted when hostResolution is absent');
+    assert.ok(!html.includes('check-ensure-host'),
+      'Host substep should be omitted when hostResolution is absent');
+    // Placeholders must still be substituted to empty (no leaked tokens).
+    assert.ok(!html.includes('__PIPELINES_HOST_CARD__'),
+      'Host card placeholder should be replaced (with empty)');
+    assert.ok(!html.includes('__HOST_CHECKLIST_SUBSTEP__'),
+      'Host substep placeholder should be replaced (with empty)');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Tests 14: hostResolution → checklist substep on the Execution tab ─────────
+
+test('render-alm-plan: hostResolution willEnsureDuringExecution renders checklist substep on the Execution tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUnboundCustomHost',
+        hostEnvUrl: 'https://pascalepipelineshost.crm.dynamics.com',
+        hostEnvId: '0817fd3d-a664-e99a-a758-dd9dc03ceb01',
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.2.3.4',
+        candidatesCount: 1,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('check-ensure-host'),
+      'Substep should expose the ensure-host id for inspection');
+    assert.ok(html.includes('Ensure Pipelines host'),
+      'Substep should be labelled "Ensure Pipelines host"');
+    assert.ok(html.includes('delegated by setup-pipeline'),
+      'Substep note should make the delegation explicit');
+    // Substep belongs in the Execution Checklist tab.
+    const checkIdx = html.indexOf('id="tab-checklist"');
+    const subIdx = html.indexOf('check-ensure-host');
+    assert.ok(checkIdx !== -1 && subIdx !== -1 && subIdx > checkIdx,
+      'Substep must appear inside the Execution Checklist tab');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: hostResolution AvailableUsing* (already established) does NOT render the checklist substep', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    // willEnsureDuringExecution is false — host already established, no delegation needed.
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://pascalepipelineshost.crm.dynamics.com',
+        hostEnvId: '0817fd3d-a664-e99a-a758-dd9dc03ceb01',
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.2.3.4',
+        candidatesCount: 0,
+        willEnsureDuringExecution: false,
+        willProvisionCustom: false,
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(!html.includes('check-ensure-host'),
+      'Substep must not render when willEnsureDuringExecution is false');
+    // The body-level <ul class="checklist-substep-list"> should not be emitted —
+    // search for the open tag specifically so we don't false-match the CSS rule
+    // ".checklist-substep-list{...}" in the embedded stylesheet.
+    assert.ok(!html.includes('<ul class="checklist-substep-list">'),
+      'No checklist-substep-list <ul> wrapper when host is already established');
+    assert.ok(!html.includes('Ensure Pipelines host'),
+      'No "Ensure Pipelines host" label when host is already established');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

@@ -211,6 +211,51 @@ Steps:
 
     > **Skip when `SOLUTION_DONE = false`**: if there is no manifest yet, there is nothing to be stale against — Phase 2 Q1 will handle first-time solution setup.
 
+12. **Run host resolution** (PP Pipelines path only — runs after the completeness check).
+
+    **Skip rule:** if `PIPELINE_DONE = true`, skip this step entirely — the host info comes from `.last-pipeline.json`. Only fresh-pipeline projects need resolution.
+
+    Acquire a BAP-audience access token (the BAP API uses a different audience than Dataverse):
+    ```bash
+    az account get-access-token --resource "https://service.powerapps.com/" --query accessToken -o tsv
+    ```
+    Capture the output as `BAP_TOKEN`. If acquisition fails, set `HOST_RESOLUTION = { status: 'DetectionFailed', error: '<stderr>' }` and skip the detect call.
+
+    Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `.alm-host-resolution.json` is preserved if the script fails mid-write:
+    ```bash
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
+      --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}" \
+      --bapToken "{BAP_TOKEN}" \
+      --projectRoot "." \
+      --cacheMaxAgeHours 24 > ./.alm-host-resolution.json.tmp \
+      && mv ./.alm-host-resolution.json.tmp ./.alm-host-resolution.json
+    ```
+
+    > **Note**: `ensure-pipelines-host-detect.js` is a **detection-only wrapper** the `ensure-pipelines-host` skill exposes for orchestrators. It runs Phases 1.0 (cache fast-path) + 2 (resolution order including tenant-wide enumeration) + 5 (verify if a host is found) of that workflow, but never enters Phase 3 (decision tree) or Phase 4 (provisioning). Output matches the `.last-host-check.json` schemaVersion 2 with `actionTaken: "none"` always.
+
+    **Failure handling:** if the detection script exits non-zero, set `HOST_RESOLUTION = { status: 'DetectionFailed', error: '<stderr>' }` and continue. Phase 2 Q4 falls back to today's "enter URL manually" branch.
+
+    On success, parse `.alm-host-resolution.json` and store as `HOST_RESOLUTION` (mapping the wrapper's field names into the plan-alm shape):
+    ```js
+    HOST_RESOLUTION = {
+      status: parsed.resolutionStatus,                  // one of: AvailableUsingCustomHost | AvailableUsingCustomHostByAdminDefault | AvailableUsingPlatformHost | AvailableUnboundCustomHost | MultipleUnboundCustomHosts | PlatformHostExistsUnbound | CannotRedirect | NoHost | OrgSettingStale | PermissionDenied
+      finalHostEnvUrl: parsed.finalHostEnvUrl,          // string | null
+      finalHostEnvId: parsed.finalHostEnvId,            // string | null
+      hostType: parsed.isPlatformHost ? 'platform' : (parsed.finalHostEnvUrl ? 'custom' : null),
+      pipelinesSolutionVersion: parsed.pipelinesSolutionVersion,  // string | null
+      candidates: parsed.candidates                     // { existingCustomHosts[], existingPlatformHost, eligibleForAppInstall[], inaccessibleEnvs[] }
+    }
+    ```
+
+    Report a single line:
+    ```
+    Pipeline host: {finalHostEnvUrl} ({status})
+    ```
+    or, when no URL is set yet:
+    ```
+    Pipeline host: will be ensured during setup-pipeline ({status})
+    ```
+
 ---
 
 ## Phase 2 — Gather ALM Strategy
@@ -297,21 +342,21 @@ If option 4: accept free-text description (via "Other") and build a stage list f
 
 Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the source.
 
-**Q4 (auto-detect + confirm — host environment):**
+**Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
-Run silently using `discover-pipelines-host.js`:
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
-  --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}"
-```
+This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false`.
 
-- **If auto-detected:** Ask via `AskUserQuestion`:
-  > "Use detected Pipelines host environment `{HOST_ENV_URL}`?"
-  Options: 1. Yes, use this / 2. Use a different host environment (enter via Other)
+| `status` | Q4 prompt | Result |
+|---|---|---|
+| `AvailableUsingCustomHost`, `AvailableUsingCustomHostByAdminDefault`, `AvailableUsingPlatformHost` | "Detected host `{finalHostEnvUrl}` (Pipelines v`{pipelinesSolutionVersion}`). Use this host?" Options: 1. Yes, use this / 2. Use a different host environment (Other) | Y → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`. N → fall back to today's "enter different URL" branch (free-text via Other). |
+| `AvailableUnboundCustomHost` | "Existing Custom Host `{displayName}` (`{finalHostEnvUrl}`) found in tenant — not yet bound to dev env. setup-pipeline will reuse it (recommended; avoids duplicates). Use this host?" Options: 1. Yes, use this / 2. Use a different host environment (Other) | Y → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. N → fall back to "enter different URL". |
+| `MultipleUnboundCustomHosts` | "{N} Custom Hosts found in tenant. Which one should setup-pipeline use?" Options: enumerate `HOST_RESOLUTION.candidates.existingCustomHosts[]` (up to 3) by display name + URL, plus "Other" for a custom URL, plus "Decide later — setup-pipeline will ask". | Picked candidate → `HOST_ENV_URL = candidate.instanceApiUrl`, `WILL_ENSURE_HOST = true`. Decide-later → `HOST_ENV_URL = null`, `WILL_ENSURE_HOST = true`, `USER_CHOSE_DEFER_TO_SETUP_PIPELINE = true`. |
+| `PlatformHostExistsUnbound` | "Tenant Platform Host `{finalHostEnvUrl}` exists. Use it (free, no admin role) or create a new Custom Host?" Options: 1. Use Platform Host / 2. Create new Custom Host / 3. Cancel | 1 → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. 2 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 3 → exit. |
+| `NoHost` | "No host detected. setup-pipeline will provision a new Custom Host (D365_ProjectHost template, ~5–10 min, requires Power Platform admin). Continue with this plan?" Options: 1. Yes / 2. Switch to manual export/import / 3. Cancel | 1 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 2 → restart Phase 2 with strategy = manual. 3 → exit. |
+| `CannotRedirect` | **Block.** Show the org-setting vs tenant-default mismatch error from `HOST_RESOLUTION.candidates`/`warnings` and stop the skill — only a Power Platform admin can resolve. | Exit with the specific error. |
+| `OrgSettingStale`, `PermissionDenied`, `DetectionFailed` | Surface the error; ask the user to enter the host URL manually with `pac env list` pre-fill (today's fallback). Pre-fill options from `ENV_LIST` (up to 3 known environment URLs) plus "Other" for a custom URL; pre-fill first option from `.last-pipeline.json` if present. | `HOST_ENV_URL = user-supplied`. |
 
-- **If not detected:** Ask via `AskUserQuestion` — pre-fill options from `ENV_LIST` (up to 3 known environment URLs from `pac env list`) plus "Other" for a custom URL. Pre-fill first option from `.last-pipeline.json` if present.
-
-Store as `HOST_ENV_URL`.
+Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` feed the planData `hostResolution` block in Phase 3 and the inline summary in Phase 4.
 
 **Q5:** Ask via `AskUserQuestion`:
 > "Should deployments require approval before each stage?"
@@ -481,7 +526,20 @@ Build a `planData` object with all gathered strategy inputs:
   "envVars": [ /* optional: env var metadata with per-environment values */ ],
   "breakdown": { /* bytes-per-category from the estimate */ },
   "estimationMethod": "metadata-based",
-  "estimationAccuracyPct": 15
+  "estimationAccuracyPct": 15,
+
+  // --- v3 fields from the host resolution (Phase 1 Step 12) — PP Pipelines path only ---
+  "hostResolution": {
+    "status": "AvailableUsingCustomHost | AvailableUsingCustomHostByAdminDefault | AvailableUsingPlatformHost | AvailableUnboundCustomHost | MultipleUnboundCustomHosts | PlatformHostExistsUnbound | CannotRedirect | NoHost | OrgSettingStale | PermissionDenied | DetectionFailed",
+    "hostEnvUrl": "https://pascalepipelineshost.crm.dynamics.com" | null,
+    "hostEnvId": "0817fd3d-a664-e99a-a758-dd9dc03ceb01" | null,
+    "hostType": "custom | platform | null",
+    "pipelinesSolutionVersion": "9.x.y.z" | null,
+    "candidatesCount": 0,
+    "willEnsureDuringExecution": true | false,
+    "willProvisionCustom": true | false,
+    "userChoseDeferToSetupPipeline": false
+  }
 }
 ```
 
@@ -489,12 +547,29 @@ Build a `planData` object with all gathered strategy inputs:
 
 **v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
 
+**`hostResolution` block** (PP Pipelines path only — omit for Manual path). Built from `HOST_RESOLUTION` (Phase 1 step 12) plus the auxiliary flags set by Phase 2 Q4:
+
+- `status` ← `HOST_RESOLUTION.status`
+- `hostEnvUrl` ← `HOST_ENV_URL` (from Q4) — may be `null` when the user deferred or chose to provision new
+- `hostEnvId` ← `HOST_RESOLUTION.finalHostEnvId`
+- `hostType` ← `HOST_RESOLUTION.hostType`
+- `pipelinesSolutionVersion` ← `HOST_RESOLUTION.pipelinesSolutionVersion`
+- `candidatesCount` ← `HOST_RESOLUTION.candidates.existingCustomHosts.length`
+- `willEnsureDuringExecution` ← `WILL_ENSURE_HOST` flag from Q4 (true whenever setup-pipeline will need to consult ensure-pipelines-host at execution time — i.e. status is `NoHost`, any `*Unbound*`, or the user deferred)
+- `willProvisionCustom` ← `WILL_PROVISION_CUSTOM` flag from Q4
+- `userChoseDeferToSetupPipeline` ← `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` flag from Q4 (only set in the `MultipleUnboundCustomHosts` "Decide later" branch)
+
 Populate `risks` based on gathered data:
 - If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables — you will be prompted for per-stage values during deployment." }`
 - If `GIT_STATUS = "no"`: `{ type: "info", message: "Consider enabling source control to track changes before deploying to production." }`
 - If `EXPORT_TYPE = "unmanaged"` and strategy includes a production target: `{ type: "warning", message: "Unmanaged solutions can be edited in the target environment — consider using Managed for production." }`
 - If `SOLUTION_DONE = false`: `{ type: "info", message: "A Dataverse solution will be created first — publisher prefix is irreversible once chosen." }`
 - If `KNOWN_GAPS` is set (the pre-plan completeness check in Phase 1 Step 11 found gaps and the user chose to continue): `{ type: "warning", message: "{X} site components, {Y} cloud flows, {Z} env vars, and {W} custom tables exist on the site but are not in the current solution. This plan will not promote them — run /power-pages:setup-solution sync mode before deploying, or re-run plan-alm after syncing." }`. Substitute the counts from `KNOWN_GAPS.missing.*.length`.
+- If `HOST_RESOLUTION.status === "NoHost"`: `{ type: "info", message: "No Pipelines host detected. setup-pipeline will create a new Custom Host (D365_ProjectHost template, requires Power Platform admin). Plan execution will pause for admin-role attestation and a pre-call confirmation." }`
+- If `HOST_RESOLUTION.status === "AvailableUnboundCustomHost"`: `{ type: "info", message: "An existing Custom Host (" + HOST_RESOLUTION.finalHostEnvUrl + ") will be reused. Source env will be bound to it automatically." }`
+- If `HOST_RESOLUTION.status === "MultipleUnboundCustomHosts"`: `{ type: "info", message: HOST_RESOLUTION.candidates.existingCustomHosts.length + " existing Custom Hosts found in tenant. setup-pipeline will prompt for selection." }`
+- If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it requires no admin role; creating a Custom Host instead provides better governance." }`
+- If `HOST_RESOLUTION.status === "CannotRedirect"`: `{ type: "warning", message: "CannotRedirect: source env ProjectHostEnvironmentId points at PE but tenant default custom host is set elsewhere. Resolution requires Power Platform admin." }` (Note: Phase 2 Q4 normally blocks plan generation in this state; this is a defensive entry in case the plan is somehow generated.)
 
 Write `planData` to `docs/.alm-plan-data.json` (create `docs/` if it doesn't exist).
 
@@ -570,6 +645,7 @@ Present a concise inline Markdown summary:
 **Stages:** {Dev} → {Staging} → {Production (if applicable)}
 **Approval gates:** {description from PP_APPROVAL_MODE, or "N/A — manual path"}
 **Solution export:** {Managed / Unmanaged}
+**Pipeline host:** {hostEnvUrl} ({status}) — *(PP Pipelines path only; when `WILL_ENSURE_HOST = true`, render as `Will be ensured during setup-pipeline ({status})` instead)*
 
 **Steps that will run:**
 - [ ] Setup solution {(SKIP — already set up) if SOLUTION_DONE}
@@ -809,7 +885,7 @@ Mark the "Finalize" task as `completed`.
 | Generate ALM plan | Generating ALM plan | Gather strategy inputs, build planData, render docs/alm-plan.html |
 | Approve ALM plan | Awaiting plan approval | Present inline summary + HTML plan path, get user confirmation |
 | Setup solution | Setting up solution | Invoke setup-solution skill (skip if .solution-manifest.json exists) |
-| Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill — PP Pipelines path only (skip if .last-pipeline.json exists) |
+| Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill — PP Pipelines path only (skip if .last-pipeline.json exists). May delegate to ensure-pipelines-host internally to resolve or provision the host environment when `hostResolution.willEnsureDuringExecution` is true; that delegation is transparent to plan-alm and is not a separate top-level task. |
 | Export solution | Exporting solution | Invoke export-solution skill — Manual path only |
 | Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill — PP Pipelines path, one task per target stage |
 | Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site immediately after each stage deploys — one task per target stage |
