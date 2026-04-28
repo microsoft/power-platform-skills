@@ -26,9 +26,7 @@ model: opus
 
 # ensure-pipelines-host
 
-> **Status: PLAN-ONLY.** This SKILL.md describes the intended workflow, scripts, and I/O contracts. The Node helpers under `scripts/lib/` referenced below are **not yet implemented**. The `## Scripts to be Implemented` section at the bottom is the build sheet for the execution phase.
->
-> **Scope note (this iteration):** When no host exists, this skill provisions a **Custom Host** only. Platform-Environment provisioning via the internal `getOrCreate` API — though fully understood from the v4 React hook source — is deferred to a follow-up plan. Detection of existing PEs is in scope (we use them when found); creation is not. See *Deferred — Platform Host provisioning* below.
+> **Scope (this iteration):** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — provisions a new **Custom Host** via the BAP env-create API with the `D365_ProjectHost` template. Platform-Environment provisioning via the internal `getOrCreate` API is deferred to a follow-up iteration; existing PEs are still detected and used when found. See *Deferred — Platform Host provisioning* below.
 
 Power Platform Pipelines need a **host environment** — a Dataverse environment with the *Power Platform Pipelines* managed solution installed, where pipelines, stages, run history, and artifacts live. The existing `setup-pipeline` and `deploy-pipeline` skills assume a host is already configured. This skill closes that gap.
 

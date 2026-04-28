@@ -85,24 +85,33 @@ Steps:
    ```
    Store output as `ENV_LIST`.
 
-4. Run `discover-pipelines-host.js` on the dev env to find the tenant's Pipelines host environment:
+4. **Resolve the Pipelines host via `ensure-pipelines-host-detect.js`** (the same flow `/power-pages:ensure-pipelines-host` runs internally — it reads any cached `.last-host-check.json`, then walks the resolution order: org-setting binding → BAP env GET → tenant default custom host → tenant-wide enumeration. Read-only; never prompts the user):
+
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
+   BAP_TOKEN=$(az account get-access-token --resource "https://service.powerapps.com/" --query accessToken -o tsv)
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
      --envUrl "{devEnvUrl}" \
      --token "{DEV_TOKEN}" \
-     --userId "{userId}"
+     --userId "{userId}" \
+     --bapToken "{BAP_TOKEN}" \
+     --projectRoot "."
    ```
-   Capture stdout as JSON: `const hostResult = JSON.parse(output)`.
-   If `hostResult.found` is true, store `hostResult.hostEnvUrl` as `HOST_ENV_URL`.
-   If `hostResult.found` is false, no default host is configured — will need to ask user.
 
-5. Cross-reference `HOST_ENV_URL` with `ENV_LIST` to confirm the host environment appears in `pac env list` output. Match on the URL or `EnvironmentId` field.
+   Capture stdout as JSON: `const hostResult = JSON.parse(output)`. Read `hostResult.resolutionStatus`, `hostResult.finalHostEnvUrl`, `hostResult.ready`.
 
-   If not found in `ENV_LIST`: set `HOST_ENV_URL = null` (will ask user in Phase 3).
+   Branch on `resolutionStatus`:
 
-6. Check for existing `.last-pipeline.json` in the project root. If found, read its contents.
+   - **`AvailableUsingPlatformHost` / `AvailableUsingCustomHost` / `AvailableUsingCustomHostByAdminDefault`** — host is already established and `ready: true`. Store `HOST_ENV_URL = hostResult.finalHostEnvUrl` and continue. Phase 3 confirms with the user.
+   - **`AvailableUnboundCustomHost` / `MultipleUnboundCustomHosts` / `PlatformHostExistsUnbound` / `NoHost`** — no host bound to the dev env. **Delegate to `/power-pages:ensure-pipelines-host`** so the user can reuse an existing host or provision a new Custom Host (`D365_ProjectHost` template). Tell the user: *"No Pipelines host bound to `{devEnvUrl}`. Invoking `/power-pages:ensure-pipelines-host` to set one up — it will run a tenant-wide search for existing hosts and offer to provision a new Custom Host if none are found."* After the sub-skill completes, re-read `.last-host-check.json`; capture `HOST_ENV_URL = finalHostEnvUrl` only if the new marker has `ready: true`. If the user cancelled the sub-skill, stop this skill — no pipeline can be created without a host.
+   - **`CannotRedirect`** — stop with the specific tenant-misconfiguration error from `hostResult.warnings[0]`. Tell the user: *"This tenant's `DefaultCustomPipelinesHostEnvForTenant` setting and the source env's `ProjectHostEnvironmentId` org setting disagree — only a Power Platform admin can resolve."*
+   - **`OrgSettingStale`** — stop and surface the warning: *"`ProjectHostEnvironmentId` on `{devEnvUrl}` points at a host env that is no longer visible (deleted, disabled, or you lack access). Clear the org setting via PPAC or contact the env owner."*
+   - **`PermissionDenied`** — stop and surface the warning: *"Caller lacks BAP read access on the env `{devEnvUrl}` is bound to. Contact the host env owner for at least `Deployment Pipeline User` access."*
 
-7. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'not auto-detected'}`. Existing pipeline: found/not found."
+   > **Why this replaces the old `discover-pipelines-host.js` call:** that helper only checked the tenant-level `DefaultCustomPipelinesHostEnvForTenant` setting (one of four resolution signals). `ensure-pipelines-host-detect.js` walks the full resolution order the Power Apps UI uses (mirrors `ProjectHostProvider.tsx`), so we agree with the UI in every case — including the previously-undetected `AvailableUnboundCustomHost` case where a Custom Host exists in the tenant but the source env hasn't been bound yet. See `references/cicd-pipeline-patterns.md` for the full state matrix.
+
+5. Check for existing `.last-pipeline.json` in the project root. If found, read its contents.
+
+6. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'pending — will be ensured next'}` ({hostResult.resolutionStatus}). Existing pipeline: found/not found."
 
 **If an existing `.last-pipeline.json` is found**, ask via `AskUserQuestion`:
 
@@ -143,7 +152,7 @@ Before asking any questions, assemble what was auto-detected:
 | Site name | `{siteName}` from `powerpages.config.json` |
 | Solution unique name | `{uniqueName}` from `.solution-manifest.json` |
 | Dev environment URL | `{devEnvUrl}` from `pac env who` |
-| Host environment URL | `{HOST_ENV_URL}` from `RetrieveSetting` (if found) |
+| Host environment URL | `{HOST_ENV_URL}` from `ensure-pipelines-host-detect.js` (resolved in Phase 1 step 4) |
 | BAP environment ID (dev) | From `pac env list` |
 
 Ask user via `AskUserQuestion` with pre-filled values:
@@ -152,13 +161,13 @@ Ask user via `AskUserQuestion` with pre-filled values:
 >
 > - **Pipeline name**: `{siteName} Pipeline` (can change)
 > - **Source (Dev) environment**: `{devEnvUrl}`
-> - **Host environment** (where Pipelines is installed): `{HOST_ENV_URL ?? "NOT DETECTED — please provide"}`
+> - **Host environment** (where Pipelines is installed): `{HOST_ENV_URL}` *(resolved in Phase 1 — should always be present at this point; `ensure-pipelines-host` would have stopped the skill otherwise)*
 > - **Solution to deploy**: `{uniqueName}`
 > - **Target environments**: How many? (Dev → Staging / Dev → Staging → Production)"
 
 Collect from user:
 - `PIPELINE_NAME` (default: `{siteName} Pipeline`)
-- `HOST_ENV_URL` (confirm if auto-detected; ask if not)
+- `HOST_ENV_URL` (confirm — already resolved in Phase 1; user can override only if they want to point at a different host they administer, in which case re-run `/power-pages:ensure-pipelines-host` first to validate it)
 - Target environment count and URLs (`STAGING_ENV_URL`, `PROD_ENV_URL` if applicable)
 - BAP environment IDs for each target (from `pac env list` — pre-fill if found, otherwise ask)
 

@@ -15,6 +15,9 @@ const TRACKED_SKILLS = {
   'create-webroles': {
     validatorScript: 'skills/create-webroles/scripts/validate-webroles.js',
   },
+  'ensure-pipelines-host': {
+    validatorScript: 'skills/ensure-pipelines-host/scripts/validate-ensure-host.js',
+  },
   'add-cloud-flow': {
     validatorScript: 'skills/add-cloud-flow/scripts/validate-cloudflow.js',
   },
