@@ -1,8 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-// Unit tests for create-deployment-pipeline.js
-// Network calls are mocked via module-level replacement on helpers.makeRequest.
+// Unit tests for create-deployment-pipeline.js (unprefixed schema).
+// Field shape verified against msdyn_AppDeploymentAnchor v9.1.2026034 in a
+// live tenant on 2026-04-28.
 
 const { createDeploymentPipeline } = require('../lib/create-deployment-pipeline');
 
@@ -12,103 +13,121 @@ const STAGE2_GUID = 'aaaaaaaa-bbbb-cccc-dddd-222222222222';
 const SOURCE_ENV_ID = 'src-env-0000-0000-0000-000000000000';
 const TARGET_ENV_ID_1 = 'tgt-env-1111-1111-1111-111111111111';
 const TARGET_ENV_ID_2 = 'tgt-env-2222-2222-2222-222222222222';
+const HOST = 'https://host.crm.dynamics.com';
 
-function makeEntityIdUrl(base, entity, guid) {
-  return `${base}/api/data/v9.2/${entity}(${guid})`;
+function setupMock(t, fn) {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = fn;
+  t.after(() => { helpers.makeRequest = orig; });
 }
 
-function buildMockMakeRequest(hostEnvUrl) {
-  // Track call sequence to return correct entity IDs
-  let callIndex = 0;
+function makeEntityIdUrl(entity, guid) {
+  return `${HOST}/api/data/v9.1/${entity}(${guid})`;
+}
+
+// Helper that returns a default-success mock router for a single-stage pipeline create.
+function defaultSuccessMock(stageGuids = [STAGE1_GUID]) {
+  let stageIdx = 0;
   return async (opts) => {
-    callIndex++;
-    if (opts.method === 'POST' && opts.url.includes('/deploymentpipelines') && !opts.url.includes('/msdyn_sourceenvironment')) {
-      // Pipeline create
-      return {
-        statusCode: 204,
-        body: '',
-        headers: { 'odata-entityid': makeEntityIdUrl(hostEnvUrl, 'deploymentpipelines', PIPELINE_GUID) },
-      };
+    // Pipeline existence check (filter on name)
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
     }
-    if (opts.method === 'PUT' && opts.url.includes('/$ref')) {
-      // $ref association
+    // Stage existence check (filter on _deploymentpipelineid_value)
+    if (opts.method === 'GET' && opts.url.includes('/deploymentstages') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    // Source association check (M2M nav)
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    // Pipeline create
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentpipelines', PIPELINE_GUID) } };
+    }
+    // Source $ref association (POST + deploymentpipeline_deploymentenvironment)
+    if (opts.method === 'POST' && opts.url.includes('/deploymentpipeline_deploymentenvironment/$ref')) {
       return { statusCode: 204, body: '' };
     }
-    if (opts.method === 'POST' && opts.url.includes('/deploymentstages')) {
-      // Stage creates — return different GUIDs per call
-      const stageGuid = callIndex % 2 === 0 ? STAGE1_GUID : STAGE2_GUID;
-      return {
-        statusCode: 204,
-        body: '',
-        headers: { 'odata-entityid': makeEntityIdUrl(hostEnvUrl, 'deploymentstages', stageGuid) },
-      };
+    // Stage create
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      const guid = stageGuids[stageIdx++] || STAGE1_GUID;
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentstages', guid) } };
     }
     return { statusCode: 200, body: '{}' };
   };
 }
 
-test('createDeploymentPipeline returns pipelineId and stages[] on success', async (t) => {
-  const helpers = require('../lib/validation-helpers');
-  const origReq = helpers.makeRequest;
+test('returns pipelineId and stages[] on success — uses unprefixed schema', async (t) => {
+  let pipelineBodySeen = null;
+  let refBodySeen = null;
+  let refMethod = null;
+  let refUrl = null;
+  let stageBodySeen = null;
 
-  const HOST = 'https://host.crm.dynamics.com';
-  helpers.makeRequest = buildMockMakeRequest(HOST);
-
-  t.after(() => { helpers.makeRequest = origReq; });
+  setupMock(t, async (opts) => {
+    if (opts.method === 'GET' && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      pipelineBodySeen = JSON.parse(opts.body);
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentpipelines', PIPELINE_GUID) } };
+    }
+    if (opts.url.includes('/deploymentpipeline_deploymentenvironment/$ref')) {
+      refMethod = opts.method;
+      refUrl = opts.url;
+      refBodySeen = JSON.parse(opts.body);
+      return { statusCode: 204, body: '' };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      stageBodySeen = JSON.parse(opts.body);
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentstages', STAGE1_GUID) } };
+    }
+    return { statusCode: 200, body: '{}' };
+  });
 
   const result = await createDeploymentPipeline({
     hostEnvUrl: HOST,
     token: 'fake-token',
-    pipelineName: 'IdeaSphere Pipeline',
+    pipelineName: 'BYOC Demo Pipeline',
     description: 'Test pipeline',
     sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
     stagesJson: JSON.stringify([
-      { name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1, order: 1 },
+      { name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1 },
     ]),
   });
 
   assert.equal(result.pipelineId, PIPELINE_GUID);
-  assert.equal(result.pipelineName, 'IdeaSphere Pipeline');
-  assert.ok(Array.isArray(result.stages));
+  assert.equal(result.pipelineName, 'BYOC Demo Pipeline');
   assert.equal(result.stages.length, 1);
-  assert.equal(result.stages[0].name, 'Deploy to Staging');
-  assert.equal(result.stages[0].targetDeploymentEnvironmentId, TARGET_ENV_ID_1);
-  assert.ok(result.stages[0].stageId, 'stageId should be set');
+  assert.equal(result.stages[0].stageId, STAGE1_GUID);
+
+  // Pipeline body uses unprefixed schema
+  assert.equal(pipelineBodySeen.name, 'BYOC Demo Pipeline');
+  assert.equal(pipelineBodySeen.description, 'Test pipeline');
+  assert.equal(pipelineBodySeen.statuscode, 1);
+  assert.equal(pipelineBodySeen.statecode, 0);
+  assert.equal(pipelineBodySeen.msdyn_name, undefined);
+  assert.equal(pipelineBodySeen.msdyn_description, undefined);
+
+  // Source ref uses POST (not PUT) on deploymentpipeline_deploymentenvironment
+  assert.equal(refMethod, 'POST');
+  assert.match(refUrl, /\/deploymentpipeline_deploymentenvironment\/\$ref$/);
+  assert.equal(refBodySeen['@odata.id'], `deploymentenvironments(${SOURCE_ENV_ID})`);
+
+  // Stage body uses unprefixed @odata.bind property names
+  assert.equal(stageBodySeen.name, 'Deploy to Staging');
+  assert.equal(stageBodySeen['deploymentpipelineid@odata.bind'], `/deploymentpipelines(${PIPELINE_GUID})`);
+  assert.equal(stageBodySeen['targetdeploymentenvironmentid@odata.bind'], `/deploymentenvironments(${TARGET_ENV_ID_1})`);
+  assert.equal(stageBodySeen['msdyn_pipelineid@odata.bind'], undefined);
 });
 
-test('createDeploymentPipeline gives each stage a stageId from OData-EntityId', async (t) => {
-  const helpers = require('../lib/validation-helpers');
-  const origReq = helpers.makeRequest;
-
-  const HOST = 'https://host.crm.dynamics.com';
-
-  // Return distinct GUIDs for the two stages
-  const stageGuids = [STAGE1_GUID, STAGE2_GUID];
-  let stageCallIndex = 0;
-
-  helpers.makeRequest = async (opts) => {
-    if (opts.method === 'POST' && opts.url.includes('/deploymentpipelines') && !opts.url.includes('/$ref')) {
-      return {
-        statusCode: 204,
-        body: '',
-        headers: { 'odata-entityid': `${HOST}/api/data/v9.2/deploymentpipelines(${PIPELINE_GUID})` },
-      };
-    }
-    if (opts.method === 'PUT' && opts.url.includes('/$ref')) {
-      return { statusCode: 204, body: '' };
-    }
-    if (opts.method === 'POST' && opts.url.includes('/deploymentstages')) {
-      const guid = stageGuids[stageCallIndex++];
-      return {
-        statusCode: 204,
-        body: '',
-        headers: { 'odata-entityid': `${HOST}/api/data/v9.2/deploymentstages(${guid})` },
-      };
-    }
-    return { statusCode: 200, body: '{}' };
-  };
-
-  t.after(() => { helpers.makeRequest = origReq; });
+test('multi-stage — assigns each stage a distinct stageId', async (t) => {
+  setupMock(t, defaultSuccessMock([STAGE1_GUID, STAGE2_GUID]));
 
   const result = await createDeploymentPipeline({
     hostEnvUrl: HOST,
@@ -117,50 +136,106 @@ test('createDeploymentPipeline gives each stage a stageId from OData-EntityId', 
     description: '',
     sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
     stagesJson: JSON.stringify([
-      { name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1, order: 1 },
-      { name: 'Deploy to Production', targetDeploymentEnvironmentId: TARGET_ENV_ID_2, order: 2 },
+      { name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1 },
+      { name: 'Deploy to Production', targetDeploymentEnvironmentId: TARGET_ENV_ID_2 },
     ]),
   });
 
   assert.equal(result.stages.length, 2);
   assert.equal(result.stages[0].stageId, STAGE1_GUID);
   assert.equal(result.stages[1].stageId, STAGE2_GUID);
-  assert.equal(result.stages[0].name, 'Deploy to Staging');
-  assert.equal(result.stages[1].name, 'Deploy to Production');
 });
 
-test('createDeploymentPipeline throws when --pipelineName is missing', async () => {
+test('idempotent — reuses existing pipeline by name', async (t) => {
+  let pipelinePostCount = 0;
+  setupMock(t, async (opts) => {
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && opts.url.includes('$filter=')) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ value: [{ deploymentpipelineid: PIPELINE_GUID, name: 'Existing Pipeline' }] }),
+      };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentstages') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentenvironmentid: SOURCE_ENV_ID }] }) };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      pipelinePostCount++;
+      return { statusCode: 204, body: '' };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentstages', STAGE1_GUID) } };
+    }
+    return { statusCode: 200, body: '{}' };
+  });
+
+  const result = await createDeploymentPipeline({
+    hostEnvUrl: HOST,
+    token: 'fake-token',
+    pipelineName: 'Existing Pipeline',
+    sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
+    stagesJson: JSON.stringify([{ name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1 }]),
+  });
+
+  assert.equal(result.pipelineId, PIPELINE_GUID);
+  assert.equal(pipelinePostCount, 0, 'must not POST when reusing');
+});
+
+test('idempotent — reuses existing stage by name+pipelineId', async (t) => {
+  let stagePostCount = 0;
+  setupMock(t, async (opts) => {
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentstages') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentstageid: STAGE2_GUID, name: 'Deploy to Staging' }] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentpipelines', PIPELINE_GUID) } };
+    }
+    if (opts.method === 'POST' && opts.url.includes('/deploymentpipeline_deploymentenvironment/$ref')) {
+      return { statusCode: 204, body: '' };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      stagePostCount++;
+      return { statusCode: 204, body: '' };
+    }
+    return { statusCode: 200, body: '{}' };
+  });
+
+  const result = await createDeploymentPipeline({
+    hostEnvUrl: HOST,
+    token: 'fake-token',
+    pipelineName: 'New Pipeline With Reused Stage Name',
+    sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
+    stagesJson: JSON.stringify([{ name: 'Deploy to Staging', targetDeploymentEnvironmentId: TARGET_ENV_ID_1 }]),
+  });
+
+  assert.equal(result.stages.length, 1);
+  assert.equal(result.stages[0].stageId, STAGE2_GUID);
+  assert.equal(stagePostCount, 0, 'must not POST when stage exists');
+});
+
+test('throws when required args are missing', async () => {
   await assert.rejects(
-    () => createDeploymentPipeline({
-      hostEnvUrl: 'https://host.crm.dynamics.com',
-      token: 'tok',
-      sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
-      stagesJson: '[]',
-    }),
-    /--pipelineName is required/
+    () => createDeploymentPipeline({ token: 't', pipelineName: 'p', sourceDeploymentEnvironmentId: SOURCE_ENV_ID, stagesJson: '[]' }),
+    /--hostEnvUrl is required/,
   );
-});
-
-test('createDeploymentPipeline throws when --hostEnvUrl is missing', async () => {
   await assert.rejects(
-    () => createDeploymentPipeline({
-      token: 'tok',
-      pipelineName: 'Pipeline',
-      sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
-      stagesJson: '[]',
-    }),
-    /--hostEnvUrl is required/
+    () => createDeploymentPipeline({ hostEnvUrl: HOST, token: 't', sourceDeploymentEnvironmentId: SOURCE_ENV_ID, stagesJson: '[]' }),
+    /--pipelineName is required/,
   );
-});
-
-test('createDeploymentPipeline throws when --sourceDeploymentEnvironmentId is missing', async () => {
   await assert.rejects(
-    () => createDeploymentPipeline({
-      hostEnvUrl: 'https://host.crm.dynamics.com',
-      token: 'tok',
-      pipelineName: 'Pipeline',
-      stagesJson: '[]',
-    }),
-    /--sourceDeploymentEnvironmentId is required/
+    () => createDeploymentPipeline({ hostEnvUrl: HOST, token: 't', pipelineName: 'p', stagesJson: '[]' }),
+    /--sourceDeploymentEnvironmentId is required/,
+  );
+  await assert.rejects(
+    () => createDeploymentPipeline({ hostEnvUrl: HOST, token: 't', pipelineName: 'p', sourceDeploymentEnvironmentId: SOURCE_ENV_ID }),
+    /--stagesJson is required/,
   );
 });
