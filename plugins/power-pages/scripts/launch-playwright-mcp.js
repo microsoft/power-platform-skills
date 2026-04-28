@@ -6,12 +6,31 @@
 // Self-contained — no external dependencies required.
 
 const { spawn } = require('child_process');
+const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
 
-const browser = detectBrowser();
-const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser, '--viewport-size', '1024,768'], {
-  stdio: 'inherit',
-  shell: true,
-});
+function buildMcpArgs(browser) {
+  return [
+    '@playwright/mcp@latest',
+    '--browser',
+    browser,
+    '--config',
+    path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
+  ];
+}
 
-child.on('exit', (code) => process.exit(code || 0));
+function launch({ browser = detectBrowser(), spawnFn = spawn, onExit = (code) => process.exit(code || 0) } = {}) {
+  const child = spawnFn('npx', buildMcpArgs(browser), {
+    stdio: 'inherit',
+    shell: true,
+  });
+
+  child.on('exit', onExit);
+  return child;
+}
+
+if (require.main === module) {
+  launch();
+}
+
+module.exports = { buildMcpArgs, launch };

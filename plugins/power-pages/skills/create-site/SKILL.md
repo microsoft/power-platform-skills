@@ -50,7 +50,7 @@ While the scaffold loading screen is visible (from Phase 2.6 until the Home page
 ```
 
 - `message` — one short present-participle phrase shown as the status line under the progress bar in the loader (replacing the default "Getting started…" / "Setting up infrastructure…" cycle). Include the grouping context inline when it helps (e.g., `"Creating Footer component (shared components)"`).
-- `awaitingInput` — when `true`, a prominent pulsing banner appears at the top of the loader. Set this **before** every `AskUserQuestion` call and clear it (`false`) **immediately after** the user answers.
+- `awaitingInput` — when `true`, a prominent pulsing banner appears at the top of the loader and stays visible until this field is cleared. Set this **before** every `AskUserQuestion` call and clear it (`false`) **immediately after** the user answers.
 - `inputPrompt` — short context for the banner (e.g., `"Choose a framework"`). Optional.
 
 **When to update the file**:
