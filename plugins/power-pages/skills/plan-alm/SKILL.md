@@ -191,11 +191,14 @@ Steps:
       > "Your solution is **missing {N} component(s)** that exist on the site:
       >
       > - **{X}** site components (e.g. {first 3 names})
+      > - **{L}** site languages (componenttype 10428 — required; without these the target site silently fails to render post-auth)
       > - **{Y}** cloud flows
       > - **{Z}** environment variable definitions
       > - **{W}** custom tables
       >
       > A plan built now will ignore these components. How would you like to proceed?"
+
+      Always render the **site languages** line when `missing.siteLanguages.length > 0`, even when other categories are zero — this gap was a recurring silent-failure mode before discover-site-components started enumerating `powerpagesitelanguages`. See `references/solution-api-patterns.md` for the 3-entity model.
 
       Ask via `AskUserQuestion`:
 

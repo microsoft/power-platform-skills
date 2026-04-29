@@ -223,6 +223,27 @@ async function discoverPowerPageComponents(envUrl, websiteRecordId, token) {
   return collectPaginated(envUrl, path, token, 40);
 }
 
+async function discoverPowerPageSiteLanguages(envUrl, websiteRecordId, token) {
+  // Site languages are a sibling unified entity (`powerpagesitelanguage`)
+  // with its own solutioncomponent.componenttype (10428). They MUST be added
+  // to the user solution alongside powerpagecomponents — without them the
+  // target site silently fails to render post-auth. See
+  // references/solution-api-patterns.md for the 3-entity model.
+  // Older Power Pages installs without the unified entity return 404; we
+  // swallow that and return [] so the estimator stays usable.
+  const path =
+    `powerpagesitelanguages` +
+    `?$filter=_powerpagesiteid_value eq '${websiteRecordId}'` +
+    `&$select=powerpagesitelanguageid,name,languagecode` +
+    `&$top=500`;
+  try {
+    return await collectPaginated(envUrl, path, token, 5);
+  } catch (e) {
+    if (/HTTP\s+404\b/.test(String(e && e.message))) return [];
+    throw e;
+  }
+}
+
 async function discoverTables(envUrl, publisherPrefix, token, manifestPath) {
   // Try manifest first
   const fs = require('fs');
@@ -498,6 +519,11 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   const ppcs = await discoverPowerPageComponents(envUrl, websiteRecordId, resolved);
   const classified = classifyPPCs(ppcs);
 
+  // Site-language records are a sibling unified entity, NOT powerpagecomponent
+  // rows. Enumerate them so the site total reconciles with the solution total
+  // (which includes them under componenttype 10428).
+  const siteLanguages = await discoverPowerPageSiteLanguages(envUrl, websiteRecordId, resolved);
+
   const tables = await discoverTables(envUrl, publisherPrefix, resolved, datamodelManifest);
   const schemaAttrCount = await countAttributesForTables(envUrl, tables, resolved);
 
@@ -611,8 +637,15 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // "actionable" count, but that made the siteTotal non-comparable to the
   // solution count in Dataverse (which does include chunk members).
   const bundleChunkCount = classified.bundleChunks.length;
+  // Power Pages 3-entity site model: ppcs (10426) + 1 site root (10427) +
+  // siteLanguages (10428). All three live in the user solution, so the site
+  // total must include all three for parity with componentCountInSolution.
+  const websiteRootCount = 1;
+  const siteLanguageCount = siteLanguages.length;
   const siteTotalComponents =
     ppcs.length +
+    websiteRootCount +
+    siteLanguageCount +
     tables.length +
     envVarCount +
     classified.cloudFlowLinks.length +

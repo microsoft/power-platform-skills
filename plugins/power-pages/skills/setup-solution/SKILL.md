@@ -182,7 +182,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
   --powerpageComponentId "{anyPowerpageComponentId}" \
   --siteLanguageId "{siteLanguageId}"
 ```
-Capture output as JSON; extract `.websiteComponentType` (store as `websiteComponentType`), `.subComponentType` (store as `subComponentType`), and `.siteLanguageComponentType` (store as `siteLanguageComponentType`). Site language has its own distinct componenttype (~10375) — it is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly.
+Capture output as JSON; extract `.websiteComponentType` (~10427 for `powerpagesite`), `.subComponentType` (~10426 for `powerpagecomponent`), and `.siteLanguageComponentType` (~10428 for `powerpagesitelanguage`). The three sibling unified entities each have their own componenttype — site language is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly. See `references/solution-api-patterns.md` for the full 3-entity model.
 
 If the script reports the website record is not yet in any solution, stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If `subComponentType` is absent (no sub-components indexed yet), proceed anyway — you will discover all component IDs in Step 5.2.
 

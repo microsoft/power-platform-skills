@@ -78,6 +78,9 @@ Compute the cutoff timestamp: `new Date(Date.now() - <windowMs>).toISOString()`
 
 #### 2.2 Query Modified Components
 
+Power Pages stores a single site as three sibling unified entities — query each table for records modified since the cutoff. See `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for the full 3-entity model.
+
+**a) `powerpagecomponent` (componenttype 10426)** — most sub-records:
 ```
 GET {envUrl}/api/data/v9.2/powerpagecomponents
   ?$filter=_powerpagesiteid_value eq '{websiteRecordId}' and modifiedon ge {cutoffTimestamp}
@@ -85,9 +88,17 @@ GET {envUrl}/api/data/v9.2/powerpagecomponents
   &$orderby=modifiedon desc
 ```
 
-Follow `@odata.nextLink` to paginate through all pages.
+**b) `powerpagesitelanguage` (componenttype 10428)** — site languages. Query separately because they are NOT `powerpagecomponent` rows:
+```
+GET {envUrl}/api/data/v9.2/powerpagesitelanguages
+  ?$filter=_powerpagesiteid_value eq '{websiteRecordId}' and modifiedon ge {cutoffTimestamp}
+  &$select=powerpagesitelanguageid,name,languagecode,modifiedon
+  &$orderby=modifiedon desc
+```
 
-If no components found: inform the user "No components were modified in this time window." and stop (suggest widening the window).
+Follow `@odata.nextLink` on each query to paginate through all pages.
+
+If both queries return zero rows: inform the user "No components were modified in this time window." and stop (suggest widening the window).
 
 #### 2.3 Resolve Component Type Labels
 
@@ -154,24 +165,26 @@ POST {envUrl}/api/data/v9.2/solutions
 
 Extract `solutionId` from `OData-EntityId` response header.
 
-#### 4.3 Discover Component Type
+#### 4.3 Discover Component Types
 
-Use `discover-component-types.js` to resolve the powerpagecomponent type at runtime:
+Use `discover-component-types.js` to resolve every componenttype the hotfix needs at runtime. Pass `--siteLanguageId` only when at least one modified record came from the `powerpagesitelanguage` query (Step 2.2.b):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --websiteRecordId "{websiteRecordId}" \
-  --powerpageComponentId "{anyModifiedComponentId}"
+  --powerpageComponentId "{anyModifiedComponentId}" \
+  --siteLanguageId "{anyModifiedLanguageId, omit if none}"
 ```
-Capture output as JSON; extract `.subComponentType` (store as `subComponentType`). If the modified component is not yet indexed, the script falls back to querying any known sub-component from the base solution to resolve the shared type value.
+Capture output as JSON; extract `.subComponentType` (~10426 — for PPCs) and `.siteLanguageComponentType` (~10428 — for languages). If the modified component is not yet indexed, the script falls back to querying any known sub-component from the base solution to resolve the shared type value.
 
 #### 4.4 Add Components
 
-Build a JSON array of all modified components:
+Build a JSON array of all modified components, **using the right componenttype per row**:
 ```json
 [
-  { "componentId": "{powerpagecomponentid}", "componentType": "{subComponentType}", "addRequired": false, "description": "{name}" },
+  { "componentId": "{powerpagecomponentid}", "componentType": "{subComponentType}",      "addRequired": false, "description": "{name}" },
+  { "componentId": "{powerpagesitelanguageid}", "componentType": "{siteLanguageComponentType}", "addRequired": false, "description": "{language name}" },
   ...
 ]
 ```

@@ -12,13 +12,20 @@
 //
 // Output (JSON to stdout):
 //   {
-//     "websiteComponentType": 10374,
-//     "subComponentType": 10373,          // only if --powerpageComponentId provided
-//     "siteLanguageComponentType": 10375, // only if --siteLanguageId provided
+//     "websiteComponentType": 10427,      // observed for `powerpagesite` root
+//     "subComponentType": 10426,          // observed for `powerpagecomponent`; only if --powerpageComponentId provided
+//     "siteLanguageComponentType": 10428, // observed for `powerpagesitelanguage`; only if --siteLanguageId provided
 //     "resolved": [{ "objectId": "...", "componentType": 9999 }]  // for --objectIds
 //   }
 //
 // Exit 0 on success, exit 1 on failure.
+//
+// Why three component types? Power Pages stores a single site as three sibling
+// unified entities: `powerpagesite` (root), `powerpagecomponent` (sub-records),
+// and `powerpagesitelanguage` (languages). Each maps to a distinct
+// solutioncomponent.componenttype. All three must be added to the user
+// solution; missing the language record silently breaks the target site
+// post-auth. See references/solution-api-patterns.md.
 
 'use strict';
 
