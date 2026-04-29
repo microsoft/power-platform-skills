@@ -46,7 +46,7 @@ Migrate a classic Enhanced Data Model (EDM) Power Pages website to a modern stat
 4. **Runtime Discovery** — Use Playwright to crawl routes, observe auth transitions, capture network calls, and identify hidden behavior.
 5. **Build Migration Model** — Combine static and runtime evidence into a confidence-scored canonical site model.
 6. **Review Migration Plan** — Present the SPA route/component/data/security plan and get user approval before writing files.
-7. **Scaffold, Deploy, and Migrate SPA** — Create or reuse the target SPA project, deploy once to hydrate `.powerpages-site`, then re-author pages, components, services, and metadata.
+7. **Create, Deploy, and Migrate SPA** — Invoke `/create-site` with the selected framework and design choices, invoke `/deploy-site` to hydrate `.powerpages-site`, then re-author pages, components, services, and metadata.
 8. **Verify Migration** — Build and browse-test the SPA, compare against EDM evidence, and produce a drift report.
 9. **Summarize and Hand Off** — Record skill usage, summarize output, and recommend focused next skills.
 
@@ -491,15 +491,24 @@ If the user requests revisions, update the model and plan artifacts, then ask ag
 
 ---
 
-## Phase 7: Scaffold, Deploy, and Migrate SPA
+## Phase 7: Create, Deploy, and Migrate SPA
 
 **Goal:** Create or update the target SPA code site, deploy it once to create `.powerpages-site`, and then complete metadata-aware migration work according to the approved plan.
 
 ### Actions
 
-#### 7.1 Create or Reuse Target Project
+#### 7.1 Create or Reuse Target Project with `/create-site`
 
-If `TARGET_PROJECT_ROOT` does not contain a Power Pages code site, ask for approval to invoke `/create-site` to scaffold the selected framework and project location.
+If `TARGET_PROJECT_ROOT` does not contain a Power Pages code site, invoke `/create-site` first. Pass the selected framework and target location from Phase 1, and let `/create-site` run its normal discovery flow for:
+
+- Site name and purpose.
+- Audience.
+- Framework confirmation.
+- Feature direction.
+- Aesthetic and mood/design choices.
+- Initial scaffold, dependency install, local preview, and baseline site structure.
+
+Do not bypass `/create-site` by manually copying templates. The migration skill should start from a valid Power Pages SPA scaffold created through the existing skill.
 
 If the target project already exists, verify:
 
@@ -510,7 +519,7 @@ If the target project already exists, verify:
 
 If the target exists and is not empty, ask before overwriting or replacing files.
 
-#### 7.2 Build and Deploy Once to Hydrate Metadata
+#### 7.2 Build and Deploy Once with `/deploy-site`
 
 After the target SPA scaffold exists and before finalizing table permissions, web roles, site settings, server logic, or Web API settings:
 
@@ -564,7 +573,7 @@ Map:
 
 Do not leave placeholder-only pages for routes marked in scope. For manual gaps, create explicit TODO sections that explain the missing EDM behavior and link to `migration-gap-log.md`.
 
-#### 7.6 Implement Data, Forms, Auth, and Metadata Boundaries
+#### 7.6 Translate EDM Metadata into SPA Metadata Format
 
 For tables that require Web API integration, either:
 
@@ -578,14 +587,31 @@ For auth and role-based UI, either:
 
 Never bypass table permissions or imply that client-side role checks enforce data security.
 
-When `.powerpages-site/` exists, use the approved model to migrate or create metadata through existing deterministic scripts and skills:
+When `.powerpages-site/` exists, translate EDM metadata into the hydrated SPA metadata format. Do not copy EDM metadata files directly. EDM downloads often use aggregate singular files, while SPA code-site metadata is more granular:
+
+| EDM source shape | SPA `.powerpages-site` target shape |
+|------------------|-------------------------------------|
+| `sitesetting.yml` with many settings | `site-settings/<sanitized-name>.sitesetting.yml`, one file per setting |
+| `webrole.yml` with many roles | `web-roles/<role-name>.webrole.yml`, one file per role |
+| `sitemarker.yml` | `sitemarkers/<marker-name>.sitemarker.yml`, one file per marker |
+| `webpagerule.yml` | `webpage-rules/<rule-name>.webpagerule.yml`, one file per rule |
+| `websitelanguage.yml` | `site-languages/<language-name>.websitelanguage.yml`, one file per language |
+| `publishingstate.yml` | `publishing-states/<state-name>.publishingstate.yml`, one file per state |
+| `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml`, one file per access record |
+| `table-permissions/*.tablepermission.yml` | `table-permissions/*.tablepermission.yml` using SPA/code-site field names |
+
+The field shape can also differ. EDM records often use `adx_`-prefixed keys such as `adx_name`, `adx_value`, and `adx_entitylogicalname`; code-site metadata commonly uses normalized keys such as `name`, `value`, and `entitylogicalname`. Use existing Power Pages scripts and skills when possible so IDs, filenames, field ordering, and normalized schemas are created correctly.
+
+Create `migration-artifacts/metadata-translation-plan.md` before writing metadata. For each EDM aggregate record, show the source file, source record name, target `.powerpages-site` folder, target file name, action (`create`, `update`, `skip`, or `gap`), ID strategy, and confidence. Use FAQ-style EDM exports as the cautionary example: records such as `Webapi/faq_topic/enabled` and `Webapi/faq_topic/fields` live inside one `sitesetting.yml` file in EDM, but must become separate `site-settings/*.sitesetting.yml` files in the SPA metadata folder.
+
+Use the approved model to migrate or create metadata through existing deterministic scripts and skills:
 
 - Table permissions and Web API site settings via `/integrate-webapi` or approved permission/settings scripts.
 - Web roles via `/create-webroles` when missing.
 - Auth-related site settings via `/setup-auth` when login/role UX is in scope.
 - Server logic only through `/add-server-logic` when an EDM behavior cannot be safely represented client-side.
 
-If a metadata item from the EDM source cannot be confidently mapped to the new SPA site, put it in `migration-gap-log.md` instead of copying it silently.
+If a metadata item from the EDM source cannot be confidently mapped to the new SPA site, put it in `migration-gap-log.md` instead of copying it silently. Preserve the hydrated SPA baseline files created by `/deploy-site`; only add or update records that are required by the approved migration plan.
 
 #### 7.7 Build and Commit Milestones
 
@@ -737,7 +763,7 @@ Recommend only what fits the migration result:
 | Discover runtime behavior | Discovering runtime | Crawl the live site with Playwright, capture routes, auth transitions, network calls, and hidden behavior |
 | Build migration model | Building model | Combine static and runtime evidence into a confidence-scored canonical site model |
 | Review migration plan | Reviewing plan | Present SPA route/component/data/security mapping and get user approval |
-| Migrate SPA implementation | Migrating SPA | Scaffold or update the SPA, deploy once to hydrate `.powerpages-site`, and create routes, components, services, metadata, assets, and traceability artifacts |
+| Migrate SPA implementation | Migrating SPA | Run `/create-site` with design choices, deploy once to hydrate `.powerpages-site`, and create routes, components, services, translated metadata, assets, and traceability artifacts |
 | Verify migrated SPA | Verifying migration | Build and browser-test the SPA, compare against EDM evidence, and document drift |
 | Summarize migration | Summarizing migration | Record usage, summarize outputs and gaps, and recommend focused next skills |
 

@@ -15,6 +15,7 @@ Create these artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
 | `runtime-discovery-summary.md` | Human-readable runtime findings |
 | `canonical-site-model.json` | Unified model that drives migration |
 | `edm-to-spa-mapping.md` | Reviewable EDM capability to SPA implementation matrix |
+| `metadata-translation-plan.md` | Aggregate EDM metadata to granular SPA `.powerpages-site` mapping |
 | `migration-gap-log.md` | Deferred, unsupported, or low-confidence work |
 | `migration-traceability.json` | Generated SPA artifacts mapped back to EDM evidence |
 | `migration-verification-report.md` | Build/browser/drift verification results |
@@ -48,11 +49,56 @@ Use this shape as a guide. Add fields when needed, but keep the top-level catego
     "tablePermissions": [],
     "pageRules": []
   },
+  "metadataTranslation": {
+    "sourceShape": "aggregate-edm",
+    "targetShape": "granular-spa-powerpages-site",
+    "siteSettings": [],
+    "webRoles": [],
+    "sitemarkers": [],
+    "webpageRules": [],
+    "siteLanguages": [],
+    "publishingStates": [],
+    "websiteAccess": [],
+    "unmapped": []
+  },
   "assets": [],
   "unsupportedOrManual": [],
   "evidenceLedger": []
 }
 ```
+
+## Metadata Translation Model
+
+Build a metadata translation plan after `/deploy-site` creates the target `.powerpages-site/` folder. This plan must compare source EDM records with the target hydrated SPA metadata and decide whether each item is created, updated, skipped, or logged as a gap.
+
+```json
+{
+  "source": "sitesetting.yml",
+  "sourceRecord": {
+    "adx_name": "Webapi/faq_topic/enabled",
+    "adx_sitesettingid": "952b3bd5-f2a0-ed11-83fd-000d3a3b16f6",
+    "adx_value": "true"
+  },
+  "targetFolder": ".powerpages-site/site-settings",
+  "targetFile": "Webapi-faq_topic-enabled.sitesetting.yml",
+  "targetRecord": {
+    "name": "Webapi/faq_topic/enabled",
+    "value": "true"
+  },
+  "idStrategy": "generate-target-id|preserve-existing-target-id|reuse-approved-id",
+  "status": "create|update|skip|gap",
+  "reason": "Enable Web API access for faq_topic in the migrated SPA.",
+  "confidence": "high"
+}
+```
+
+Rules:
+
+- Use the target `.powerpages-site/` folder shape as the source of truth for filenames and field style.
+- Do not copy aggregate EDM files such as `sitesetting.yml`, `webrole.yml`, or `sitemarker.yml`.
+- Do not blindly preserve EDM record IDs or web role IDs. Target metadata may already have its own IDs after deployment.
+- Prefer existing creation scripts and skills for site settings, table permissions, web roles, cloud flows, and server logic.
+- Record every skipped or uncertain metadata item in `migration-gap-log.md`.
 
 ## Route Model
 

@@ -27,6 +27,55 @@ A downloaded EDM website-data root commonly contains these files and folders:
 | `locale/`, `websitelanguage.yml` | Locale and language records | Localization scope |
 | `blogs/`, `forums/`, `polls/`, `poll-placements/` | Portal feature records | Usually manual-gap candidates unless explicitly in scope |
 
+## SPA Metadata Shape After Deployment
+
+After `/create-site` and the first `/deploy-site`, the target SPA code site has a `.powerpages-site/` folder. This folder is not the same shape as many EDM downloads. It is more granular and usually stores one YAML file per metadata record.
+
+Common target folders:
+
+| SPA metadata folder | Typical contents |
+|---------------------|------------------|
+| `site-settings/` | One `<sanitized-name>.sitesetting.yml` file per site setting |
+| `web-roles/` | One `<role-name>.webrole.yml` file per web role |
+| `table-permissions/` | One `<permission-name>.tablepermission.yml` file per table permission |
+| `server-logic/` | Server logic metadata when created through `/add-server-logic` |
+| `cloud-flow-consumer/` | Cloud flow consumer metadata when created through `/add-cloud-flow` |
+| `web-pages/`, `web-templates/`, `content-snippets/`, `page-templates/`, `web-files/` | Deployed code-site page/template/content/asset metadata |
+| `publishing-states/`, `site-languages/`, `sitemarkers/`, `weblink-sets/`, `webpage-rules/`, `website-accesss/` | Granular records that may correspond to EDM aggregate files |
+
+### Aggregate EDM to Granular SPA Translation
+
+Do not copy aggregate EDM files into `.powerpages-site/`. Translate records into the hydrated SPA format:
+
+| EDM source | SPA target |
+|------------|------------|
+| `sitesetting.yml` | `site-settings/<sanitized-name>.sitesetting.yml` |
+| `webrole.yml` | `web-roles/<role-name>.webrole.yml` |
+| `sitemarker.yml` | `sitemarkers/<marker-name>.sitemarker.yml` |
+| `webpagerule.yml` | `webpage-rules/<rule-name>.webpagerule.yml` |
+| `websitelanguage.yml` | `site-languages/<language-name>.websitelanguage.yml` |
+| `publishingstate.yml` | `publishing-states/<state-name>.publishingstate.yml` |
+| `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml` |
+
+Field names can also differ. EDM often uses `adx_`-prefixed keys (`adx_name`, `adx_value`, `adx_entitylogicalname`), while code-site metadata commonly uses normalized keys (`name`, `value`, `entitylogicalname`). Prefer existing deterministic scripts and Power Pages skills to create target metadata instead of hand-writing converted YAML.
+
+### FAQV2 Contrast Example
+
+FAQV2 is a useful small EDM reference because it shows aggregate files that must become granular SPA metadata:
+
+| EDM source example | Observed record shape | SPA target implication |
+|--------------------|-----------------------|------------------------|
+| `sitesetting.yml` | Dozens of `- adx_name`, `adx_sitesettingid`, `adx_value` records, including `Webapi/faq_topic/enabled` and `Webapi/faq_topic/fields` | Split into individual `site-settings/*.sitesetting.yml` files with normalized `name`, `id`, and `value` fields |
+| `webrole.yml` | Multiple role records in one file, such as Anonymous Users, Authenticated Users, Administrators, and admin-specific roles | Split into individual `web-roles/*.webrole.yml` files |
+| `sitemarker.yml` | Marker records for Home, Search, Profile, Access Denied, and Page Not Found | Split into individual `sitemarkers/*.sitemarker.yml` files |
+| `webpagerule.yml` | Multiple redirect or access records in one aggregate file | Split into individual `webpage-rules/*.webpagerule.yml` files |
+| `table-permissions/*.tablepermission.yml` | Already one file per permission, but keys are often `adx_`-prefixed (`adx_entitylogicalname`, `adx_read`, `adx_scope`) | Keep one file per permission but normalize to the code-site schema and target-site role IDs |
+
+Use this contrast to prevent two common mistakes:
+
+1. Copying an aggregate EDM file, such as `sitesetting.yml`, into the SPA metadata folder.
+2. Preserving EDM record IDs or web role references when the target SPA site has its own hydrated metadata IDs.
+
 ## Observed Template Variants
 
 Use these variants to avoid overfitting to one portal shape:

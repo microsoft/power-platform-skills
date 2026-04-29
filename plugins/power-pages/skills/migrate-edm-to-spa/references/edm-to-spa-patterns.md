@@ -17,7 +17,7 @@ Use this reference during `/migrate-edm-to-spa` Phases 3, 6, 7, and 8 to map EDM
 | Advanced form | Multistep SPA flow or manual gap | Preserve authentication/session/progress behavior only when understood |
 | Table permission | Server-side Dataverse access rule | Do not replace with client-side checks |
 | Web role | Role model for UX gating | Pair with `/setup-auth`; real security remains table permissions |
-| Site setting | Runtime configuration or migration note | Some settings have no SPA equivalent and become deployment/admin tasks |
+| Site setting | Granular `site-settings/*.sitesetting.yml`, runtime configuration, or migration note | EDM `sitesetting.yml` must be split into per-setting SPA metadata files when migrated |
 | Custom JavaScript | Framework-specific behavior | Rewrite jQuery and portal globals into component state/effects/validation |
 | Liquid FetchXML | Web API query, server logic, or manual gap | Complex joins/aggregates may need custom backend/server logic |
 
@@ -158,6 +158,8 @@ Power Pages security is server-side. The SPA can improve UX by hiding or showing
 
 For a new SPA code site, deploy the scaffold once before finalizing security metadata. `/deploy-site` creates `.powerpages-site/`, which is required before the migration can reliably create or update table permissions, web roles, site settings, server logic metadata, and skill tracking YAML.
 
+Treat the deployment-created `.powerpages-site/` as the target schema. EDM metadata is often aggregate and `adx_`-prefixed; SPA code-site metadata is more granular and commonly normalizes keys. Translate intent and records, not files.
+
 Map:
 
 - `webrole.yml` to role names and UX gates.
@@ -190,6 +192,10 @@ Classify site settings:
 Do not assume every EDM site setting has a direct SPA equivalent.
 
 Do not copy or create target site-setting YAML until `.powerpages-site/site-settings/` exists. If deployment has not hydrated the metadata folder, keep site-setting work in the migration plan or gap log and require `/deploy-site` before finalization.
+
+When migrating site settings from EDM, split the aggregate `sitesetting.yml` records into individual `site-settings/<sanitized-name>.sitesetting.yml` files. Preserve IDs only when they belong to the target site; otherwise let existing creation scripts generate target-site IDs.
+
+Example: an EDM FAQ site may contain `Webapi/faq_topic/enabled` and `Webapi/faq_topic/fields` as records inside one `sitesetting.yml` file. In the migrated SPA, those become separate files under `.powerpages-site/site-settings/`, such as `Webapi-faq_topic-enabled.sitesetting.yml` and `Webapi-faq_topic-fields.sitesetting.yml`, using the target code-site field shape.
 
 ## Unsupported or Manual-Gap Candidates
 
