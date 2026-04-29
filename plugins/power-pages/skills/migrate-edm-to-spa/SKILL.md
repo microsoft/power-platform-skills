@@ -24,6 +24,7 @@ Migrate a classic Enhanced Data Model (EDM) Power Pages website to a modern stat
 - **Explain every inference**: Each migrated route, component, data dependency, permission, and unsupported feature must trace back to static evidence, runtime evidence, or both.
 - **Preserve user control**: Ask before downloading a site, logging in through the browser, testing destructive form actions, writing SPA files, or invoking follow-up skills.
 - **Use existing Power Pages skills**: Reuse `/create-site`, `/integrate-webapi`, `/setup-auth`, `/create-webroles`, `/test-site`, and `/deploy-site` instead of duplicating their implementation logic.
+- **Deploy to hydrate metadata**: Deploy the scaffolded SPA before metadata-dependent migration work is finalized. `/deploy-site` creates the `.powerpages-site` metadata folder that follow-up skills and migration steps need for table permissions, web roles, site settings, server logic, and related YAML.
 - **Static SPA only**: Supported target frameworks are React, Vue, Angular, and Astro. Do not generate Next.js, Nuxt, Remix, SvelteKit, Liquid, or server-rendered output.
 
 **Initial request:** $ARGUMENTS
@@ -45,7 +46,7 @@ Migrate a classic Enhanced Data Model (EDM) Power Pages website to a modern stat
 4. **Runtime Discovery** — Use Playwright to crawl routes, observe auth transitions, capture network calls, and identify hidden behavior.
 5. **Build Migration Model** — Combine static and runtime evidence into a confidence-scored canonical site model.
 6. **Review Migration Plan** — Present the SPA route/component/data/security plan and get user approval before writing files.
-7. **Scaffold and Migrate SPA** — Create or reuse the target SPA project and re-author pages, components, services, and configuration.
+7. **Scaffold, Deploy, and Migrate SPA** — Create or reuse the target SPA project, deploy once to hydrate `.powerpages-site`, then re-author pages, components, services, and metadata.
 8. **Verify Migration** — Build and browse-test the SPA, compare against EDM evidence, and produce a drift report.
 9. **Summarize and Hand Off** — Record skill usage, summarize output, and recommend focused next skills.
 
@@ -490,9 +491,9 @@ If the user requests revisions, update the model and plan artifacts, then ask ag
 
 ---
 
-## Phase 7: Scaffold and Migrate SPA
+## Phase 7: Scaffold, Deploy, and Migrate SPA
 
-**Goal:** Create or update the target SPA code site according to the approved migration plan.
+**Goal:** Create or update the target SPA code site, deploy it once to create `.powerpages-site`, and then complete metadata-aware migration work according to the approved plan.
 
 ### Actions
 
@@ -509,7 +510,30 @@ If the target project already exists, verify:
 
 If the target exists and is not empty, ask before overwriting or replacing files.
 
-#### 7.2 Establish Migration Traceability
+#### 7.2 Build and Deploy Once to Hydrate Metadata
+
+After the target SPA scaffold exists and before finalizing table permissions, web roles, site settings, server logic, or Web API settings:
+
+1. Run the target project's build command, usually:
+
+   ```bash
+   npm run build
+   ```
+
+2. Fix build failures before deployment.
+3. Ask the user to approve the required first deployment:
+
+   | Question | Options |
+   |----------|---------|
+   | The migrated SPA needs an initial deployment so Power Pages creates `.powerpages-site` metadata. Deploy now? | Deploy now (Required for metadata migration), Stop and deploy later |
+
+4. If approved, invoke `/deploy-site` for `TARGET_PROJECT_ROOT`.
+5. After deployment completes, verify `.powerpages-site/` exists in the target project.
+6. If `.powerpages-site/` is still missing, stop metadata-dependent work and report that table permissions, web roles, site settings, server logic, and tracking cannot be finalized until deployment creates it.
+
+This deployment is not optional for migrations that include metadata-dependent functionality. It hydrates the target code site metadata so the migration can create or update YAML through existing Power Pages skill patterns.
+
+#### 7.3 Establish Migration Traceability
 
 For each generated route/component/service, record its source in `migration-artifacts/migration-traceability.json`:
 
@@ -518,7 +542,7 @@ For each generated route/component/service, record its source in `migration-arti
 
 Use concise comments only when they help future maintainers understand non-obvious EDM mappings.
 
-#### 7.3 Implement Routes and Layout
+#### 7.4 Implement Routes and Layout
 
 Create the SPA route structure from the approved model:
 
@@ -528,7 +552,7 @@ Create the SPA route structure from the approved model:
 - Shared header/footer/navigation based on web templates, web link sets, and snippets.
 - Framework-appropriate routing conventions.
 
-#### 7.4 Implement Components and Content
+#### 7.5 Implement Components and Content
 
 Map:
 
@@ -540,7 +564,7 @@ Map:
 
 Do not leave placeholder-only pages for routes marked in scope. For manual gaps, create explicit TODO sections that explain the missing EDM behavior and link to `migration-gap-log.md`.
 
-#### 7.5 Implement Data, Forms, and Auth Boundaries
+#### 7.6 Implement Data, Forms, Auth, and Metadata Boundaries
 
 For tables that require Web API integration, either:
 
@@ -554,7 +578,16 @@ For auth and role-based UI, either:
 
 Never bypass table permissions or imply that client-side role checks enforce data security.
 
-#### 7.6 Build and Commit Milestones
+When `.powerpages-site/` exists, use the approved model to migrate or create metadata through existing deterministic scripts and skills:
+
+- Table permissions and Web API site settings via `/integrate-webapi` or approved permission/settings scripts.
+- Web roles via `/create-webroles` when missing.
+- Auth-related site settings via `/setup-auth` when login/role UX is in scope.
+- Server logic only through `/add-server-logic` when an EDM behavior cannot be safely represented client-side.
+
+If a metadata item from the EDM source cannot be confidently mapped to the new SPA site, put it in `migration-gap-log.md` instead of copying it silently.
+
+#### 7.7 Build and Commit Milestones
 
 Run the project build after meaningful implementation chunks:
 
@@ -567,6 +600,8 @@ Fix build errors before proceeding. Commit after significant milestones when wor
 ### Output
 
 - Migrated SPA files created or updated.
+- Initial deployment completed and `.powerpages-site/` verified for metadata-dependent migrations.
+- Metadata-dependent artifacts created or explicitly logged as gaps.
 - Traceability artifacts saved.
 - Build passes before verification.
 
@@ -581,6 +616,8 @@ Fix build errors before proceeding. Commit after significant milestones when wor
 #### 8.1 Verify File Inventory
 
 Confirm the expected routes, components, services, assets, and migration artifacts exist. Compare against the approved plan.
+
+Confirm `.powerpages-site/` exists when the approved migration includes table permissions, web roles, site settings, server logic, or Web API settings. If it is missing, mark metadata verification as failed and direct the user to run `/deploy-site`.
 
 #### 8.2 Verify Build
 
@@ -655,6 +692,7 @@ Include:
 | Routes migrated | `<count and notable routes>` |
 | Data/API work | `<completed / pending>` |
 | Auth/security work | `<completed / pending>` |
+| Metadata hydration | `<.powerpages-site present / missing>` |
 | Manual gaps | `<count and highest-risk items>` |
 | Verification | `<build/browser/drift status>` |
 | Key artifacts | `<migration-artifacts paths>` |
@@ -668,7 +706,7 @@ Recommend only what fits the migration result:
 | Dataverse tables still need frontend API work | `/integrate-webapi` |
 | Auth or role behavior is incomplete | `/setup-auth` or `/create-webroles` |
 | Permissions need review | `/audit-permissions` |
-| The SPA should be deployed | `/deploy-site` |
+| `.powerpages-site` is missing or metadata hydration failed | `/deploy-site` |
 | Deployed runtime parity should be checked | `/test-site` |
 
 ### Output
@@ -684,7 +722,7 @@ Recommend only what fits the migration result:
 2. **Phase 2**: Continue, narrow, or stop if high-risk EDM patterns are found.
 3. **Phase 4**: Confirm before authenticated browsing or interactions that may create/modify data.
 4. **Phase 6**: Approve the migration plan before writing SPA files.
-5. **Phase 7**: Confirm before invoking follow-up skills, overwriting an existing target project, or deferring Web API/auth work.
+5. **Phase 7**: Confirm before invoking follow-up skills, overwriting an existing target project, or stopping before the required first deployment that creates `.powerpages-site`.
 6. **Phase 8**: Confirm whether unexpected drift should be fixed, accepted, or moved to manual gaps.
 
 ---
@@ -699,7 +737,7 @@ Recommend only what fits the migration result:
 | Discover runtime behavior | Discovering runtime | Crawl the live site with Playwright, capture routes, auth transitions, network calls, and hidden behavior |
 | Build migration model | Building model | Combine static and runtime evidence into a confidence-scored canonical site model |
 | Review migration plan | Reviewing plan | Present SPA route/component/data/security mapping and get user approval |
-| Migrate SPA implementation | Migrating SPA | Scaffold or update the SPA and create routes, components, services, assets, and traceability artifacts |
+| Migrate SPA implementation | Migrating SPA | Scaffold or update the SPA, deploy once to hydrate `.powerpages-site`, and create routes, components, services, metadata, assets, and traceability artifacts |
 | Verify migrated SPA | Verifying migration | Build and browser-test the SPA, compare against EDM evidence, and document drift |
 | Summarize migration | Summarizing migration | Record usage, summarize outputs and gaps, and recommend focused next skills |
 

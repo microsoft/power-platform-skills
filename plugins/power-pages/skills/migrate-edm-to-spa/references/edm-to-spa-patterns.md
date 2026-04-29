@@ -156,6 +156,8 @@ Do not copy jQuery code directly into a framework component unless it is explici
 
 Power Pages security is server-side. The SPA can improve UX by hiding or showing UI, but table permissions and web roles enforce access.
 
+For a new SPA code site, deploy the scaffold once before finalizing security metadata. `/deploy-site` creates `.powerpages-site/`, which is required before the migration can reliably create or update table permissions, web roles, site settings, server logic metadata, and skill tracking YAML.
+
 Map:
 
 - `webrole.yml` to role names and UX gates.
@@ -186,6 +188,8 @@ Classify site settings:
 | Header/footer output cache | Usually not relevant to SPA runtime |
 
 Do not assume every EDM site setting has a direct SPA equivalent.
+
+Do not copy or create target site-setting YAML until `.powerpages-site/site-settings/` exists. If deployment has not hydrated the metadata folder, keep site-setting work in the migration plan or gap log and require `/deploy-site` before finalization.
 
 ## Unsupported or Manual-Gap Candidates
 
