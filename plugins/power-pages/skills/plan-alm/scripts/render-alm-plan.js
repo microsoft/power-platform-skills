@@ -450,6 +450,92 @@ function buildPipelinesHtml() {
   return `<div class="pipeline-container">${stagesHtml}</div>`;
 }
 
+function buildSiteTestsSection(d) {
+  // Renders the "Site Tests" card on the Pipeline tab. Captures per-stage
+  // test-site results (page pass/fail, API pass/fail, console errors, runOutcome).
+  //
+  // Data shape (from plan-alm Phase 7 Step C):
+  //   data.siteTests = {
+  //     "<stageName>": null | {
+  //       url, runAt, durationSec, passedPages, failedPages,
+  //       passedApis, failedApis, consoleErrors, runOutcome
+  //     }
+  //   }
+  //
+  // runOutcome values: "passed" | "passed-with-warnings" | "failed".
+  // Empty state: emit a note when siteTests is absent or every stage is null.
+  const tests = d && d.siteTests;
+  if (!tests || typeof tests !== 'object') {
+    return `<div class="card site-tests-card">
+  <h3 style="margin-top:0;">Site Tests</h3>
+  <div class="note-box neutral">No automated tests recorded for this run.</div>
+</div>`;
+  }
+  const entries = Object.entries(tests).filter(([, v]) => v && typeof v === 'object');
+  if (entries.length === 0) {
+    return `<div class="card site-tests-card">
+  <h3 style="margin-top:0;">Site Tests</h3>
+  <div class="note-box neutral">No automated tests recorded for this run.</div>
+</div>`;
+  }
+
+  const badgeClass = (outcome) => {
+    const o = String(outcome || '').toLowerCase();
+    if (o === 'failed') return 'test-result-fail';
+    if (o === 'passed-with-warnings') return 'test-result-warning';
+    return 'test-result-pass';
+  };
+  const badgeLabel = (outcome) => {
+    const o = String(outcome || '').toLowerCase();
+    if (o === 'failed') return 'FAILED';
+    if (o === 'passed-with-warnings') return 'WARNINGS';
+    return 'PASSED';
+  };
+
+  const rows = entries.map(([stageName, t]) => {
+    const dur = (t.durationSec != null) ? `${Number(t.durationSec).toFixed(0)}s` : '&mdash;';
+    const url = t.url ? `<code>${escapeHtml(t.url)}</code>` : '<span style="color:var(--text-dim);">&mdash;</span>';
+    const pages = `<span style="color:var(--pass);">${Number(t.passedPages || 0)} ok</span>` +
+      (Number(t.failedPages || 0) > 0 ? ` &middot; <span style="color:var(--critical);">${Number(t.failedPages)} fail</span>` : '');
+    const apis = `<span style="color:var(--pass);">${Number(t.passedApis || 0)} ok</span>` +
+      (Number(t.failedApis || 0) > 0 ? ` &middot; <span style="color:var(--critical);">${Number(t.failedApis)} fail</span>` : '');
+    const errs = Number(t.consoleErrors || 0);
+    const errsCell = errs > 0
+      ? `<span style="color:var(--critical);">${errs}</span>`
+      : `<span style="color:var(--pass);">0</span>`;
+    return `<tr class="test-stage-row">
+  <td class="test-stage-name">${escapeHtml(stageName)}</td>
+  <td class="test-stage-url">${url}</td>
+  <td>${dur}</td>
+  <td>${pages}</td>
+  <td>${apis}</td>
+  <td>${errsCell}</td>
+  <td><span class="test-result-badge ${badgeClass(t.runOutcome)}">${badgeLabel(t.runOutcome)}</span></td>
+</tr>`;
+  }).join('\n');
+
+  return `<div class="card site-tests-card">
+  <h3 style="margin-top:0;">Site Tests</h3>
+  <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">Per-stage results from <code>/power-pages:test-site</code> runs against each activated environment. Diagnostic only &mdash; failures are non-blocking.</div>
+  <table class="test-stage-table">
+    <thead>
+      <tr>
+        <th>Stage</th>
+        <th>URL</th>
+        <th>Duration</th>
+        <th>Pages</th>
+        <th>APIs</th>
+        <th>Console Errors</th>
+        <th>Outcome</th>
+      </tr>
+    </thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>
+</div>`;
+}
+
 function buildHostCardHtml(d) {
   // Renders the "Pipelines Host" card on the Pipeline tab. Three modes:
   //   - host-card-ok      → AvailableUsing* statuses (host already established)
@@ -561,6 +647,7 @@ const replacements = {
   PIPELINES_TAB_DESC: buildPipelinesTabDesc(),
   PIPELINES_HOST_CARD: buildHostCardHtml(data),
   PIPELINES_HTML: buildPipelinesHtml(),
+  SITE_TESTS_SECTION: buildSiteTestsSection(data),
   CHECKLIST_HTML: buildChecklistHtml(),
   HOST_CHECKLIST_SUBSTEP: buildHostChecklistSubBullet(data),
   ESTIMATION_METHOD: escapeHtml(data.estimationMethod || 'metadata-based'),

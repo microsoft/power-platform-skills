@@ -447,9 +447,10 @@ Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 | 4 | Setup pipeline | Setting up pipeline | Invoke setup-pipeline skill (conditional) |
 | 5..N | Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill for this stage — one task per target stage |
 | 5..N+1 | Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site if not yet provisioned — one task per target stage |
-| N+2 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
+| 5..N+2 | Test site in {stageName} | Testing site in {stageName} | Invoke /power-pages:test-site against the activated URL; capture pass/fail counts; non-blocking — one task per target stage |
+| N+3 | Finalize | Finalizing | Update HTML status, commit, run skill tracking |
 
-Create one **Deploy to {stageName}** + **Activate site in {stageName}** task pair for each target stage in `PP_STAGES` (e.g. Staging, Production).
+Create one **Deploy to {stageName}** + **Activate site in {stageName}** + **Test site in {stageName}** task triplet for each target stage in `PP_STAGES` (e.g. Staging, Production).
 
 **For Manual path**, create:
 
@@ -466,9 +467,11 @@ Create one **Deploy to {stageName}** + **Activate site in {stageName}** task pai
 If `SOLUTION_DONE = true`, add `(will skip — already set up)` to the setup-solution task description.
 If `PIPELINE_DONE = true` (PP path), add `(will skip — already set up)` to the setup-pipeline task description.
 
-**Activation steps (PP path):** Create a separate **"Activate site in {stageName}"** task for every target stage. After each `deploy-pipeline` invocation succeeds, the activation task for that stage runs immediately — do not wait until all stages are deployed. The planData `steps` array must include one `"Deploy to {stageName}"` + one `"Activate site in {stageName}"` pair per target stage. Activation happens after every stage deployment — not just Production.
+**Activation steps (PP path):** Create a separate **"Activate site in {stageName}"** task for every target stage. After each `deploy-pipeline` invocation succeeds, the activation task for that stage runs immediately — do not wait until all stages are deployed. The planData `steps` array must include one `"Deploy to {stageName}"` + one `"Activate site in {stageName}"` + one `"Test site in {stageName}"` triplet per target stage. Activation and testing happen after every stage deployment — not just Production.
 
-**Activation steps (Manual path):** For the Manual path, create one "Activate site in {targetLabel}" task per target environment. These run after the corresponding import completes.
+**Test steps (PP path):** Create a separate **"Test site in {stageName}"** task for every target stage. After each activation completes (or is skipped), the test task runs immediately and is **non-blocking** — failures are recorded in `siteTests[stageName]` and surfaced in the HTML, but do not fail the overall plan.
+
+**Activation steps (Manual path):** For the Manual path, create one "Activate site in {targetLabel}" task per target environment. These run after the corresponding import completes. The Manual path does not include automatic test-site invocations — site testing is left to the user after manual deployment.
 
 Mark task 1 ("Generate ALM plan") as `in_progress`.
 
@@ -500,9 +503,15 @@ Build a `planData` object with all gathered strategy inputs:
     { "name": "Setup pipeline", "status": "pending", "skip": false },
     { "name": "Deploy via pipeline to Staging", "status": "pending", "skip": false },
     { "name": "Activate site in Staging", "status": "pending", "skip": false },
+    { "name": "Test site in Staging", "status": "pending", "skip": false },
     { "name": "Deploy via pipeline to Production", "status": "pending", "skip": false },
-    { "name": "Activate site in Production", "status": "pending", "skip": false }
+    { "name": "Activate site in Production", "status": "pending", "skip": false },
+    { "name": "Test site in Production", "status": "pending", "skip": false }
   ],
+  "siteTests": {
+    "Staging": null,
+    "Production": null
+  },
   "risks": [
     { "type": "info", "message": "..." }
   ],
@@ -544,6 +553,29 @@ Build a `planData` object with all gathered strategy inputs:
 ```
 
 `solutionContents` is populated from `SOLUTION_CONTENTS_DATA` built in Phase 1. If discovery was unavailable, pass `null` — the renderer will show a fallback note.
+
+**`siteTests` block** (PP Pipelines path only — initialize one entry per target stage with value `null`; populated during Phase 7 Step C as each stage's test runs). Shape per stage:
+
+```json
+{
+  "siteTests": {
+    "Staging": {
+      "url": "https://example.powerappsportals.com",
+      "runAt": "2026-04-27T15:00:00.000Z",
+      "durationSec": 120,
+      "passedPages": 3,
+      "failedPages": 0,
+      "passedApis": 2,
+      "failedApis": 0,
+      "consoleErrors": 0,
+      "runOutcome": "passed"
+    },
+    "Production": null
+  }
+}
+```
+
+`runOutcome` values: `"passed"` (all pages and APIs ok, 0 console errors), `"passed-with-warnings"` (any console errors but pages/APIs ok), `"failed"` (any 5xx, missing pages, or critical errors). The renderer maps these to green / yellow / red badges. For the Manual path, omit `siteTests` from planData.
 
 **v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
 
@@ -781,12 +813,51 @@ node -e "const d=require('./.last-deploy.json'); process.stdout.write(JSON.strin
   1. **Yes, activate now** — invoke `/power-pages:activate-site`. After it completes, mark task `completed`, update checklist step to `status-completed`.
   2. **No, skip for now** — mark task `skipped`, update checklist step to `status-skipped`.
 
-After handling activation, switch PAC CLI back to the dev environment:
+**Step C — Test site (immediately after activate for this stage):**
+Mark the "Test site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+
+Determine the URL to test:
+- Prefer `siteUrl` from `.last-deploy.json` (written by `deploy-pipeline`).
+- If absent or empty, fall back to the URL returned by the most recent `activate-site` invocation for this stage.
+- If both are unavailable (activation was skipped, no URL captured), mark the task `skipped` and set `siteTests[stageName] = null`. Update checklist step to `status-skipped`.
+
+If a URL is available, invoke the skill (forwarding the URL as the argument):
+```
+/power-pages:test-site --siteUrl {activatedUrl}
+```
+
+When `test-site` completes, capture a high-level summary into `siteTests[stageName]`:
+```js
+siteTests[stageName] = {
+  url: "{activatedUrl}",
+  runAt: "{ISO timestamp when test started}",
+  durationSec: <integer seconds>,
+  passedPages: <count from test-site report>,
+  failedPages: <count from test-site report>,
+  passedApis: <count from test-site report>,
+  failedApis: <count from test-site report>,
+  consoleErrors: <count from test-site report>,
+  runOutcome: "passed" | "passed-with-warnings" | "failed"
+};
+```
+
+Compute `runOutcome`:
+- `"failed"` if `failedPages > 0` OR `failedApis > 0` OR test-site reported critical errors (5xx, missing pages).
+- `"passed-with-warnings"` if `consoleErrors > 0` and not failed.
+- `"passed"` otherwise.
+
+**Decision rule (non-blocking):** Regardless of `runOutcome`, mark the task `completed` and continue to the next stage. Failures are diagnostic, not gating — the plan does not abort.
+
+Update the HTML checklist step:
+- `runOutcome === "failed"` → `status-warning` (NEW status — yellow).
+- otherwise → `status-completed`.
+
+After handling activation and testing, switch PAC CLI back to the dev environment:
 ```bash
 pac env select --environment "{devEnvUrl}"
 ```
 
-**Then repeat Step A + B for the next stage** (if any).
+**Then repeat Step A + B + C for the next stage** (if any).
 
 ### Manual path (one import per target environment)
 
@@ -889,6 +960,7 @@ Mark the "Finalize" task as `completed`.
 | Export solution | Exporting solution | Invoke export-solution skill — Manual path only |
 | Deploy to {stageName} | Deploying to {stageName} | Invoke deploy-pipeline skill — PP Pipelines path, one task per target stage |
 | Activate site in {stageName} | Activating site in {stageName} | Check activation status + invoke activate-site immediately after each stage deploys — one task per target stage |
+| Test site in {stageName} | Testing site in {stageName} | Invoke /power-pages:test-site against the activated URL; capture pass/fail counts; non-blocking |
 | Import to {targetEnv} | Importing solution | Switch PAC CLI context, invoke import-solution — Manual path, one task per target |
 | Activate site in {targetEnv} | Activating site | Check activation status + invoke activate-site if needed — Manual path, one task per target |
 | Finalize | Finalizing | Update HTML plan status, commit, run skill tracking, present summary |

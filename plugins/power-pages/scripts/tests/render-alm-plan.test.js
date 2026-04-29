@@ -801,6 +801,131 @@ test('render-alm-plan: hostResolution willEnsureDuringExecution renders checklis
   }
 });
 
+// ── Tests 15: siteTests → "Site Tests" card on the Pipeline tab ───────────────
+
+test('render-alm-plan: siteTests populated for a stage renders pass/fail row with green badge', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      siteTests: {
+        Staging: {
+          url: 'https://staging.powerappsportals.com',
+          runAt: '2026-04-27T15:00:00.000Z',
+          durationSec: 120,
+          passedPages: 3,
+          failedPages: 0,
+          passedApis: 2,
+          failedApis: 0,
+          consoleErrors: 0,
+          runOutcome: 'passed',
+        },
+        Production: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('Site Tests'),
+      'Pipeline tab should include a "Site Tests" heading');
+    assert.ok(html.includes('staging.powerappsportals.com'),
+      'Stage URL should appear in the row');
+    // Stage label should appear inside a test-stage-name cell.
+    assert.ok(/<td class="test-stage-name">Staging<\/td>/.test(html),
+      'Stage label should render in a test-stage-name cell');
+    // Pass badge.
+    assert.ok(html.includes('test-result-pass'),
+      'Pass outcome should use test-result-pass badge class');
+    assert.ok(/test-result-pass[^>]*">PASSED/.test(html),
+      'Pass badge should display "PASSED"');
+    // Card belongs to the Pipeline tab (between tab-pipelines and tab-checklist).
+    // Match the rendered card element specifically (not the CSS rule in <head>).
+    const pipeIdx = html.indexOf('id="tab-pipelines"');
+    const checkIdx = html.indexOf('id="tab-checklist"');
+    const cardIdx = html.indexOf('class="card site-tests-card"');
+    assert.ok(pipeIdx !== -1 && checkIdx !== -1 && cardIdx !== -1,
+      'All markers present');
+    assert.ok(cardIdx > pipeIdx && cardIdx < checkIdx,
+      'Site Tests card should sit inside the Pipelines tab');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: siteTests absent or all-null renders empty-state note', () => {
+  // Covers both spec branches: (a) siteTests omitted entirely, and
+  // (b) siteTests present with every stage value null.
+  for (const variant of [
+    { name: 'absent', overrides: {} },
+    { name: 'all-null', overrides: { siteTests: { Staging: null, Production: null } } },
+  ]) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+    const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+    try {
+      const { status } = runScript(makeValidData(variant.overrides), outputPath);
+      assert.equal(status, 0,
+        `Expected exit 0 for variant=${variant.name}`);
+
+      const html = fs.readFileSync(outputPath, 'utf8');
+      assert.ok(html.includes('Site Tests'),
+        `Variant=${variant.name}: Site Tests heading should render`);
+      assert.ok(html.includes('No automated tests recorded for this run.'),
+        `Variant=${variant.name}: empty-state note should render`);
+      // Look for a rendered badge element (full attribute), not the CSS rule in <head>.
+      assert.ok(!/<span class="test-result-badge test-result-pass">/.test(html),
+        `Variant=${variant.name}: no pass badge should render`);
+      assert.ok(!/<span class="test-result-badge test-result-fail">/.test(html),
+        `Variant=${variant.name}: no fail badge should render`);
+      assert.ok(!html.includes('__SITE_TESTS_SECTION__'),
+        `Variant=${variant.name}: placeholder should be replaced`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('render-alm-plan: siteTests with runOutcome failed renders red badge', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      siteTests: {
+        Staging: {
+          url: 'https://staging.powerappsportals.com',
+          runAt: '2026-04-27T15:00:00.000Z',
+          durationSec: 95,
+          passedPages: 1,
+          failedPages: 2,
+          passedApis: 0,
+          failedApis: 3,
+          consoleErrors: 4,
+          runOutcome: 'failed',
+        },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(html.includes('test-result-fail'),
+      'Failed outcome should use test-result-fail badge class');
+    assert.ok(/test-result-fail[^>]*">FAILED/.test(html),
+      'Fail badge should display "FAILED"');
+    // Failure counts should surface.
+    assert.ok(html.includes('2 fail'),
+      'Should display the failed-pages count');
+    assert.ok(html.includes('3 fail'),
+      'Should display the failed-apis count');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('render-alm-plan: hostResolution AvailableUsing* (already established) does NOT render the checklist substep', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');

@@ -138,12 +138,14 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .checklist-item.status-in-progress .checklist-icon{color:var(--high);}
 .checklist-item.status-completed .checklist-icon{color:var(--pass);}
 .checklist-item.status-skipped .checklist-icon{color:var(--text-dim);opacity:0.6;}
+.checklist-item.status-warning .checklist-icon{color:var(--high);}
 .checklist-name{flex:1;font-size:13px;color:var(--text);}
 .status-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;font-family:var(--mono);}
 .status-badge.pending{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
 .status-badge.in-progress{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
 .status-badge.completed{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
 .status-badge.skipped{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
+.status-badge.warning{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
 
 .warning-box{background:var(--high-bg);border:1px solid var(--high-border);border-radius:var(--radius);padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--text);}
 .critical-box{background:var(--critical-bg);border:1px solid var(--critical-border);border-radius:var(--radius);padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--text);}
@@ -193,6 +195,19 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .host-card-ok{border-left:3px solid var(--pass-border);}
 .host-card-pending{border-left:3px solid var(--high-border);}
 .host-card-blocked{border-left:3px solid var(--critical-border);}
+
+.site-tests-card{margin-top:18px;}
+.test-stage-table{width:100%;border-collapse:collapse;font-size:12px;}
+.test-stage-table th{text-align:left;font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:8px 10px;border-bottom:2px solid var(--border);background:var(--surface2);}
+.test-stage-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.test-stage-table tr.test-stage-row:last-child td{border-bottom:none;}
+.test-stage-table tr.test-stage-row:hover td{background:var(--surface2);}
+.test-stage-name{font-weight:700;color:var(--text-bright);}
+.test-stage-url{font-family:var(--mono);font-size:11px;word-break:break-all;max-width:280px;}
+.test-result-badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;font-family:var(--mono);}
+.test-result-pass{background:var(--pass-bg);color:var(--pass);border:1px solid var(--pass-border);}
+.test-result-warning{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
+.test-result-fail{background:var(--critical-bg);color:var(--critical);border:1px solid var(--critical-border);}
 
 .checklist-substep-list{list-style:none;padding:0;margin:-2px 0 8px 32px;}
 .checklist-substep{font-size:12px;color:var(--text-dim);padding:6px 14px;background:var(--surface2);border:1px dashed var(--border);border-radius:var(--radius-sm);}
@@ -300,6 +315,7 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
       <p class="section-desc">__PIPELINES_TAB_DESC__</p>
       __PIPELINES_HOST_CARD__
       __PIPELINES_HTML__
+      __SITE_TESTS_SECTION__
     </div>
 
     <div class="section" id="tab-checklist">
