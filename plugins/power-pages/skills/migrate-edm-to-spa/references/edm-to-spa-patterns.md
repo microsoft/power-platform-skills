@@ -182,7 +182,7 @@ Classify site settings:
 | Authentication and registration | Auth plan and setup/admin tasks |
 | Profile redirects | SPA auth redirect handling and `/setup-auth` |
 | Web API settings | `/integrate-webapi` permissions/settings plan |
-| `WebAPI/enableReadOperationPreview` | Web API read behavior note; verify against current platform behavior before relying on it |
+| `Webapi/enableReadOperationPreview` | Web API read behavior note; verify against current platform behavior before relying on it |
 | Wildcard Web API fields (`Webapi/<table>/fields` = `*`) | High-risk access setting; review permissions carefully |
 | Search and facets | Search component, Web API/server logic, or manual gap |
 | Knowledge management | Usually manual or custom data implementation |

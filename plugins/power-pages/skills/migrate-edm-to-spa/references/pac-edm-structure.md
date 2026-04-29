@@ -41,7 +41,7 @@ Common target folders:
 | `server-logic/` | Server logic metadata when created through `/add-server-logic` |
 | `cloud-flow-consumer/` | Cloud flow consumer metadata when created through `/add-cloud-flow` |
 | `web-pages/`, `web-templates/`, `content-snippets/`, `page-templates/`, `web-files/` | Deployed code-site page/template/content/asset metadata |
-| `publishing-states/`, `site-languages/`, `sitemarkers/`, `weblink-sets/`, `webpage-rules/`, `website-accesss/` | Granular records that may correspond to EDM aggregate files |
+| `publishing-states/`, `site-languages/`, `sitemarkers/`, `weblink-sets/`, `webpage-rules/`, `website-accesss/` | Granular records that may correspond to EDM aggregate files. `website-accesss` reflects the current deployed code-site folder name. |
 
 ### Aggregate EDM to Granular SPA Translation
 
@@ -58,6 +58,8 @@ Do not copy aggregate EDM files into `.powerpages-site/`. Translate records into
 | `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml` |
 
 Field names can also differ. EDM often uses `adx_`-prefixed keys (`adx_name`, `adx_value`, `adx_entitylogicalname`), while code-site metadata commonly uses normalized keys (`name`, `value`, `entitylogicalname`). Prefer existing deterministic scripts and Power Pages skills to create target metadata instead of hand-writing converted YAML.
+
+> Note: The SPA target folder for website access metadata is currently `website-accesss/` in deployed code-site metadata. Keep that spelling unless the deployed metadata format changes.
 
 ### FAQV2 Contrast Example
 

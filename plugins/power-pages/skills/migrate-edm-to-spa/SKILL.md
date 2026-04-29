@@ -597,7 +597,7 @@ When `.powerpages-site/` exists, translate EDM metadata into the hydrated SPA me
 | `webpagerule.yml` | `webpage-rules/<rule-name>.webpagerule.yml`, one file per rule |
 | `websitelanguage.yml` | `site-languages/<language-name>.websitelanguage.yml`, one file per language |
 | `publishingstate.yml` | `publishing-states/<state-name>.publishingstate.yml`, one file per state |
-| `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml`, one file per access record |
+| `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml`, one file per access record. `website-accesss` reflects the current deployed code-site folder name. |
 | `table-permissions/*.tablepermission.yml` | `table-permissions/*.tablepermission.yml` using SPA/code-site field names |
 
 The field shape can also differ. EDM records often use `adx_`-prefixed keys such as `adx_name`, `adx_value`, and `adx_entitylogicalname`; code-site metadata commonly uses normalized keys such as `name`, `value`, and `entitylogicalname`. Use existing Power Pages scripts and skills when possible so IDs, filenames, field ordering, and normalized schemas are created correctly.
