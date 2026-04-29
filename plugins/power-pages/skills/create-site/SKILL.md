@@ -308,7 +308,7 @@ Assemble a single JSON object with the following keys. The plan template rejects
 
 Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
 ```
 
@@ -318,11 +318,7 @@ The script prints `{"status":"ok","output":"<path>"}` on success. Capture and us
 
 ### 4.4 Open the Plan in the Default Browser
 
-Use the platform-appropriate command for the current shell:
-
-- macOS (`Bash`): `open "<OUTPUT_PATH>"`
-- Linux (`Bash`): `xdg-open "<OUTPUT_PATH>"`
-- Windows (`PowerShell`): `Start-Process "<OUTPUT_PATH>"`
+Open `<OUTPUT_PATH>` in the default browser using the platform-appropriate file opener for the current environment. For example, use `open` on macOS, `xdg-open` on Linux, or the equivalent default-browser opener available on Windows.
 
 ### 4.5 Present a Brief Summary in the Terminal
 
