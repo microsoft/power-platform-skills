@@ -8,9 +8,9 @@ description: >-
   found, uses it. If no host is bound to the source env, provisions a new
   **Custom Host** via the BAP env-create API with the `D365_ProjectHost`
   template (fast path), or guides the user through PPAC install / `New custom
-  host` (manual fallbacks). Platform-Environment auto-provisioning via the
-  internal `getOrCreate` API is **deferred to a future plan** — see Section
-  "Deferred — Platform Host provisioning". Polls lifecycle operations,
+  host` (manual fallbacks). Platform-Environment auto-provisioning is
+  **deferred** — see `PowerPipelines/ensure-pipelines-host-PLAN.md` for the
+  follow-up spec. Polls lifecycle operations,
   verifies the host responds to Pipelines API calls, writes a host-check
   artifact other ALM skills consume. Use when asked to: "set up pipelines
   host", "ensure pipelines host", "no pipelines host", "install pipelines",
@@ -26,7 +26,7 @@ model: opus
 
 # ensure-pipelines-host
 
-> **Scope (this iteration):** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — provisions a new **Custom Host** via the BAP env-create API with the `D365_ProjectHost` template. Platform-Environment provisioning via the internal `getOrCreate` API is deferred to a follow-up iteration; existing PEs are still detected and used when found. See *Deferred — Platform Host provisioning* below.
+> **Scope (this iteration):** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — provisions a new **Custom Host** via the BAP env-create API with the `D365_ProjectHost` template. Platform-Environment auto-provisioning is deferred to a follow-up iteration; existing PEs are still detected and used when found. The follow-up spec lives in `PowerPipelines/ensure-pipelines-host-PLAN.md` § *Deferred — Platform Host provisioning*.
 
 Power Platform Pipelines need a **host environment** — a Dataverse environment with the *Power Platform Pipelines* managed solution installed, where pipelines, stages, run history, and artifacts live. The existing `setup-pipeline` and `deploy-pipeline` skills assume a host is already configured. This skill closes that gap.
 
@@ -119,7 +119,7 @@ Source: `ProjectHostProvider.tsx` lines 100–213 (orgSetting fetch → defaultC
 
 ## What this skill does NOT do
 
-These are deliberate non-goals (each based on a hard constraint, a destructive blast-radius, or a deferred-scope decision — see *Design Constraints* and *Deferred — Platform Host provisioning*):
+These are deliberate non-goals (each based on a hard constraint, a destructive blast-radius, or a deferred-scope decision — see *Design Constraints* below and `PowerPipelines/ensure-pipelines-host-PLAN.md` for the deferred PE-provisioning spec):
 
 - **Does not silently provision anything.** Any action that creates an env or binds the source env to a host requires explicit user confirmation, with the tenant ID echoed back.
 - **Does not provision a Platform Environment in this iteration.** Existing PEs are detected and used (Phase 2.3 → Phase 3.A); creation is deferred. Rationale: PE is tenant-singleton, irreversible (admins cannot delete it), and its `getOrCreate` API is undocumented externally. Custom Host gives equivalent capability with a documented template (`D365_ProjectHost`) and a documented PPAC fallback. We can revisit PE auto-provisioning once the Custom Host path is shipped and stable.
@@ -148,7 +148,7 @@ The PAC shim returns BAP-shaped data; downstream code (sku filter, ranking, clas
 5. **Each environment is bound to only one host at a time.** Rebinding requires Force Link, which is destructive in the previous host. Out of scope (see non-goals).
 6. **The skill runs in user OAuth context** — same scope and audience the Power Apps UI uses. BAP calls use `https://service.powerapps.com/` audience.
 
-> **Idempotency of `getOrCreate`** — the BAP `getOrCreate` endpoint is idempotent (existing PE returns with `provisioningState === 'Succeeded'`; new PE returns 202 + lifecycle op). This is the key property that would make PE provisioning safe in a future iteration. See *Deferred — Platform Host provisioning*.
+> **Idempotency of `getOrCreate`** — the BAP `getOrCreate` endpoint is idempotent (existing PE returns with `provisioningState === 'Succeeded'`; new PE returns 202 + lifecycle op). This is the key property that would make PE provisioning safe in a future iteration. See `PowerPipelines/ensure-pipelines-host-PLAN.md` § *Deferred — Platform Host provisioning* for the full follow-up spec.
 
 ## Prerequisites
 
@@ -590,15 +590,11 @@ Write `.last-host-check.json` to the project root (or `--outputPath` if invoked 
 
 This file is consumed by `setup-pipeline` and `deploy-pipeline`.
 
-Run skill tracking:
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
-  --projectRoot "." \
-  --skillName "EnsurePipelinesHost" \
-  --authoringTool "ClaudeCode"
-```
+Record skill usage:
 
-Add `EnsurePipelinesHost` to the skill name mapping table in `references/skill-tracking-reference.md`.
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "EnsurePipelinesHost"`.
 
 Present summary table:
 
@@ -731,7 +727,7 @@ All shipped under `plugins/power-pages/scripts/lib/` (or as noted). Each is sing
 | `validate-ensure-host.js` (skill `scripts/`) | PostToolUse Stop-hook validator. Schema v1+v2 forward-compat. Treats `CannotRedirect` / `OrgSettingStale` / `PermissionDenied` as documented terminal-error states (skill ran successfully even if host isn't usable). | n/a (reads stdin JSON `{cwd}`) | exit 0 (approve) or exit 2 (block) |
 
 **Deferred** (will ship when PE provisioning is added):
-- `provision-platform-host.js` — calls `getOrCreate` BAP endpoint with `D365_1stPartyAdminApps` + `Platform` body. Full spec in *Deferred — Platform Host provisioning* below.
+- `provision-platform-host.js` — calls `getOrCreate` BAP endpoint with `D365_1stPartyAdminApps` + `Platform` body. Full spec in `PowerPipelines/ensure-pipelines-host-PLAN.md` § *Deferred — Platform Host provisioning*.
 
 Existing helpers reused (no changes):
 - `verify-alm-prerequisites.js`
@@ -741,58 +737,13 @@ Existing helpers reused (no changes):
 
 ## Deferred — Platform Host provisioning
 
-Pre-fact-finding for the follow-up plan. The contract is fully captured here so the next iteration can pick it up without re-discovery.
+Platform Environment auto-provisioning via the internal `getOrCreate` BAP API is **not implemented in this iteration**. Existing PEs are still detected and used (Phase 2.3 → Phase 3.A); only *creation* is out of scope here.
 
-### Why deferred (this iteration)
+The full follow-up plan — `getOrCreate` contract, polling rules, JIT step, decision-tree path, threat-model row, and outstanding open items — lives in the design doc and is the source of truth for the next iteration:
 
-- PE is **tenant-singleton** and **admin-non-deletable** (see `PowerPipelines_PE_Knowledge.md` §6.C). A wrong-tenant or wrong-time provision is permanent.
-- The `getOrCreate` API is internal/undocumented; it can change without notice. We don't want it on the critical path until the documented Custom Host route is shipped and stable.
-- Custom Host gives equivalent capability for Power Pages ALM; PE is mainly a free-tier convenience.
-- Detection of an existing PE is in scope (Phase 2 + 3.A) — if a tenant already has one, we use it. Only *creation* is deferred.
+> **`PowerPipelines/ensure-pipelines-host-PLAN.md` § "Deferred — Platform Host provisioning"**
 
-### What is already known (from `useGetOrCreatePlatformEnvironment.v4.ts` lines 67–115)
-
-```
-POST {BapRpEndpoint}/getOrCreate?api-version={BapApiVersion}
-Authorization: Bearer {BAP_TOKEN}
-Content-Type: application/json
-x-ms-correlation-id: {uuid v4}
-
-{
-  "properties": {
-    "environmentSku": "Platform",
-    "linkedEnvironmentMetadata": {
-      "templates": ["D365_1stPartyAdminApps"]
-    }
-  }
-}
-```
-
-Where:
-- `BapRpEndpoint = https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform` (production; mock uses `tip2.api.bap.microsoft.com`)
-- `BapApiVersion = 2021-04-01` (per the v4 hook mock response)
-
-**Response handling** (verbatim from the hook):
-
-- `200` + body with `properties.provisioningState === 'Succeeded'` → PE already exists; capture `properties.linkedEnvironmentMetadata.instanceApiUrl`. Idempotent — same call discovers OR provisions.
-- `202` + `Location` header (lifecycle op URL) + `Retry-After` header + body with `provisioningState === 'Creating'` → poll the Location URL.
-
-**Polling** (mirrors `useQuery` `refetchInterval` behavior in the hook):
-- Interval = `Retry-After` seconds; default 10s.
-- Continue while `provisioningState === 'Creating'`.
-- Terminate on `'Succeeded'` (capture `instanceApiUrl`, `name`, `displayName`) or `'Failed'`.
-
-**JIT** (per `ProjectHostProvider.tsx` lines 232–240 comment): the user is not pre-provisioned in the new PE; the **first** post-provision call against `instanceApiUrl` JIT-provisions them. This step (Phase 5) is already implemented for the existing-PE-detection case; same code path applies to a freshly-provisioned PE.
-
-### What the future plan adds
-
-1. A new path option in Phase 3.C decision tree: *"Provision Platform Host (recommended for first-time tenants — free, idempotent)"*.
-2. New helper `provision-platform-host.js` (spec already drafted above) calling the contract documented in this section.
-3. Phase 4 path 4.0 (will become first option since it's the lowest-friction): same poll loop as 4.A but using the `getOrCreate` endpoint instead of `/environments`.
-4. Threat-model row reactivated: *"Tenant-singleton PE created accidentally — Phase 1.4 + Phase 4.0 pre-call gate echoing tenant ID."*
-5. Open Item: validate the actual `BapRpEndpoint` constant resolves to the production URL listed above (vs. tip cluster) by inspecting the runtime bundle.
-
-No code change needed in detection (Phase 2) — that already returns `RESOLUTION.isPlatform = true` for an existing PE.
+Why deferred at a glance: PE is tenant-singleton and admin-non-deletable; the `getOrCreate` endpoint is internal/undocumented. Custom Host gives equivalent capability for Power Pages ALM via the documented `D365_ProjectHost` template, so we ship that path first and revisit PE auto-provisioning once Custom Host is stable in production. See the plan doc for the full rationale.
 
 ## Validation script
 

@@ -49,6 +49,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | configure-env-variables | ConfigureEnvVariables | Site/AI/Skills/ConfigureEnvVariables |
 | setup-pipeline | SetupPipeline | Site/AI/Skills/SetupPipeline |
 | deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
+| ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
 
 ## YAML Format
 
