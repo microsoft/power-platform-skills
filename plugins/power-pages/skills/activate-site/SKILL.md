@@ -81,10 +81,10 @@ pac auth who
 Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
 
 ```bash
-az account show
+az account show --allow-no-subscriptions
 ```
 
-**If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login`.
+**If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login --allow-no-subscriptions` (this form works whether or not the user has an Azure subscription — the activation flow only needs an AAD token).
 
 #### 1.4 Check If Already Activated
 
@@ -222,7 +222,7 @@ Evaluate the JSON output:
 |---|---|---|
 | **`Succeeded`** | — | Provisioning complete. The result includes `siteUrl`. Proceed to Phase 5. |
 | **`Failed`** | `400` + `SubdomainConflict` (or error message mentions subdomain) | Subdomain already taken. Loop back to Phase 2 action 2.2 for a new subdomain, then re-run the script. |
-| **`Failed`** | `401` | Token expired. Ask the user to run `az login` and retry. |
+| **`Failed`** | `401` | Token expired. Ask the user to run `az login --allow-no-subscriptions` and retry. |
 | **`Failed`** | `403` | Insufficient permissions. Inform user they need the "Power Pages site creator" or "System Administrator" role. |
 | **`Failed`** | `409` | Website already exists. Inform user and suggest using `/deploy-site` instead. |
 | **`Failed`** | `429` or `5xx` | Throttling or server error. Wait 5 seconds and re-run the script once. |

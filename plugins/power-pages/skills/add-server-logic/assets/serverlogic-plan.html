@@ -216,7 +216,7 @@ function renderKvInstructions() {
         <div class="kv-method">
           <div class="kv-method-title"><span class="kv-method-icon">&#9002;</span> Option A &mdash; Azure CLI</div>
           <ol class="kv-steps">
-            <li>Open a terminal and ensure you are logged in: <code>az login</code></li>
+            <li>Open a terminal and ensure you are logged in: <code>az login --allow-no-subscriptions</code> (works without an Azure subscription if you have vault data-plane RBAC, e.g. <em>Key Vault Secrets Officer</em>)</li>
             ${secretRows}
           </ol>
           <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">Each command prints a JSON object containing a <code>id</code> field &mdash; that is the Secret Identifier URI you will need.</div>

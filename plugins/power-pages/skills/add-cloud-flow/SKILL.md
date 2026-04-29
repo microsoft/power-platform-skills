@@ -33,7 +33,7 @@ For already-registered flows, the skill skips metadata and role creation and goe
 > **Prerequisites:**
 > - An existing Power Pages code site with `.powerpages-site` deployed
 > - PAC CLI authenticated (`pac auth who` must succeed)
-> - Azure CLI authenticated (`az login`)
+> - Azure CLI authenticated (`az login --allow-no-subscriptions` works whether or not your account has an Azure subscription — Dataverse and Power Platform tokens are AAD-scoped)
 
 **Initial request:** $ARGUMENTS
 
@@ -133,7 +133,7 @@ This calls the **Power Automate Flow RP API** with the filter `properties/defini
 - **Already-registered flows**: Flows whose `id` matches a `processid` from Phase 1.5 — these already have metadata and roles but can be integrated into additional pages/components
 
 **Handle errors**:
-- Exit code 1 with auth message → prompt the user to run `az login`
+- Exit code 1 with auth message → prompt the user to run `az login --allow-no-subscriptions`
 - Zero flows from API (no flows with a PowerPages trigger exist at all) → tell the user that no Power Automate flows with a PowerPages trigger were found in this environment. Guide them to create a flow first:
 
   > "No Power Automate cloud flows with a PowerPages trigger were found in this environment. To use this skill, you first need to create a flow in [Power Automate](https://make.powerautomate.com) with the **"When a Power Pages flow step is run"** trigger, then run this skill again to connect it to your site."

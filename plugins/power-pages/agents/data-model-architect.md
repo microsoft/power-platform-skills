@@ -93,7 +93,7 @@ Verify Dataverse access and obtain authentication details using the shared scrip
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
-This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. If it fails, inform the user that Azure CLI login is required (`az login`).
+This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. If it fails, inform the user that Azure CLI login is required (`az login --allow-no-subscriptions` — works whether or not the user has an Azure subscription).
 
 ### 2.3 Query Existing Tables
 
@@ -148,7 +148,7 @@ If still unable to determine the prefix, use `cr` as a placeholder and note in t
 If any of the above commands fail, include the error in your plan output so the user can see what went wrong:
 
 - If `pac env who` fails: Note that PAC CLI auth is required (`pac auth create`)
-- If `verify-dataverse-access.js` fails: Note that Azure CLI login is required (`az login`)
+- If `verify-dataverse-access.js` fails: Note that Azure CLI login is required (`az login --allow-no-subscriptions`)
 - If `dataverse-request.js` returns a non-2xx `status`: Check the status code — 401/403 means permissions are insufficient, 404 means the environment URL or API path may be incorrect
 - The `dataverse-request.js` script handles 401 token refresh and 429/5xx retries automatically
 

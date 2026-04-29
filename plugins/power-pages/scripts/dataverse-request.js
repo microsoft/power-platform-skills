@@ -76,7 +76,7 @@ async function main() {
 
   let token = getAuthToken(envUrl);
   if (!token) {
-    process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
+    process.stderr.write('Failed to get Azure CLI token. Run `az login --allow-no-subscriptions` first.\n');
     process.exit(1);
   }
 
@@ -94,7 +94,7 @@ async function main() {
     if (res.statusCode === 401 && attempt < maxRetries) {
       token = getAuthToken(envUrl);
       if (!token) {
-        process.stderr.write('Token refresh failed. Run `az login` again.\n');
+        process.stderr.write('Token refresh failed. Run `az login --allow-no-subscriptions` again.\n');
         process.exit(1);
       }
       continue;

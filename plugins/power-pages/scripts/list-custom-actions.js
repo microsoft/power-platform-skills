@@ -166,7 +166,7 @@ async function main() {
   const token = getAuthToken(cleanUrl);
   if (!token) {
     process.stderr.write(
-      'Failed to get Azure CLI token. Run `az login` first.\n'
+      'Failed to get Azure CLI token. Run `az login --allow-no-subscriptions` first.\n'
     );
     process.exit(1);
   }

@@ -378,7 +378,7 @@ Result:
 If any API calls fail:
 
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
-- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
+- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login --allow-no-subscriptions`)
 - **OData 401/403**: The `dataverse-request.js` script handles 401 token refresh automatically; persistent 401/403 indicates insufficient privileges — note in plan
 - **OData 404**: Table doesn't exist — exclude from plan
 
