@@ -92,14 +92,16 @@ GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=objectid eq '{knownObjectI
 
 Run this query **twice**: once for `websiteRecordId` (captures `websiteComponentType`) and once for any `powerpagecomponentid` from the site (captures `subComponentType`). All Power Pages sub-components — web pages, web files, web roles, site settings, templates, etc. — share a **single `componenttype` value** in `solutioncomponents`. Only the top-level site record uses a different componenttype.
 
-**Known approximate values** (for reference only — do not hardcode):
+**Known approximate values** (for reference only — do not hardcode; resolve at runtime):
 | Type | Approximate ComponentType | Notes |
 |---|---|---|
-| Website (PowerPages site) | ~10374 | Resolve via discovery query using `websiteRecordId` |
-| All sub-components (web pages, web files, web roles, site settings, templates, table permissions, etc.) | ~10373 | One shared componenttype for ALL powerpagecomponents — resolve via discovery query using any `powerpagecomponentid` |
-| Site language (`powerpagesitelanguage`) | ~10375 | Separate type, NOT included by `AddRequiredComponents: true` — must be added explicitly |
+| Website (`powerpagesite` root) | **10427** (observed) | Resolve via discovery query using `websiteRecordId`. Earlier docs cited ~10374. |
+| All sub-components (`powerpagecomponent`) — web pages, web files, web roles, site settings, templates, table permissions, etc. | **10426** (observed) | One shared componenttype for ALL powerpagecomponents — resolve via discovery query using any `powerpagecomponentid`. |
+| Site language (`powerpagesitelanguage`) | **10428** (observed) | Separate sibling unified entity, NOT included by `AddRequiredComponents: true`. Earlier docs cited ~10375. |
 
-**Add the Website component first** with `AddRequiredComponents: true`. Then add site language records, then all sub-components individually using `subComponentType`. The `AddRequiredComponents: true` flag does NOT automatically cascade sub-components or site languages — each must be added explicitly.
+> **Why the 3-entity model matters for ALM.** Power Pages has **three** sibling unified entities for a single site: `powerpagesite` (root), `powerpagecomponent` (sub-records), and `powerpagesitelanguage` (languages). Each gets its own `solutioncomponent.componenttype`. If `setup-solution` only enumerates `powerpagecomponent` (the most common gap), the language record never lands in the user solution → solution import in the target env creates the site without any language → `powerpagesite.content.defaultlanguage` references an ID that doesn't exist → site silently fails to render post-auth. Always include `powerpagesitelanguages` in the discovery + bulk-add pass. See `scripts/lib/discover-site-components.js` `discoverSiteLanguages()` for the canonical enumeration.
+
+**Add the Website component first** with `AddRequiredComponents: true`. Then add site language records (componenttype 10428), then all sub-components individually (componenttype 10426). The `AddRequiredComponents: true` flag does NOT automatically cascade sub-components or site languages — each must be added explicitly.
 
 **Site language discovery**:
 ```

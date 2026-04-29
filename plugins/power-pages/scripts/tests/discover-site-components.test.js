@@ -427,3 +427,87 @@ test('throws on missing required args', async () => {
     /envUrl is required/
   );
 });
+
+test('surfaces site languages from powerpagesitelanguages and includes them in missing[] when not in solution', async () => {
+  const makeRequest = fakeRequest([
+    [
+      '/powerpagecomponents?',
+      {
+        value: [
+          { powerpagecomponentid: 'p1', name: 'Home', powerpagecomponenttype: 2 },
+        ],
+      },
+    ],
+    [
+      '/powerpagesitelanguages?',
+      {
+        value: [
+          { powerpagesitelanguageid: 'L1', name: 'English', languagecode: 'en-US', lcid: 1033, statecode: 0 },
+          { powerpagesitelanguageid: 'L2', name: 'French', languagecode: 'fr-FR', lcid: 1036, statecode: 0 },
+        ],
+      },
+    ],
+    [
+      '/workflows?',
+      { value: [] },
+    ],
+    [
+      '/solutioncomponents?',
+      {
+        value: [
+          // Site root + the one PPC are in the solution; both languages are missing.
+          { objectid: 'site-guid', componenttype: 10427 },
+          { objectid: 'p1', componenttype: 10426 },
+        ],
+      },
+    ],
+  ]);
+
+  const result = await discoverSiteComponents({
+    envUrl: 'https://example.crm.dynamics.com',
+    token: 'tok',
+    siteId: 'site-guid',
+    solutionId: 'sol-guid',
+    makeRequest,
+  });
+
+  assert.equal(result.siteLanguages.length, 2, 'Should enumerate both languages');
+  const en = result.siteLanguages.find((l) => l.id === 'L1');
+  assert.equal(en.name, 'English');
+  assert.equal(en.languageCode, 'en-US');
+  assert.equal(en.lcid, 1033);
+
+  assert.equal(result.missing.siteLanguages.length, 2,
+    'Both languages should appear in missing[] when not in solution');
+  assert.deepEqual(
+    result.missing.siteLanguages.map((l) => l.id).sort(),
+    ['L1', 'L2']
+  );
+});
+
+test('returns empty siteLanguages when the powerpagesitelanguage entity-set returns 404 (older installs)', async () => {
+  // Older Power Pages installs may not expose the unified entity. The discovery
+  // pass should swallow that 404 specifically and return [] rather than failing.
+  const makeRequest = async ({ url }) => {
+    if (url.includes('/powerpagecomponents?')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ powerpagecomponentid: 'p1', name: 'Home', powerpagecomponenttype: 2 }] }) };
+    }
+    if (url.includes('/powerpagesitelanguages?')) {
+      return { statusCode: 404, body: '{}' };
+    }
+    if (url.includes('/workflows?')) return { statusCode: 200, body: '{"value":[]}' };
+    return { statusCode: 200, body: '{"value":[]}' };
+  };
+
+  const result = await discoverSiteComponents({
+    envUrl: 'https://legacy.crm.dynamics.com',
+    token: 'tok',
+    siteId: 'site-guid',
+    makeRequest,
+  });
+
+  assert.deepEqual(result.siteLanguages, [],
+    'Should return empty siteLanguages on 404 from the unified entity');
+  assert.equal(result.powerpagecomponents.total, 1,
+    'Other discovery paths should still complete normally');
+});

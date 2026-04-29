@@ -384,7 +384,9 @@ From the JSON output, take `missing.powerpagecomponents` and partition:
 
 For each real-content orphan, also deduplicate by `name`: if there are multiple `index.html` rows and one is already in the solution (newer `modifiedon`), the older orphan is a stale duplicate — **exclude it from the adoption prompt** and log it as a stale duplicate instead. Rule: keep only the most-recent orphan per `(powerpagecomponenttype, name)` pair.
 
-If the real-content orphan list is non-empty, prompt via `AskUserQuestion` with `multiSelect: true`:
+**Also take `missing.siteLanguages`** — these are `powerpagesitelanguage` records (componenttype 10428) that exist on the site but aren't in the user solution. They are NOT optional: an imported site without its language records silently fails to render post-auth because `powerpagesite.content.defaultlanguage` references an ID that doesn't exist in the target env. Include every entry verbatim in the orphan-adoption prompt — there is no bundle-chunk noise to filter for languages — and pre-select them as recommended.
+
+If the real-content orphan list (or `missing.siteLanguages`) is non-empty, prompt via `AskUserQuestion` with `multiSelect: true`:
 
 > "Found **{N}** site components not yet in **{solutionUniqueName}**:
 >
@@ -395,9 +397,13 @@ If the real-content orphan list is non-empty, prompt via `AskUserQuestion` with 
 
 Collect selections into `adoptedPpcs: [{ id, name, type, typeLabel }]`.
 
-When the user selects, call `AddSolutionComponent` per entry with `ComponentType: 10373` and `AddRequiredComponents: false`. Do **not** set `DoNotIncludeSubcomponents: true` — the Dataverse API rejects that flag for non-Entity root components (HTTP 400 `0x80040216`) and it's not needed for type-10373 rows anyway.
+When the user selects, call `AddSolutionComponent` per entry with `AddRequiredComponents: false` and the right `ComponentType`:
+- `subComponentType` (~10426) for `missing.powerpagecomponents` entries
+- `siteLanguageComponentType` (~10428) for `missing.siteLanguages` entries
 
-If zero real-content orphans, the step runs silently.
+Do **not** set `DoNotIncludeSubcomponents: true` — the Dataverse API rejects that flag for non-Entity root components (HTTP 400 `0x80040216`) and it's not needed for these unified-entity rows.
+
+If both `missing.powerpagecomponents` (after filtering) and `missing.siteLanguages` are empty, the step runs silently.
 
 > **Why this step exists**: before this check, a recurring failure pattern was that `setup-solution` finished with the user convinced everything was wrapped up, while `invoice-checker` / `index.html` / similar site-linked records quietly stayed in the `Active` solution and didn't travel to staging/prod. Today's live validation found 1 real orphan (`invoice-checker`) on SupplierInvoicePortal — adopted via AddSolutionComponent, solution bumped from v1.0.0.1 → v1.0.0.2.
 

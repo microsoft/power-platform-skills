@@ -16,6 +16,7 @@
 //       byType: { "<typeValue>": [{ id, name, type, typeLabel }, ...] },
 //       typeLabels: { "1": "Publishing State", ... }
 //     },
+//     siteLanguages: [{ id, name, languageCode, lcid }],
 //     cloudFlows: [{ id, name, state, category }],
 //     envVars: [{ id, schemaName, displayName, type, defaultValue }],
 //     customTables: [{ logicalName, schemaName, displayName }],
@@ -24,6 +25,7 @@
 //     },
 //     missing: {                  // only present when --solutionId passed
 //       powerpagecomponents: [...],
+//       siteLanguages: [...],
 //       cloudFlows: [...],
 //       envVars: [...],
 //       customTables: [...]
@@ -31,6 +33,13 @@
 //   }
 //
 // Exit 0 on success, exit 1 on failure.
+//
+// Power Pages site model uses three sibling unified entities, each with its own
+// solutioncomponent.componenttype. The discovery flow MUST query all three or
+// it will undercount the site and the solution that ships it:
+//   - powerpagecomponent       (componenttype 10426) — sub-records (most types)
+//   - powerpagesite            (componenttype 10427) — site root (1 per site)
+//   - powerpagesitelanguage    (componenttype 10428) — site languages (≥1 per site)
 //
 // Authoritative powerpagecomponenttype enum (picklist values) from
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/powerpagecomponent
@@ -192,7 +201,17 @@ async function discoverSiteComponents({
     });
   }
 
-  // 2) Cloud flows cross-linked through ppc type 33 (Cloud Flow binding) — BYOC sites
+  // 2) Site languages — sibling unified entity (componenttype 10428). Every site
+  //    has at least one (the default). Without these in the solution, an imported
+  //    site has no language to render in and silently fails to load post-auth.
+  const siteLanguages = await discoverSiteLanguages({
+    baseUrl,
+    token,
+    siteId,
+    makeRequest,
+  });
+
+  // 3) Cloud flows cross-linked through ppc type 33 (Cloud Flow binding) — BYOC sites
   //    don't use type 33, so we also enumerate flows by category when a solution scope
   //    lets us hang them on the publisher (otherwise we return only ppc-linked ones).
   const cloudFlows = await discoverCloudFlows({
@@ -202,12 +221,12 @@ async function discoverSiteComponents({
     makeRequest,
   });
 
-  // 3) Env vars filtered by publisher prefix (optional)
+  // 4) Env vars filtered by publisher prefix (optional)
   const envVars = publisherPrefix
     ? await discoverEnvVars({ baseUrl, token, publisherPrefix, makeRequest })
     : [];
 
-  // 4) Custom tables filtered by publisher prefix (optional)
+  // 5) Custom tables filtered by publisher prefix (optional)
   const customTables = publisherPrefix
     ? await discoverCustomTables({ baseUrl, token, publisherPrefix, makeRequest })
     : [];
@@ -219,6 +238,7 @@ async function discoverSiteComponents({
       byType: ppcByType,
       typeLabels: { ...PPC_TYPE_LABELS },
     },
+    siteLanguages,
     cloudFlows,
     envVars,
     customTables,
@@ -252,6 +272,9 @@ async function discoverSiteComponents({
         if (!inSolutionIds.has((c.id || '').toLowerCase())) missingPpc.push(c);
       }
     }
+    const missingLanguages = siteLanguages.filter(
+      (l) => !inSolutionIds.has((l.id || '').toLowerCase())
+    );
     const missingFlows = cloudFlows.filter(
       (f) => !inSolutionIds.has((f.id || '').toLowerCase())
     );
@@ -264,6 +287,7 @@ async function discoverSiteComponents({
 
     result.missing = {
       powerpagecomponents: missingPpc,
+      siteLanguages: missingLanguages,
       cloudFlows: missingFlows,
       envVars: missingEnvVars,
       customTables: missingTables,
@@ -271,6 +295,39 @@ async function discoverSiteComponents({
   }
 
   return result;
+}
+
+/**
+ * Discovers powerpagesitelanguage records for the given site. These are NOT
+ * powerpagecomponent rows — they live in a sibling unified entity and use
+ * solutioncomponent.componenttype 10428 (vs 10426 for PPCs and 10427 for the
+ * site root). Every site has at least one default-language record; without it
+ * in the user solution, an imported site silently breaks post-auth because
+ * powerpagesite.content.defaultlanguage points at an ID that doesn't exist
+ * in the target environment.
+ */
+async function discoverSiteLanguages({ baseUrl, token, siteId, makeRequest }) {
+  const url =
+    `${baseUrl}/api/data/v9.2/powerpagesitelanguages` +
+    `?$filter=_powerpagesiteid_value eq ${siteId}` +
+    `&$select=powerpagesitelanguageid,name,languagecode,lcid,statecode` +
+    `&$top=5000`;
+  try {
+    const rows = await odataGetAll(url, token, makeRequest);
+    return rows.map((row) => ({
+      id: row.powerpagesitelanguageid,
+      name: row.name,
+      languageCode: row.languagecode,
+      lcid: row.lcid,
+      statecode: row.statecode,
+    }));
+  } catch (e) {
+    // Older Power Pages installs may not have the unified powerpagesitelanguage
+    // entity. Return empty so callers fall back to whatever they had before
+    // rather than failing the entire discovery pass.
+    if (/^HTTP\s+404\b/.test(String(e && e.message))) return [];
+    throw e;
+  }
 }
 
 async function discoverCloudFlows({ baseUrl, token, ppcRows, makeRequest }) {
