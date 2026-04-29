@@ -205,6 +205,24 @@ Authorization: Bearer {HOST_TOKEN}
 ```
 If found: ask via `AskUserQuestion` whether to use the existing pipeline ID or create a new one with a different name.
 
+**4.4 Check `blockedattachments` on source + all target envs:**
+
+Power Pages code sites include `.js` files in their compiled output. If `.js` is in the env's `blockedattachments` setting, `pac pages upload-code-site` (on the source) and `deploy-pipeline` (on targets) will both fail with `AttachmentBlocked`. Run this on the **source env** and on **every target env**:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+  --envUrl "{envUrl}" \
+  --extensions js \
+  --dry-run
+```
+
+If `wasBlocked` is non-empty for any env, inform the user:
+> "`.js` files are blocked in `{envUrl}`. This will cause upload/deployment failures for Power Pages code sites. Remove the block? This modifies an environment-level security setting."
+
+Ask via `AskUserQuestion`: 1. Yes, remove block (recommended) / 2. Skip (I'll fix manually).
+
+If approved, re-run **without** `--dry-run` to apply the change. If the user declines, record it as a warning — they'll need to fix it manually before deployment succeeds.
+
 Report preflight results. If any critical check failed, stop with clear instructions. If warnings only, ask user to confirm before proceeding.
 
 ### Phase 5 — Create Deployment Environments
