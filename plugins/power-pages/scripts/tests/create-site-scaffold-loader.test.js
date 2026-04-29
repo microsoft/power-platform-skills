@@ -1,6 +1,6 @@
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const createSiteRoot = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets');

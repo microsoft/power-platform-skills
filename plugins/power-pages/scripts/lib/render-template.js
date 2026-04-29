@@ -17,8 +17,9 @@ const path = require('path');
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
+ * @param {boolean} [options.escapeStringValues=false] - Escape string values for HTML text contexts
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, escapeStringValues = false }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -47,13 +48,13 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   // Replace all __KEY__ placeholders with corresponding values from the data object.
   // For non-string values (arrays/objects serialized to JSON), escape `<` as `\u003c`
   // so a literal `</script>` inside string data cannot close a containing <script> tag.
-  // String values are left as-is — they must be placed in safe HTML text contexts only
-  // (see plugins/power-pages/AGENTS.md for the convention).
+  // Templates that place string placeholders in HTML text contexts can opt in to
+  // string escaping with escapeStringValues.
   let result = template;
   for (const [key, value] of Object.entries(data)) {
     const placeholder = `__${key}__`;
     const replacement = typeof value === 'string'
-      ? value
+      ? (escapeStringValues ? escapeHtml(value) : value)
       : JSON.stringify(value).replace(/</g, '\\u003c');
     result = result.split(placeholder).join(replacement);
   }
@@ -97,6 +98,13 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   }
 
   console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+}
+
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function parseArgs(argv) {

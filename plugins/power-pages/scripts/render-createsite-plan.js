@@ -70,8 +70,33 @@ if (args['data-inline']) {
     console.error('Error: --data-inline value is not valid JSON');
     process.exit(1);
   }
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject: withDerivedTemplateData(dataObject), requiredKeys });
+  renderTemplate({
+    templatePath,
+    outputPath: path.resolve(args.output),
+    dataObject: withDerivedTemplateData(dataObject),
+    requiredKeys,
+    escapeStringValues: true,
+  });
 } else {
-  const dataObject = JSON.parse(fs.readFileSync(path.resolve(args.data), 'utf8'));
-  renderTemplate({ templatePath, outputPath: path.resolve(args.output), dataObject: withDerivedTemplateData(dataObject), requiredKeys });
+  const dataPath = path.resolve(args.data);
+  if (!fs.existsSync(dataPath)) {
+    console.error(`Data file not found: ${dataPath}`);
+    process.exit(1);
+  }
+
+  let dataObject;
+  try {
+    dataObject = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  } catch {
+    console.error('Error: --data file is not valid JSON');
+    process.exit(1);
+  }
+
+  renderTemplate({
+    templatePath,
+    outputPath: path.resolve(args.output),
+    dataObject: withDerivedTemplateData(dataObject),
+    requiredKeys,
+    escapeStringValues: true,
+  });
 }

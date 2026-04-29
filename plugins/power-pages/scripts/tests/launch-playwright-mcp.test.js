@@ -1,8 +1,8 @@
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
-const { EventEmitter } = require('events');
+const { EventEmitter } = require('node:events');
 
 const {
   buildMcpArgs,
