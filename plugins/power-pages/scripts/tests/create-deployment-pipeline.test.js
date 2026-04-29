@@ -221,6 +221,115 @@ test('idempotent — reuses existing stage by name+pipelineId', async (t) => {
   assert.equal(stagePostCount, 0, 'must not POST when stage exists');
 });
 
+test('reuses existing pipeline by source+target wiring even with different name', async (t) => {
+  // Existing pipeline "Old Pipeline Name" wired to source SOURCE_ENV_ID and target TARGET_ENV_ID_1
+  // User requests "New Pipeline Name" with same source + same target → should reuse Old Pipeline
+  const EXISTING_PIPELINE_ID = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+  const EXISTING_STAGE_ID = '11111111-2222-3333-4444-eeeeeeeeeeee';
+
+  let pipelinePostCount = 0;
+  let stagePostCount = 0;
+
+  setupMock(t, async (opts) => {
+    // Name-match lookup returns nothing for "New Pipeline Name"
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && opts.url.includes('$filter=name')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    // Wiring lookup: list all pipelines
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && !opts.url.includes('/deploymentpipeline_deploymentenvironment') && !opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentpipelineid: EXISTING_PIPELINE_ID, name: 'Old Pipeline Name' }] }) };
+    }
+    // Source binding for the existing pipeline
+    if (opts.method === 'GET' && opts.url.includes(`/deploymentpipelines(${EXISTING_PIPELINE_ID})/deploymentpipeline_deploymentenvironment`)) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentenvironmentid: SOURCE_ENV_ID }] }) };
+    }
+    // Stages on the existing pipeline (with original stage name "Old Stage")
+    if (opts.method === 'GET' && opts.url.includes('/deploymentstages') && opts.url.includes('$filter=')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{
+        deploymentstageid: EXISTING_STAGE_ID,
+        name: 'Old Stage Name',
+        _targetdeploymentenvironmentid_value: TARGET_ENV_ID_1,
+      }] }) };
+    }
+    // No POSTs should happen
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      pipelinePostCount++;
+      return { statusCode: 204, body: '' };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      stagePostCount++;
+      return { statusCode: 204, body: '' };
+    }
+    if (opts.method === 'POST' && opts.url.includes('/$ref')) {
+      return { statusCode: 204, body: '' };
+    }
+    return { statusCode: 200, body: '{}' };
+  });
+
+  const result = await createDeploymentPipeline({
+    hostEnvUrl: HOST,
+    token: 'fake-token',
+    pipelineName: 'New Pipeline Name',
+    sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
+    stagesJson: JSON.stringify([{ name: 'New Stage Name', targetDeploymentEnvironmentId: TARGET_ENV_ID_1 }]),
+  });
+
+  assert.equal(result.pipelineId, EXISTING_PIPELINE_ID, 'should reuse the existing pipeline');
+  assert.equal(result.pipelineName, 'Old Pipeline Name', 'should report the original name');
+  assert.equal(result.reused, true);
+  assert.equal(result.reusedByWiring.requestedName, 'New Pipeline Name');
+  assert.equal(result.reusedByWiring.originalName, 'Old Pipeline Name');
+  assert.equal(result.stages.length, 1);
+  assert.equal(result.stages[0].stageId, EXISTING_STAGE_ID);
+  assert.equal(result.stages[0].reusedFromWiringMatch, true);
+  assert.equal(pipelinePostCount, 0, 'must not POST a new pipeline');
+  assert.equal(stagePostCount, 0, 'must not POST a new stage');
+});
+
+test('does NOT reuse pipeline by wiring when target envs differ', async (t) => {
+  const EXISTING_PIPELINE_ID = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+  let pipelinePostCount = 0;
+
+  setupMock(t, async (opts) => {
+    if (opts.method === 'GET' && opts.url.includes('$filter=name')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentpipelines') && !opts.url.includes('$filter=') && !opts.url.includes('deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentpipelineid: EXISTING_PIPELINE_ID, name: 'Old' }] }) };
+    }
+    if (opts.url.includes('/deploymentpipeline_deploymentenvironment')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [{ deploymentenvironmentid: SOURCE_ENV_ID }] }) };
+    }
+    if (opts.method === 'GET' && opts.url.includes('/deploymentstages')) {
+      // Existing pipeline targets TARGET_ENV_ID_1, but we'll request TARGET_ENV_ID_2
+      return { statusCode: 200, body: JSON.stringify({ value: [{
+        deploymentstageid: 'old-stage',
+        _targetdeploymentenvironmentid_value: TARGET_ENV_ID_1,
+      }] }) };
+    }
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentpipelines')) {
+      pipelinePostCount++;
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentpipelines', PIPELINE_GUID) } };
+    }
+    if (opts.method === 'POST' && opts.url.includes('/$ref')) return { statusCode: 204, body: '' };
+    if (opts.method === 'POST' && opts.url.endsWith('/deploymentstages')) {
+      return { statusCode: 204, body: '', headers: { 'odata-entityid': makeEntityIdUrl('deploymentstages', STAGE2_GUID) } };
+    }
+    return { statusCode: 200, body: '{}' };
+  });
+
+  const result = await createDeploymentPipeline({
+    hostEnvUrl: HOST,
+    token: 'fake-token',
+    pipelineName: 'Different Targets Pipeline',
+    sourceDeploymentEnvironmentId: SOURCE_ENV_ID,
+    stagesJson: JSON.stringify([{ name: 'Stage', targetDeploymentEnvironmentId: TARGET_ENV_ID_2 }]),
+  });
+
+  assert.equal(result.reused, false, 'should not reuse — targets differ');
+  assert.equal(pipelinePostCount, 1, 'should POST a new pipeline');
+});
+
 test('throws when required args are missing', async () => {
   await assert.rejects(
     () => createDeploymentPipeline({ token: 't', pipelineName: 'p', sourceDeploymentEnvironmentId: SOURCE_ENV_ID, stagesJson: '[]' }),

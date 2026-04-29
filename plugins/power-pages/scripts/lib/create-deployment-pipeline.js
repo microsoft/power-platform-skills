@@ -86,6 +86,78 @@ async function findExistingPipelineByName({ cleanHost, token, name }) {
   return null;
 }
 
+// Finds an existing pipeline that has the SAME source-env and target-env wiring
+// as the request. This is the deduplication-by-wiring path: if the user creates
+// a pipeline named "Pipeline A" with source X and target Y, and then asks for
+// "Pipeline B" with the same source X and same target Y, this function returns
+// Pipeline A's id (with its stage ids per target) so the caller can offer reuse
+// instead of creating a duplicate.
+//
+// Match criteria:
+//   - source env: requestedSourceDeId is in the pipeline's
+//     deploymentpipeline_deploymentenvironment M2M
+//   - target envs: every requestedTargetDeId has a matching stage on the pipeline
+// Returns the FIRST matching pipeline with its stage layout. Null if no match.
+async function findExistingPipelineByWiring({ cleanHost, token, requestedSourceDeId, requestedTargetDeIds }) {
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+
+  // List all pipelines on the host (typically a small number).
+  const listRes = await helpers.makeRequest({
+    url: `${cleanHost}/api/data/v9.1/deploymentpipelines?$select=deploymentpipelineid,name`,
+    method: 'GET',
+    headers,
+    timeout: 15000,
+  });
+  if (listRes.statusCode !== 200) return null;
+
+  let pipelines;
+  try { pipelines = JSON.parse(listRes.body).value || []; } catch { return null; }
+  if (pipelines.length === 0) return null;
+
+  const targetSet = new Set(requestedTargetDeIds.map(String));
+
+  for (const p of pipelines) {
+    const pid = p.deploymentpipelineid;
+
+    // Check source binding
+    const srcRes = await helpers.makeRequest({
+      url: `${cleanHost}/api/data/v9.1/deploymentpipelines(${pid})/deploymentpipeline_deploymentenvironment?$select=deploymentenvironmentid`,
+      method: 'GET', headers, timeout: 15000,
+    });
+    if (srcRes.statusCode !== 200) continue;
+    let srcs;
+    try { srcs = JSON.parse(srcRes.body).value || []; } catch { continue; }
+    const srcMatch = srcs.some((s) => String(s.deploymentenvironmentid) === String(requestedSourceDeId));
+    if (!srcMatch) continue;
+
+    // Check stage targets
+    const stageFilter = encodeURIComponent(`_deploymentpipelineid_value eq ${pid}`);
+    const stageRes = await helpers.makeRequest({
+      url: `${cleanHost}/api/data/v9.1/deploymentstages?$filter=${stageFilter}&$select=deploymentstageid,name,_targetdeploymentenvironmentid_value`,
+      method: 'GET', headers, timeout: 15000,
+    });
+    if (stageRes.statusCode !== 200) continue;
+    let stages;
+    try { stages = JSON.parse(stageRes.body).value || []; } catch { continue; }
+    const stageTargetSet = new Set(stages.map((s) => String(s._targetdeploymentenvironmentid_value)));
+
+    // All requested targets must have a matching stage
+    const allTargetsCovered = [...targetSet].every((t) => stageTargetSet.has(t));
+    if (!allTargetsCovered) continue;
+
+    // Match. Return the pipeline + the stages for each requested target.
+    const stagesByTarget = {};
+    stages.forEach((s) => { stagesByTarget[String(s._targetdeploymentenvironmentid_value)] = { stageId: s.deploymentstageid, name: s.name }; });
+    return {
+      pipelineId: pid,
+      pipelineName: p.name,
+      stagesByTarget,
+    };
+  }
+
+  return null;
+}
+
 async function findExistingStage({ cleanHost, token, pipelineId, stageName }) {
   const filter = encodeURIComponent(`_deploymentpipelineid_value eq ${pipelineId} and name eq '${stageName.replace(/'/g, "''")}'`);
   const url = `${cleanHost}/api/data/v9.1/deploymentstages?$filter=${filter}&$select=deploymentstageid,name`;
@@ -140,8 +212,25 @@ async function createDeploymentPipeline({
   catch (e) { throw new Error(`Failed to parse --stagesJson: ${e.message}`); }
   if (!Array.isArray(stages)) throw new Error('--stagesJson must be a JSON array');
 
-  // Step 1: Pipeline (idempotent — reuse existing on name match)
+  // Step 1: Pipeline (idempotent — reuse existing on name match OR wiring match)
   let pipelineId = await findExistingPipelineByName({ cleanHost, token, name: pipelineName });
+  let reusedByWiring = null;
+
+  if (!pipelineId) {
+    // Try to find a pipeline with matching source + targets, regardless of name.
+    // This catches "the user created a pipeline before and is asking again with
+    // a different name" — we shouldn't create duplicate pipelines pointing at
+    // the same Stage-1→Stage-2 wiring.
+    const requestedTargetDeIds = stages.map((s) => s.targetDeploymentEnvironmentId);
+    reusedByWiring = await findExistingPipelineByWiring({
+      cleanHost, token,
+      requestedSourceDeId: sourceDeploymentEnvironmentId,
+      requestedTargetDeIds,
+    });
+    if (reusedByWiring) {
+      pipelineId = reusedByWiring.pipelineId;
+    }
+  }
 
   if (!pipelineId) {
     const pipelineBody = JSON.stringify({
@@ -207,14 +296,25 @@ async function createDeploymentPipeline({
     }
   }
 
-  // Step 3: Create stages (idempotent — reuse existing by pipelineId+name)
+  // Step 3: Create stages (idempotent — reuse existing by pipelineId+name OR
+  // pipelineId+targetDeploymentEnvironmentId. The latter handles the case
+  // where the pipeline was reused by wiring: existing stage names may differ
+  // from the requested names but the target env IDs match exactly.)
   const createdStages = [];
   for (const stage of stages) {
     const { name: stageName, targetDeploymentEnvironmentId, description: stageDesc } = stage;
     if (!stageName) throw new Error('Each stage must have a "name" field');
     if (!targetDeploymentEnvironmentId) throw new Error('Each stage must have a "targetDeploymentEnvironmentId" field');
 
-    let stageId = await findExistingStage({ cleanHost, token, pipelineId, stageName });
+    // Prefer the by-wiring lookup if we reused the pipeline by wiring
+    let stageId = null;
+    let reusedStageOriginalName = null;
+    if (reusedByWiring && reusedByWiring.stagesByTarget[String(targetDeploymentEnvironmentId)]) {
+      const m = reusedByWiring.stagesByTarget[String(targetDeploymentEnvironmentId)];
+      stageId = m.stageId;
+      reusedStageOriginalName = m.name;
+    }
+    if (!stageId) stageId = await findExistingStage({ cleanHost, token, pipelineId, stageName });
 
     if (!stageId) {
       const stageBody = JSON.stringify({
@@ -252,10 +352,24 @@ async function createDeploymentPipeline({
       if (!stageId) throw new Error(`Could not extract stageId for stage "${stageName}"`);
     }
 
-    createdStages.push({ stageId, name: stageName, targetDeploymentEnvironmentId });
+    createdStages.push({
+      stageId,
+      name: reusedStageOriginalName || stageName,
+      targetDeploymentEnvironmentId,
+      reusedFromWiringMatch: !!reusedStageOriginalName,
+    });
   }
 
-  return { pipelineId, pipelineName, stages: createdStages };
+  return {
+    pipelineId,
+    pipelineName: reusedByWiring ? reusedByWiring.pipelineName : pipelineName,
+    stages: createdStages,
+    reused: !!reusedByWiring,
+    reusedByWiring: reusedByWiring ? {
+      originalName: reusedByWiring.pipelineName,
+      requestedName: pipelineName,
+    } : null,
+  };
 }
 
 if (require.main === module) {
