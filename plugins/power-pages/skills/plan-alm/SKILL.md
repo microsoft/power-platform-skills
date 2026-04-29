@@ -469,7 +469,7 @@ If `PIPELINE_DONE = true` (PP path), add `(will skip — already set up)` to the
 
 **Activation steps (PP path):** Create a separate **"Activate site in {stageName}"** task for every target stage. After each `deploy-pipeline` invocation succeeds, the activation task for that stage runs immediately — do not wait until all stages are deployed. The planData `steps` array must include one `"Deploy to {stageName}"` + one `"Activate site in {stageName}"` + one `"Test site in {stageName}"` triplet per target stage. Activation and testing happen after every stage deployment — not just Production.
 
-**Test steps (PP path):** Create a separate **"Test site in {stageName}"** task for every target stage. After each activation completes (or is skipped), the test task runs immediately and is **non-blocking** — failures are recorded in `siteTests[stageName]` and surfaced in the HTML, but do not fail the overall plan.
+**Test steps (PP path):** Create a separate **"Test site in {stageName}"** task for every target stage. After each activation completes (or is skipped), the test task runs immediately and is **non-blocking** — `test-site` writes `.last-test-site.json`, plan-alm ingests it into `validationRuns[stageName]`, and the rendered HTML's **Validation** tab gets a per-stage sub-tab with categorized findings. Failures do not abort the plan.
 
 **Activation steps (Manual path):** For the Manual path, create one "Activate site in {targetLabel}" task per target environment. These run after the corresponding import completes. The Manual path does not include automatic test-site invocations — site testing is left to the user after manual deployment.
 
@@ -508,7 +508,7 @@ Build a `planData` object with all gathered strategy inputs:
     { "name": "Activate site in Production", "status": "pending", "skip": false },
     { "name": "Test site in Production", "status": "pending", "skip": false }
   ],
-  "siteTests": {
+  "validationRuns": {
     "Staging": null,
     "Production": null
   },
@@ -555,28 +555,49 @@ Build a `planData` object with all gathered strategy inputs:
 
 `solutionContents` is populated from `SOLUTION_CONTENTS_DATA` built in Phase 1. If discovery was unavailable, pass `null` — the renderer will show a fallback note.
 
-**`siteTests` block** (PP Pipelines path only — initialize one entry per target stage with value `null`; populated during Phase 7 Step C as each stage's test runs). Shape per stage:
+**`validationRuns` block** (PP Pipelines path only — initialize one entry per target stage with value `null`; populated during Phase 7 Step C by ingesting `.last-test-site.json` after each stage's test run). The full categorized test report drives the new **Validation** tab in the rendered HTML. Shape per stage:
 
 ```json
 {
-  "siteTests": {
+  "validationRuns": {
     "Staging": {
       "url": "https://example.powerappsportals.com",
       "runAt": "2026-04-27T15:00:00.000Z",
       "durationSec": 120,
-      "passedPages": 3,
-      "failedPages": 0,
-      "passedApis": 2,
-      "failedApis": 0,
-      "consoleErrors": 0,
-      "runOutcome": "passed"
+      "runOutcome": "passed | passed-with-warnings | failed",
+      "summary": {
+        "critical": 0, "high": 1, "medium": 0, "low": 2,
+        "total": 3, "automated": 2, "manual": 1,
+        "passed": 2, "failed": 1, "skipped": 0
+      },
+      "categories": [
+        {
+          "id": "site-load",
+          "name": "Site Load",
+          "icon": "📦",
+          "tests": [
+            {
+              "id": "t01",
+              "name": "Homepage returns 200 OK",
+              "severity": "critical",
+              "type": "automated",
+              "status": "passed",
+              "description": "...",
+              "steps": ["GET /", "Expect 200"],
+              "expected": "200 OK",
+              "actual": "200 OK",
+              "validates": "Site activation"
+            }
+          ]
+        }
+      ]
     },
     "Production": null
   }
 }
 ```
 
-`runOutcome` values: `"passed"` (all pages and APIs ok, 0 console errors), `"passed-with-warnings"` (any console errors but pages/APIs ok), `"failed"` (any 5xx, missing pages, or critical errors). The renderer maps these to green / yellow / red badges. For the Manual path, omit `siteTests` from planData.
+The shape is identical to `.last-test-site.json` written by `test-site` Phase 6.7a — `plan-alm` reads that file verbatim and assigns it to `validationRuns[stageName]`. The renderer maps `runOutcome` to green / yellow / red Outcome badges and produces a sub-tab per stage on the Validation tab. For the Manual path, omit `validationRuns` from planData.
 
 **`pipelineMeta` block** (PP Pipelines path only — read from `.last-pipeline.json` and `.last-deploy.json` at planData-build time. `null` on fresh plans where no pipeline is configured yet; populated after `setup-pipeline` and refreshed after each `deploy-pipeline` run via the post-deploy re-render in Phase 7). Highlights the pipeline that is actually moving configurations for this project. Shape:
 
@@ -871,32 +892,35 @@ Mark the "Test site in {stageName}" task as `in_progress`. Update HTML checklist
 Determine the URL to test:
 - Prefer `siteUrl` from `.last-deploy.json` (written by `deploy-pipeline`).
 - If absent or empty, fall back to the URL returned by the most recent `activate-site` invocation for this stage.
-- If both are unavailable (activation was skipped, no URL captured), mark the task `skipped` and set `siteTests[stageName] = null`. Update checklist step to `status-skipped`.
+- If both are unavailable (activation was skipped, no URL captured), mark the task `skipped` and set `validationRuns[stageName] = null`. Update checklist step to `status-skipped`.
 
 If a URL is available, invoke the skill (forwarding the URL as the argument):
 ```
 /power-pages:test-site --siteUrl {activatedUrl}
 ```
 
-When `test-site` completes, capture a high-level summary into `siteTests[stageName]`:
-```js
-siteTests[stageName] = {
-  url: "{activatedUrl}",
-  runAt: "{ISO timestamp when test started}",
-  durationSec: <integer seconds>,
-  passedPages: <count from test-site report>,
-  failedPages: <count from test-site report>,
-  passedApis: <count from test-site report>,
-  failedApis: <count from test-site report>,
-  consoleErrors: <count from test-site report>,
-  runOutcome: "passed" | "passed-with-warnings" | "failed"
-};
+When `test-site` completes, ingest its `.last-test-site.json` marker file directly into `validationRuns[stageName]` — the file's shape is exactly the validationRuns entry shape (see "validationRuns block" in Phase 3). No transformation needed:
+
+```bash
+node -e "
+const fs = require('fs');
+const stage = process.argv[1];
+const planData = JSON.parse(fs.readFileSync('docs/.alm-plan-data.json','utf8'));
+const run = JSON.parse(fs.readFileSync('.last-test-site.json','utf8'));
+planData.validationRuns = planData.validationRuns || {};
+planData.validationRuns[stage] = run;
+fs.writeFileSync('docs/.alm-plan-data.json', JSON.stringify(planData, null, 2));
+" "{stageName}"
 ```
 
-Compute `runOutcome`:
-- `"failed"` if `failedPages > 0` OR `failedApis > 0` OR test-site reported critical errors (5xx, missing pages).
-- `"passed-with-warnings"` if `consoleErrors > 0` and not failed.
-- `"passed"` otherwise.
+Then re-render the plan so the Validation tab updates immediately:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
+  --output "<projectRoot>/docs/alm-plan.html" \
+  --data "<projectRoot>/docs/.alm-plan-data.json"
+```
+
+`runOutcome` is set by `test-site` itself (see Phase 6.7a in the test-site skill): `"failed"` when any critical/high failure exists, `"passed-with-warnings"` for any non-critical failure or console errors, `"passed"` otherwise. Trust the value as written — do not re-compute.
 
 **Decision rule (non-blocking):** Regardless of `runOutcome`, mark the task `completed` and continue to the next stage. Failures are diagnostic, not gating — the plan does not abort.
 

@@ -801,126 +801,277 @@ test('render-alm-plan: hostResolution willEnsureDuringExecution renders checklis
   }
 });
 
-// ── Tests 15: siteTests → "Site Tests" card on the Pipeline tab ───────────────
+// ── Tests 15: validationRuns → "Validation" tab with per-stage sub-tabs ───────
 
-test('render-alm-plan: siteTests populated for a stage renders pass/fail row with green badge', () => {
+function makeValidationRun(overrides = {}) {
+  return {
+    url: 'https://staging.powerappsportals.com',
+    runAt: '2026-04-29T09:50:00.000Z',
+    durationSec: 95,
+    runOutcome: 'passed',
+    summary: { critical: 0, high: 0, medium: 0, low: 2, total: 2, automated: 2, manual: 0, passed: 2, failed: 0, skipped: 0 },
+    categories: [
+      {
+        id: 'site-load',
+        name: 'Site Load',
+        icon: '\u{1F4E6}',
+        tests: [
+          {
+            id: 't01',
+            name: 'Homepage returns 200 OK',
+            severity: 'critical',
+            type: 'automated',
+            status: 'passed',
+            description: 'Homepage at site root should return HTTP 200.',
+            steps: ['GET /', 'Expect 200'],
+            expected: '200 OK',
+            actual: '200 OK',
+            validates: 'Site activation',
+          },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+test('render-alm-plan: validationRuns absent → empty Validation tab still renders sub-tabs for target stages', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');
 
   try {
-    const data = makeValidData({
-      siteTests: {
-        Staging: {
-          url: 'https://staging.powerappsportals.com',
-          runAt: '2026-04-27T15:00:00.000Z',
-          durationSec: 120,
-          passedPages: 3,
-          failedPages: 0,
-          passedApis: 2,
-          failedApis: 0,
-          consoleErrors: 0,
-          runOutcome: 'passed',
-        },
-        Production: null,
-      },
-    });
-    const { status } = runScript(data, outputPath);
-    assert.equal(status, 0, 'Expected exit 0');
-
+    const { status } = runScript(makeValidData(), outputPath);
+    assert.equal(status, 0);
     const html = fs.readFileSync(outputPath, 'utf8');
 
-    assert.ok(html.includes('Site Tests'),
-      'Pipeline tab should include a "Site Tests" heading');
-    assert.ok(html.includes('staging.powerappsportals.com'),
-      'Stage URL should appear in the row');
-    // Stage label should appear inside a test-stage-name cell.
-    assert.ok(/<td class="test-stage-name">Staging<\/td>/.test(html),
-      'Stage label should render in a test-stage-name cell');
-    // Pass badge.
-    assert.ok(html.includes('test-result-pass'),
-      'Pass outcome should use test-result-pass badge class');
-    assert.ok(/test-result-pass[^>]*">PASSED/.test(html),
-      'Pass badge should display "PASSED"');
-    // Card belongs to the Pipeline tab (between tab-pipelines and tab-checklist).
-    // Match the rendered card element specifically (not the CSS rule in <head>).
-    const pipeIdx = html.indexOf('id="tab-pipelines"');
-    const checkIdx = html.indexOf('id="tab-checklist"');
-    const cardIdx = html.indexOf('class="card site-tests-card"');
-    assert.ok(pipeIdx !== -1 && checkIdx !== -1 && cardIdx !== -1,
-      'All markers present');
-    assert.ok(cardIdx > pipeIdx && cardIdx < checkIdx,
-      'Site Tests card should sit inside the Pipelines tab');
+    // Validation tab section + sidebar nav button must be present.
+    assert.ok(html.includes('id="tab-validation"'), 'Validation tab section should render');
+    assert.ok(html.includes('data-tab="validation"'), 'Validation sidebar nav button should render');
+
+    // Two target stages in makeValidData → two sub-tab buttons.
+    const subtabBtns = (html.match(/<button class="subtab-btn[^"]*"[^>]*>/g) || []);
+    assert.equal(subtabBtns.length, 2,
+      'One sub-tab per target stage (Staging + Production)');
+    // Both stages rendered with "Not run" status when validationRuns absent.
+    assert.ok(/subtab-status-pending[^>]*>Not run<\/span>/.test(html),
+      'Stages with no run should display "Not run"');
+    // Empty-state note appears in the active pane.
+    assert.ok(html.includes('Not yet tested'),
+      'Empty stage pane should show "Not yet tested"');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
-test('render-alm-plan: siteTests absent or all-null renders empty-state note', () => {
-  // Covers both spec branches: (a) siteTests omitted entirely, and
-  // (b) siteTests present with every stage value null.
-  for (const variant of [
-    { name: 'absent', overrides: {} },
-    { name: 'all-null', overrides: { siteTests: { Staging: null, Production: null } } },
-  ]) {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
-    const outputPath = path.join(tmpDir, 'alm-plan.html');
-
-    try {
-      const { status } = runScript(makeValidData(variant.overrides), outputPath);
-      assert.equal(status, 0,
-        `Expected exit 0 for variant=${variant.name}`);
-
-      const html = fs.readFileSync(outputPath, 'utf8');
-      assert.ok(html.includes('Site Tests'),
-        `Variant=${variant.name}: Site Tests heading should render`);
-      assert.ok(html.includes('No automated tests recorded for this run.'),
-        `Variant=${variant.name}: empty-state note should render`);
-      // Look for a rendered badge element (full attribute), not the CSS rule in <head>.
-      assert.ok(!/<span class="test-result-badge test-result-pass">/.test(html),
-        `Variant=${variant.name}: no pass badge should render`);
-      assert.ok(!/<span class="test-result-badge test-result-fail">/.test(html),
-        `Variant=${variant.name}: no fail badge should render`);
-      assert.ok(!html.includes('__SITE_TESTS_SECTION__'),
-        `Variant=${variant.name}: placeholder should be replaced`);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  }
-});
-
-test('render-alm-plan: siteTests with runOutcome failed renders red badge', () => {
+test('render-alm-plan: validationRuns populated stage renders summary grid + categorized cards', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');
 
   try {
     const data = makeValidData({
-      siteTests: {
-        Staging: {
-          url: 'https://staging.powerappsportals.com',
-          runAt: '2026-04-27T15:00:00.000Z',
-          durationSec: 95,
-          passedPages: 1,
-          failedPages: 2,
-          passedApis: 0,
-          failedApis: 3,
-          consoleErrors: 4,
-          runOutcome: 'failed',
-        },
+      validationRuns: {
+        Staging: makeValidationRun(),
+        Production: null,
       },
     });
     const { status } = runScript(data, outputPath);
-    assert.equal(status, 0, 'Expected exit 0');
-
+    assert.equal(status, 0);
     const html = fs.readFileSync(outputPath, 'utf8');
-    assert.ok(html.includes('test-result-fail'),
-      'Failed outcome should use test-result-fail badge class');
-    assert.ok(/test-result-fail[^>]*">FAILED/.test(html),
-      'Fail badge should display "FAILED"');
-    // Failure counts should surface.
-    assert.ok(html.includes('2 fail'),
-      'Should display the failed-pages count');
-    assert.ok(html.includes('3 fail'),
-      'Should display the failed-apis count');
+
+    assert.ok(html.includes('class="test-summary-grid"'),
+      'Per-stage summary grid should render');
+    assert.ok(html.includes('class="test-category"'),
+      'Categorized test cards should render');
+    assert.ok(html.includes('Site Load'),
+      'Category title should render');
+    assert.ok(html.includes('Homepage returns 200 OK'),
+      'Test name should render');
+    // Outcome badge for the Staging stage in sub-tab bar — passed.
+    assert.ok(/subtab-status-pass[^>]*>Passed<\/span>/.test(html),
+      'Staging sub-tab should be marked Passed');
+    // Production sub-tab still pending.
+    assert.ok(/subtab-status-pending[^>]*>Not run<\/span>/.test(html),
+      'Production sub-tab should be marked Not run');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: validationRuns failed test card renders red severity + FAIL status badge', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      validationRuns: {
+        Staging: makeValidationRun({
+          runOutcome: 'failed',
+          summary: { critical: 1, high: 1, medium: 0, low: 0, total: 2, automated: 2, manual: 0, passed: 0, failed: 2, skipped: 0 },
+          categories: [
+            {
+              id: 'webapi', name: 'Web API', icon: '\u{1F50C}',
+              tests: [
+                {
+                  id: 't10',
+                  name: '/_api/cr_orders returns 200',
+                  severity: 'critical',
+                  type: 'automated',
+                  status: 'failed',
+                  description: 'Verifies the orders Web API endpoint returns data.',
+                  steps: ['Open DevTools', 'Navigate to Orders', 'Capture network'],
+                  expected: 'HTTP 200 with OData response',
+                  actual: 'HTTP 403 Forbidden',
+                  validates: 'Table permissions for Orders',
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Critical severity badge inside a rendered card (not the CSS rule).
+    assert.ok(/<span class="severity-badge severity-critical">/.test(html),
+      'Critical severity badge should render');
+    // FAIL status badge.
+    assert.ok(/<span class="test-status-badge test-status-fail">FAIL<\/span>/.test(html),
+      'FAIL status badge should render');
+    // Test card carries the failed modifier class for the red left-border.
+    assert.ok(/<div class="test-card test-card-failed"/.test(html),
+      'Failed test card should carry test-card-failed class');
+    // Actual line shows up with the failed modifier.
+    assert.ok(/<div class="test-actual is-failed"/.test(html),
+      'Failed test should render Actual block with is-failed style');
+    assert.ok(html.includes('HTTP 403 Forbidden'),
+      'Actual response text should render');
+    // Sidebar nav badge surfaces failure count (1 critical + 1 high = 2).
+    assert.ok(/<span class="nav-badge nav-badge-warn">2<\/span>/.test(html),
+      'Nav badge should show total failure count (critical + high)');
+    // Stage status badge in sub-tab bar should be Failed.
+    assert.ok(/subtab-status-fail[^>]*>Failed<\/span>/.test(html),
+      'Stage with runOutcome=failed should show Failed status in sub-tab bar');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: validationRuns multi-stage renders one sub-tab + pane per stage', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      validationRuns: {
+        Staging: makeValidationRun(),
+        Production: makeValidationRun({ runOutcome: 'passed-with-warnings' }),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Two sub-tab buttons — one per stage; first marked active.
+    assert.ok(/<button class="subtab-btn active"[^>]*data-vstage="Staging"/.test(html),
+      'First sub-tab (Staging) should be active by default');
+    assert.ok(/<button class="subtab-btn"[^>]*data-vstage="Production"/.test(html),
+      'Production sub-tab should render in inactive state');
+    // Both panes exist; first active, second hidden until clicked.
+    assert.ok(html.includes('id="vstage-Staging"') && html.includes('id="vstage-Production"'),
+      'Both stage panes should exist');
+    assert.ok(/<div class="vstage-pane active" id="vstage-Staging">/.test(html),
+      'Staging pane should be active');
+    assert.ok(/<div class="vstage-pane" id="vstage-Production">/.test(html),
+      'Production pane should be inactive');
+    // Production marked Warnings in the sub-tab bar.
+    assert.ok(/subtab-status-warn[^>]*>Warnings<\/span>/.test(html),
+      'Production sub-tab should show Warnings status');
+    // Sub-tab JS handler is wired up.
+    assert.ok(html.includes("document.querySelectorAll('.subtab-btn')"),
+      'Sub-tab JS handler should be present in the script block');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: validationRuns test card shows steps + expected when expanded', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      validationRuns: {
+        Staging: makeValidationRun({
+          categories: [
+            {
+              id: 'auth', name: 'Authentication', icon: '\u{1F512}',
+              tests: [
+                {
+                  id: 't20',
+                  name: 'Login redirects to Entra ID',
+                  severity: 'critical',
+                  type: 'manual',
+                  status: 'passed',
+                  description: 'Login flow.',
+                  steps: ['Click Sign In', 'Verify redirect to login.microsoftonline.com'],
+                  expected: 'User is redirected to Entra ID with the correct tenant ID',
+                  actual: 'Redirected to login.microsoftonline.com/<tenant>',
+                  validates: 'Entra ID app registration',
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Steps list rendered as ordered list.
+    assert.ok(/<ol class="test-steps">/.test(html),
+      'Steps should render as <ol class="test-steps">');
+    assert.ok(html.includes('Click Sign In'),
+      'Step text should render');
+    // Expected block.
+    assert.ok(/<div class="test-expected">/.test(html),
+      'Expected block should render');
+    assert.ok(html.includes('Entra ID with the correct tenant ID'),
+      'Expected text should render');
+    // Manual test type badge.
+    assert.ok(/<span class="test-type-badge test-type-manual">manual<\/span>/.test(html),
+      'Manual type badge should render');
+    // Validates field surfaces.
+    assert.ok(html.includes('Entra ID app registration'),
+      'Validates field text should render');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: validationRuns nav badge shows OK when all stages passed cleanly', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      validationRuns: {
+        Staging: makeValidationRun(),  // passed, 0 critical, 0 high
+        Production: makeValidationRun(),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Nav badge should be OK (no critical/high failures).
+    assert.ok(/<span class="nav-badge nav-badge-ok">OK<\/span>/.test(html),
+      'Nav badge should display "OK" when no critical/high failures');
+    // Should NOT show the warn badge.
+    assert.ok(!/<span class="nav-badge nav-badge-warn">/.test(html.split('data-tab="validation"')[1] || ''),
+      'Nav badge for Validation should not be the warn variant when passing');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

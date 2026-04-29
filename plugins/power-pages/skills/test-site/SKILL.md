@@ -513,6 +513,97 @@ For each failure, reiterate the specific remediation guidance from Phase 5.4. Gr
 
 - Use `browser_close` to clean up the browser session.
 
+#### 6.7a Write Machine-Readable Report (`.last-test-site.json`)
+
+Always write a structured JSON report to the project root so other skills (notably `plan-alm`) can ingest the run without re-parsing the markdown summary. The file is overwritten on every run.
+
+**Shape:**
+```json
+{
+  "url": "https://contoso.powerappsportals.com",
+  "runAt": "2026-04-29T08:50:00.000Z",
+  "durationSec": 95,
+  "runOutcome": "passed | passed-with-warnings | failed",
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 0,
+    "low": 2,
+    "total": 3,
+    "automated": 2,
+    "manual": 1,
+    "passed": 2,
+    "failed": 1,
+    "skipped": 0
+  },
+  "categories": [
+    {
+      "id": "site-load",
+      "name": "Site Load",
+      "icon": "📦",
+      "tests": [
+        {
+          "id": "t01",
+          "name": "Homepage returns 200 OK",
+          "severity": "critical | high | medium | low",
+          "type": "automated | manual",
+          "status": "passed | failed | skipped",
+          "description": "Short why-this-matters sentence.",
+          "steps": ["GET /", "Expect 200"],
+          "expected": "200 OK",
+          "actual": "200 OK",
+          "validates": "Site activation"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Category mapping** — emit one category per test-site phase that produced findings. Use these stable `id` values so consumers can recognize them:
+
+| `id`             | `name`               | Source phase                                    |
+|------------------|----------------------|-------------------------------------------------|
+| `site-load`      | Site Load            | Phase 2 (homepage HTTP, redirect, render)       |
+| `authentication` | Authentication       | Phase 3 (login redirect, anonymous gate)        |
+| `page-crawl`     | Page Crawl           | Phase 4 (each tested page becomes one card)     |
+| `web-api`        | Web API              | Phase 5 (each tested endpoint becomes one card) |
+| `auth-pages`     | Authenticated Pages  | Phase 5.6 page tests                            |
+| `auth-api`       | Authenticated API    | Phase 5.6 API tests                             |
+| `console`        | Console Health       | Aggregated console errors across all pages      |
+
+**Severity rules** (apply per test card):
+- HTTP 5xx response → `critical`
+- HTTP 4xx response on a public page or a documented public API → `high`
+- HTTP 4xx response on an authenticated-only resource accessed anonymously → `low` (expected gate)
+- Console errors on an otherwise-passing page → `medium`
+- All other findings (info-only) → `low`
+
+**Status rules**:
+- `passed` — assertion held (200, no console errors, expected redirect, etc.)
+- `failed` — assertion did not hold (5xx, 4xx where 200 was expected, login flow broke, etc.)
+- `skipped` — phase or test was deliberately bypassed (e.g. user picked "Skip authenticated pages" in 3.5)
+
+**`summary`** is computed from `categories`:
+- `critical`/`high`/`medium`/`low` — count of tests at each severity, **regardless of status** (so reviewers see the test surface even when everything passed).
+- `total` — total test cards.
+- `automated`/`manual` — split by `type`.
+- `passed`/`failed`/`skipped` — split by `status`.
+
+**`runOutcome`** is the rolled-up verdict:
+- `failed` if any test has `status: "failed"` AND `severity: "critical"` OR `"high"`.
+- `passed-with-warnings` if no critical/high failures but `summary.failed > 0` OR there are console errors logged.
+- `passed` otherwise.
+
+**Write the file** (Node.js, run from the project root):
+```bash
+node -e "require('fs').writeFileSync('.last-test-site.json', process.argv[1])" "$(cat <<'EOF'
+{...the JSON above...}
+EOF
+)"
+```
+or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `.last-test-site.json` in the project root (sibling to `.last-deploy.json` and `.last-pipeline.json`).
+
 #### 6.8 Suggest Next Steps
 
 Based on the test results, suggest relevant skills:

@@ -506,90 +506,260 @@ function buildPipelinesHtml() {
   return `<div class="pipeline-container">${stagesHtml}</div>`;
 }
 
-function buildSiteTestsSection(d) {
-  // Renders the "Site Tests" card on the Pipeline tab. Captures per-stage
-  // test-site results (page pass/fail, API pass/fail, console errors, runOutcome).
+function buildValidationTab(d) {
+  // Renders the full "Site Validation" tab body. One sub-tab per target stage.
+  // Each sub-tab shows a summary grid + per-category test cards.
   //
-  // Data shape (from plan-alm Phase 7 Step C):
-  //   data.siteTests = {
+  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's .last-test-site.json):
+  //   data.validationRuns = {
   //     "<stageName>": null | {
-  //       url, runAt, durationSec, passedPages, failedPages,
-  //       passedApis, failedApis, consoleErrors, runOutcome
+  //       url, runAt, durationSec, runOutcome,
+  //       summary: { critical, high, medium, low, total, automated, manual,
+  //                  passed, failed, skipped },
+  //       categories: [
+  //         { id, name, icon, tests: [
+  //             { id, name, severity, type, status, description, steps[],
+  //               expected, actual, validates }
+  //         ]}
+  //       ]
   //     }
   //   }
   //
-  // runOutcome values: "passed" | "passed-with-warnings" | "failed".
-  // Empty state: emit a note when siteTests is absent or every stage is null.
-  const tests = d && d.siteTests;
-  if (!tests || typeof tests !== 'object') {
-    return `<div class="card site-tests-card">
-  <h3 style="margin-top:0;">Site Tests</h3>
-  <div class="note-box neutral">No automated tests recorded for this run.</div>
-</div>`;
+  // For stages in data.stages with type === 'target' that have no entry (or null),
+  // an empty-state pane is rendered so reviewers see the stage but understand
+  // testing hasn't run yet.
+
+  const targetStages = (Array.isArray(d.stages) ? d.stages : [])
+    .filter((s) => s && s.type === 'target' && s.label)
+    .map((s) => s.label);
+  const runs = (d.validationRuns && typeof d.validationRuns === 'object') ? d.validationRuns : {};
+
+  // Stage list = union of target stages + any stage names already captured.
+  // Preserve target-stage order; append unknown stages last (rare, but possible
+  // if stages were renamed mid-run).
+  const allStages = [...targetStages];
+  for (const stageName of Object.keys(runs)) {
+    if (!allStages.includes(stageName)) allStages.push(stageName);
   }
-  const entries = Object.entries(tests).filter(([, v]) => v && typeof v === 'object');
-  if (entries.length === 0) {
-    return `<div class="card site-tests-card">
-  <h3 style="margin-top:0;">Site Tests</h3>
-  <div class="note-box neutral">No automated tests recorded for this run.</div>
+
+  if (allStages.length === 0) {
+    return `<div class="card site-validation-card">
+  <div class="note-box neutral">No target stages defined &mdash; nothing to validate. Validation runs after each stage's deployment + activation.</div>
 </div>`;
   }
 
-  const badgeClass = (outcome) => {
-    const o = String(outcome || '').toLowerCase();
-    if (o === 'failed') return 'test-result-fail';
-    if (o === 'passed-with-warnings') return 'test-result-warning';
-    return 'test-result-pass';
-  };
-  const badgeLabel = (outcome) => {
-    const o = String(outcome || '').toLowerCase();
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]+/g, '_');
+
+  function statusBadgeForStage(run) {
+    if (!run) {
+      return `<span class="subtab-status subtab-status-pending">Not run</span>`;
+    }
+    const o = String(run.runOutcome || '').toLowerCase();
+    if (o === 'failed') return `<span class="subtab-status subtab-status-fail">Failed</span>`;
+    if (o === 'passed-with-warnings') return `<span class="subtab-status subtab-status-warn">Warnings</span>`;
+    return `<span class="subtab-status subtab-status-pass">Passed</span>`;
+  }
+
+  // Sub-tab bar
+  const subtabBar = allStages.map((stageName, i) => {
+    const run = runs[stageName] || null;
+    const id = safeId(stageName);
+    return `<button class="subtab-btn${i === 0 ? ' active' : ''}" data-vstage="${id}">
+  <span class="subtab-name">${escapeHtml(stageName)}</span>
+  ${statusBadgeForStage(run)}
+</button>`;
+  }).join('');
+
+  // Per-stage panes
+  const panes = allStages.map((stageName, i) => {
+    const run = runs[stageName] || null;
+    const id = safeId(stageName);
+    const paneClass = `vstage-pane${i === 0 ? ' active' : ''}`;
+    return `<div class="${paneClass}" id="vstage-${id}">${buildValidationStagePane(stageName, run)}</div>`;
+  }).join('');
+
+  return `<div class="card site-validation-card">
+  <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px;line-height:1.6;">
+    Migration validation tests run after each target stage's deployment and activation. Each tab below corresponds to one target environment. Tests are categorized and grouped by severity &mdash; <strong>Critical</strong> failures should be addressed before promoting to the next stage; lower-severity findings are diagnostic only.
+  </div>
+  <div class="subtab-bar" role="tablist">${subtabBar}</div>
+  <div class="vstage-panes">${panes}</div>
+</div>`;
+}
+
+function buildValidationStagePane(stageName, run) {
+  if (!run) {
+    return `<div class="note-box neutral" style="margin-top:14px;">Not yet tested. <code>/power-pages:test-site</code> runs automatically after this stage's deployment and activation.</div>`;
+  }
+
+  const url = run.url ? `<code>${escapeHtml(run.url)}</code>` : '<span style="color:var(--text-dim);">&mdash;</span>';
+  const dur = (run.durationSec != null) ? `${Number(run.durationSec).toFixed(0)}s` : '&mdash;';
+  const runAt = run.runAt ? `<span style="font-family:var(--mono);">${escapeHtml(run.runAt)}</span>` : '&mdash;';
+
+  const summary = run.summary || {};
+  const cardClass = (n) => Number(n || 0) > 0 ? 'has-value' : 'zero-value';
+  const summaryGrid = `<div class="test-summary-grid">
+  <div class="test-summary-card ${cardClass(summary.critical)}">
+    <div class="test-summary-num critical">${Number(summary.critical || 0)}</div>
+    <div class="test-summary-label">Critical</div>
+  </div>
+  <div class="test-summary-card ${cardClass(summary.high)}">
+    <div class="test-summary-num high">${Number(summary.high || 0)}</div>
+    <div class="test-summary-label">High</div>
+  </div>
+  <div class="test-summary-card ${cardClass((summary.medium || 0) + (summary.low || 0))}">
+    <div class="test-summary-num medium">${Number((summary.medium || 0) + (summary.low || 0))}</div>
+    <div class="test-summary-label">Medium / Low</div>
+  </div>
+  <div class="test-summary-card has-value">
+    <div class="test-summary-num">${Number(summary.total || 0)}</div>
+    <div class="test-summary-label">Total Tests</div>
+  </div>
+</div>`;
+
+  // Run header (URL, runAt, duration, outcome)
+  const outcomeKlass = (() => {
+    const o = String(run.runOutcome || '').toLowerCase();
+    if (o === 'failed') return 'critical';
+    if (o === 'passed-with-warnings') return 'high';
+    return 'pass';
+  })();
+  const outcomeLabel = (() => {
+    const o = String(run.runOutcome || '').toLowerCase();
     if (o === 'failed') return 'FAILED';
     if (o === 'passed-with-warnings') return 'WARNINGS';
     return 'PASSED';
-  };
-
-  const rows = entries.map(([stageName, t]) => {
-    const dur = (t.durationSec != null) ? `${Number(t.durationSec).toFixed(0)}s` : '&mdash;';
-    const url = t.url ? `<code>${escapeHtml(t.url)}</code>` : '<span style="color:var(--text-dim);">&mdash;</span>';
-    const pages = `<span style="color:var(--pass);">${Number(t.passedPages || 0)} ok</span>` +
-      (Number(t.failedPages || 0) > 0 ? ` &middot; <span style="color:var(--critical);">${Number(t.failedPages)} fail</span>` : '');
-    const apis = `<span style="color:var(--pass);">${Number(t.passedApis || 0)} ok</span>` +
-      (Number(t.failedApis || 0) > 0 ? ` &middot; <span style="color:var(--critical);">${Number(t.failedApis)} fail</span>` : '');
-    const errs = Number(t.consoleErrors || 0);
-    const errsCell = errs > 0
-      ? `<span style="color:var(--critical);">${errs}</span>`
-      : `<span style="color:var(--pass);">0</span>`;
-    return `<tr class="test-stage-row">
-  <td class="test-stage-name">${escapeHtml(stageName)}</td>
-  <td class="test-stage-url">${url}</td>
-  <td>${dur}</td>
-  <td>${pages}</td>
-  <td>${apis}</td>
-  <td>${errsCell}</td>
-  <td><span class="test-result-badge ${badgeClass(t.runOutcome)}">${badgeLabel(t.runOutcome)}</span></td>
-</tr>`;
-  }).join('\n');
-
-  return `<div class="card site-tests-card">
-  <h3 style="margin-top:0;">Site Tests</h3>
-  <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">Per-stage results from <code>/power-pages:test-site</code> runs against each activated environment. Diagnostic only &mdash; failures are non-blocking.</div>
-  <table class="test-stage-table">
-    <thead>
-      <tr>
-        <th>Stage</th>
-        <th>URL</th>
-        <th>Duration</th>
-        <th>Pages</th>
-        <th>APIs</th>
-        <th>Console Errors</th>
-        <th>Outcome</th>
-      </tr>
-    </thead>
-    <tbody>
-${rows}
-    </tbody>
-  </table>
+  })();
+  const runHeader = `<div class="vstage-header">
+  <div class="vstage-header-row">
+    <span class="vstage-header-label">URL</span>
+    <span class="vstage-header-value">${url}</span>
+  </div>
+  <div class="vstage-header-row">
+    <span class="vstage-header-label">Run at</span>
+    <span class="vstage-header-value">${runAt}</span>
+  </div>
+  <div class="vstage-header-row">
+    <span class="vstage-header-label">Duration</span>
+    <span class="vstage-header-value">${dur}</span>
+  </div>
+  <div class="vstage-header-row">
+    <span class="vstage-header-label">Outcome</span>
+    <span class="test-result-badge test-result-${outcomeKlass === 'pass' ? 'pass' : (outcomeKlass === 'high' ? 'warning' : 'fail')}">${outcomeLabel}</span>
+  </div>
 </div>`;
+
+  // Categories
+  const categories = Array.isArray(run.categories) ? run.categories : [];
+  const categoryHtml = categories.length === 0
+    ? `<div class="note-box neutral" style="margin-top:14px;">Run completed but produced no categorized findings.</div>`
+    : categories.map((cat) => buildValidationCategory(cat)).join('');
+
+  return `${runHeader}
+${summaryGrid}
+${categoryHtml}`;
+}
+
+function buildValidationCategory(cat) {
+  if (!cat || !Array.isArray(cat.tests) || cat.tests.length === 0) return '';
+  const tests = cat.tests;
+
+  const sevCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+  tests.forEach((t) => {
+    const s = String(t.severity || '').toLowerCase();
+    if (sevCounts.hasOwnProperty(s)) sevCounts[s]++;
+  });
+
+  const sevPills = ['critical', 'high', 'medium', 'low']
+    .filter((s) => sevCounts[s] > 0)
+    .map((s) => `<span class="severity-badge severity-${s}">${sevCounts[s]} ${s}</span>`)
+    .join(' ');
+
+  const cards = tests.map((t) => buildValidationTestCard(t)).join('');
+
+  return `<div class="test-category">
+  <div class="test-category-header">
+    <span class="test-category-icon">${cat.icon || ''}</span>
+    <span class="test-category-title">${escapeHtml(cat.name || cat.id || '')}</span>
+    <span class="test-category-count">${tests.length} test${tests.length === 1 ? '' : 's'}</span>
+    <span style="margin-left:auto;display:flex;gap:4px;">${sevPills}</span>
+  </div>
+  ${cards}
+</div>`;
+}
+
+function buildValidationTestCard(t) {
+  const sev = String(t.severity || 'low').toLowerCase();
+  const type = String(t.type || 'automated').toLowerCase();
+  const status = String(t.status || '').toLowerCase();
+  const statusBadge = (() => {
+    if (status === 'passed') return `<span class="test-status-badge test-status-pass">PASS</span>`;
+    if (status === 'failed') return `<span class="test-status-badge test-status-fail">FAIL</span>`;
+    if (status === 'skipped') return `<span class="test-status-badge test-status-skip">SKIP</span>`;
+    return '';
+  })();
+  const steps = Array.isArray(t.steps) ? t.steps : [];
+  const stepsHtml = steps.length > 0
+    ? `<div class="field-label" style="margin-top:14px;margin-bottom:4px;">Steps</div>
+  <ol class="test-steps">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>`
+    : '';
+  const expectedHtml = t.expected
+    ? `<div class="test-expected"><strong>Expected Result:</strong> ${escapeHtml(t.expected)}</div>`
+    : '';
+  const actualHtml = t.actual
+    ? `<div class="test-actual ${status === 'failed' ? 'is-failed' : ''}"><strong>Actual:</strong> ${escapeHtml(t.actual)}</div>`
+    : '';
+  const validatesHtml = t.validates
+    ? `<div style="grid-column:span 2"><div class="field-label">Validates</div><span style="font-size:12px;color:var(--text);line-height:1.6;">${escapeHtml(t.validates)}</span></div>`
+    : '';
+  const descHtml = t.description
+    ? `<div style="font-size:12px;color:var(--text);margin:12px 0;line-height:1.7;">${escapeHtml(t.description)}</div>`
+    : '';
+
+  return `<div class="test-card test-card-${status || 'unknown'}" id="test-${escapeHtml(t.id || '')}">
+  <div class="test-card-header" onclick="this.parentElement.classList.toggle('expanded')">
+    <span class="severity-badge severity-${sev}">${sev}</span>
+    <span class="test-type-badge test-type-${type === 'manual' ? 'manual' : 'automated'}">${type}</span>
+    ${statusBadge}
+    <span class="test-card-name">${escapeHtml(t.name || t.id || '')}</span>
+    <span class="test-card-chevron">&#9654;</span>
+  </div>
+  <div class="test-card-body">
+    ${descHtml}
+    <div class="test-detail-grid">
+      <div>
+        <div class="field-label">Severity</div>
+        <span class="severity-badge severity-${sev}" style="font-size:10px;">${sev.toUpperCase()}</span>
+      </div>
+      <div>
+        <div class="field-label">Type</div>
+        <span class="test-type-badge test-type-${type === 'manual' ? 'manual' : 'automated'}" style="font-size:10px;">${type === 'automated' ? 'Automated (scriptable)' : 'Manual (browser)'}</span>
+      </div>
+      ${validatesHtml}
+    </div>
+    ${stepsHtml}
+    ${expectedHtml}
+    ${actualHtml}
+  </div>
+</div>`;
+}
+
+// Sidebar nav button for the Validation tab — badge shows total failure count
+// (critical + high + failed status), or "OK" when everything passed.
+function buildValidationNavBadge() {
+  const runs = (data.validationRuns && typeof data.validationRuns === 'object') ? data.validationRuns : null;
+  if (!runs) return { text: '', cls: '' };
+  let totalFailures = 0;
+  let totalRuns = 0;
+  for (const v of Object.values(runs)) {
+    if (!v || typeof v !== 'object') continue;
+    totalRuns++;
+    const s = v.summary || {};
+    totalFailures += Number(s.critical || 0) + Number(s.high || 0);
+  }
+  if (totalRuns === 0) return { text: '', cls: '' };
+  if (totalFailures > 0) return { text: String(totalFailures), cls: 'nav-badge-warn' };
+  return { text: 'OK', cls: 'nav-badge-ok' };
 }
 
 function buildHostCardHtml(d) {
@@ -703,7 +873,9 @@ const replacements = {
   PIPELINES_TAB_DESC: buildPipelinesTabDesc(),
   PIPELINES_HOST_CARD: buildHostCardHtml(data),
   PIPELINES_HTML: buildPipelinesHtml(),
-  SITE_TESTS_SECTION: buildSiteTestsSection(data),
+  VALIDATION_TAB: buildValidationTab(data),
+  VALIDATION_NAV_BADGE: buildValidationNavBadge().text,
+  VALIDATION_NAV_BADGE_CLASS: buildValidationNavBadge().cls,
   CHECKLIST_HTML: buildChecklistHtml(),
   HOST_CHECKLIST_SUBSTEP: buildHostChecklistSubBullet(data),
   ESTIMATION_METHOD: escapeHtml(data.estimationMethod || 'metadata-based'),
