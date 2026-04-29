@@ -25,6 +25,22 @@ Test a deployed, activated Power Pages site at runtime. Navigate the site in a b
 - **User-controlled authentication**: Never attempt to log in automatically. Always ask the user to log in via the browser window when authentication is required.
 - **Bounded crawling**: Cap page crawling at 25 pages to prevent infinite loops on sites with dynamic or paginated URLs.
 
+## Validation Test Categories
+
+Every run produces a categorized test report (`.last-test-site.json` — see Phase 6.7a). Stable category IDs and the source phase that produces each:
+
+| Category `id` | Display Name | Source phase | What it covers |
+|---|---|---|---|
+| `site-load` | **Site Load** | Phase 2 | Homepage HTTP status, redirect handling, initial render. One card for the homepage; failures are critical. |
+| `authentication` | **Authentication** | Phase 3 | Anonymous-to-Entra redirect, private-site gate detection, login flow integrity. Critical for private sites. |
+| `page-crawl` | **Page Crawl** | Phase 4 | One card per page tested (up to 25). Each card carries the page URL, HTTP status, and any console errors. Severity scales with HTTP class (5xx → critical, 4xx on public → high). |
+| `web-api` | **Web API** | Phase 5 | One card per `/_api/` endpoint observed during the run. Captures status code, response shape, and remediation hints (table-permissions / site-settings / inner-error settings). |
+| `auth-pages` | **Authenticated Pages** | Phase 5.6 | Pages that only became reachable after login. Skipped when the user opts out of authenticated testing. |
+| `auth-api` | **Authenticated API** | Phase 5.6 | API endpoints that only became callable after login. Skipped when authenticated testing is skipped. |
+| `console` | **Console Health** | Aggregated | Rolled-up count of console errors observed across all phases. Severity is medium by default. |
+
+`plan-alm`'s Validation tab consumes this shape directly — each category becomes a collapsible group in the per-stage sub-tab, and the rolled-up `runOutcome` (`passed` / `passed-with-warnings` / `failed`) drives the green / yellow / red Outcome badge in both the Validation tab and the Execution checklist substep.
+
 **Initial request:** $ARGUMENTS
 
 ---

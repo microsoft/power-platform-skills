@@ -931,6 +931,8 @@ Update the HTML checklist step:
 - `runOutcome === "failed"` → `status-warning` (NEW status — yellow).
 - otherwise → `status-completed`.
 
+**Checklist substep rendering** (the renderer handles this automatically once `validationRuns` is populated and the planData re-rendered): every `Test site in {stageName}` step gets an inline substep showing the test-result badge (`PASSED` / `WARNINGS` / `FAILED`), the tested URL, the `pass / fail / skip` summary line, and a "View details &rarr;" link that jumps to the Validation tab. Every `Deploy via pipeline to {stageName}` and `Activate site in {stageName}` step also gets a `Target: <envUrl>` substep so reviewers see the target env without leaving the Execution tab. The renderer derives env URLs from `data.stages[].envUrl` (matched by trailing stage label) — keep stage labels consistent across `data.stages` and `data.steps`.
+
 After handling activation and testing, switch PAC CLI back to the dev environment:
 ```bash
 pac env select --environment "{devEnvUrl}"

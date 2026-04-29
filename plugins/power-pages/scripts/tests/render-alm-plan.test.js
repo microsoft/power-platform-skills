@@ -1051,6 +1051,81 @@ test('render-alm-plan: validationRuns test card shows steps + expected when expa
   }
 });
 
+test('render-alm-plan: Test site checklist step shows Passed badge + URL + pass count + View details link', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      steps: [
+        { name: 'Deploy via pipeline to Staging', status: 'completed', skip: false },
+        { name: 'Activate site in Staging', status: 'completed', skip: false },
+        { name: 'Test site in Staging', status: 'completed', skip: false },
+      ],
+      validationRuns: {
+        Staging: makeValidationRun({
+          url: 'https://example.powerappsportals.com',
+          summary: { critical: 0, high: 0, medium: 0, low: 1, total: 1, automated: 1, manual: 0, passed: 1, failed: 0, skipped: 0 },
+        }),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // The Test site step's substep block should contain a PASSED badge,
+    // the URL inline, the pass count, and the View details link.
+    const idx = html.indexOf('Test site in Staging');
+    assert.ok(idx > 0, 'Test site step should render');
+    const stepCtx = html.slice(idx, idx + 1200);
+    assert.ok(/test-result-pass">PASSED</.test(stepCtx),
+      'Test step substep should show PASSED badge');
+    assert.ok(stepCtx.includes('example.powerappsportals.com'),
+      'Test step substep should show the URL');
+    assert.ok(stepCtx.includes('1 pass'),
+      'Test step substep should show the pass count');
+    assert.ok(/View details/.test(stepCtx),
+      'Test step substep should include a "View details" jump link');
+    // Deploy + Activate steps should each have a Target: env URL substep.
+    const deployIdx = html.indexOf('Deploy via pipeline to Staging');
+    const deployCtx = html.slice(deployIdx, deployIdx + 600);
+    assert.ok(/Target:[\s\S]*staging\.crm\.dynamics\.com/.test(deployCtx),
+      'Deploy step should show Target: <envUrl> substep');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: failed validationRun escalates Test step status from completed to warning', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      steps: [
+        { name: 'Test site in Staging', status: 'completed', skip: false },
+      ],
+      validationRuns: {
+        Staging: makeValidationRun({ runOutcome: 'failed' }),
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    const idx = html.indexOf('Test site in Staging');
+    const stepCtx = html.slice(idx - 200, idx + 200);
+    // Status modifier on the wrapper div should be status-warning, not
+    // status-completed, when the run failed.
+    assert.ok(/checklist-item status-warning/.test(stepCtx),
+      'A failed run should escalate the step status from completed to warning');
+    assert.ok(/test-result-fail">FAILED</.test(html.slice(idx, idx + 1200)),
+      'Failed run should render the FAILED badge in the substep');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('render-alm-plan: validationRuns nav badge shows OK when all stages passed cleanly', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');

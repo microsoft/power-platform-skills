@@ -826,17 +826,84 @@ function buildHostChecklistSubBullet(d) {
 }
 
 function buildChecklistHtml() {
-  const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;' };
+  const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;', warning: '&#9888;' };
   const steps = Array.isArray(data.steps) ? data.steps : [];
   if (steps.length === 0) return '<div class="note-box neutral">Execution steps will be populated after approval.</div>';
+  const runs = (data.validationRuns && typeof data.validationRuns === 'object') ? data.validationRuns : {};
+
+  // Match "Test site in {stageName}" entries to their captured validationRun.
+  // Also enrich every "<verb> in {stageName}" step with a stage-env subline so
+  // reviewers can see the target env URL inline.
+  const targetStageByLabel = {};
+  for (const st of (Array.isArray(data.stages) ? data.stages : [])) {
+    if (st && st.label) targetStageByLabel[st.label] = st;
+  }
+
   return steps.map((step) => {
-    const s = String(step.status || 'pending').toLowerCase().replace(/_/g, '-');
+    let s = String(step.status || 'pending').toLowerCase().replace(/_/g, '-');
     const skip = step.skip ? ' <em style="opacity:0.6;font-size:12px;">(will skip)</em>' : '';
+    const name = String(step.name || '');
+
+    // Detect "<verb> in <stageName>" pattern. The same parser handles
+    // "Deploy to Staging", "Activate site in Staging", and "Test site in Staging".
+    const stageMatch = name.match(/(?:to|in)\s+(.+)$/i);
+    const stageName = stageMatch ? stageMatch[1].trim() : null;
+    const stageInfo = stageName && targetStageByLabel[stageName] ? targetStageByLabel[stageName] : null;
+
+    // Test-site step: surface the validation run summary if we have one.
+    const isTestStep = /^test\s+site\s+in\s+/i.test(name);
+    let validationLine = '';
+    if (isTestStep && stageName) {
+      const run = runs[stageName] || null;
+      if (run && typeof run === 'object') {
+        const o = String(run.runOutcome || '').toLowerCase();
+        const badgeKlass =
+          o === 'failed' ? 'test-result-fail' :
+          o === 'passed-with-warnings' ? 'test-result-warning' :
+          'test-result-pass';
+        const badgeLabel =
+          o === 'failed' ? 'FAILED' :
+          o === 'passed-with-warnings' ? 'WARNINGS' :
+          'PASSED';
+        const sm = run.summary || {};
+        const counts = [];
+        if (Number(sm.passed || 0) > 0) counts.push(`${Number(sm.passed)} pass`);
+        if (Number(sm.failed || 0) > 0) counts.push(`${Number(sm.failed)} fail`);
+        if (Number(sm.skipped || 0) > 0) counts.push(`${Number(sm.skipped)} skip`);
+        const countsStr = counts.length ? ` &middot; ${counts.join(' / ')}` : '';
+        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${run.url ? `<code>${escapeHtml(run.url)}</code>` : '&mdash;'}${countsStr}</span>
+    <a href="#tab-validation" onclick="document.querySelector('[data-tab=\\'validation\\']').click(); return false;" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none;">View details &rarr;</a>
+  </li>
+</div>`;
+        // Promote step status to "warning" yellow when the test failed/warned —
+        // makes the failure visible at a glance from the Execution tab.
+        if (s === 'completed' && o === 'failed') s = 'warning';
+      } else if (s === 'completed' || s === 'pending' || s === 'in-progress') {
+        // Step exists but no run captured — show a small note.
+        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="font-size:11px;">No test-site run captured for <strong>${escapeHtml(stageName)}</strong> yet.</li>
+</div>`;
+      }
+    }
+
+    // Env-name subline: for any stage-bound step (Deploy / Activate / Test),
+    // show the target env URL beneath the step name. Plays well with the
+    // existing checklist-substep-list styling.
+    let envLine = '';
+    if (stageInfo && stageInfo.envUrl && !isTestStep) {
+      envLine = `<div class="checklist-substep-list" style="margin-top:2px;">
+  <li class="checklist-substep" style="font-size:11px;color:var(--text-dim);">Target: <code>${escapeHtml(stageInfo.envUrl)}</code></li>
+</div>`;
+    }
+
     return `<div class="checklist-item status-${s}">
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
-  <span class="checklist-name">${escapeHtml(step.name)}${skip}</span>
+  <span class="checklist-name">${escapeHtml(name)}${skip}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
-</div>`;
+</div>${envLine}${validationLine}`;
   }).join('\n');
 }
 
