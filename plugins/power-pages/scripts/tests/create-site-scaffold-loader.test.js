@@ -11,12 +11,17 @@ const loaderTemplates = [
   'astro/src/pages/index.astro',
 ];
 
-test('create-site loader keeps awaiting-input banner persistent across templates', () => {
+test('create-site loader keeps awaiting-input banner persistent and dismissible across templates', () => {
   for (const template of loaderTemplates) {
     const content = fs.readFileSync(path.join(createSiteRoot, template), 'utf8');
 
-    assert.match(content, /if \(banner\) banner\.hidden = !awaiting/, template);
+    assert.match(content, /id="inputBannerClose"/, template);
+    assert.match(content, /input-banner-close/, template);
+    assert.match(content, /aria-label="Dismiss notification"/, template);
+    assert.match(content, /dismissedPrompt/, template);
+    assert.match(content, /addEventListener\('click', dismissInputBanner\)/, template);
+    assert.match(content, /if \(banner\) banner\.hidden = !awaiting \|\| dismissedPrompt === prompt/, template);
+    assert.match(content, /if \(!awaiting\) dismissedPrompt = null/, template);
     assert.match(content, /if \(!lastAwaiting\)/, template);
-    assert.doesNotMatch(content, /inputBannerClose|input-banner-close|userDismissed|dismissedPrompt/, template);
   }
 });

@@ -112,6 +112,8 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .input-banner-text { line-height: 1.4; flex: 1; min-width: 0; }
 .input-banner-text b { font-weight: 600; display: block; letter-spacing: 0.3px; }
 .input-banner-text small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; }
+.input-banner-close { width: 24px; height: 24px; border: none; border-radius: 50%; background: rgba(92, 61, 0, 0.12); color: #5C3D00; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; flex-shrink: 0; transition: background 0.2s ease, transform 0.2s ease; }
+.input-banner-close:hover { background: rgba(92, 61, 0, 0.2); transform: scale(1.05); }
 @keyframes bannerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
 @keyframes bannerEnter { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .input-banner { top: 12px; right: 12px; padding: 10px 12px 10px 16px; font-size: 13px; max-width: calc(100vw - 24px); } }
@@ -127,6 +129,7 @@ export default function Home() {
     const statusArea = document.getElementById('statusArea')
     const progressLabel = document.getElementById('progressLabel')
     const tipTextEl = document.getElementById('tipText')
+    const inputBannerClose = document.getElementById('inputBannerClose')
 
     // Particles
     function createParticle() {
@@ -181,6 +184,14 @@ export default function Home() {
     let lastLiveMessage: string | null = null
     let lastAwaiting = false
     let lastPrompt: string | null = null
+    let dismissedPrompt: string | null = null
+
+    const dismissInputBanner = () => {
+      const banner = document.getElementById('inputBanner')
+      dismissedPrompt = lastPrompt || 'Please check your terminal to respond.'
+      if (banner) banner.hidden = true
+    }
+    inputBannerClose?.addEventListener('click', dismissInputBanner)
 
     function renderStatusMessage(text: string) {
       if (!statusArea) return
@@ -249,12 +260,13 @@ export default function Home() {
         const prompt = data.inputPrompt || 'Please check your terminal to respond.'
         const awaitingChanged = awaiting !== lastAwaiting
         const promptChanged = prompt !== lastPrompt
+        if (!awaiting) dismissedPrompt = null
         if (awaitingChanged || promptChanged) {
           lastAwaiting = awaiting
           lastPrompt = prompt
           if (promptEl) promptEl.textContent = prompt
         }
-        if (banner) banner.hidden = !awaiting
+        if (banner) banner.hidden = !awaiting || dismissedPrompt === prompt
       } catch {
         if (liveOverride) {
           const phaseIndex = Math.min(Math.floor((currentStatusIndex / statuses.length) * phaseLabels.length), phaseLabels.length - 1)
@@ -306,6 +318,7 @@ export default function Home() {
     intervals.push(window.setInterval(showTip, 12000))
 
     return () => {
+      inputBannerClose?.removeEventListener('click', dismissInputBanner)
       intervals.forEach(id => clearInterval(id))
       timeouts.forEach(id => clearTimeout(id))
     }
@@ -327,6 +340,7 @@ export default function Home() {
             <b>Waiting for your input</b>
             <small id="inputBannerPrompt">Please check your terminal to respond.</small>
           </div>
+          <button type="button" className="input-banner-close" id="inputBannerClose" aria-label="Dismiss notification">{'\u00d7'}</button>
         </div>
 
         <div className="center-stage" id="centerStage">
