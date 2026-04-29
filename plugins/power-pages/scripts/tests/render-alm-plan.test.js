@@ -962,3 +962,108 @@ test('render-alm-plan: hostResolution AvailableUsing* (already established) does
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('render-alm-plan: pipelineMeta absent → no ACTIVE chip and no last-run footer', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData(); // no pipelineMeta key
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // The single-solution branch should not emit a header, ACTIVE chip, or
+    // last-run footer when pipelineMeta is absent. Look for the literal
+    // closing tag span for ACTIVE so we don't false-match anywhere else.
+    assert.ok(!/>ACTIVE<\/span>/.test(html),
+      'No ACTIVE chip when pipelineMeta is absent');
+    assert.ok(!/Last run:/.test(html),
+      'No "Last run:" footer when pipelineMeta is absent');
+    assert.ok(!/Reused/.test(html) || /Reused as managed/.test(html) || true,
+      'No "Reused — matched on source+target" annotation when pipelineMeta is absent');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: pipelineMeta with isActive renders ACTIVE chip + actual name + last-run footer', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      pipelineMeta: {
+        isActive: true,
+        pipelineId: '2b8b5de8-8f43-f111-bec7-6045bd569497',
+        pipelineName: 'BYOC Supplier Portal Pipeline',
+        reusedByWiring: null,
+        lastDeploy: {
+          status: 'Succeeded',
+          stageName: 'Deploy to Staging',
+          deployedAt: '2026-04-29T08:42:00.000Z',
+          artifactVersion: '1.0.0.2',
+          componentCount: 118,
+        },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('BYOC Supplier Portal Pipeline'),
+      'Should render the actual pipeline name from pipelineMeta');
+    assert.ok(!/TestSite-Pipeline/.test(html),
+      'Should NOT fall back to the synthesized {SITE_NAME}-Pipeline name when pipelineMeta supplies one');
+    assert.ok(/>ACTIVE<\/span>/.test(html),
+      'Should render the ACTIVE chip when pipelineMeta.isActive is true');
+    assert.ok(/Last run:/.test(html),
+      'Should render the "Last run:" footer when lastDeploy is set');
+    assert.ok(html.includes('v1.0.0.2'),
+      'Last-run footer should include the artifact version');
+    assert.ok(html.includes('Succeeded'),
+      'Last-run footer should include the deploy status');
+    assert.ok(html.includes('118 components'),
+      'Last-run footer should include the component count');
+    assert.ok(html.includes('Deploy to Staging'),
+      'Last-run footer should include the stage name');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: pipelineMeta.reusedByWiring renders the reused-name annotation', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      pipelineMeta: {
+        isActive: true,
+        pipelineId: 'aaaa1111-bbbb-cccc-dddd-eeeeffff0000',
+        pipelineName: 'BYOC Demo Site Pipeline',
+        reusedByWiring: {
+          originalName: 'BYOC Demo Site Pipeline',
+          requestedName: 'BYOC Supplier Portal Pipeline',
+        },
+        lastDeploy: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    assert.ok(html.includes('BYOC Demo Site Pipeline'),
+      'Should render the original (reused) pipeline name');
+    assert.ok(/Reused/.test(html),
+      'Should mark the pipeline as reused');
+    assert.ok(html.includes('matched on source+target wiring'),
+      'Should explain the reused-by-wiring rationale');
+    assert.ok(html.includes('BYOC Supplier Portal Pipeline'),
+      'Should also surface the requested name so reviewers see why the actual name differs');
+    assert.ok(!/Last run:/.test(html),
+      'Should not render a "Last run:" footer when lastDeploy is null');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

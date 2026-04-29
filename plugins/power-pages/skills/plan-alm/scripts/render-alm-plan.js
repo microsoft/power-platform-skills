@@ -409,6 +409,42 @@ function buildPipelinesTabDesc() {
     : `Power Platform Pipelines configuration for promoting ${escapeHtml(data.SITE_NAME)} across environments.`;
 }
 
+function buildPipelineActiveAnnotations(meta, color) {
+  // Renders the chips/notes that mark a pipeline as the one currently being
+  // used to move configurations — only emitted when planData has a
+  // pipelineMeta block (i.e. .last-pipeline.json exists for this project).
+  if (!meta || !meta.isActive) return { chip: '', wiringNote: '', lastRunFooter: '' };
+
+  const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;margin-left:8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;font-family:var(--mono);background:${color}1a;border:1px solid ${color}55;color:${color};">ACTIVE</span>`;
+
+  let wiringNote = '';
+  if (meta.reusedByWiring && typeof meta.reusedByWiring === 'object') {
+    const orig = escapeHtml(meta.reusedByWiring.originalName || '');
+    const req = escapeHtml(meta.reusedByWiring.requestedName || '');
+    wiringNote = `<div style="margin-top:6px;font-size:11px;color:var(--text-dim);line-height:1.5;">
+  <strong style="color:var(--high);">Reused</strong> &mdash; matched on source+target wiring. Original pipeline name: <code>${orig}</code>${req ? ` (requested name was <code>${req}</code>)` : ''}.
+</div>`;
+  }
+
+  let lastRunFooter = '';
+  const ld = meta.lastDeploy;
+  if (ld && typeof ld === 'object') {
+    const status = String(ld.status || '');
+    const sLow = status.toLowerCase();
+    const statusColor = sLow === 'succeeded' ? 'var(--pass)' : (sLow === 'failed' ? 'var(--critical)' : 'var(--high)');
+    const parts = [];
+    if (ld.artifactVersion) parts.push(`<code>v${escapeHtml(ld.artifactVersion)}</code>`);
+    parts.push(`<span style="color:${statusColor};font-weight:600;">${escapeHtml(status || 'unknown')}</span>`);
+    if (ld.stageName) parts.push(escapeHtml(ld.stageName));
+    if (ld.deployedAt) parts.push(`<span style="font-family:var(--mono);">${escapeHtml(ld.deployedAt)}</span>`);
+    if (ld.componentCount != null) parts.push(`${Number(ld.componentCount)} components`);
+    lastRunFooter = `<div style="margin-top:6px;font-size:11px;color:var(--text-dim);">
+  Last run: ${parts.join(' &middot; ')}
+</div>`;
+  }
+  return { chip, wiringNote, lastRunFooter };
+}
+
 function buildPipelinesHtml() {
   const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387'];
   const stages = Array.isArray(data.stages) ? data.stages : [];
@@ -417,14 +453,23 @@ function buildPipelinesHtml() {
     <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
   </div>`).join('');
 
+  const meta = data.pipelineMeta && typeof data.pipelineMeta === 'object' ? data.pipelineMeta : null;
+  const activeColor = colors[0];
+  const ann = buildPipelineActiveAnnotations(meta, activeColor);
+
+  // Pipeline name: prefer the actual provisioned name when known.
+  const synthesizedName = `${escapeHtml(data.SITE_NAME || 'Site')}-Pipeline`;
+  const pipelineName = meta && meta.pipelineName
+    ? escapeHtml(meta.pipelineName)
+    : synthesizedName;
+
   if (proposedSolutions.length > 1) {
-    // Header — single pipeline name
-    const pipelineName = `${escapeHtml(data.SITE_NAME || 'Site')}-Pipeline`;
+    const nDeployable = proposedSolutions.filter((s) => !s.isFutureBuffer).length;
     const header = `<div class="pipeline-solution-label">
-  <span class="pipeline-solution-dot" style="background:${colors[0]};"></span>
-  <span class="pipeline-solution-name">${pipelineName}</span>
-  <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">1 pipeline · ${proposedSolutions.filter((s) => !s.isFutureBuffer).length} run${proposedSolutions.filter((s) => !s.isFutureBuffer).length === 1 ? '' : 's'}</span>
-</div>
+  <span class="pipeline-solution-dot" style="background:${activeColor};"></span>
+  <span class="pipeline-solution-name">${pipelineName}</span>${ann.chip}
+  <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">1 pipeline &middot; ${nDeployable} run${nDeployable === 1 ? '' : 's'}</span>
+</div>${ann.wiringNote}${ann.lastRunFooter}
 <div class="pipeline-container">${stagesHtml}</div>`;
 
     // Deployment order list — each solution is a stage run. Future buffer shown
@@ -446,6 +491,17 @@ function buildPipelinesHtml() {
   <h4 style="margin:0 0 8px 0;font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;">Deployment order</h4>
   ${orderRows}
 </div>`;
+  }
+
+  // Single-solution path. Show a header with the pipeline name + ACTIVE chip
+  // when meta is present; otherwise just the stage flow (preserves prior look
+  // for fresh/unconfigured plans).
+  if (meta) {
+    return `<div class="pipeline-solution-label">
+  <span class="pipeline-solution-dot" style="background:${activeColor};"></span>
+  <span class="pipeline-solution-name">${pipelineName}</span>${ann.chip}
+</div>${ann.wiringNote}${ann.lastRunFooter}
+<div class="pipeline-container">${stagesHtml}</div>`;
   }
   return `<div class="pipeline-container">${stagesHtml}</div>`;
 }

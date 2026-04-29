@@ -512,6 +512,7 @@ Build a `planData` object with all gathered strategy inputs:
     "Staging": null,
     "Production": null
   },
+  "pipelineMeta": null,                   // populated when .last-pipeline.json exists — see "pipelineMeta block" below
   "risks": [
     { "type": "info", "message": "..." }
   ],
@@ -576,6 +577,55 @@ Build a `planData` object with all gathered strategy inputs:
 ```
 
 `runOutcome` values: `"passed"` (all pages and APIs ok, 0 console errors), `"passed-with-warnings"` (any console errors but pages/APIs ok), `"failed"` (any 5xx, missing pages, or critical errors). The renderer maps these to green / yellow / red badges. For the Manual path, omit `siteTests` from planData.
+
+**`pipelineMeta` block** (PP Pipelines path only — read from `.last-pipeline.json` and `.last-deploy.json` at planData-build time. `null` on fresh plans where no pipeline is configured yet; populated after `setup-pipeline` and refreshed after each `deploy-pipeline` run via the post-deploy re-render in Phase 7). Highlights the pipeline that is actually moving configurations for this project. Shape:
+
+```json
+{
+  "pipelineMeta": {
+    "isActive": true,
+    "pipelineId": "2b8b5de8-8f43-f111-bec7-6045bd569497",
+    "pipelineName": "BYOC Supplier Portal Pipeline",
+    "reusedByWiring": null,
+    "lastDeploy": {
+      "status": "Succeeded",
+      "stageName": "Deploy to Staging",
+      "deployedAt": "2026-04-29T08:42:00.000Z",
+      "artifactVersion": "1.0.0.2",
+      "componentCount": 118
+    }
+  }
+}
+```
+
+- `isActive`: `true` whenever the project has a configured pipeline (`.last-pipeline.json` exists). Drives the **ACTIVE** chip on the Pipelines tab.
+- `pipelineName`: from `.last-pipeline.json`. The renderer falls back to `${SITE_NAME}-Pipeline` when `pipelineMeta` is absent.
+- `reusedByWiring`: `null` when the pipeline was created fresh; an object `{ originalName, requestedName }` when `create-deployment-pipeline.js` matched an existing pipeline by source+target wiring and reused it under its existing name. The renderer surfaces this with an explanatory note so reviewers understand why the plan and the live pipeline names may differ.
+- `lastDeploy`: derived from `.last-deploy.json`. Omit (set to `null`) before the first deploy.
+
+**How to populate.** During Phase 3 planData build, read both files (Node.js inline) and inject:
+```bash
+node -e "
+const fs = require('fs');
+const meta = { isActive: false, pipelineId: null, pipelineName: null, reusedByWiring: null, lastDeploy: null };
+try {
+  const lp = JSON.parse(fs.readFileSync('.last-pipeline.json','utf8'));
+  meta.isActive = true;
+  meta.pipelineId = lp.pipelineId || null;
+  meta.pipelineName = lp.pipelineName || null;
+  meta.reusedByWiring = lp.reusedByWiring || null;
+} catch {}
+try {
+  const ld = JSON.parse(fs.readFileSync('.last-deploy.json','utf8'));
+  meta.lastDeploy = {
+    status: ld.status, stageName: ld.stageName, deployedAt: ld.deployedAt,
+    artifactVersion: ld.artifactVersion, componentCount: ld.componentCount,
+  };
+} catch {}
+process.stdout.write(JSON.stringify(meta));
+"
+```
+Embed the result as `planData.pipelineMeta`.
 
 **v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
 
@@ -756,7 +806,7 @@ Invoke the skill:
 /power-pages:setup-pipeline
 ```
 
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`.
+After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then refresh `pipelineMeta` from the freshly-written `.last-pipeline.json` and re-render `docs/alm-plan.html` so the Pipelines tab reflects the actual pipeline name + ACTIVE chip (no `lastDeploy` yet — that fills in after Phase 7 Step A).
 
 ### Manual path
 
@@ -795,6 +845,8 @@ Invoke the skill:
 ```
 
 After completion: mark deploy task as `completed`. Update HTML checklist step to `status-completed`.
+
+**Refresh `pipelineMeta` and re-render the plan.** Re-read `.last-pipeline.json` and `.last-deploy.json` (using the snippet documented in the `pipelineMeta` block above), update `planData.pipelineMeta`, write `docs/.alm-plan-data.json`, and re-render `docs/alm-plan.html` so the Pipelines tab now shows the actual pipeline name, ACTIVE chip, and last-run footer (succeeded/failed status + version + component count). This re-render is cheap and runs once per stage.
 
 **Step B — Activate (immediately after deploy for this stage):**
 Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
