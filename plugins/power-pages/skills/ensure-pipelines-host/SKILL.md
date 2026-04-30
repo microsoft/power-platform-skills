@@ -396,25 +396,83 @@ A PE already exists in the tenant (one is provisioned automatically the first ti
 - No → fall through to Phase 3.C `NoHost` decision tree (admin-created Custom Host preferred for governance).
 - Cancel → exit.
 
-#### 3.C — Status `NoHost` (decision tree)
+#### 3.C — Status `NoHost` (env-first decision tree)
 
-Present three paths plus cancel. Order: automated fast-path first; manual fallbacks second.
+The prompt asks the user to pick the **host environment** first (option 1's nested list); the install method follows from that choice. Options 2–4 cover the create-new-env paths and cancel. See `PowerPipelines/host-env-selection-flow.html` for the full design walkthrough.
 
-> "No Pipelines host bound to this dev env. Pick a path:
+**Step 1: build the eligible-env list and apply role labels.**
+
+Take `RESOLUTION.candidates.eligibleForAppInstall[]` from Phase 2 (envs with Dataverse, caller has access, Pipelines NOT yet installed, sku ∈ {Production, Sandbox}).
+
+For each entry, decorate with project-context labels at presentation time. Match by **URL origin** (lowercase, trailing slash stripped, path/query ignored). Multiple labels join with ` · `.
+
+| Label | Source signal |
+|---|---|
+| `dev env` | The env URL the skill is running against (`devEnvUrl` from caller / `pac env who`) |
+| `source env` | `sourceEnvironmentUrl` from `.last-pipeline.json` (typically same env as dev) |
+| `staging env` | `targetEnvironmentUrl` of any stage in `.last-pipeline.json` whose stage name matches `/stag\|test\|uat/i` |
+| `production env` | `targetEnvironmentUrl` of any stage whose name matches `/prod/i` |
+
+Envs with no role match show without a label.
+
+**Step 2: check eligibility-list emptiness.**
+
+If the list has zero entries after the filters above, **drop option 1 from the prompt entirely** (no "list of nothing" dead-end). Prompt collapses to the 3-option variant shown below; renumber accordingly.
+
+**Step 3: present the prompt.**
+
+> "No Pipelines host bound to `{devEnvUrl}`. Which environment should host Pipelines?
 >
-> 1. **Provision new Custom Host (recommended)** — automated env-create with template `D365_ProjectHost`. Pipelines app pre-installed. Requires Global / Power Platform / Dynamics admin. ~5–10 min. *(eng.ms-documented; same template PPAC `New custom host` uses.)*
-> 2. **Install Pipelines app on an existing env** (guided manual) — pick an env with Dataverse + system-admin role; install via PPAC → Resources → Dynamics 365 apps. Use this if you don't have tenant-admin role but do have system-admin on an existing env. *(Public-docs path.)*
-> 3. **Create new Custom Host via PPAC UI** (guided manual) — fallback if path 1 fails. *(Public-docs path.)*
+> Pipelines lives in one env per tenant; pipelines, stages, and run history are stored there. Source envs deploy through it.
+>
+> 1. **Use an existing environment** — install the Pipelines app on it. Pick from your eligible envs:
+>    - `{env[0].displayName}` (`{env[0].instanceApiUrl}`) — `{environmentSku}` — *{labels if any}*
+>    - `{env[1].displayName}` (...)
+>    - …
+>    - *Other (paste URL)*
+>
+>    *⚠ Sandbox-sku envs trigger a confirmation prompt before install.*
+>
+> 2. **Create a brand-new dedicated host env** — automated env-create with template `D365_ProjectHost`. Pipelines app pre-installed. Requires Global / Power Platform / Dynamics admin. ~5–10 min.
+> 3. **Open PPAC and create one manually** — fallback if option 2 fails.
 > 4. **Cancel** — exit.
 >
 > *Note: Platform-Environment auto-provisioning is intentionally not offered in this iteration. If you'd prefer the free Platform Host, navigate to `make.powerapps.com` → any solution → Pipelines page in the browser; PE auto-provisions on first navigation, then re-run this skill — it will detect and use the new PE.*"
 
-- Option 1 → `ACTION_TAKEN = "fast-path-custom-d365projecthost"`, Phase 4.A (sub-prompts: name, region)
-- Option 2 → `ACTION_TAKEN = "user-installed-app"`, Phase 4.B (sub-prompt: which env)
-- Option 3 → `ACTION_TAKEN = "user-created-custom-ppac"`, Phase 4.C
-- Option 4 → exit
+**3-option variant (when option 1's list is empty):** drop option 1 entirely; renumber options 2/3/4 → 1/2/3. Replace the lead sentence with: *"No existing environments in this tenant qualify for hosting Pipelines. Options:"*.
 
-For path 1, a **second confirmation gate** echoes the exact API call about to be made (URL, body, tenant) before firing.
+**Step 4: route the answer.**
+
+| Selection | Phase 4 path | `ACTION_TAKEN` |
+|---|---|---|
+| Option 1 — picked env from list, URL matches `devEnvUrl` (origin-equal) | **4.B** (skip the "which env" sub-prompt; pass the picked env URL through as `CHOSEN_ENV_URL`) | `"user-installed-app-on-dev"` |
+| Option 1 — picked any other listed env | **4.B** (skip sub-prompt; pass `CHOSEN_ENV_URL`) | `"user-installed-app"` |
+| Option 1 — "Other (paste URL)" | **4.B** with user-supplied URL as `CHOSEN_ENV_URL` | `"user-installed-app"` |
+| Option 1 — picked env where `environmentSku === "Sandbox"` | **3.C-sandbox sub-prompt below**, then 4.B if confirmed | (deferred until confirmation) |
+| Option 2 | **4.A** (sub-prompts: name, region, admin confirmation) | `"fast-path-custom-d365projecthost"` |
+| Option 3 | **4.C** | `"user-created-custom-ppac"` |
+| Option 4 | exit | n/a |
+
+For option 2, a **second confirmation gate** echoes the exact API call about to be made (URL, body, tenant) before firing.
+
+**Step 5 (conditional): Sandbox confirmation gate.**
+
+If the env picked in option 1 has `environmentSku === "Sandbox"`, present:
+
+> "⚠ `{displayName}` is a **Sandbox** env (`environmentSku: Sandbox`).
+>
+> Power Platform Pipelines is documented to run on Production envs. Sandbox should work but isn't on the supported matrix.
+>
+> Proceed?
+> 1. Yes, proceed at my own risk
+> 2. Pick a different env
+> 3. Cancel"
+
+- Yes → continue to 4.B with the Sandbox env. Set `ACTION_TAKEN` per the dev-env-match rule above.
+- Pick a different env → re-show option 1's env list (keep the rest of the picker state).
+- Cancel → back to the top-level Phase 3.C prompt.
+
+**Telemetry note.** Splitting `"user-installed-app"` and `"user-installed-app-on-dev"` lets us see, after rollout, how often users co-locate Pipelines with their dev env vs. dedicating a separate env.
 
 #### 3.D — Status `HostWithoutPipelines` (rare)
 
@@ -501,10 +559,13 @@ Interval = `Retry-After` seconds (default 10s). Timeout = 15min (configurable). 
 
 #### 4.B — Guided manual: Install Pipelines app on an existing env
 
-1. Sub-prompt: *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list as choices, plus "Other (paste URL)".
+1. **If the env was already chosen in Phase 3.C option 1** (`CHOSEN_ENV_URL` is set): skip the "which env" sub-prompt entirely — proceed directly to step 2 with the chosen env. Set `ACTION_TAKEN` per the Phase 3.C step 4 mapping (`"user-installed-app-on-dev"` when `CHOSEN_ENV_URL` origin matches `devEnvUrl`, else `"user-installed-app"`).
+
+   **Otherwise** (legacy entry path — caller invoked 4.B directly without going through 3.C): present the sub-prompt: *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list as choices, plus "Other (paste URL)".
+
 2. Print PPAC URL: `https://admin.powerplatform.microsoft.com/manage/environments/{envId}/dynamics365apps` and instructions: *"Click 'Install app' → 'Power Platform Pipelines' → Next → accept terms → Install. Wait until the app shows 'Installed'."*
 3. Two-option AskUserQuestion: *"Done — proceed"* / *"Cancel"*.
-4. After confirmation, poll `verify-host-readiness.js` (Phase 5) against the chosen env URL. On Pipelines tables present, capture URLs, `actionTaken = "user-installed-app"`. Proceed to Phase 5.
+4. After confirmation, poll `verify-host-readiness.js` (Phase 5) against the chosen env URL. On Pipelines tables present, capture URLs and proceed to Phase 5.
 
 #### 4.C — Guided manual: PPAC `New custom host`
 
@@ -562,7 +623,7 @@ Write `.last-host-check.json` to the project root (or `--outputPath` if invoked 
   "finalHostInstanceApiUrl": "...",
   "isPlatformHost": true | false,
   "tenantDefaultCustomHostEnvId": "...",
-  "actionTaken": "none" | "reuse-existing-custom" | "reuse-existing-pe" | "fast-path-custom-d365projecthost" | "user-installed-app" | "user-created-custom-ppac",
+  "actionTaken": "none" | "reuse-existing-custom" | "reuse-existing-pe" | "fast-path-custom-d365projecthost" | "user-installed-app" | "user-installed-app-on-dev" | "user-created-custom-ppac",
   "pipelinesSolutionVersion": "9.x.y.z",
   "ready": true,
   "warnings": [
@@ -587,6 +648,15 @@ Write `.last-host-check.json` to the project root (or `--outputPath` if invoked 
 ```
 
 > **Schema version bump (1 → 2):** added `candidates.*` block to record the tenant-wide enumeration result. Cache fast-path (Phase 1 step 0) reads `finalHostEnvUrl` regardless of schemaVersion; the candidates block is informational and helps debug / re-run decisions. Old v1 files remain readable — any missing field is treated as "not yet enumerated".
+
+> **`actionTaken` enum — value definitions:**
+> - `"none"` — host already established before this run; no install/provision performed (Phase 3.A path or cache fast-path).
+> - `"reuse-existing-custom"` — user picked an unbound Custom Host that already existed in the tenant (Phase 3.C-pre or 3.C-pre').
+> - `"reuse-existing-pe"` — user picked the existing Platform Host (Phase 3.C-pre'').
+> - `"fast-path-custom-d365projecthost"` — Phase 4.A provisioned a new Custom Host via the env-create API.
+> - `"user-installed-app"` — Phase 4.B installed Pipelines on an existing env that is **not** the same as the dev env.
+> - `"user-installed-app-on-dev"` — Phase 4.B installed Pipelines on the **dev env itself** (URL origin matches `devEnvUrl`). Telemetry-distinct from `"user-installed-app"` so we can see how often users co-locate Pipelines with their dev env.
+> - `"user-created-custom-ppac"` — Phase 4.C — user created the env via the PPAC UI; flow detected it post-create.
 
 This file is consumed by `setup-pipeline` and `deploy-pipeline`.
 
