@@ -26,6 +26,7 @@ references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
   QAChecks.md                  ← Runtime anti-pattern checks for self-QA
+  PlanTemplates.md             ← CREATE and EDIT plan document structures for canvas-app-planner
 agents/
   canvas-app-planner.md        ← Plans app design (CREATE) or edit changes (EDIT); invoked by edit-canvas-app
   canvas-screen-builder.md     ← Builds or modifies one screen; invoked by edit-canvas-app (parallel)
