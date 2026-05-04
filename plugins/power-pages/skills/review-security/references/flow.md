@@ -35,11 +35,12 @@ Confirmation matters because some sub-skills are long and require credentials. S
 
 ## Step 4 — Scan in progress
 
-Stream short progress lines. One sentence per sub-skill at start and one at end. Avoid technical jargon. Examples:
+Sub-skills run as **parallel subagents**. Long-running scans (`manage-code-scan`, `manage-site-scan`) launch first to get a head start, then the remaining checks launch immediately after. The user sees one progress line when each subagent completes. Examples:
 
-- "Checking your code now…"
+- "All checks are running now…"
 - "Code check finished — 2 important issues, 4 smaller ones."
-- "Scanning your live site… this may take several minutes."
+- "Live site scan finished — no critical issues found."
+- "All checks are complete."
 
 Do not narrate per-rule progress. Do not list every file scanned. The user wants reassurance, not telemetry.
 

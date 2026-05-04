@@ -3,8 +3,8 @@ name: review-security
 description: >-
   Runs a guided, end-to-end security review of a Power Pages code site by
   delegating to the focused security skills (code and dependencies, live
-  site scan, browser headers, web application firewall, authentication, web
-  roles, and table permissions) and consolidating every finding into one
+  site scan, browser headers, web application firewall, authentication,
+  and table permissions) and consolidating every finding into one
   HTML report with a glossary. Use when the user wants a full security
   review, a release-readiness check before publishing, a code scan during
   development, live site monitoring, or asks open-ended questions like
@@ -13,7 +13,7 @@ description: >-
   checks.
 user-invocable: true
 argument-hint: "[optional natural-language hint about the goal]"
-allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Skill
+allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Skill, Agent
 model: opus
 ---
 
@@ -142,8 +142,8 @@ Map the answer to a goal id:
 
 | Option | Goal id | Sub-skills involved (Phase 4) |
 |--------|---------|-------------------------------|
-| Code and config | `code-config` | manage-code-scan, audit-permissions (and read-only checks of setup-auth and create-webroles state) |
-| Release readiness | `release` | manage-code-scan, manage-site-scan, manage-http-headers, manage-web-application-firewall, audit-permissions (and read-only checks of setup-auth and create-webroles state) |
+| Code and config | `code-config` | manage-code-scan, audit-permissions (and read-only check of setup-auth state) |
+| Release readiness | `release` | manage-code-scan, manage-site-scan, manage-http-headers, manage-web-application-firewall, audit-permissions (and read-only check of setup-auth state) |
 | Deployed site | `monitor` | manage-site-scan |
 
 ### 2.2 Step 2 — Choose scope and depth
@@ -220,14 +220,14 @@ Map the release check selections to sub-skills:
 
 | Selection | Sub-skills |
 |-----------|------------|
-| Code and permissions | manage-code-scan, audit-permissions (and read-only checks of setup-auth and create-webroles state) |
+| Code and permissions | manage-code-scan, audit-permissions (and read-only check of setup-auth state) |
 | Live site scan | manage-site-scan |
 | Browser headers | manage-http-headers |
 | Firewall | manage-web-application-firewall |
 
 ### 2.3 Capture the chosen sub-skill set
 
-Build a `selectedSkills` list based on the answers. Always include the read-only checks of `setup-auth` and `create-webroles` for the `code-config` and `release` goals (they consist of reading existing YAML, not running the sub-skills themselves — see Phase 4.4 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the sub-skill itself — see Phase 4.4 below). This is the **Access & Data Security Validation** component.
 
 ---
 
@@ -245,11 +245,49 @@ When the user confirms, mark the **Run sub-skills** task `in_progress` and conti
 
 ## Phase 4: Run the matching sub-skills
 
-For every selected sub-skill, invoke it via the `Skill` tool with the argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. Each sub-skill handles its own authentication, error reporting, and progress.
+Spawn each selected sub-skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. Each sub-skill handles its own authentication, error reporting, and progress.
 
-### 4.1 Sub-skill invocation
+### 4.1 Sub-skill invocation via subagents
 
-Process the sub-skills sequentially (not in parallel) so the user sees progress one section at a time and so credential prompts (e.g., live site scan with sign-in) do not interleave. After each sub-skill completes, expect a JSON file at `<PROJECT_ROOT>/.security-review-tmp/<skill-name>.json` with the same shape it would otherwise feed to its standalone HTML report:
+Sub-skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scans first so they get a head start, then launch the remaining checks immediately after.
+
+**Wave 1 — long-running scans (launch first):**
+
+Spawn background subagents for `manage-code-scan` and `manage-site-scan` (when selected). These sub-skills take the most time and benefit from an early start.
+
+**Wave 2 — remaining checks (launch immediately after Wave 1):**
+
+Spawn background subagents for the remaining selected skills (`manage-http-headers`, `manage-web-application-firewall`, `audit-permissions`). When the goal only includes Wave 1 skills, skip this wave.
+
+**Launch all waves together when possible.** If Wave 1 and Wave 2 subagents are independent (no credential prompts overlap), spawn them all in a single message with multiple `Agent` tool calls so they start concurrently. When credential prompts might interleave (e.g., `manage-site-scan` with signed-in pages), launch Wave 1 first and Wave 2 after Wave 1 subagents have completed their authentication steps.
+
+**Inline checks (run while subagents work):**
+
+While subagents run, perform the read-only check for `setup-auth` inline (see Phase 4.4).
+
+Wait for all subagents to complete before proceeding to Phase 5.
+
+### 4.1.1 Subagent prompt pattern
+
+Each subagent receives a self-contained prompt that includes:
+
+1. The skill to invoke and the `--data-only` argument with the temp directory path
+2. The project root path so the skill can locate site files
+3. Any scope/depth parameters captured in Phase 2
+
+Example subagent call:
+
+```
+Agent({
+  description: "Run manage-code-scan",
+  prompt: "Invoke the skill `manage-code-scan` with argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/manage-code-scan.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  run_in_background: true
+})
+```
+
+### 4.1.2 Expected output
+
+After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-review-tmp/<skill-name>.json` matching the [section data format](references/section-data-format.md):
 
 ```text
 .security-review-tmp/
@@ -260,27 +298,23 @@ Process the sub-skills sequentially (not in parallel) so the user sees progress 
 └── audit-permissions.json   (when invoked)
 ```
 
-If a sub-skill fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so Phase 5 can render it as a single `info` finding for that section.
+If a sub-skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so Phase 5 can render it as a single `info` finding for that section.
 
 ### 4.2 Sub-skills that lack a data-only mode
 
-`audit-permissions`, `setup-auth`, and `create-webroles` do not currently run in data-only mode by themselves. Treat them as follows:
+`audit-permissions` and `setup-auth` do not currently run in data-only mode by themselves. Treat them as follows:
 
 - **audit-permissions** — invoke via `Skill` and capture its findings JSON manually. The skill writes its data to `<PROJECT_ROOT>/docs/<file>.html`; in this orchestration, **read its findings JSON shape from the inventory you collected during the run** and write it to `.security-review-tmp/audit-permissions.json` matching the shared section format documented in `references/section-data-format.md`.
 - **setup-auth** — do not invoke. Instead, read existing `.powerpages-site/site-settings/` files for authentication and cookie settings and produce a small finding list:
   - identity provider configured? (look for `Authentication/OpenIdConnect/*/Authority`)
   - profile redirect disabled? (`Authentication/Registration/ProfileRedirectEnabled = false`)
   - cookie SameSite reasonable? (`HTTP/SameSite/Default`)
-- **create-webroles** — do not invoke. Read `.powerpages-site/web-roles/*.yml` and produce a small finding list:
-  - at least one role defined?
-  - exactly one anonymous-users role and one authenticated-users role?
-  - no role assigned zero permissions in `audit-permissions.json` data?
 
-Write the resulting per-area findings to `.security-review-tmp/setup-auth.json` and `.security-review-tmp/create-webroles.json` in the [section data format](references/section-data-format.md).
+Write the resulting findings to `.security-review-tmp/setup-auth.json` in the [section data format](references/section-data-format.md).
 
 ### 4.3 Status updates
 
-Stream short progress lines to the user (one sentence per sub-skill start and finish). Avoid technical jargon — say "Checking your code now…" rather than "Invoking opengrep with the OWASP ruleset". Do not narrate the sub-skill's internal phases.
+Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate sub-skill internal phases. Once all subagents have finished, confirm that all checks are complete before moving to Phase 5.
 
 ---
 
@@ -302,7 +336,7 @@ Load every JSON file in `.security-review-tmp/`. Each file should match the [sec
 
 ### 5.3 Pick top findings
 
-Choose up to five findings for the Overview's "Top findings" list. Prioritize critical findings, break ties with the section order: code → site → headers → firewall → permissions → auth → roles.
+Choose up to five findings for the Overview's "Top findings" list. Prioritize critical findings, break ties with the section order: code → site → headers → firewall → permissions → auth.
 
 ### 5.4 Write next-step guidance
 
@@ -395,7 +429,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms. The glossary in the final report covers them.
-- **Sequential delegation** — never run multiple sub-skills in parallel. Sequence keeps progress comprehensible and avoids duplicated authentication prompts.
+- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `manage-code-scan` and `manage-site-scan` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work. When credential prompts might interleave, stagger waves to avoid confusion.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--data-only` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Glossary always present** — every report includes a Glossary section with at least the terms that appeared in the findings.
