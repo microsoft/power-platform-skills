@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { spawnSync } = require('child_process');
 const {
   getTrackedSkillFromToolInput,
@@ -14,6 +15,13 @@ const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
 function debug(msg) {
   if (DEBUG) process.stderr.write(msg);
+}
+
+function osFriendlyName(platform) {
+  if (platform === 'win32') return 'Windows';
+  if (platform === 'darwin') return 'Mac';
+  if (platform === 'linux') return 'Linux';
+  return platform;
 }
 
 debug('[power-pages hook] run-skill-posttool-validation.js started\n');
@@ -65,6 +73,7 @@ process.stdin.on('end', async () => {
     const eventsLib = require(path.join(TELEMETRY_DIR, 'lib', 'events'));
     const correlationLib = require(path.join(TELEMETRY_DIR, 'lib', 'correlation'));
     const sessionLib = require(path.join(TELEMETRY_DIR, 'lib', 'session'));
+    const pacAuthLib = require(path.join(TELEMETRY_DIR, 'lib', 'pac-auth'));
 
     const ikeyCfg = (() => {
       try {
@@ -72,7 +81,7 @@ process.stdin.on('end', async () => {
           fs.readFileSync(path.join(TELEMETRY_DIR, 'ikey.json'), 'utf8')
         );
       } catch {
-        return { ikey: '', collector_url: '' };
+        return { ikey: '', collector_url: '', event_stream_name: '' };
       }
     })();
 
@@ -96,19 +105,34 @@ process.stdin.on('end', async () => {
     const outcome =
       !validatorRan || validatorStatus === 0 ? 'success' : 'failure';
 
+    let pacAuth = null;
+    try {
+      pacAuth = pacAuthLib.readPacAuth();
+    } catch {
+      pacAuth = null;
+    }
+
+    const fields = {
+      pluginName: 'power-pages',
+      pluginVersion,
+      sessionId: sessionLib.getSessionId(),
+      correlationId: corr.correlation_id,
+      osName: osFriendlyName(process.platform),
+      osVersion: os.release(),
+      nodeVersion: 'v' + String(process.versions.node).split('.')[0],
+      skillName,
+      outcome,
+      durationMs: Date.now() - (corr.start_ts || startTs),
+      errorClass: '',
+    };
+    if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
+    if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+
     emitSpawn.fireAndForget(
-      eventsLib.buildSkillCompleted({
-        plugin_name: 'power-pages',
-        plugin_version: pluginVersion,
-        session_id: sessionLib.getSessionId(),
-        os_family: process.platform,
-        node_version: 'v' + String(process.versions.node).split('.')[0],
-        skill_name: skillName,
-        correlation_id: corr.correlation_id,
-        outcome,
-        duration_ms: Date.now() - (corr.start_ts || startTs),
-        error_class: '',
-      }),
+      eventsLib.buildSkillCompleted(
+        ikeyCfg.event_stream_name || '',
+        fields
+      ),
       {
         iKey: ikeyCfg.ikey || '',
         collectorUrl: ikeyCfg.collector_url || '',
