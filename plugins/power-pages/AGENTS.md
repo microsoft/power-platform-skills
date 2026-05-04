@@ -100,6 +100,16 @@ skills/
     scripts/validate-plan-alm.js ← Validates docs/alm-plan.html exists and is > 500 bytes; gracefully exits 0 if not a plan-alm session
 ```
 
+## ALM intent routing — `plan-alm` is the front door
+
+When the user expresses an **ALM intent** in natural language — *promote this site to {env}, ship to staging, deploy to production, set up CI/CD, move to next environment, push out a release, run the pipeline, export and import to staging* — invoke **`/power-pages:plan-alm` first**, before any individual ALM skill. The orchestrator detects the project state, runs the pre-plan completeness check, asks about promotion strategy, and dispatches to the right skills (`setup-solution`, `setup-pipeline`, `deploy-pipeline`, `activate-site`, `test-site`) in the right order.
+
+**Do not** jump straight to `/power-pages:setup-pipeline`, `/power-pages:deploy-pipeline`, `/power-pages:export-solution`, or `/power-pages:import-solution` in response to an ALM intent. Those are individual building blocks; running them out of order misses the orchestrator's gates (completeness check, host resolution, deployment-strategy selection, post-deploy validation, rendered HTML plan).
+
+**Skip `plan-alm` only when the user is explicit about the individual skill.** Phrases like *"just run setup-pipeline"*, *"skip planning, just deploy"*, *"I only need to export the solution zip"* are direct invocations — honor them. Anything ambiguous about deployment intent → `plan-alm` first.
+
+`setup-pipeline` and `deploy-pipeline` enforce this with a Phase 0 ALM-plan gate. If a user invokes them directly without a plan, those skills surface the recommendation to run `plan-alm` first (with an "I know what I'm doing" escape hatch). The Phase 0 gate is meant to fail closed — don't bypass it on the user's behalf.
+
 ## Plugin Components
 
 ### Agents
