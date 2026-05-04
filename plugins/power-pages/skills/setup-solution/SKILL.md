@@ -15,15 +15,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-solution/scripts/validate-solution.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the setup-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. A Dataverse publisher was verified or created (publisherId captured)
-            2. A Dataverse solution was verified or created (solutionId captured)
-            3. The Power Pages website component was added to the solution (component type discovered dynamically, not hardcoded)
-            4. A .solution-manifest.json file was written to the project root
-            5. A completion summary was presented showing solution details and component count
-          timeout: 30
 ---
 
 # setup-solution

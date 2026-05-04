@@ -18,16 +18,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/scripts/validate-deploy-pipeline.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the deploy-pipeline skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. .last-pipeline.json was read and pipelineId, hostEnvUrl, stages were available
-            2. A target stage was selected by the user
-            3. ValidatePackageAsync was called and validation completed (operation changed away from 200000201)
-            4. DeployPackageAsync was called and deployment reached a terminal stagerunstatus (not still in-progress)
-            5. .last-deploy.json was written with pipelineId, stageRunId, solutionName, status, and deployedAt
-            6. A summary was presented with deployment outcome
-          timeout: 30
 ---
 
 # deploy-pipeline

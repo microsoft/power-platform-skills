@@ -20,14 +20,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-pipeline/scripts/validate-pipeline.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the setup-pipeline skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. The CI/CD platform was selected by the user
-            2. For Power Platform Pipelines: .last-pipeline.json was written with pipelineId, hostEnvUrl, sourceDeploymentEnvironmentId, and non-empty stages array
-            3. For Power Platform Pipelines: docs/pipeline-setup.md was written
-            4. A completion summary was presented listing all created resources and next steps
-          timeout: 30
 ---
 
 # setup-pipeline

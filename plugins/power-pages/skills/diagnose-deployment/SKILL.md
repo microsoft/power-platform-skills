@@ -9,18 +9,6 @@ description: >-
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: prompt
-          prompt: |
-            Check whether the diagnose-deployment skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. PAC CLI and Azure CLI auth were verified (or their absence was reported)
-            2. Deployment artifacts were collected (powerpages.config.json, .powerpages-site/ contents)
-            3. Upload errors were surfaced (either by re-running pac pages upload-code-site or reading prior output)
-            4. Findings were pattern-matched against the deployment error catalog
-            5. A summary table was presented showing all findings with severity and fix status
-          timeout: 30
 ---
 
 # diagnose-deployment

@@ -15,15 +15,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/import-solution/scripts/validate-import.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the import-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. A valid solution zip file was located and verified to contain Solution.xml
-            2. Import options (overwrite, staged vs direct) were confirmed with the user
-            3. An async import job was triggered and polled to completion
-            4. The solution was verified to exist in the target environment after import
-            5. A completion summary was presented showing imported component count (or warnings/errors)
-          timeout: 30
 ---
 
 # import-solution

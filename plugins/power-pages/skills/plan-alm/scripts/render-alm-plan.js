@@ -356,9 +356,53 @@ function buildSolutionMembershipBanner() {
 </div>`;
 }
 
+function buildSynthesizedSingleSolution() {
+  // Compose a single proposedSolution entry from other planData fields when
+  // the caller passed proposedSolutions = []. Returns null if there isn't
+  // enough information to synthesize anything useful.
+  //
+  // Sources, in priority order:
+  //   - data.solutionContents.solution (if the orchestrator wrote it)
+  //   - data.solution / data.SOLUTION_INFO (legacy field)
+  //   - .solution-manifest.json data already merged into planData
+  //   - Fall back to SITE_NAME for both unique and display names
+
+  const fromContents = (data.solutionContents && data.solutionContents.solution) || null;
+  const fromTopLevel = data.solution || data.SOLUTION_INFO || null;
+  const src = fromContents || fromTopLevel || {};
+
+  const uniqueName = src.uniqueName || src.unique_name || data.solutionUniqueName ||
+    (data.SITE_NAME ? String(data.SITE_NAME).replace(/\s+/g, '') : null);
+  const displayName = src.friendlyName || src.displayName || data.SITE_NAME || uniqueName;
+
+  if (!uniqueName && !displayName) return null;
+
+  return {
+    uniqueName: uniqueName || 'Solution',
+    displayName: displayName || uniqueName || 'Solution',
+    order: 1,
+    sizeMB: totalSizeMB || 0,
+    componentCount: componentCount || 0,
+    componentTypes: ['All site components'],
+    tableLogicalNames: Array.isArray(data.solutionContents && data.solutionContents.tables) ? data.solutionContents.tables : [],
+    description: 'Single managed solution containing all Power Pages site components. No split was recommended by the size estimator.',
+    isFutureBuffer: false,
+  };
+}
+
 function buildSolutionsHtml() {
+  // Safety net: when proposedSolutions is empty (caller forgot to populate
+  // the single-solution entry, or planData was hand-built), synthesize one
+  // base-solution entry from other planData fields rather than showing the
+  // useless "structure will be determined" placeholder. Reviewers always
+  // see SOMETHING about the solution that's about to ship.
   if (proposedSolutions.length === 0) {
-    return '<div class="note-box neutral">Solution structure will be determined during Setup Solution.</div>';
+    const synthesized = buildSynthesizedSingleSolution();
+    if (synthesized) {
+      proposedSolutions.push(synthesized);
+    } else {
+      return '<div class="note-box neutral">Solution structure will be determined during Setup Solution. <em>(Fallback shown because <code>planData.proposedSolutions</code> was empty — populate it from the size estimator output for a richer view.)</em></div>';
+    }
   }
   const membershipHtml = buildSolutionMembershipBanner();
   const calloutHtml = buildAssetAdvisoryCallout();

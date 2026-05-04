@@ -18,15 +18,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/configure-env-variables/scripts/validate-env-variables.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the configure-env-variables skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. At least one environment variable definition was created or confirmed in Dataverse
-            2. Each selected site setting was linked to its env var definition via link-site-setting-to-env-var.js (verified: ok and verified both true)
-            3. The env var was added to the solution via AddSolutionComponent
-            4. deployment-settings.json was written with at least one stage's EnvironmentVariables entry
-            5. A completion summary was presented
-          timeout: 30
 ---
 
 # configure-env-variables

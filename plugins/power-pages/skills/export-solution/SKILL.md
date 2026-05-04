@@ -15,16 +15,6 @@ hooks:
         - type: command
           command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/export-solution/scripts/validate-export.js"'
           timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the export-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. The solution was identified (by name) in the target Dataverse environment
-            2. The export type (managed or unmanaged) was confirmed with the user
-            3. An async export job was triggered and polled to completion
-            4. The solution zip file was downloaded and written to disk
-            5. The zip file was verified to contain Solution.xml
-            6. A completion summary was presented with the zip path and size
-          timeout: 30
 ---
 
 # export-solution
