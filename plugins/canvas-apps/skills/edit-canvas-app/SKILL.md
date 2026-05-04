@@ -4,7 +4,7 @@ version: 2.0.0
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation from requirements, simple inline edits, and complex multi-screen changes with parallel screen builders. Triggers on requests to create, build, generate, modify, update, change, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas
+allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas
 ---
 
 # Canvas App
@@ -28,13 +28,14 @@ accordingly:
 
 Two specialist agents are used for planned work:
 
-1. **`canvas-app-planner`** — discovers available controls and data sources, designs the app
-   or edit plan, presents a screen plan for your approval, then writes a shared plan document
+1. **`canvas-app-planner`** — discovers available controls, APIs, and data sources; gathers
+   control property definitions; and writes the shared plan document (`canvas-app-plan.md`)
+   and `App.pa.yaml`. Receives the approved plan from the skill.
 2. **`canvas-screen-builder`** — writes or modifies exactly one screen's YAML; multiple
    builders run in parallel after the plan is approved
 
-You (the skill) coordinate the agents, detect mode, and own the compilation + error-fixing
-loop after all screens are written.
+You (the skill) coordinate the agents, detect mode, design and present the plan for user
+approval, and own the compilation + error-fixing loop after all screens are written.
 
 ---
 
@@ -163,69 +164,159 @@ Apply the changes directly:
 
 ## Phase 5 — Plan
 
-Invoke the `canvas-app-planner` agent using the `Task` tool. The planner prompt varies by
-mode.
+You (the skill) own plan design and user approval. After approval, invoke the
+`canvas-app-planner` agent to discover resources, gather control definitions, and write the
+plan document.
 
-### CREATE mode
+### Step 5.1 — Read Reference Documents
 
-Pass a prompt that includes:
+Read both reference documents before designing the plan:
 
-- The user's requirements: `$ARGUMENTS`
-- Mode: **CREATE**
-- The wizard answers collected in Phase 3 (target users & device, aesthetic direction,
-  features, and any screenshot observations)
-- The working directory (the absolute path resolved in Phase 0)
-- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
+- `${CLAUDE_PLUGIN_ROOT}/references/TechnicalGuide.md`
+- `${CLAUDE_PLUGIN_ROOT}/references/DesignGuide.md`
+
+Internalize both. These govern every design decision you will make.
+
+### Step 5.2 — Design the Plan
+
+#### CREATE mode
+
+Based on the user preferences from Phase 3 and the user's requirements, reason through:
+
+- How many screens are needed and what each does
+- Which controls will drive each screen's layout
+- What aesthetic direction fits the app's purpose
+- How data will flow (data sources, collections, or mock data)
+- **Layout strategy** — follow the layout decision rules in TechnicalGuide.md
+
+#### EDIT mode
+
+Read all `.pa.yaml` files in the working directory (you may have already read them in
+Phase 4). Based on the current app state and the user's edit requirements, reason through:
+
+- Which screens need to be modified and what specific changes are needed
+- Whether any new screens need to be created
+- How changes can be made while preserving the existing app's aesthetic and layout consistency
+- Any new controls, data sources, or variables required
+
+### Step 5.3 — Present Plan for Approval
+
+Enter plan mode (`EnterPlanMode`) and present the plan.
+
+#### CREATE mode
+
+```
+## Canvas App Plan
+
+### Screens ([N] total)
+
+| Screen | File | Purpose | Key Controls |
+|--------|------|---------|--------------|
+| [Name] | [Name].pa.yaml | [one-line description] | [2-3 controls] |
+
+### Data Strategy
+[How data will be loaded — data sources used, or "collections/mock data"]
+
+### Aesthetic Direction
+[e.g., "Bold & editorial — high-contrast dark background, accent RGBA(255,90,60,1), card-based layout, strong typographic hierarchy"]
+```
+
+#### EDIT mode
+
+```
+## Canvas Edit Plan
+
+### Screens to Modify ([N] total)
+
+| Screen | File | Summary of Changes |
+|--------|------|--------------------|
+| [Name] | [Name].pa.yaml | [one-line description of changes] |
+
+### Screens to Add ([N] total, if any)
+
+| Screen | File | Purpose |
+|--------|------|---------|
+| [Name] | [Name].pa.yaml | [one-line description] |
+
+### Approach
+[e.g., "Preserving existing dark theme — updating button palette on Home screen and adding a
+new Settings screen with consistent RGBA values extracted from existing files"]
+```
+
+#### Both modes
+
+Then call `ExitPlanMode` to request user approval.
+
+- If approved: proceed to Step 5.4.
+- If changes requested: revise the plan and re-enter plan mode with the updated version.
+
+### Step 5.4 — Invoke Planner Agent
+
+After approval, invoke the `canvas-app-planner` agent using the `Task` tool. The agent
+will discover available resources, gather control property definitions, write `App.pa.yaml`
+(CREATE only), and write `canvas-app-plan.md`.
+
+Pass a prompt that includes the **approved plan**. The agent does NOT redesign the plan or
+interact with the user — it discovers resources, enriches the plan with control definitions,
+and writes the output files.
+
+#### CREATE mode
 
 Example prompt:
 
-> You are the canvas-app-planner agent. Plan a Canvas App for the following requirements:
->
-> [paste $ARGUMENTS here]
+> You are the canvas-app-planner agent. Write the plan document for a Canvas App.
 >
 > Mode: CREATE
 >
+> Requirements: [paste $ARGUMENTS here]
+>
+> Approved plan:
+> [paste the full plan you presented in Step 5.3 — screens, data strategy, aesthetic
+> direction, all RGBA values]
+>
 > User preferences (from wizard):
-> - Target users & device: [answer or "not specified" — e.g., "Front desk staff on desktop/tablet"]
-> - Aesthetic direction: [answer or "not specified"]
-> - Features: [answer or "not specified"]
-> - Reference image: [observations from screenshot, or "none provided"]
+> - Target users & device: [answer]
+> - Aesthetic direction: [answer]
+> - Features: [answer]
+> - Reference image: [observations, or "none provided"]
 >
 > Working directory: [absolute path from Phase 0]
 > Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
-> Follow the instructions in your agent file. Write canvas-app-plan.md and App.pa.yaml to
-> the working directory. Return the screen list and plan document path when complete.
+> Follow the instructions in your agent file. Discover resources, gather control
+> definitions, write App.pa.yaml and canvas-app-plan.md to the working directory. Return
+> the screen list and plan document path when complete.
 
-### EDIT mode (complex)
-
-Pass a prompt that includes:
-
-- The user's edit requirements: `$ARGUMENTS`
-- Mode: **EDIT**
-- The working directory (absolute path where `.pa.yaml` files were synced)
-- The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
-- The list of synced `.pa.yaml` files found in the working directory
+#### EDIT mode (complex)
 
 Example prompt:
 
-> You are the canvas-app-planner agent. Plan the following edits to an existing Canvas App:
->
-> [paste $ARGUMENTS here]
+> You are the canvas-app-planner agent. Write the plan document for edits to a Canvas App.
 >
 > Mode: EDIT
+>
+> Edit requirements: [paste $ARGUMENTS here]
+>
+> Approved plan:
+> [paste the full plan you presented in Step 5.3 — screens to modify/add, approach,
+> all RGBA values]
+>
+> Current app state:
+> - Palette: [exact RGBA values extracted from existing files]
+> - Variables: [variable names found in existing files]
+> - Layout strategy: [AutoLayout / ManualLayout as found in existing files]
+> - Screens: [list of existing screens and their key controls]
 >
 > Working directory: [absolute working directory path]
 > Plugin root: ${CLAUDE_PLUGIN_ROOT}
 > Synced files: [list of .pa.yaml filenames]
 >
-> Follow the instructions in your agent file. Write canvas-app-plan.md to the working
-> directory. Return the list of screens to modify/create and the plan document path when
-> complete.
+> Follow the instructions in your agent file. Discover resources for new controls, gather
+> control definitions, write canvas-app-plan.md to the working directory. Return the list
+> of screens and the plan document path when complete.
 
-**Wait for the planner to finish.** The planner will present the plan to the user via plan
-mode and wait for approval before returning. Do not proceed to Phase 6 until the planner
-task completes successfully.
+**Wait for the planner to finish.** Do not proceed to Phase 6 until the planner task
+completes successfully.
 
 ---
 

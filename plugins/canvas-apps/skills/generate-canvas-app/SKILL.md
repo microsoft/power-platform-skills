@@ -3,7 +3,7 @@ name: generate-canvas-app
 version: 2.0.0
 description: "[DEPRECATED — use edit-canvas-app instead] Generate a complete Power Apps canvas app."
 author: Microsoft Corporation
-user-invocable: false
+user-invocable: true
 allowed-tools: Read
 ---
 

@@ -28,7 +28,7 @@ references/
   QAChecks.md                  ← Runtime anti-pattern checks for self-QA
   PlanTemplates.md             ← CREATE and EDIT plan document structures for canvas-app-planner
 agents/
-  canvas-app-planner.md        ← Plans app design (CREATE) or edit changes (EDIT); invoked by edit-canvas-app
+  canvas-app-planner.md        ← Discovers resources and writes plan document; invoked by edit-canvas-app
   canvas-screen-builder.md     ← Builds or modifies one screen; invoked by edit-canvas-app (parallel)
 skills/
   edit-canvas-app/
@@ -55,7 +55,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `edit-canvas-app` | In CREATE mode: discovers resources, designs the app, presents plan for approval, writes plan document and App.pa.yaml. In EDIT mode: reads existing app state, plans changes, presents edit plan for approval, writes plan document. |
+| `canvas-app-planner` | `edit-canvas-app` | Receives the approved plan from the skill. Discovers available controls, APIs, and data sources; gathers control property definitions (`describe_control`); writes `App.pa.yaml` (CREATE mode) and `canvas-app-plan.md` for downstream screen builders. |
 | `canvas-screen-builder` | `edit-canvas-app` | For Create actions: writes YAML for one new screen based on the plan. For Modify actions: applies targeted edits to one existing screen. Runs in parallel with other builders; validation is performed later by `edit-canvas-app` using `compile_canvas`. |
 
 ## MCP Tools
