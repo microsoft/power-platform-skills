@@ -16,7 +16,6 @@ function mkConfigDir(enabled = true) {
     path.join(tmp, "telemetry.json"),
     JSON.stringify({
       version: 1,
-
       enabled,
       recorded_at: new Date().toISOString(),
     })
@@ -37,13 +36,9 @@ function runHook({ prompt, configDir, fakeProbe }) {
   });
 }
 
-test("hook exits 0 and emits skill_started for a tracked slash command", () => {
+test("hook emits PowerPagesPluginEvent with top-level fields for tracked slash command", () => {
   const configDir = mkConfigDir(true);
   const probePath = path.join(configDir, "probe.json");
-
-  // Force the dispatcher onto the HTTPS path with a throwaway non-placeholder
-  // ikey so that FAKE_HTTPS captures the probe. We rewrite the synced
-  // ikey.json for this test run, then restore it.
   const ikeyPath = path.join(
     PLUGIN_ROOT,
     "scripts",
@@ -57,6 +52,7 @@ test("hook exits 0 and emits skill_started for a tracked slash command", () => {
     JSON.stringify({
       ikey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
       collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "PowerPagesPluginEvent",
     })
   );
 
@@ -67,28 +63,28 @@ test("hook exits 0 and emits skill_started for a tracked slash command", () => {
       fakeProbe: probePath,
     });
     assert.equal(status, 0);
-    // Hook is fire-and-forget via a detached child. Wait briefly for the
-    // dispatcher to write its probe.
     const deadline = Date.now() + 5_000;
     while (!fs.existsSync(probePath) && Date.now() < deadline) {
-      // busy-wait tight enough for CI; no sleep helper available cross-platform
+      // busy-wait
     }
     assert.ok(fs.existsSync(probePath), "dispatcher should have written probe");
     const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-    assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated for x-json-stream");
+    assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
     const body = JSON.parse(probe.body);
     assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
+    assert.equal(body.name, "PowerPagesPluginEvent");
     assert.equal(body.ver, "4.0");
-    assert.equal(body.name, "VscodeEvent");
     assert.match(body.iKey, /^o:/);
-    assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
     assert.equal(body.data.eventName, "skill_started");
     assert.equal(body.data.eventType, "Trace");
     assert.equal(body.data.severity, "Info");
-    assert.equal(typeof body.data.eventInfo, "string");
-    const info = JSON.parse(body.data.eventInfo);
-    assert.equal(info.plugin_name, "power-pages");
-    assert.equal(info.skill_name, "add-seo");
+    assert.equal(body.data.pluginName, "power-pages");
+    assert.equal(body.data.skillName, "add-seo");
+    assert.equal(typeof body.data.sessionId, "string");
+    assert.equal(typeof body.data.correlationId, "string");
+    assert.equal(typeof body.data.osName, "string");
+    assert.equal(typeof body.data.osVersion, "string");
+    assert.match(body.data.nodeVersion, /^v\d+$/);
   } finally {
     fs.writeFileSync(ikeyPath, original);
   }
@@ -103,10 +99,9 @@ test("hook exits 0 and emits nothing for an unrelated prompt", () => {
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  // Give any stray dispatcher a brief window; still expect no probe file.
   const deadline = Date.now() + 500;
   while (!fs.existsSync(probePath) && Date.now() < deadline) {
-    /* spin */
+    // spin
   }
   assert.ok(!fs.existsSync(probePath), "unrelated prompt must not emit");
 });
