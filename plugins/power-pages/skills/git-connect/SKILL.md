@@ -30,22 +30,24 @@ hooks:
 
 # Connect Power Pages Environment to Git
 
-Guide the user through connecting a Power Pages solution to a Git repository (Azure DevOps or GitHub) for source control. Uses the Dataverse Native Git integration OData actions.
+Guide the user through connecting a Power Pages solution to a Git repository (Azure DevOps or GitHub) for source control. The action wraps `pac pages git connect`; OData virtual entities are used only for browsing organizations, projects, repositories, and branches in the picker.
 
-> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for all OData API patterns used in this skill.
+> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for OData fallback patterns and `${CLAUDE_PLUGIN_ROOT}/skills/git-connect/references/error-catalog.md` for error remediation.
 
 ## Core Principles
 
+- **Drive PAC CLI for the action** — `pac pages git connect|status|disconnect` are the contract. Skill never POSTs `ConnectToGit` / `DisconnectFromGit` directly.
+- **OData only for the picker** — Browsing `gitorganizations` / `gitprojects` / `gitrepositories` / `gitbranches` is the one path PAC doesn't expose, so it stays OData.
 - **Cloud-aware URL resolution** — Never hardcode API base URLs. Derive from the Cloud value returned by `pac auth who`.
-- **Confirm before mutating** — Always present the full connection parameters and get explicit approval before executing ConnectToGit.
+- **Confirm before mutating** — Always present the full connection parameters and get explicit approval before executing the connect.
 - **Use TaskCreate/TaskUpdate** — Track all progress throughout all phases.
 
 > **Prerequisites:**
 >
-> - PAC CLI installed and authenticated to the target environment
-> - Azure CLI logged in (`az login`)
-> - Managed Environments enabled on the target environment (required for Git integration)
-> - At least one Power Platform solution in the environment
+> - PAC CLI installed, authenticated to the target environment, and built with the `verbPAPortalGit` feature flag enabled (the skill probes this in Phase 1).
+> - Azure CLI logged in (`az login`).
+> - Managed Environments enabled on the target environment (required for Git integration).
+> - At least one Power Platform solution in the environment.
 
 **Initial request:** $ARGUMENTS
 
@@ -69,7 +71,19 @@ pac help
 
 If not installed, instruct: `dotnet tool install --global Microsoft.PowerApps.CLI.Tool`
 
-#### 1.3 Check Authentication
+#### 1.3 Probe the `pac pages git` sub-noun
+
+```powershell
+pac pages git --help
+```
+
+The sub-noun is gated behind the `verbPAPortalGit` feature flag in PAC CLI. If `pac pages git --help` exits non-zero or reports `Unknown command`, surface this message and **STOP**:
+
+> "This skill needs PAC CLI built with the `verbPAPortalGit` feature flag (the `pac pages git` sub-noun). Update PAC CLI to a version that ships the sub-noun, or use a build with the flag enabled, then rerun `/git-connect`."
+
+When the probe succeeds you should see the five verbs: `connect`, `commit`, `pull`, `status`, `disconnect`.
+
+#### 1.4 Check Authentication
 
 ```powershell
 pac auth who
@@ -79,7 +93,7 @@ Extract: **Environment URL**, **Environment ID**, **Cloud** value.
 
 If not authenticated, ask for the environment URL and run `pac auth create --environment "<URL>"`.
 
-#### 1.4 Verify Azure CLI
+#### 1.5 Verify Azure CLI
 
 ```powershell
 az account show
@@ -87,15 +101,21 @@ az account show
 
 If not logged in, instruct the user to run `az login`.
 
-#### 1.5 Check Existing Connection
+#### 1.6 Check Existing Connection
 
-Run the connection status script:
+Run the connection status script (which queries OData for richer fields than `pac pages git status` exposes):
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/check-git-connection.js" --envUrl "<ENV_URL>"
 ```
 
-Evaluate the JSON result:
+Cross-check with PAC CLI for human readability:
+
+```powershell
+pac pages git status --environment "<ENV_URL>"
+```
+
+Evaluate the JSON result from the helper:
 
 - **If `connected` is `true`**: Show existing connection details (repo, branch, last sync). Use `AskUserQuestion`:
 
@@ -104,11 +124,11 @@ Evaluate the JSON result:
   | Your environment is already connected to Git: **`<repositoryUrl>`** (branch: `<branchName>`). What would you like to do? | Connection | Keep current connection — stop here, Disconnect and reconnect to a different repo |
 
   - **Keep**: Stop the skill. Suggest `/git-commit` or `/git-pull`.
-  - **Disconnect**: Execute disconnect via `dataverse-request.js`:
+  - **Disconnect**: Execute disconnect via PAC CLI:
     ```powershell
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "DisconnectFromGit" --body '{"SolutionUniqueName":"<name>"}'
+    pac pages git disconnect --solutionName "<solutionUniqueName>" --environment "<ENV_URL>"
     ```
-    Then proceed to Phase 2.
+    Expect stdout `Disconnected`. Then proceed to Phase 2.
 
 - **If `connected` is `false`**: Proceed to Phase 2.
 
@@ -234,34 +254,41 @@ Present all parameters to the user via `AskUserQuestion`:
 
 **If "Cancel"**: Stop the skill.
 
-#### 4.2 Execute ConnectToGit
+#### 4.2 Execute the connect via PAC CLI
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "ConnectToGit" --body '{"SolutionUniqueName":"<uniqueName>","Organization":"<orgName>","Project":"<projectName>","Repository":"<repoName>","Branch":"<branchName>","GitFolder":"<folderPath>","GitProvider":0,"ConnectionType":0}'
+pac pages git connect `
+  --solutionName "<solutionUniqueName>" `
+  --organization "<orgName>" `
+  --project "<projectName>" `
+  --repository "<repoName>" `
+  --branch "<branchName>" `
+  --folder "<folderPath>" `
+  --gitProvider 0 `
+  --environment "<ENV_URL>"
 ```
 
-> **Parameter reference** (from OData metadata):
-> - `Organization` (string) — ADO org name (e.g., "dynamicscrm")
-> - `Project` (string) — ADO project name (e.g., "OneCRM")
-> - `Repository` (string) — Repo name (e.g., "CDS")
-> - `Branch` (string, required) — Branch name (e.g., "main")
-> - `GitFolder` (string, required) — Folder path in repo (e.g., "/")
-> - `SolutionUniqueName` (string) — Solution to connect
-> - `GitProvider` (int) — 0 = Azure DevOps, 1 = GitHub
-> - `ConnectionType` (int) — 0 = standard
-
-> **Note:** This may take up to 2 minutes. The initial sync starts automatically after connection. Use a Bash timeout of at least 180 seconds.
+> **Argument reference** (from PAC CLI `PAPortalGitConnectVerb.cs`):
+> - `--solutionName` (string, required) — Power Platform solution unique name to bind.
+> - `--organization` (string, required) — ADO org or GitHub org (e.g. "dynamicscrm" or "microsoft").
+> - `--project` (string, required) — ADO project (use the same name as `--repository` for GitHub).
+> - `--repository` (string, required) — Repo name.
+> - `--branch` (string, required) — Branch name (e.g. "main").
+> - `--folder` (string, required) — Folder path inside the repo where the solution syncs (e.g. "/").
+> - `--gitProvider 0|1` — 0 = Azure DevOps (default), 1 = GitHub.
+> - `--environment` (string, optional) — Target env URL when not using the default profile.
+> - PAC CLI internally calls the `ConnectToGit` Dataverse action and waits for the initial sync; this can take up to 2 minutes. Use a Bash timeout of at least 180 seconds.
 
 #### 4.3 Handle Results
 
-| Status | Action |
-|--------|--------|
-| **200/204** | Connection initiated. Proceed to Phase 5. |
-| **400 — "Managed Environments not enabled"** | Tell user to enable Managed Environments in Power Platform Admin Center, then retry. |
-| **400 — "failed to complete"** | May need Managed Environments. Suggest enabling and retrying. |
-| **401** | Token expired. Ask user to run `az login` and retry. |
-| **403** | Insufficient permissions. User needs System Administrator role. |
-| Other error | Present error and help troubleshoot. |
+| Stdout / Exit code | Action |
+|---|---|
+| Exit 0 with `Connected to {repoUrl}@{branch}` | Connection initiated. Proceed to Phase 5. |
+| Stderr contains `Managed Environments not enabled` | Tell user to enable Managed Environments in Power Platform Admin Center, then retry. |
+| Stderr contains `CommitInvalidAdoLocation` | The folder path is invalid or the ADO repo location is misconfigured. Walk the user through fixing `--folder`. |
+| HTTP 401 underneath | Token expired. Ask user to run `az login` and retry. |
+| HTTP 403 underneath | Insufficient permissions. User needs System Administrator role. |
+| Other error | Look up the error in `${CLAUDE_PLUGIN_ROOT}/skills/git-connect/references/error-catalog.md`. |
 
 **Output**: ConnectToGit action executed
 
@@ -275,13 +302,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "Conn
 
 #### 5.1 Verify Connection
 
-Wait 5 seconds, then re-run the connection check:
+Wait 5 seconds, then verify with both PAC CLI (human-readable) and the helper script (structured):
 
 ```powershell
+pac pages git status --environment "<ENV_URL>"
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/check-git-connection.js" --envUrl "<ENV_URL>"
 ```
 
-Confirm `connected` is `true`.
+Expect `pac pages git status` stdout to begin with `Connected to ...` and the helper script JSON to have `"connected": true`.
 
 > **Note:** The initial sync may still be in progress. Solution components are being processed — this can take several minutes. The connection itself is established even if sync hasn't completed.
 
@@ -323,15 +351,26 @@ Git connection established!
 
 ### Key Decision Points (Wait for User)
 
-1. Phase 1.5: If already connected — keep or disconnect
+1. Phase 1.6: If already connected — keep or disconnect
 2. Phase 2.2: Select which solution to connect
 3. Phase 3.1–3.5: Select organization, project, repo, branch, folder (sequential)
 4. Phase 4.1: Confirm all connection parameters before executing
 
 ### Prerequisites Reminder
 
-- **Managed Environments** must be enabled on the target environment. If ConnectToGit fails with a Managed Environments error, direct the user to: Power Platform Admin Center → Environments → Select environment → Enable Managed Environments.
+- **Managed Environments** must be enabled on the target environment. If `pac pages git connect` fails with a Managed Environments error, direct the user to: Power Platform Admin Center → Environments → Select environment → Enable Managed Environments.
 - The environment must have at least one unmanaged solution.
+
+### Limitations (UI parity)
+
+The following Power Pages Studio "Source control" tab actions are NOT covered by this skill or the PAC CLI sub-noun today; users who need them should use the Studio UI:
+
+- **Branch switching** on a connected solution (the picker only chooses the branch at connect time).
+- **Commit history view** — no `pac pages git log` verb yet.
+- **Individual file diffs** — no per-file diff verb.
+- **Cherry-pick / selective commit** — `pac pages git commit` always commits all pending Push rows; you cannot stage a subset.
+
+To **disconnect** an environment from Git, run `pac pages git disconnect --solutionName "<name>" --environment "<url>"` directly. There is no `/git-disconnect` skill in this PR; that is intentionally scoped to a follow-up.
 
 ### Progress Tracking
 
@@ -339,11 +378,11 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Check PAC CLI, auth, Azure CLI, existing connection |
+| Verify prerequisites | Verifying prerequisites | Check PAC CLI, sub-noun feature flag, auth, Azure CLI, existing connection |
 | Select solution | Selecting solution | List solutions, user picks which to connect |
 | Select repository | Selecting repository | Browse orgs/projects/repos/branches via OData |
-| Confirm and connect | Connecting to Git | Present summary, execute ConnectToGit action |
-| Verify connection | Verifying connection | Check status, record usage, suggest next steps |
+| Confirm and connect | Connecting to Git | Present summary, run `pac pages git connect` |
+| Verify connection | Verifying connection | Run `pac pages git status`, record usage, suggest next steps |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`.
 

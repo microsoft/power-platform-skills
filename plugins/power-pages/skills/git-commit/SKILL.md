@@ -29,20 +29,22 @@ hooks:
 
 # Commit Power Pages Changes to Git
 
-Commit pending changes from a Power Pages environment to the connected Git repository using the Dataverse `CommitToGit` OData action.
+Commit pending changes from a Power Pages environment to the connected Git repository. The action wraps `pac pages git commit`; OData is used only for the helper script that lists pending components.
 
-> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for all OData API patterns used in this skill.
+> Refer to `${CLAUDE_PLUGIN_ROOT}/references/git-api-patterns.md` for OData fallback patterns and `${CLAUDE_PLUGIN_ROOT}/skills/git-commit/references/error-catalog.md` for error remediation.
 
 ## Core Principles
 
+- **Drive PAC CLI for the action** — `pac pages git commit` is the contract. Skill never POSTs `CommitToGit` directly.
 - **Check before committing** — Always verify the Git connection exists and show pending changes before committing.
 - **Smart commit messages** — Auto-generate a descriptive commit message from the pending components, but let the user customize it.
 - **Use TaskCreate/TaskUpdate** — Track all progress throughout all phases.
 
 > **Prerequisites:**
 >
-> - Environment must already be connected to Git via `/git-connect`
-> - PAC CLI authenticated and Azure CLI logged in
+> - Environment must already be connected to Git via `/git-connect`.
+> - PAC CLI built with the `verbPAPortalGit` feature flag enabled (skill probes this in Phase 1).
+> - PAC CLI authenticated and Azure CLI logged in.
 
 **Initial request:** $ARGUMENTS
 
@@ -58,7 +60,17 @@ Commit pending changes from a Power Pages environment to the connected Git repos
 
 Create all tasks upfront (see [Progress Tracking](#progress-tracking) table).
 
-#### 1.2 Check Authentication
+#### 1.2 Probe the `pac pages git` sub-noun
+
+```powershell
+pac pages git --help
+```
+
+The sub-noun is gated behind the `verbPAPortalGit` feature flag in PAC CLI. If the help command exits non-zero or reports `Unknown command`, surface this and **STOP**:
+
+> "This skill needs PAC CLI built with the `verbPAPortalGit` feature flag (the `pac pages git` sub-noun). Update PAC CLI to a version that ships the sub-noun, or use a build with the flag enabled, then rerun `/git-commit`."
+
+#### 1.3 Check Authentication
 
 ```powershell
 pac auth who
@@ -66,7 +78,7 @@ pac auth who
 
 Extract the **Environment URL**. If not authenticated, follow the standard auth flow.
 
-#### 1.3 Verify Azure CLI
+#### 1.4 Verify Azure CLI
 
 ```powershell
 az account show
@@ -74,7 +86,7 @@ az account show
 
 If not logged in, instruct: `az login`.
 
-#### 1.4 Check Git Connection
+#### 1.5 Check Git Connection
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/check-git-connection.js" --envUrl "<ENV_URL>"
@@ -157,24 +169,33 @@ Present via `AskUserQuestion`:
 
 ### Actions
 
-#### 4.1 Execute CommitToGit
+#### 4.1 Execute the commit via PAC CLI
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "CommitToGit" --body '{"SolutionUniqueName":"<solutionUniqueName>","CommitMessage":"<commitMessage>"}'
+pac pages git commit `
+  --solutionName "<solutionUniqueName>" `
+  --message "<commitMessage>" `
+  --environment "<ENV_URL>"
 ```
 
-> **Note:** This may take up to 60 seconds depending on the number of components. Use a Bash timeout of at least 120 seconds.
+> **Argument reference** (from PAC CLI `PAPortalGitCommitVerb.cs`):
+> - `--solutionName` (string, required) — Solution to commit.
+> - `--message` (string, required) — Commit message.
+> - `--environment` (string, optional) — Target env URL when not using the default profile.
+> - PAC CLI internally calls the `CommitToGit` Dataverse action. Allow up to 60 seconds — use a Bash timeout of at least 120 seconds.
 
 #### 4.2 Handle Results
 
-| Status / Error | Action |
+| Stdout / Stderr | Action |
 |---|---|
-| **200/204** | Commit succeeded. Proceed to Phase 5. |
-| **"Source Control not enabled"** | Managed Environments may not be enabled, or the connection was lost. Suggest `/git-connect`. |
-| **"items requested do not exist"** | Components are still being processed from a previous sync. Tell user to wait a few minutes and retry. |
-| **"Please wait... Solution components are being processed"** | Initial sync still in progress. Tell user to wait and retry. |
-| **401** | Token expired. Ask user to run `az login` and retry. |
-| Other error | Present the error clearly and help troubleshoot. |
+| Exit 0 with `Committed` | Commit succeeded. Proceed to Phase 5. |
+| Exit 0 with `Nothing to commit` | The CLI detected no pending changes. Skip Phase 5 verification and tell the user nothing was committed. |
+| `Source Control not enabled` | Managed Environments may not be enabled, or the connection was lost. Suggest `/git-connect`. |
+| `items requested do not exist` | Components are still being processed from a previous sync. Tell user to wait a few minutes and retry. |
+| `Solution components are being processed` | Initial sync still in progress. Tell user to wait and retry. |
+| `0x80040216` or `SourceControlComponent` empty / null reference | The known empty-components NRE: tracking thinks there are zero pending Push rows. Run the helper script again to confirm `pendingCount=0`; suggest the user make a small change and retry. See `error-catalog.md`. |
+| HTTP 401 underneath | Token expired. Run `az login` and retry. |
+| Other error | Look up the error in `${CLAUDE_PLUGIN_ROOT}/skills/git-commit/references/error-catalog.md`. |
 
 **Output**: CommitToGit action executed
 
@@ -188,13 +209,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "Comm
 
 #### 5.1 Verify Commit
 
-Wait 5 seconds, then re-run pending changes check:
+Wait 5 seconds, then verify with both PAC CLI and the helper script:
 
 ```powershell
+pac pages git status --environment "<ENV_URL>"
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-commit/scripts/check-pending-changes.js" --envUrl "<ENV_URL>"
 ```
 
-If `pendingCount` is 0 (or significantly reduced), the commit succeeded.
+`pac pages git status` should report `0 pending changes` (or no `pending changes` line at all). Helper script `pendingCount` should be 0 (or significantly reduced).
 
 If pending changes remain, warn the user that some components may not have been committed (possibly still processing).
 
@@ -237,17 +259,25 @@ Changes committed to Git!
 
 1. Phase 3.1: Accept auto-generated commit message or write their own
 
+### Limitations (UI parity)
+
+The following Power Pages Studio "Source control" tab actions are NOT covered by this skill today:
+
+- **Cherry-pick / selective commit** — `pac pages git commit` always commits all pending Push rows; you cannot stage a subset.
+- **Amend last commit** — no amend verb. To "fix" a wrong commit message, push another commit on top.
+- **View commit history** — no `pac pages git log` verb. Use ADO/GitHub web UI for repo-side history.
+
 ### Progress Tracking
 
 Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Check PAC CLI, Azure CLI, Git connection |
+| Verify prerequisites | Verifying prerequisites | Check PAC CLI, sub-noun feature flag, Azure CLI, Git connection |
 | Check pending changes | Checking changes | Query sourcecontrolcomponents for uncommitted changes |
 | Get commit message | Getting commit message | Auto-generate or get from user |
-| Commit to Git | Committing changes | Execute CommitToGit OData action |
-| Verify commit | Verifying commit | Confirm changes committed, record usage, suggest next steps |
+| Commit to Git | Committing changes | Run `pac pages git commit` |
+| Verify commit | Verifying commit | Run `pac pages git status`, record usage, suggest next steps |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`.
 

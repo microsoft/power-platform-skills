@@ -1,0 +1,74 @@
+{
+  "skill_name": "git-connect",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Connect this environment to git. We use Azure DevOps; the org is GitIntegration22, project gitintegration, repo gitintegration, branch main, folder /MyAlmSite.",
+      "expected_output": "The skill verifies PAC CLI auth, probes that the `pac pages git` sub-noun is available, verifies Azure CLI login, checks for an existing connection (none here), lists available solutions and prompts the user to pick one, walks the picker for org/project/repo/branch via OData virtual entities (gitorganizations/gitprojects/gitrepositories/gitbranches), confirms the full parameter set with the user, runs `pac pages git connect` with the provided arguments, then verifies via `pac pages git status` and the helper script that the connection is established. Records skill usage as GitConnect.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified via 'pac help'",
+        "The `pac pages git --help` sub-noun probe is run and the skill stops cleanly with a feature-flag message if the sub-noun is unavailable",
+        "Authentication is verified via 'pac auth who' and Environment URL extracted",
+        "Azure CLI login is verified via 'az account show'",
+        "check-git-connection.js is run and `connected: false` is observed",
+        "The user is prompted to pick a solution via AskUserQuestion",
+        "OData virtual entities (gitorganizations, gitprojects, gitrepositories, gitbranches) are queried using organizationname/projectname/repositoryname filters",
+        "Full connection parameters are presented to the user for explicit approval before mutating",
+        "`pac pages git connect` is executed with --solutionName, --organization, --project, --repository, --branch, --folder, --gitProvider 0, --environment",
+        "Bash timeout of at least 180 seconds is used for the connect command",
+        "Verification runs `pac pages git status` and check-git-connection.js — `Connected to ...` and `connected: true` observed",
+        "Skill usage is recorded with --skillName 'GitConnect' --authoringTool 'ClaudeCode'",
+        "Progress is tracked via TaskCreate/TaskUpdate per phase"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Hook this env up to source control",
+      "expected_output": "The skill recognizes the request as a git-connect intent, runs all prerequisite checks, and walks the user through the full picker because no specific repo was named. The skill does NOT assume any defaults beyond the conventional `/` for folder.",
+      "files": [],
+      "expectations": [
+        "Sub-noun probe runs first; skill exits cleanly if `pac pages git --help` fails",
+        "The skill asks the user via AskUserQuestion which solution to connect when there are multiple unmanaged solutions",
+        "The picker walks org → project → repo → branch sequentially, with AskUserQuestion at each step",
+        "`/` is presented as the recommended folder default",
+        "The skill stops without executing connect if the user cancels at the confirmation step"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "git-connect to my GitHub repo, microsoft/woodgrove-portal, branch main, into /portal",
+      "expected_output": "The skill recognizes that the target is GitHub and uses --gitProvider 1 in the `pac pages git connect` call. Solution and environment context still come from PAC CLI auth.",
+      "files": [],
+      "expectations": [
+        "--gitProvider 1 is passed to `pac pages git connect`",
+        "--organization is the GitHub org (microsoft)",
+        "--project equals --repository for GitHub (woodgrove-portal)",
+        "--branch is main, --folder is /portal",
+        "Other prerequisite checks still run as in eval 1"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Set up git, but Managed Environments isn't enabled in my env",
+      "expected_output": "The skill runs the prerequisite checks and proceeds to the connect attempt. When `pac pages git connect` returns a Managed Environments error, the skill surfaces the error catalog Pattern 2 message: tell the user to enable Managed Environments in the Power Platform Admin Center, then retry.",
+      "files": [],
+      "expectations": [
+        "On Managed Environments error, the skill stops cleanly without retrying in a loop",
+        "The user is given the exact Power Platform Admin Center path: Environments → select env → Settings → Managed Environments → Enable",
+        "The skill suggests rerunning /git-connect after Managed Environments is on"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/git-connect — but I'm already connected to a different repo and want to switch",
+      "expected_output": "Phase 1.6 runs check-git-connection.js, sees `connected: true`, asks the user via AskUserQuestion whether to keep or disconnect. User picks disconnect; the skill calls `pac pages git disconnect --solutionName <name> --environment <url>`, expects `Disconnected` in stdout, then proceeds to the picker for the new repo.",
+      "files": [],
+      "expectations": [
+        "When connected: true, AskUserQuestion presents 'Keep current connection' (Recommended) and 'Disconnect and reconnect to a different repo'",
+        "When user chooses disconnect, `pac pages git disconnect` is invoked with the existing solution's unique name",
+        "After successful disconnect, the skill proceeds normally to Phase 2 (Select Solution)"
+      ]
+    }
+  ]
+}
