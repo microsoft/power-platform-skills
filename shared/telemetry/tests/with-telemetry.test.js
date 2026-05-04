@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 
 const { withTelemetry } = require("../lib/with-telemetry");
 
+const ENVELOPE = "PowerPagesPluginEvent";
+
 function recorder() {
   const events = [];
   return {
@@ -13,82 +15,115 @@ function recorder() {
   };
 }
 
-function parseInfo(ev) {
-  return JSON.parse(ev.data.eventInfo);
-}
-
-test("success path emits script_started and script_completed", async () => {
+test("success path emits started + completed with envelope name", async () => {
   const rec = recorder();
   const result = await withTelemetry(
-    "verify-dataverse-access",
+    "deploy-site",
     async () => 42,
-    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+    }
   );
   assert.equal(result, 42);
   assert.equal(rec.events.length, 2);
-  assert.equal(rec.events[0].name, "VscodeEvent");
+  assert.equal(rec.events[0].name, ENVELOPE);
   assert.equal(rec.events[0].data.eventName, "script_started");
-  assert.equal(parseInfo(rec.events[0]).script_name, "verify-dataverse-access");
+  assert.equal(rec.events[0].data.scriptName, "deploy-site");
+  assert.equal(rec.events[1].name, ENVELOPE);
   assert.equal(rec.events[1].data.eventName, "script_completed");
-  const completedInfo = parseInfo(rec.events[1]);
-  assert.equal(completedInfo.outcome, "success");
-  assert.equal(completedInfo.error_class, "");
+  assert.equal(rec.events[1].data.outcome, "success");
+  assert.equal(rec.events[1].data.errorClass, "");
 });
 
-test("failure path emits script_completed with outcome=failure and rethrows", async () => {
+test("failure path emits completed with outcome=failure and severity=Error", async () => {
   const rec = recorder();
   await assert.rejects(
     withTelemetry(
-      "x",
+      "deploy-site",
       async () => {
         throw new TypeError("boom");
       },
-      { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
+      {
+        emitter: rec.emit,
+        envelopeName: ENVELOPE,
+        pluginName: "power-pages",
+        pluginVersion: "1.2.2",
+      }
     ),
     TypeError
   );
   assert.equal(rec.events.length, 2);
-  const info = parseInfo(rec.events[1]);
-  assert.equal(info.outcome, "failure");
-  assert.equal(info.error_class, "TypeError");
+  assert.equal(rec.events[1].data.outcome, "failure");
+  assert.equal(rec.events[1].data.errorClass, "TypeError");
+  assert.equal(rec.events[1].data.severity, "Error");
 });
 
-test("same correlation_id on started and completed", async () => {
+test("started and completed share the same correlationId", async () => {
   const rec = recorder();
   await withTelemetry(
-    "x",
+    "deploy-site",
     async () => null,
-    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+    }
   );
-  const a = parseInfo(rec.events[0]).correlation_id;
-  const b = parseInfo(rec.events[1]).correlation_id;
-  assert.equal(a, b);
-  assert.ok(a.length >= 32);
+  assert.equal(rec.events[0].data.correlationId, rec.events[1].data.correlationId);
+  assert.ok(rec.events[0].data.correlationId.length >= 32);
 });
 
-test("emit is called synchronously before asyncFn starts (fire-and-forget)", async () => {
+test("emit is called synchronously before asyncFn starts", async () => {
   const rec = recorder();
   let asyncFnSeenEventsAtStart = -1;
   await withTelemetry(
-    "x",
+    "deploy-site",
     async () => {
       asyncFnSeenEventsAtStart = rec.events.length;
       return null;
     },
-    { emitter: rec.emit, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+    }
   );
-  // script_started must have been emitted before asyncFn ran.
   assert.equal(asyncFnSeenEventsAtStart, 1);
 });
 
 test("throwing emitter does not break the wrapper", async () => {
-  const throwingEmitter = () => {
-    throw new Error("emit blew up");
-  };
   const result = await withTelemetry(
-    "x",
+    "deploy-site",
     async () => 99,
-    { emitter: throwingEmitter, pluginName: "power-pages", pluginVersion: "1.2.2" }
+    {
+      emitter: () => {
+        throw new Error("emit blew up");
+      },
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+    }
   );
   assert.equal(result, 99);
+});
+
+test("durationMs is non-negative integer on success", async () => {
+  const rec = recorder();
+  await withTelemetry(
+    "deploy-site",
+    async () => null,
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+    }
+  );
+  assert.ok(Number.isInteger(rec.events[1].data.durationMs));
+  assert.ok(rec.events[1].data.durationMs >= 0);
 });
