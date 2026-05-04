@@ -217,10 +217,10 @@ pac pages git pull `
 
 #### 4.3 Handle Results
 
-| Stdout / Stderr | Action |
+| Stdout / Stderr (case-insensitive substring match) | Action |
 |---|---|
-| Exit 0 with `Pulled successfully` | Pull succeeded. Proceed to Phase 5. |
-| Exit 0 with `{n} conflicts detected` (without `--autoResolve`) | PAC CLI aborted because conflicts exist. Re-run Phase 3 with the user; either accept Git version (re-run with `--autoResolve`) or have them manually resolve in Studio first. |
+| Exit 0 with `pulled` (typically phrased as `Successfully pulled` or `Changes pulled`) | Pull succeeded. Proceed to Phase 5. |
+| Exit 0 with WARNING containing `conflict` (without `--autoResolve`) | PAC CLI aborted because conflicts exist. Re-run Phase 3 with the user; either accept Git version (re-run with `--autoResolve`) or have them manually resolve in Studio first. |
 | `Source Control not enabled` | Managed Environments issue. Suggest enabling and reconnecting. |
 | `Solution components are being processed` | A previous operation is still running. Tell user to wait and retry. |
 | `SourceControlProcessingInProgress` | An async git op is already running for this solution. Wait and retry. |
@@ -246,7 +246,7 @@ pac pages git status --environment "<ENV_URL>"
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-pull/scripts/check-available-updates.js" --envUrl "<ENV_URL>"
 ```
 
-`pac pages git status` should show no `available updates` line (or `0 available updates`). Helper script `availableCount` should be 0 (or significantly reduced).
+`pac pages git status` should NOT print an `available update(s) to pull` line (the verb omits the line when count is 0). Helper script `availableCount` should be 0 (or significantly reduced).
 
 #### 5.2 Record Skill Usage
 

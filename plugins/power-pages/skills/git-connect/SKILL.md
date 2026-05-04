@@ -283,7 +283,7 @@ pac pages git connect `
 
 | Stdout / Exit code | Action |
 |---|---|
-| Exit 0 with `Connected to {repoUrl}@{branch}` | Connection initiated. Proceed to Phase 5. |
+| Exit 0 with stdout containing the org name and branch (typical phrasing: `Connected to {org}/{project}/{repo}@{branch}`) | Connection initiated. Proceed to Phase 5. Note: the LocString-formatted text may vary across PAC CLI builds; match case-insensitively on `connected` plus the org/repo/branch values you supplied. |
 | Stderr contains `Managed Environments not enabled` | Tell user to enable Managed Environments in Power Platform Admin Center, then retry. |
 | Stderr contains `CommitInvalidAdoLocation` | The folder path is invalid or the ADO repo location is misconfigured. Walk the user through fixing `--folder`. |
 | HTTP 401 underneath | Token expired. Ask user to run `az login` and retry. |
@@ -309,7 +309,7 @@ pac pages git status --environment "<ENV_URL>"
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/check-git-connection.js" --envUrl "<ENV_URL>"
 ```
 
-Expect `pac pages git status` stdout to begin with `Connected to ...` and the helper script JSON to have `"connected": true`.
+Expect `pac pages git status` stdout to contain `Connected to Git source control. Repository: <url>, Branch: <branch>` (case-insensitive match on "connected" + the repo URL is the safest assertion). The helper script JSON should have `"connected": true`.
 
 > **Note:** The initial sync may still be in progress. Solution components are being processed — this can take several minutes. The connection itself is established even if sync hasn't completed.
 

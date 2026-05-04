@@ -186,10 +186,10 @@ pac pages git commit `
 
 #### 4.2 Handle Results
 
-| Stdout / Stderr | Action |
+| Stdout / Stderr (case-insensitive substring match) | Action |
 |---|---|
-| Exit 0 with `Committed` | Commit succeeded. Proceed to Phase 5. |
-| Exit 0 with `Nothing to commit` | The CLI detected no pending changes. Skip Phase 5 verification and tell the user nothing was committed. |
+| Exit 0 with `committed` (typically phrased as `Successfully committed` or `Changes committed`) | Commit succeeded. Proceed to Phase 5. |
+| Exit 0 with `No pending` (PAC CLI's wording for "nothing to commit") | The CLI detected no pending changes. Skip Phase 5 verification and tell the user nothing was committed. |
 | `Source Control not enabled` | Managed Environments may not be enabled, or the connection was lost. Suggest `/git-connect`. |
 | `items requested do not exist` | Components are still being processed from a previous sync. Tell user to wait a few minutes and retry. |
 | `Solution components are being processed` | Initial sync still in progress. Tell user to wait and retry. |
@@ -216,7 +216,7 @@ pac pages git status --environment "<ENV_URL>"
 node "${CLAUDE_PLUGIN_ROOT}/skills/git-commit/scripts/check-pending-changes.js" --envUrl "<ENV_URL>"
 ```
 
-`pac pages git status` should report `0 pending changes` (or no `pending changes` line at all). Helper script `pendingCount` should be 0 (or significantly reduced).
+`pac pages git status` should NOT print a `pending change(s) to commit` line (the verb omits the line when count is 0). Helper script `pendingCount` should be 0 (or significantly reduced).
 
 If pending changes remain, warn the user that some components may not have been committed (possibly still processing).
 
