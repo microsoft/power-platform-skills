@@ -4,9 +4,13 @@
 // Usage: node check-git-connection.js [--envUrl <url>]
 //
 // Output (JSON to stdout):
-//   Connected:    { "connected": true, "solutionName": "...", "repositoryUrl": "...", "branchName": "...", "lastSyncDate": "..." }
+//   Connected:    { "connected": true, "solutionId": "<guid>", "solutionUniqueName": "<string>",
+//                   "repositoryUrl": "...", "branchName": "...", "status": "...", "lastSyncDate": "..." }
 //   Disconnected: { "connected": false }
 //   Error:        { "error": "..." }
+//
+// solutionUniqueName is the value to pass to `pac pages git commit/disconnect --solutionName`.
+// solutionId is kept for callers that need the GUID.
 
 const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
 
@@ -79,9 +83,30 @@ async function main() {
   }
 
   const config = configs[0];
+  const solutionId = config._solutionid_value || null;
+
+  // Follow-up: resolve solution unique name. The virtual `sourcecontrolconfigurations`
+  // entity doesn't accept $expand on solutionid, so we issue a second targeted query.
+  let solutionUniqueName = null;
+  if (solutionId) {
+    const solRes = await makeRequest({
+      url: envUrl + `/api/data/v9.2/solutions(${solutionId})?$select=uniquename`,
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      timeout: 30000,
+    });
+    if (solRes.statusCode === 200 && solRes.body) {
+      try { solutionUniqueName = JSON.parse(solRes.body).uniquename || null; } catch { /* leave null */ }
+    }
+  }
+
   console.log(JSON.stringify({
     connected: true,
-    solutionId: config._solutionid_value || null,
+    solutionId,
+    solutionUniqueName,
     repositoryUrl: config.repositoryurl || null,
     branchName: config.branchname || null,
     status: config.status || null,

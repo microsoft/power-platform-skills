@@ -124,7 +124,7 @@ Evaluate the JSON result from the helper:
   | Your environment is already connected to Git: **`<repositoryUrl>`** (branch: `<branchName>`). What would you like to do? | Connection | Keep current connection — stop here, Disconnect and reconnect to a different repo |
 
   - **Keep**: Stop the skill. Suggest `/git-commit` or `/git-pull`.
-  - **Disconnect**: Execute disconnect via PAC CLI:
+  - **Disconnect**: Execute disconnect via PAC CLI. Use `solutionUniqueName` from the helper's JSON output (NOT the `solutionId` GUID — `--solutionName` expects the unique-name string):
     ```powershell
     pac pages git disconnect --solutionName "<solutionUniqueName>" --environment "<ENV_URL>"
     ```
@@ -274,7 +274,7 @@ pac pages git connect `
 > - `--project` (string, required) — ADO project (use the same name as `--repository` for GitHub).
 > - `--repository` (string, required) — Repo name.
 > - `--branch` (string, required) — Branch name (e.g. "main").
-> - `--folder` (string, required) — Folder path inside the repo where the solution syncs (e.g. "/").
+> - `--folder` (string, optional, default `/`) — Folder path inside the repo where the solution syncs. The CLI accepts a missing `--folder` and uses `/` (PAPortalGitConnectVerb.cs:98). Phase 3.5 still asks the user so the choice is explicit.
 > - `--gitProvider 0|1` — 0 = Azure DevOps (default), 1 = GitHub.
 > - `--environment` (string, optional) — Target env URL when not using the default profile.
 > - PAC CLI internally calls the `ConnectToGit` Dataverse action and waits for the initial sync; this can take up to 2 minutes. Use a Bash timeout of at least 180 seconds.

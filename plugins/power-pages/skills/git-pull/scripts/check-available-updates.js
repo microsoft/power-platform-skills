@@ -4,10 +4,14 @@
 // Usage: node check-available-updates.js [--envUrl <url>]
 //
 // Output (JSON to stdout):
-//   { "connected": true, "solutionName": "...", "branchName": "...",
+//   { "connected": true, "solutionId": "<guid>", "solutionUniqueName": "<string>",
+//     "branchName": "...", "repositoryUrl": "...",
 //     "availableCount": N, "conflictCount": M, "available": [...], "conflicts": [...] }
 //   { "connected": false }
 //   { "error": "..." }
+//
+// solutionUniqueName is the value to pass to `pac pages git pull --solutionName`.
+// On 401 we surface { "error": "..." } so callers don't misread auth failure as "not connected".
 
 const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
 
@@ -49,13 +53,21 @@ async function main() {
     timeout: 30000,
   });
 
-  if (configRes.error || configRes.statusCode !== 200) {
-    console.log(JSON.stringify({ connected: false }));
-    return;
+  if (configRes.error) {
+    console.log(JSON.stringify({ error: configRes.error }));
+    process.exit(1);
+  }
+  if (configRes.statusCode === 401) {
+    console.log(JSON.stringify({ error: 'Authentication failed (401). Run az login again.' }));
+    process.exit(1);
+  }
+  if (configRes.statusCode !== 200) {
+    console.log(JSON.stringify({ error: `Unexpected status ${configRes.statusCode} from sourcecontrolconfigurations` }));
+    process.exit(1);
   }
 
   let configData;
-  try { configData = JSON.parse(configRes.body); } catch { console.log(JSON.stringify({ connected: false })); return; }
+  try { configData = JSON.parse(configRes.body); } catch { console.log(JSON.stringify({ error: 'Failed to parse sourcecontrolconfigurations response' })); process.exit(1); }
 
   const configs = configData.value || [];
   if (configs.length === 0) {
@@ -105,9 +117,24 @@ async function main() {
     } catch { /* ignore */ }
   }
 
+  const solutionId = config._solutionid_value || null;
+  let solutionUniqueName = null;
+  if (solutionId) {
+    const solRes = await makeRequest({
+      url: envUrl + `/api/data/v9.2/solutions(${solutionId})?$select=uniquename`,
+      method: 'GET',
+      headers,
+      timeout: 30000,
+    });
+    if (solRes.statusCode === 200 && solRes.body) {
+      try { solutionUniqueName = JSON.parse(solRes.body).uniquename || null; } catch { /* leave null */ }
+    }
+  }
+
   console.log(JSON.stringify({
     connected: true,
-    solutionId: config._solutionid_value || null,
+    solutionId,
+    solutionUniqueName,
     branchName: config.branchname || null,
     repositoryUrl: config.repositoryurl || null,
     availableCount: available.length,

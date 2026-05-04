@@ -93,7 +93,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/git-connect/scripts/check-git-connection.js" 
 ```
 
 - **If `connected` is `false`**: Tell the user: "This environment is not connected to Git. Run `/git-connect` first to set up source control." **STOP.**
-- **If `connected` is `true`**: Record the solution name and branch. Proceed.
+- **If `connected` is `true`**: Record `solutionUniqueName` (the value to pass as `--solutionName` to PAC CLI in Phase 4) and `branchName` from the helper's JSON output. Proceed.
 
 **Output**: Environment authenticated and connected to Git
 
