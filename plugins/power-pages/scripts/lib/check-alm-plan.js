@@ -11,6 +11,8 @@
 // Output (JSON to stdout):
 //   {
 //     exists:     true | false,
+//     deferred:   true | false,                          // .alm-deferred marker present
+//     deferral:   { reason, deferredBy, ... } | null,    // contents of the marker
 //     planPath:   "<projectRoot>/docs/.alm-plan-data.json" | null,
 //     htmlPath:   "<projectRoot>/docs/alm-plan.html" | null,
 //     generatedAt: "<ISO timestamp>" | null,
@@ -18,10 +20,17 @@
 //     planStatus:  "Draft" | "Approved" | "In Execution" | "Completed" | null,
 //     stale:       true | false,
 //     staleness: {
-//       reason:    "no-plan" | "solution-modified" | null,
+//       reason:    "no-plan" | "solution-modified" | "deferred" | null,
 //       detail:    "<human-readable>" | null
 //     }
 //   }
+//
+// Deferral handling: if the project root contains a .alm-deferred marker
+// (created by the user when they explicitly defer ALM for a project, e.g.
+// "ni-dev — handled separately"), the helper reports deferred:true. The
+// Phase 0 gate in setup-pipeline / deploy-pipeline should treat this as
+// "user-explicit decision, do not nag" — pass through silently to Phase 1
+// without recommending plan-alm.
 //
 // Exit 0 always (callers inspect the JSON). Exit 1 on argparse / fatal error.
 //
@@ -62,6 +71,8 @@ function parseArgs(argv) {
 function emptyResult(extraStaleness) {
   return {
     exists: false,
+    deferred: false,
+    deferral: null,
     planPath: null,
     htmlPath: null,
     generatedAt: null,
@@ -72,10 +83,48 @@ function emptyResult(extraStaleness) {
   };
 }
 
+function readDeferralLocal(projectRoot) {
+  // Inline minimal version (matches readDeferralMarker in validation-helpers).
+  // Kept here so this helper stays standalone and can be invoked from any cwd.
+  if (!projectRoot) return null;
+  const markerPath = path.join(projectRoot, '.alm-deferred');
+  if (!fs.existsSync(markerPath)) return null;
+  let raw = '';
+  try { raw = fs.readFileSync(markerPath, 'utf8'); } catch {}
+  let info = null;
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try { info = JSON.parse(trimmed); } catch {}
+  }
+  return { path: markerPath, raw, info };
+}
+
 async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeRequest }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
   const planPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
   const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+
+  // Deferral marker check — runs first, regardless of plan presence.
+  // When deferred, the Phase 0 gate in calling skills should pass through
+  // without nagging the user about a missing plan.
+  const deferral = readDeferralLocal(projectRoot);
+  if (deferral) {
+    const reason = (deferral.info && (deferral.info.reason || deferral.info.detail))
+      || (deferral.raw && deferral.raw.trim())
+      || 'ALM explicitly deferred for this project (.alm-deferred marker present).';
+    return {
+      exists: false,
+      deferred: true,
+      deferral: deferral.info || { reason },
+      planPath: null,
+      htmlPath: null,
+      generatedAt: null,
+      approver: null,
+      planStatus: null,
+      stale: false,                        // Not stale — deferred is a deliberate state.
+      staleness: { reason: 'deferred', detail: 'ALM deferred: ' + reason },
+    };
+  }
 
   if (!fs.existsSync(planPath)) {
     return emptyResult();
@@ -93,6 +142,8 @@ async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeReques
 
   const result = {
     exists: true,
+    deferred: false,
+    deferral: null,
     planPath,
     htmlPath: fs.existsSync(htmlPath) ? htmlPath : null,
     generatedAt: planData.GENERATED_AT || null,

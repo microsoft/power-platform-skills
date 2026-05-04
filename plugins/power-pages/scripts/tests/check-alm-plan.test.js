@@ -152,3 +152,70 @@ test('throws when projectRoot is not provided', async () => {
     /projectRoot is required/i
   );
 });
+
+test('deferral: .alm-deferred marker (empty) flips deferred:true, stale:false, even when no plan exists', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-alm-defer-empty-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.alm-deferred'), '', 'utf8');
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.deferred, true);
+    assert.equal(r.exists, false);                 // no plan file present, but...
+    assert.equal(r.stale, false);                  // deferral is a deliberate state, not staleness
+    assert.equal(r.staleness.reason, 'deferred');
+    assert.match(r.staleness.detail, /deferred/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deferral: .alm-deferred with plain-text reason surfaces the reason in staleness.detail', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-alm-defer-text-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.alm-deferred'), 'ni-dev — ALM handled separately by infra team', 'utf8');
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.deferred, true);
+    assert.match(r.staleness.detail, /ni-dev/);
+    assert.match(r.staleness.detail, /infra team/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deferral: .alm-deferred with JSON object preserves structured fields in deferral', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-alm-defer-json-'));
+  try {
+    const marker = { deferredAt: '2026-05-04T10:00:00Z', deferredBy: 'admin@example', reason: 'staging frozen', scope: 'env:ni-dev' };
+    fs.writeFileSync(path.join(dir, '.alm-deferred'), JSON.stringify(marker), 'utf8');
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.deferred, true);
+    assert.deepEqual(r.deferral, marker);
+    assert.match(r.staleness.detail, /staging frozen/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deferral: .alm-deferred wins over an existing plan — caller should pass through quietly', async () => {
+  const dir = tempProject({ GENERATED_AT: '2026-04-01T00:00:00.000Z' });
+  try {
+    fs.writeFileSync(path.join(dir, '.alm-deferred'), 'deferred', 'utf8');
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.deferred, true);
+    // exists/plan fields are zeroed when deferred — Phase 0 gate sees a single signal
+    assert.equal(r.exists, false);
+    assert.equal(r.stale, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deferred:false is set in normal results so callers can branch consistently', async () => {
+  const dir = tempProject({ GENERATED_AT: '2026-04-01T00:00:00.000Z' });
+  try {
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.deferred, false);
+    assert.equal(r.deferral, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -64,6 +64,7 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 
 | Result | Behavior |
 |---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
 | `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
 | `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
 | `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |

@@ -6,11 +6,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const {
-  approve, block, runValidation, findProjectRoot,
-} = require('../../../scripts/lib/validation-helpers');
+const { approve, block, runValidation, findProjectRoot, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
+  if (readDeferralMarker(findProjectRoot(cwd) || cwd)) return approve();  // ALM deferred — silent-approve.
   const projectRoot = findProjectRoot(cwd) || cwd;
   const markerPath = path.join(projectRoot, '.last-import.json');
 

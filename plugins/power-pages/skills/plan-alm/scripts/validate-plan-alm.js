@@ -9,9 +9,10 @@
 
 const path = require('path');
 const fs = require('fs');
-const { runValidation, findProjectRoot, block, approve } = require('../../../scripts/lib/validation-helpers');
+const { runValidation, findProjectRoot, block, approve, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
 
 runValidation((cwd) => {
+  if (readDeferralMarker(findProjectRoot(cwd) || cwd)) return approve();  // ALM deferred — silent-approve.
   const projectRoot = findProjectRoot(cwd);
 
   // If we can't find the project root, approve gracefully — not a plan-alm session
