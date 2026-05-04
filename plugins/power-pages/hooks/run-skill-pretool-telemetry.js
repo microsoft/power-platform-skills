@@ -3,16 +3,18 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, correlationLib, sessionLib;
+let emitSpawn, eventsLib, correlationLib, sessionLib, pacAuthLib;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   correlationLib = require(path.join(TELEMETRY_DIR, "lib", "correlation"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
+  pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
 } catch {
   process.exit(0);
 }
@@ -40,10 +42,21 @@ function readIkey() {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
     );
-    return { ikey: cfg.ikey || "", collectorUrl: cfg.collector_url || "" };
+    return {
+      ikey: cfg.ikey || "",
+      collectorUrl: cfg.collector_url || "",
+      eventStreamName: cfg.event_stream_name || "",
+    };
   } catch {
-    return { ikey: "", collectorUrl: "" };
+    return { ikey: "", collectorUrl: "", eventStreamName: "" };
   }
+}
+
+function osFriendlyName(platform) {
+  if (platform === "win32") return "Windows";
+  if (platform === "darwin") return "Mac";
+  if (platform === "linux") return "Linux";
+  return platform;
 }
 
 function readStdin() {
@@ -70,27 +83,38 @@ function readStdin() {
 
   const { correlation_id } = correlationLib.write({ skillName });
 
-  const { ikey, collectorUrl } = readIkey();
+  const { ikey, collectorUrl, eventStreamName } = readIkey();
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
   const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
+  let pacAuth = null;
+  try {
+    pacAuth = pacAuthLib.readPacAuth();
+  } catch {
+    pacAuth = null;
+  }
+
+  const fields = {
+    pluginName: "power-pages",
+    pluginVersion: readPluginVersion(),
+    sessionId: sessionLib.getSessionId(),
+    correlationId: correlation_id,
+    osName: osFriendlyName(process.platform),
+    osVersion: os.release(),
+    nodeVersion: "v" + String(process.versions.node).split(".")[0],
+    skillName,
+  };
+  if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
+  if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+
   try {
     emitSpawn.fireAndForget(
-      eventsLib.buildSkillStarted({
-        plugin_name: "power-pages",
-        plugin_version: readPluginVersion(),
-        session_id: sessionLib.getSessionId(),
-        os_family: process.platform,
-        node_version: "v" + String(process.versions.node).split(".")[0],
-        skill_name: skillName,
-        correlation_id,
-      }),
+      eventsLib.buildSkillStarted(eventStreamName, fields),
       { iKey: ikey, collectorUrl, configDir, fakeProbe }
     );
   } catch {
     // fail closed
   }
 
-  // Parent exits immediately; dispatcher child carries the POST.
   process.exit(0);
 })().catch(() => process.exit(0));
