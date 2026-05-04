@@ -1,6 +1,6 @@
 ---
 name: edit-canvas-app
-version: 1.0.0
+version: 2.0.0
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation from requirements, simple inline edits, and complex multi-screen changes with parallel screen builders. Triggers on requests to create, build, generate, modify, update, change, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
