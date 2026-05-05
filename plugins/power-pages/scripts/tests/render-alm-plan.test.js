@@ -1293,3 +1293,131 @@ test('render-alm-plan: pipelineMeta.reusedByWiring renders the reused-name annot
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ── Env Variables tab + Overview stat reconcile with sizeAnalysis.envVarCount ─
+// Regression: a plan generated with sizeAnalysis.envVarCount.value > 0 but an
+// empty envVars[] array previously showed three contradictory views — Overview
+// stat "0", size signal "5", and tab "No env var definitions detected", while
+// the agent injected "(5 detected)" into the warning. Renderer should reconcile
+// these by falling back to the size estimator's count when per-variable details
+// haven't been enumerated yet.
+
+test('render-alm-plan: Env Variables tab shows count-aware info note when envVars[] empty but sizeAnalysis count > 0', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 5, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // The envvars tab section should NOT show the "no detections" neutral note
+    const tabStart = html.indexOf('id="tab-envvars"');
+    const tabEnd = html.indexOf('id="tab-solutions"');
+    assert.ok(tabStart !== -1 && tabEnd !== -1, 'Both tab markers must exist');
+    const envvarsSection = html.slice(tabStart, tabEnd);
+
+    assert.ok(
+      !envvarsSection.includes('No environment variable definitions detected'),
+      'Tab must not show the "no detections" copy when sizeAnalysis count > 0'
+    );
+    assert.ok(
+      /5 environment variable definitions detected/.test(envvarsSection),
+      'Tab should show the count from sizeAnalysis.envVarCount.value'
+    );
+    assert.ok(
+      /class="note-box info"/.test(envvarsSection),
+      'Count-aware note should use the info class, not neutral'
+    );
+    assert.ok(
+      /configure-env-variables/.test(envvarsSection) && /deploy-pipeline/.test(envvarsSection),
+      'Note should point to the skills that will enumerate details and collect per-stage values'
+    );
+
+    // Overview stat card must reflect the same count, not "0"
+    const statMatch = envvarsSection ? html.match(/<div class="stat-num"[^>]*>(\d+)<\/div><div class="stat-label">Env Variables<\/div>/) : null;
+    assert.ok(statMatch, 'Overview Env Variables stat card must be present');
+    assert.equal(statMatch[1], '5', 'Overview stat should fall back to sizeAnalysis count when envVars[] is empty');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab still shows neutral note when envVars[] empty AND sizeAnalysis count is 0', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 0, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('No environment variable definitions detected'),
+      'When the count is also 0, the original neutral copy still applies'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab renders the per-variable table when envVars[] is populated (count fallback inactive)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [
+        { schemaName: 'cr_LocalLoginEnabled', type: 'Boolean', siteSetting: 'Authentication/Local/Enabled', defaultValue: 'true' },
+        { schemaName: 'cr_ApiBaseUrl', type: 'String', siteSetting: 'Api/BaseUrl', defaultValue: 'https://dev.api' },
+      ],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 5, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // Per-variable table renders, neither neutral nor count-info note appears.
+    assert.ok(html.includes('cr_LocalLoginEnabled'), 'Per-variable schema name should appear in the table');
+    assert.ok(html.includes('cr_ApiBaseUrl'), 'Second per-variable schema name should appear');
+    assert.ok(!html.includes('No environment variable definitions detected'), 'Neutral note must not appear');
+    assert.ok(!/\d+ environment variable definitions detected/.test(html), 'Count-info note must not appear when table renders');
+
+    // Overview stat reflects envVars.length, not sizeAnalysis.envVarCount.value
+    const statMatch = html.match(/<div class="stat-num"[^>]*>(\d+)<\/div><div class="stat-label">Env Variables<\/div>/);
+    assert.ok(statMatch, 'Overview stat card must be present');
+    assert.equal(statMatch[1], '2', 'Overview stat should reflect envVars[].length when populated, not sizeAnalysis count');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

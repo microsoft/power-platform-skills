@@ -286,8 +286,27 @@ function buildAdvisoryHtml() {
   return html;
 }
 
+function envVarSummaryCount() {
+  // Source of truth when per-variable details haven't been enumerated into
+  // envVars[] yet. The size estimator counts env var definitions matching the
+  // publisher prefix during plan-alm Phase 1 and stores the count in
+  // sizeAnalysis.envVarCount.value — that count is what drives the size
+  // signal card and the agent-generated "(N detected)" warning.
+  const v = sizeAnalysis?.envVarCount?.value;
+  return Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0;
+}
+
 function buildEnvVarsHtml() {
   if (envVars.length === 0) {
+    const summaryCount = envVarSummaryCount();
+    if (summaryCount > 0) {
+      // Count-only path: the size estimator found env var definitions but the
+      // gathering phase did not enumerate per-variable metadata into envVars[].
+      // Show a count-aware info note so this tab agrees with the Overview
+      // stat, the size analysis signal, and the "(N detected)" warning.
+      const noun = summaryCount === 1 ? 'definition' : 'definitions';
+      return `<div class="note-box info">${summaryCount} environment variable ${noun} detected. Per-variable details (schema name, type, bound site setting) will be reviewed during <code>setup-solution</code> / <code>configure-env-variables</code>, and per-stage values will be collected before <code>deploy-pipeline</code>.</div>`;
+    }
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
   const envNames = Object.keys(envVars[0]?.values || {});
@@ -962,7 +981,7 @@ const replacements = {
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
-  STAT_ENVVARS: String(envVars.length || 0),
+  STAT_ENVVARS: String(envVars.length || envVarSummaryCount() || 0),
   STAT_SIZE: totalSizeMB.toFixed(1),
   STAT_SIZE_COLOR: sizeColor,
   STAT_SOLUTIONS: String(proposedSolutions.length || 1),
