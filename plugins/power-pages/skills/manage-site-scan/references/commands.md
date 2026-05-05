@@ -17,7 +17,6 @@ Every script in this skill can exit with the following codes. Script-specific co
 
 - [Identifiers — websiteId vs. portalId](#identifiers--websiteid-vs-portalid)
 - [Resolving the website — `website.js`](#resolving-the-website--websitejs)
-- [`run-quick-scan.js`](#run-quick-scanjs)
 - [`start-deep-scan.js`](#start-deep-scanjs)
 - [`poll-deep-scan.js`](#poll-deep-scanjs)
 - [`get-latest-report.js`](#get-latest-reportjs)
@@ -34,7 +33,7 @@ Two different GUIDs identify a Power Pages site. Keep them straight:
 | Identifier | Where it comes from | What it is |
 |------------|---------------------|------------|
 | `websiteId` | `.powerpages-site/website.yml` (`id` field), `pac pages list` ("Website Record ID") | Dataverse website record primary key. The user-facing identifier. |
-| `portalId` | `Id` field on the `/websites` admin-API response | The `{id}` segment in admin-API URL paths such as `/websites/{id}/scan/quick/execute`. |
+| `portalId` | `Id` field on the `/websites` admin-API response | The `{id}` segment in admin-API URL paths such as `/websites/{id}/scan/...`. |
 
 These are **not** the same value. The skill resolves `websiteId` → `portalId` once during Phase 1 (using `website.js --websiteId <guid>`) and reuses the resolved `portalId` for the rest of the run. The consumer scripts in this folder accept `--portalId` only — they never look up the site themselves.
 
@@ -88,58 +87,6 @@ A single matching website record (or `null` when no record matches):
 | `0`  | Success (`null` is also success — caller decides what to do) |
 | `2`  | Sign-in required |
 | `1`  | Service error |
-
----
-
-## `run-quick-scan.js`
-
-Runs a quick scan and writes the raw response to a file.
-
-### Usage
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/run-quick-scan.js" \
-  --portalId <guid> \
-  --output <file> \
-  [--lcid <code>]
-```
-
-### Parameters
-
-| Flag           | Required | Default | Description |
-|----------------|----------|---------|-------------|
-| `--portalId`   | Yes      | —       | Admin-API portalId resolved during Phase 1. |
-| `--output`     | Yes      | —       | Path for the raw response JSON. |
-| `--lcid`       | No       | `1033`  | Locale code for findings text. |
-
-### Response (stdout summary)
-
-```json
-{ "status": "ok", "output": "<file>" }
-```
-
-The full service-defined quick-scan envelope is written to `--output`.
-
-### Errors
-
-| Status / `code` | Meaning |
-|-----------------|---------|
-| `400 / A001`    | Site does not exist |
-| `400 / A019`    | Bad portalId format |
-| `400 / A033`    | Tenant mismatch |
-| `500 / A009`    | Service-side failure |
-
-### Response shape — quick scan items
-
-Each element of the quick scan response array:
-
-| Field | Type | Notes |
-|---|---|---|
-| `issue` | string | Human-readable issue title |
-| `category` | string | Category classification |
-| `result` | enum string | One of `Pass`, `Error`, `Warning`, `Information` |
-| `description` | string | Detailed explanation |
-| `learnMoreUrl` | string | Documentation URL |
 
 ---
 
@@ -290,7 +237,7 @@ When `website.js --websiteId` returns `null`, the skill stops with a local error
 ## Operating notes
 
 - The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available.
-- The deep scan is rate-limited per site. Running two starts in quick succession returns `Z003`; treat that as a normal "already running" outcome.
-- When a deep scan finishes, the service sends an email notification to the admin. The report summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
+- The scan is rate-limited per site. Running two starts in quick succession returns `Z003`; treat that as a normal "already running" outcome.
+- When the scan finishes, the service sends an email notification to the admin. The report summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
 - Trial sites may have limited scan availability. Surface any limitations as an `info` finding rather than an error.
 - Resolution is a single admin-API call during Phase 1. The rest of the workflow uses the cached portalId, so adding more scan steps later does not multiply the lookup cost.

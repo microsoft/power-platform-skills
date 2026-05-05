@@ -1,11 +1,10 @@
 ---
 name: manage-site-scan
 description: >-
-  Runs Power Pages security scans on a deployed site, retrieves the latest scan
-  report, and produces an HTML summary. Supports a quick check on public pages
-  and a deep scan of the site's public surface. Use when the user wants to
-  scan, check, test, or assess the security of a published Power Pages site,
-  or asks "how safe is my live site".
+  Runs a Power Pages security scan on a deployed site, retrieves the latest scan
+  report, and produces an HTML summary. Scans the site's public surface for
+  vulnerabilities. Use when the user wants to scan, check, test, or assess the
+  security of a published Power Pages site, or asks "how safe is my live site".
 user-invocable: true
 argument-hint: "[optional: --data-only <out-dir>]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
@@ -16,12 +15,9 @@ model: opus
 
 # Manage Site Scan
 
-Run security scans on a deployed Power Pages site, fetch the latest results, and surface them in a uniform HTML report.
+Run a security scan on a deployed Power Pages site, fetch the latest results, and surface them in a uniform HTML report.
 
-There are two scan flavors:
-
-- **Quick check** — a faster alternative that checks public pages. Available via the API but not documented in the Security workspace UI.
-- **Deep check** — the primary scan type. Scans the site's public pages. May take several minutes to complete.
+The scan checks the site's public pages for vulnerabilities across multiple security categories. It runs server-side and may take several minutes to complete.
 
 This skill talks to the Power Platform service that owns the site — it does not analyze local code. The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available. Pair it with `/manage-code-scan` for source-level analysis.
 
@@ -30,20 +26,18 @@ This skill talks to the Power Platform service that owns the site — it does no
 - **Website record id vs portal id.** `.powerpages-site/website.yml` stores the website record id, not the portal id. Every script takes `--portalId`. Resolve once via `website.js --websiteId` in Phase 1.
 - **Never resolve by name.** Site names can duplicate inside an environment; only the website record id is safe for resolution.
 - **A `null` from the resolver means** the site is not deployed, or the authenticated profile is pointing at a different environment than the one that owns the site.
-- **Deep scans are long-running.** The scan runs server-side for a substantial period. The skill polls for completion but should warn the user about the wait.
-- **Only one deep scan per site at a time.** `Z003` (handled as HTTP 204 or HTTP 400 with code `Z003` in `start-deep-scan.js`) surfaces when a start is attempted while a scan is already running. The script exits with code 0 and `{ "status": "already-running" }` — treat it as a normal outcome, not an error.
-- **Quick scan is not the same as deep scan.** Quick runs diagnostic checks against configuration patterns. Deep runs a dynamic scan of the public surface. Users often conflate them — clarify before proceeding.
-- **Quick scan uses an LCID.** The diagnostic service expects a Microsoft Locale ID (e.g. `1033` for en-US). The `--lcid` flag defaults to `1033` when omitted, so it only needs to be set for non-English locales.
+- **Scans are long-running.** The scan runs server-side for a substantial period. The skill polls for completion but should warn the user about the wait.
+- **Only one scan per site at a time.** `Z003` (handled as HTTP 204 or HTTP 400 with code `Z003` in `start-deep-scan.js`) surfaces when a start is attempted while a scan is already running. The script exits with code 0 and `{ "status": "already-running" }` — treat it as a normal outcome, not an error.
 - **Rate limits apply.** There are daily and weekly caps on scans per site. When exceeded, wait and retry later.
-- **A fresh site with no completed deep scan has no report.** Run a deep scan first.
+- **A fresh site with no completed scan has no report.** Run a scan first.
 
 **Initial request:** $ARGUMENTS
 
 ## Workflow
 
 1. **Phase 1: Prerequisites** — Locate the project, confirm sign-in, identify the site
-2. **Phase 2: Plan the scan** — Choose quick or deep, and confirm in plain language
-3. **Phase 3: Run the scan** — Run quick scan, or start a deep scan and wait for it
+2. **Phase 2: Plan the scan** — Choose to run a new scan or view the latest results, and confirm in plain language
+3. **Phase 3: Run the scan** — Start the scan and wait for it
 4. **Phase 4: Fetch results** — Get the latest report
 5. **Phase 5: Build the report** — Normalize findings and write the HTML report
 6. **Phase 6: Present and next steps** — Show the report, record usage, suggest follow-ups
@@ -70,7 +64,7 @@ Only this one task. Do not create any other tasks until Phase 1 completes and th
 
 | Task subject | activeForm | When to create |
 |--------------|------------|----------------|
-| Run the scan | Running the scan | Only if the user chose quick check or deep check. Do NOT create if the user chose "Just show me the latest results". |
+| Run the scan | Running the scan | Only if the user chose to run a new scan. Do NOT create if the user chose "Just show me the latest results". |
 | Fetch results | Fetching results | Always |
 | Build the report | Building the report | Always |
 | Present findings | Presenting findings | Always |
@@ -115,9 +109,9 @@ If the matched site is a trial or developer site, mention that some scan feature
 
 ### 1.3 Check current scan state
 
-Before asking the user what they want, check whether a deep scan is currently running. This changes Phase 2's available options:
+Before asking the user what they want, check whether a scan is currently running. This changes Phase 2's available options:
 
-- **If a scan is ongoing** — the user cannot start a new deep scan. They can run a quick scan, fetch an older report, or wait.
+- **If a scan is ongoing** — the user cannot start a new scan. They can fetch an older report or wait.
 - **If idle** — all options are available.
 
 Summarize the state to the user in one sentence before continuing.
@@ -137,11 +131,6 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
     "header": "Scan type",
     "multiSelect": false,
     "options": [
-      {
-        "label": "Quick check",
-        "description": "Instant feedback on configuration. Fast.",
-        "preview": "Runs a set of built-in diagnostic checks against your site's configuration and common security patterns. Results come back immediately — usually in a few seconds.\n\nCovers things like missing headers, exposed admin pages, and misconfigured settings. Good for a fast pulse check."
-      },
       {
         "label": "Deep check",
         "description": "Full scan of your live site. (Recommended)",
@@ -166,18 +155,6 @@ Show a one-line plan in plain language and confirm: `Yes, start the check` / `Ch
 ## Phase 3: Run the scan
 
 All scripts in this phase take `--portalId` (the admin-API id from Phase 1.2). They never look up the site themselves — Phase 1.2 already did the resolution.
-
-### 3.1 Quick check
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/run-quick-scan.js" \
-  --portalId "<PORTAL_ID>" \
-  --output "<TEMP_DIR>/quick.json"
-```
-
-The script returns the scan result inline. If it fails with a transient error, retry once.
-
-### 3.2 Thorough check
 
 Let the user know the scan may take several minutes and remind them they can keep working — the skill will check progress in the background.
 
@@ -236,7 +213,7 @@ Write `<TEMP_DIR>/site-scan-data.json` with:
 - `SITE_NAME` — site display name
 - `SUMMARY` — 2–3 sentences: "We checked X pages and Y endpoints. We found N important issues, M smaller ones, and Z things that look healthy."
 - `FINDINGS_DATA` — array of finding objects (`id, severity, title, tag?, location?, details?, reasoning, fix?`). Use the page URL or endpoint as `location` when available.
-- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Scan type', value: '<Quick|Thorough>' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
+- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Scan type', value: 'Deep' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
 
 In **data-only mode**, write the file to `<DATA_ONLY_DIR>/manage-site-scan.json` and stop here — do not render or open HTML.
 
@@ -274,7 +251,7 @@ Use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| What would you like to do next? | Walk me through fixing the important items; Run a deeper check (only if quick was used); Stop here, I will read the report |
+| What would you like to do next? | Walk me through fixing the important items; Stop here, I will read the report |
 
 If the user wants help fixing items, group critical findings, explain the first one in plain language, and propose actions. For findings that map to other skills, suggest:
 
@@ -287,10 +264,10 @@ If the user wants help fixing items, group critical findings, explain the first 
 ## Constraints
 
 - **Plain language with users** — never lead with words like CSP, CORS, OWASP, hardening, or scan profile. Explain when asked.
-- **Background long-running calls** — start the deep scan, then poll in the background while the user can continue working.
+- **Background long-running calls** — start the scan, then poll in the background while the user can continue working.
 - **Read-only** — this skill only runs scans and reads results. It never enables WAF, deletes scans, or changes site configuration.
 - **Trial sites** — some scan features may be limited on trial or developer sites. Do not block the workflow; add an `info` finding instead.
-- **Scan results** — when a deep scan finishes, the service sends an email notification. The scan summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
+- **Scan results** — when the scan finishes, the service sends an email notification. The scan summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
 
 ## Progress tracking table
 
