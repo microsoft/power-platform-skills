@@ -13,7 +13,7 @@ const COMMON_FIELDS = [
   "pacCliVersion",
   "aiAgentName",
   "aiAgentVersion",
-  "eventObject",
+  "eventInfo",
 ];
 
 const SKILL_FIELDS = ["skillName"];
