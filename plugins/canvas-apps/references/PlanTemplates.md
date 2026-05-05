@@ -51,7 +51,7 @@ CREATE
 - Accent color: RGBA([...])
 - Text primary: RGBA([...])
 - Text secondary: RGBA([...])
-- Layout strategy: [VerticalAutoLayout / ManualLayout + rationale]
+- Layout strategy: [AutoLayout (Vertical/Horizontal) / ManualLayout + rationale]
 - Typography scale: [header size/weight, body size/weight, caption size]
 
 ## Named Variables and Shared State
