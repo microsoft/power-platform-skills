@@ -35,6 +35,28 @@ function readConsent() {
   }
 }
 
+// Repo-side kill switch: when ikey.json contains "disabled": true, no events
+// are emitted regardless of consent or iKey state. Lets the infrastructure
+// PRs land while the tenant-side annotation + Kusto table are still being
+// provisioned. Flip to false in a single PR when ready.
+//
+// Test seam: POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH=1 forces the gate
+// open so existing dispatcher tests can exercise the emission paths
+// without round-tripping through the shared ikey.json.
+function isDisabledByConfig() {
+  if (process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH === "1") {
+    return false;
+  }
+  try {
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "ikey.json"), "utf8")
+    );
+    return cfg.disabled === true;
+  } catch {
+    return false; // ikey.json missing/unreadable → fail open.
+  }
+}
+
 function buildEnvelope(event) {
   return {
     ver: "4.0",
@@ -65,6 +87,9 @@ function writeLocalLog(event) {
     // fail closed
   }
 }
+
+// ---- Repo-side kill switch (applies before consent / placeholder logic) ----
+if (isDisabledByConfig()) exitSilently();
 
 // ---- Consent gate (applies to BOTH network POST and local log) -------------
 if (readConsent().state !== "enabled") exitSilently();

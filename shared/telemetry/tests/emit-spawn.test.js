@@ -47,12 +47,20 @@ test("dispatcher child receives the event and writes the probe", async () => {
   const tmp = mkTmp();
   mkConsent(tmp, true);
   const probe = path.join(tmp, "probe.json");
-  fireAndForget(sampleEvent, {
-    iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-    collectorUrl: "https://example.invalid/OneCollector/1.0/",
-    configDir: tmp,
-    fakeProbe: probe,
-  });
+  // Bypass the repo kill switch so the dispatcher exercises its emit path.
+  const prevBypass = process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH;
+  process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH = "1";
+  try {
+    fireAndForget(sampleEvent, {
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      configDir: tmp,
+      fakeProbe: probe,
+    });
+  } finally {
+    if (prevBypass === undefined) delete process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH;
+    else process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH = prevBypass;
+  }
   // Wait up to 2s for the child to write the probe.
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(probe)) break;

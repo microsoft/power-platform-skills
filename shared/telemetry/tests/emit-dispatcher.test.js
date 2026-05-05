@@ -35,6 +35,11 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_COLLECTOR: env.collectorUrl || "",
       POWER_PLATFORM_SKILLS_TELEMETRY: env.off ? "0" : "",
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
+      // Bypass the repo-side kill switch by default so existing emission-path
+      // tests work regardless of the shared ikey.json's `disabled` flag.
+      // The new "kill switch" test below intentionally omits this.
+      POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH:
+        env.bypassKillSwitch === false ? "" : "1",
     },
   });
 }
@@ -178,6 +183,30 @@ test("dispatcher appends to events.jsonl when iKey is placeholder + consent enab
   const parsed = JSON.parse(lines[0]);
   assert.equal(parsed.name, "PowerPagesPluginEvent");
   assert.equal(parsed.data.eventName, "skill_started");
+});
+
+test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => {
+  // Default-disabled state shipped with the lib: the shared ikey.json has
+  // `disabled: true`. Without the test bypass, the dispatcher must exit
+  // before either the HTTPS POST or the local-log path runs.
+  const tmp = mkConsent(true);
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      bypassKillSwitch: false, // intentionally let the kill switch take effect
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "kill switch must skip POST");
+  assert.ok(
+    !fs.existsSync(path.join(tmp, "events.jsonl")),
+    "kill switch must skip local log"
+  );
 });
 
 test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {
