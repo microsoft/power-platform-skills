@@ -370,7 +370,9 @@ Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the so
 
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
-This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false`.
+This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `CHOSEN_ENV_URL`, `WILL_PROVISION_CUSTOM`, `WILL_USE_PPAC`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false` / null.
+
+**Why the NoHost branch presents the env-first menu here instead of deferring to ensure-pipelines-host Phase 3.C:** the original design asked a yes/no "we'll provision new — continue?" question in plan-alm and let 3.C surface the env-first choice at execution time. In practice the agent treated the plan-alm yes-confirmation as authorization to skip 3.C entirely (or to skip 4.A's pre-call gate), and users hit 4.A → 409 trial-license errors when an existing env install (4.B) would have been a clean path. Surfacing the env-first menu **here** — once, at planning time, when the user has full context — eliminates the ambiguity. ensure-pipelines-host then trusts `CHOSEN_ENV_URL` and skips its own 3.C menu (see ensure-pipelines-host Phase 3 skip rule).
 
 | `status` | Q4 prompt | Result |
 |---|---|---|
@@ -378,11 +380,11 @@ This question consumes `HOST_RESOLUTION` populated by the new detect-only wrappe
 | `AvailableUnboundCustomHost` | "Existing Custom Host `{displayName}` (`{finalHostEnvUrl}`) found in tenant — not yet bound to dev env. setup-pipeline will reuse it (recommended; avoids duplicates). Use this host?" Options: 1. Yes, use this / 2. Use a different host environment (Other) | Y → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. N → fall back to "enter different URL". |
 | `MultipleUnboundCustomHosts` | "{N} Custom Hosts found in tenant. Which one should setup-pipeline use?" Options: enumerate `HOST_RESOLUTION.candidates.existingCustomHosts[]` (up to 3) by display name + URL, plus "Other" for a custom URL, plus "Decide later — setup-pipeline will ask". | Picked candidate → `HOST_ENV_URL = candidate.instanceApiUrl`, `WILL_ENSURE_HOST = true`. Decide-later → `HOST_ENV_URL = null`, `WILL_ENSURE_HOST = true`, `USER_CHOSE_DEFER_TO_SETUP_PIPELINE = true`. |
 | `PlatformHostExistsUnbound` | "Tenant Platform Host `{finalHostEnvUrl}` exists. Use it (free, no admin role) or create a new Custom Host?" Options: 1. Use Platform Host / 2. Create new Custom Host / 3. Cancel | 1 → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. 2 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 3 → exit. |
-| `NoHost` | "No host detected. setup-pipeline will provision a new Custom Host (D365_ProjectHost template, ~5–10 min, requires Power Platform admin). Continue with this plan?" Options: 1. Yes / 2. Switch to manual export/import / 3. Cancel | 1 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 2 → restart Phase 2 with strategy = manual. 3 → exit. |
+| `NoHost` | **Env-first prompt** — same shape as `ensure-pipelines-host` Phase 3.C so the user makes the host choice once, here, instead of being asked again at execution time. Build the eligible-env list from `HOST_RESOLUTION.candidates.eligibleForAppInstall[]` with role labels (`dev env`, `source env`, `staging env`, `production env`) per origin match. Present: *"No Pipelines host bound to `{devEnvUrl}`. Which environment should host Pipelines? Pipelines lives in one env per tenant; pipelines, stages, and run history are stored there. Source envs deploy through it."* Options: 1. Each eligible env (display name + URL + role labels) labeled "*Install Pipelines app on this env*" — sandbox-sku envs add a "(Sandbox — confirmation gate)" suffix; **N+1.** "Create a brand-new dedicated host env (D365_ProjectHost template, ~5–10 min, requires Power Platform admin)"; **N+2.** "Open PPAC and create one manually (admin fallback)"; **N+3.** "Switch to Manual export/import strategy"; **N+4.** "Cancel". When the eligible list is empty, drop the per-env options and present the four create/switch/cancel options. | Picked eligible env → `HOST_ENV_URL = picked.instanceApiUrl`, `CHOSEN_ENV_URL = picked.instanceApiUrl`, `WILL_ENSURE_HOST = true`, `WILL_PROVISION_CUSTOM = false`. (Sandbox confirmation gate, if applicable, must be passed before this resolution stands.) Create-new (N+1) → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. PPAC manual (N+2) → `HOST_ENV_URL = null`, `WILL_USE_PPAC = true`, `WILL_ENSURE_HOST = true`. Manual strategy (N+3) → restart Phase 2 with `STRATEGY = manual`. Cancel (N+4) → exit. |
 | `CannotRedirect` | **Block.** Show the org-setting vs tenant-default mismatch error from `HOST_RESOLUTION.candidates`/`warnings` and stop the skill — only a Power Platform admin can resolve. | Exit with the specific error. |
 | `OrgSettingStale`, `PermissionDenied`, `DetectionFailed` | Surface the error; ask the user to enter the host URL manually with `pac env list` pre-fill (today's fallback). Pre-fill options from `ENV_LIST` (up to 3 known environment URLs) plus "Other" for a custom URL; pre-fill first option from `.last-pipeline.json` if present. | `HOST_ENV_URL = user-supplied`. |
 
-Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` feed the planData `hostResolution` block in Phase 3 and the inline summary in Phase 4.
+Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliary flags `CHOSEN_ENV_URL`, `WILL_PROVISION_CUSTOM`, `WILL_USE_PPAC`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` feed the planData `hostResolution` block in Phase 3 and the inline summary in Phase 4. ensure-pipelines-host reads `chosenEnvUrl`, `willProvisionCustom`, and `willUsePpac` from that block to bypass its own Phase 3.C menu when the user has already made the choice here.
 
 **Q5:** Ask via `AskUserQuestion`:
 > "Should deployments require approval before each stage?"
@@ -581,6 +583,8 @@ Build a `planData` object with all gathered strategy inputs:
     "candidatesCount": 0,
     "willEnsureDuringExecution": true | false,
     "willProvisionCustom": true | false,
+    "willUsePpac": true | false,
+    "chosenEnvUrl": "https://orgc4f78248.crm5.dynamics.com/" | null,
     "userChoseDeferToSetupPipeline": false
   }
 }
@@ -695,6 +699,8 @@ Embed the result as `planData.pipelineMeta`.
 - `candidatesCount` ← `HOST_RESOLUTION.candidates.existingCustomHosts.length`
 - `willEnsureDuringExecution` ← `WILL_ENSURE_HOST` flag from Q4 (true whenever setup-pipeline will need to consult ensure-pipelines-host at execution time — i.e. status is `NoHost`, any `*Unbound*`, or the user deferred)
 - `willProvisionCustom` ← `WILL_PROVISION_CUSTOM` flag from Q4
+- `willUsePpac` ← `WILL_USE_PPAC` flag from Q4 (set when the user picks "Open PPAC and create one manually" in the NoHost env-first menu; ensure-pipelines-host treats this as a directive to go straight to Phase 4.C)
+- `chosenEnvUrl` ← `CHOSEN_ENV_URL` flag from Q4 (set when the user picks an existing env in the NoHost env-first menu; ensure-pipelines-host treats this as a directive to skip its Phase 3.C menu and go straight to Phase 4.B with this env)
 - `userChoseDeferToSetupPipeline` ← `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` flag from Q4 (only set in the `MultipleUnboundCustomHosts` "Decide later" branch)
 
 Populate `risks` based on gathered data:

@@ -856,7 +856,21 @@ function buildHostCardHtml(d) {
     } else if (status === 'PlatformHostExistsUnbound') {
       note = 'Will use existing Platform Host (free, no admin role required).';
     } else if (status === 'NoHost') {
-      note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      // The NoHost env-first menu in plan-alm Phase 2 Q4 asks the user to pick a
+      // host strategy: install on existing env / provision new / PPAC manual /
+      // switch to manual strategy. Reflect the choice rather than always saying
+      // "will provision new", so the rendered plan agrees with what
+      // ensure-pipelines-host will actually do at execution time.
+      if (hr.chosenEnvUrl) {
+        note = 'Will install Pipelines app on existing env <code>' + escapeHtml(hr.chosenEnvUrl) + '</code>.';
+      } else if (hr.willUsePpac === true) {
+        note = 'Will create new Custom Host via PPAC manual flow (admin opens <code>https://admin.powerplatform.microsoft.com/deployments</code> &#8594; <em>New custom host</em>).';
+      } else if (hr.willProvisionCustom === true) {
+        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      } else {
+        // Fallback for older planData that did not capture the choice.
+        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      }
     } else {
       note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
     }

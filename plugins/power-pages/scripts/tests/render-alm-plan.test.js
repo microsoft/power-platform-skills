@@ -1421,3 +1421,113 @@ test('render-alm-plan: Env Variables tab renders the per-variable table when env
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ── NoHost host card reflects the env-first choice from plan-alm Phase 2 Q4 ─
+// Regression: the plan-alm Q4 NoHost prompt was changed to surface an env-first
+// menu (install on existing / create new / PPAC / switch to manual) instead of
+// a simple yes/no provisioning confirmation. The renderer's host card text
+// must agree with the user's choice, otherwise the rendered plan misrepresents
+// what setup-pipeline will actually do.
+
+test('render-alm-plan: NoHost host card reflects chosenEnvUrl when user picked existing env', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        hostEnvId: null,
+        hostType: null,
+        pipelinesSolutionVersion: null,
+        candidatesCount: 2,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        willUsePpac: false,
+        chosenEnvUrl: 'https://orgc4f78248.crm5.dynamics.com/',
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('Will install Pipelines app on existing env'),
+      'Card should describe the existing-env install path'
+    );
+    assert.ok(
+      html.includes('orgc4f78248.crm5.dynamics.com'),
+      'Card should surface the chosen env URL'
+    );
+    assert.ok(
+      !html.includes('Will provision new Custom Host'),
+      'Card must not say "provision new" when user picked an existing env'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: NoHost host card reflects willUsePpac when user picked PPAC manual', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        willUsePpac: true,
+        chosenEnvUrl: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      /Will create new Custom Host via PPAC manual flow/.test(html),
+      'Card should describe the PPAC manual flow'
+    );
+    assert.ok(
+      !html.includes('D365_ProjectHost'),
+      'Card must not mention the env-create template when PPAC manual is the chosen path'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: NoHost host card defaults to provision-new when no flags carry the choice', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: true,
+        willUsePpac: false,
+        chosenEnvUrl: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      /Will provision new Custom Host with <code>D365_ProjectHost<\/code> template/.test(html),
+      'Card should fall back to the create-new description when willProvisionCustom is true'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
