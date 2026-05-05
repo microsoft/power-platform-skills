@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EventStreamingAnnotation name="^PowerPagesPluginEvent$">
+  <Indexing>
+    <Content><![CDATA[
+    {
+      "Interchange": {
+        "CollectorEventMappingList": ["ffdb4c99ca3a4ad5b8e9ffb08bf7da0d:PowerPagesPluginEvent"],
+        "FieldNameMappings": [
+          "data_eventName:EventName",
+          "data_eventType:EventType",
+          "data_severity:Severity",
+          "data_pluginName:PluginName",
+          "data_pluginVersion:PluginVersion",
+          "data_sessionId:SessionId",
+          "data_correlationId:CorrelationId",
+          "data_osName:OsName",
+          "data_osVersion:OsVersion",
+          "data_nodeVersion:NodeVersion",
+          "data_skillName:SkillName",
+          "data_scriptName:ScriptName",
+          "data_outcome:Outcome",
+          "data_durationMs:DurationMs",
+          "data_errorClass:ErrorClass",
+          "data_orgId:OrgId",
+          "data_tenantId:TenantId",
+          "iKey:iKey",
+          "ver:Ver"
+        ],
+        "IncludeFields": [
+          "EventName", "EventType", "Severity",
+          "PluginName", "PluginVersion",
+          "SessionId", "CorrelationId",
+          "OsName", "OsVersion", "NodeVersion",
+          "SkillName", "ScriptName",
+          "Outcome", "DurationMs", "ErrorClass",
+          "OrgId", "TenantId",
+          "iKey", "Ver"
+        ],
+        "EnableOriginalMessage": false
+      }
+    }
+    ]]></Content>
+  </Indexing>
+</EventStreamingAnnotation>
