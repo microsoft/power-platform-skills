@@ -145,6 +145,43 @@ File paths, working directories, environment variables (except the telemetry off
 
 `severity` defaults to `"Info"`. The `*_completed` builders set `severity = "Error"` when `outcome === "failure"`. No `Warning` level is currently emitted; future events that warrant it can override.
 
+### AI agent name and version — runtime detection
+
+`aiAgentName` and `aiAgentVersion` identify *which AI assistant CLI is running our hooks* (Claude Code, GitHub Copilot CLI, Cursor, etc.). Reliability varies by host because each one publishes a different (or no) runtime fingerprint. The library handles this in priority order, most-reliable first:
+
+1. **Explicit env override.** `AI_AGENT_NAME` and `AI_AGENT_VERSION` env vars, if set, are honoured verbatim. Any host (or any plugin's hook config) can populate them. This is the canonical cross-host path.
+2. **Claude Code auto-detection.** When `CLAUDECODE=1` is set in the hook subprocess, name resolves to `"Claude Code"` and version is read from the `package.json` next to `CLAUDE_CODE_EXECPATH`. Both vars are set automatically by Claude Code in the hook env, so this path requires zero plugin-side configuration.
+3. **Empty fallback.** If neither path resolves, both fields are omitted from the wire payload.
+
+#### Status by host (as of writing)
+
+| Host | Marker env in hook subprocess | Auto-detected? | Recommended config |
+|---|---|---|---|
+| Claude Code | `CLAUDECODE=1` + `CLAUDE_CODE_EXECPATH` | ✓ | none — works zero-config |
+| GitHub Copilot CLI | none documented | ✗ | hook config: `env: { "AI_AGENT_NAME": "GitHub Copilot CLI", "AI_AGENT_VERSION": "<static>" }` |
+| Cursor | `CURSOR_*` (varies) | ✗ | hook config: `env: { "AI_AGENT_NAME": "Cursor", "AI_AGENT_VERSION": "<static>" }` |
+| Other / unknown | varies | ✗ | hook config sets both env vars |
+
+#### Convention for plugin authors and host integrators
+
+Until every host exposes a runtime marker, **plugin authors who want reliable `AiAgentName` coverage across hosts should set the env vars in each host-specific hook config block**. Example for a plugin's Copilot CLI hook config:
+
+```json
+{
+  "command": "node hook.js",
+  "env": {
+    "AI_AGENT_NAME": "GitHub Copilot CLI",
+    "AI_AGENT_VERSION": "1.0.0"
+  }
+}
+```
+
+The static version is acceptable for hosts that don't expose one — analytics groups by name first; version is secondary precision. When a host adds a runtime marker (e.g., GitHub adding `COPILOT_CLI_VERSION`), the env override path picks it up automatically without lib changes; the static value can then be removed from the hook config.
+
+#### Why we don't try to "auto-detect" non-Claude-Code hosts
+
+Detecting via process tree, `process.title`, or parent process inspection is fragile and platform-specific. Static marker env vars are the only reliable cross-platform signal. We document the convention and let each host opt in.
+
 ---
 
 ## 5. EventStreamingAnnotation Deliverable
