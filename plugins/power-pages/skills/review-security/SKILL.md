@@ -21,7 +21,7 @@ model: opus
 
 # Review Security
 
-Guide the user through a full security review of their Power Pages code site. The skill asks one short question to capture the goal, then a second to set the scope, runs the matching focused skills, and assembles every finding into a single HTML report with a built-in glossary so the user never has to switch tabs.
+Guide the user through a full security review of their Power Pages code site. The skill asks one short question to capture the goal, then — for code-and-config — a follow-up to set depth. Release readiness skips the follow-up and runs every check at advanced depth by default. The skill then runs the matching focused skills and assembles every finding into a single HTML report with a built-in glossary so the user never has to switch tabs.
 
 The skill never asks the user technical questions. The conversation stays in plain language; technical names appear in the final report and the glossary explains them.
 
@@ -31,8 +31,8 @@ The skill never asks the user technical questions. The conversation stays in pla
 
 The conversation always follows the same seven steps. Each step maps to a phase below.
 
-1. **Ask the goal** — one question, four answers, plain language
-2. **Choose scope and depth** — one follow-up question that depends on step 1
+1. **Ask the goal** — one question, three answers, plain language
+2. **Choose scope and depth** — one follow-up for code-and-config; release defaults to all checks at advanced depth; monitor skips this step
 3. **Confirm and start** — show a one-line plan, give the user a chance to back out
 4. **Scan in progress** — run the matching sub-skills, surface progress
 5. **Results summary** — totals, top findings
@@ -160,12 +160,12 @@ Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same st
     "multiSelect": false,
     "options": [
       {
-        "label": "Quick",
+        "label": "Basic",
         "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
         "preview": "OWASP Top Ten ruleset — covers the most exploited web vulnerability categories.\n\nFlags medium+ severity. Best choice for most projects."
       },
       {
-        "label": "Deep",
+        "label": "Advanced",
         "description": "Full security audit ruleset. Slowest.",
         "preview": "Full security audit ruleset — all patterns including low-severity findings.\n\nMay take several minutes on larger projects. Best before a PR."
       }
@@ -176,32 +176,7 @@ Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same st
 
 **For `monitor`:** skip this step — the scan covers public pages automatically.
 
-**For `release`:**
-
-```json
-{
-  "questions": [{
-    "question": "Which checks should run? Select the ones you want.",
-    "header": "Checks",
-    "multiSelect": true,
-    "options": [
-      { "label": "Code and permissions", "description": "Code patterns, packages, secrets, authentication, roles, and permissions. (Recommended)" },
-      { "label": "Live site scan", "description": "Dynamic scan of the deployed site for runtime vulnerabilities. (Recommended)" },
-      { "label": "Browser headers", "description": "CSP, CORS, cookies, and framing protection. (Recommended)" },
-      { "label": "Firewall", "description": "WAF status, managed rules, and custom rules. (Recommended)" }
-    ]
-  }]
-}
-```
-
-Map the release check selections to sub-skills:
-
-| Selection | Sub-skills |
-|-----------|------------|
-| Code and permissions | manage-code-scan, audit-permissions (and read-only check of setup-auth state) |
-| Live site scan | manage-site-scan |
-| Browser headers | manage-http-headers |
-| Firewall | manage-web-application-firewall |
+**For `release`:** skip this step entirely. Default to running **all** sub-skills at **advanced** depth (full security audit ruleset, all severity levels).
 
 ### 2.3 Capture the chosen sub-skill set
 

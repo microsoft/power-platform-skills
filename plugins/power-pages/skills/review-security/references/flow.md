@@ -18,11 +18,11 @@ Why not start by asking the user which sub-skills to run? Because most users —
 
 ## Step 2 — Choose scope and depth
 
-The follow-up question depends on the goal. The choices map to concrete sub-skill behavior — quick vs. deep code scan, and so on.
+The follow-up question depends on the goal. The choices map to concrete sub-skill behavior — basic vs. advanced code scan, and so on.
 
-For code-and-config there are two depth tiers: Quick (OWASP Top Ten ruleset, good balance) and Deep (full security audit ruleset, slower). Three tiers added complexity without clear user benefit — the difference between quick and deep is mainly time, not token cost, since the scanning tools do the heavy lifting outside the context window.
+For code-and-config there are two depth tiers: Basic (OWASP Top Ten ruleset, good balance) and Advanced (full security audit ruleset, slower). Three tiers added complexity without clear user benefit — the difference between basic and advanced is mainly time, not token cost, since the scanning tools do the heavy lifting outside the context window.
 
-When the user picks "Release readiness" we show all recommended checks as a multi-select list. Every check is described as recommended. The user selects the ones they want to run without needing a separate "Custom" step.
+Release readiness skips this step entirely and defaults to running every check at advanced depth.
 
 ## Step 3 — Confirm and start
 
