@@ -140,6 +140,10 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .checklist-item.status-skipped .checklist-icon{color:var(--text-dim);opacity:0.6;}
 .checklist-item.status-warning .checklist-icon{color:var(--high);}
 .checklist-name{flex:1;font-size:13px;color:var(--text);}
+.checklist-name a.checklist-link{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;cursor:pointer;}
+.checklist-name a.checklist-link:hover{color:var(--accent);border-bottom-color:var(--accent);}
+.checklist-name a.checklist-link::after{content:" \2197";opacity:0.4;font-size:11px;}
+.checklist-name a.checklist-link:hover::after{opacity:0.9;}
 .status-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;font-family:var(--mono);}
 .status-badge.pending{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
 .status-badge.in-progress{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}

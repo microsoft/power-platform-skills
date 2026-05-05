@@ -1114,12 +1114,15 @@ test('render-alm-plan: failed validationRun escalates Test step status from comp
     const html = fs.readFileSync(outputPath, 'utf8');
 
     const idx = html.indexOf('Test site in Staging');
-    const stepCtx = html.slice(idx - 200, idx + 200);
+    // Lookback widened from 200 → 500 because the step name is now wrapped in
+    // a <a class="checklist-link"> anchor (~100 chars of extra markup before
+    // the literal step name) so the wrapper div is further upstream.
+    const stepCtx = html.slice(idx - 500, idx + 500);
     // Status modifier on the wrapper div should be status-warning, not
     // status-completed, when the run failed.
     assert.ok(/checklist-item status-warning/.test(stepCtx),
       'A failed run should escalate the step status from completed to warning');
-    assert.ok(/test-result-fail">FAILED</.test(html.slice(idx, idx + 1200)),
+    assert.ok(/test-result-fail">FAILED</.test(html.slice(idx, idx + 1500)),
       'Failed run should render the FAILED badge in the substep');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1526,6 +1529,184 @@ test('render-alm-plan: NoHost host card defaults to provision-new when no flags 
     assert.ok(
       /Will provision new Custom Host with <code>D365_ProjectHost<\/code> template/.test(html),
       'Card should fall back to the create-new description when willProvisionCustom is true'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Execution checklist step names link to the relevant tab ────────────────
+// The Execution Checklist tab lists steps but, before this change, was a
+// dead-end — the step labels were inert text. Each step now wraps its name in
+// an anchor that triggers the existing data-tab click handler so the user can
+// jump directly to the tab that has the actual run details.
+
+function checklistMatchFor(html, stepName, expectedTab) {
+  const escaped = stepName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const linkPattern = new RegExp(
+    `<a class="checklist-link"\\s+href="#tab-${expectedTab}"[^>]*data-tab=&quot;${expectedTab}&quot;[^>]*>${escaped}<\\/a>`,
+    's'
+  );
+  return linkPattern.test(html);
+}
+
+test('render-alm-plan: checklist step "Setup solution" links to the Solutions tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup solution', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Setup solution', 'solutions'),
+      'Setup solution should be wrapped in a checklist-link to tab-solutions');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Setup pipeline" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup pipeline', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Setup pipeline', 'pipelines'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Deploy via pipeline to Staging" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Deploy via pipeline to Staging', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Deploy via pipeline to Staging', 'pipelines'),
+      'Deploy step should link to Pipelines tab regardless of stage suffix');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Test site in Staging" links to the Validation tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Test site in Staging', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Test site in Staging', 'validation'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Activate site in Staging" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Activate site in Staging', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Activate site in Staging', 'pipelines'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Import to Production" links to the Solutions tab (manual path)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      STRATEGY: 'manual',
+      steps: [{ name: 'Import to Production', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Import to Production', 'solutions'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Finalize" links to the Overview tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Finalize', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Finalize', 'overview'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step with no tab match renders as plain text (no link)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Unmapped custom step', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The step name should appear, but NOT inside a checklist-link anchor.
+    assert.ok(html.includes('Unmapped custom step'), 'Step name still rendered');
+    assert.ok(
+      !/<a class="checklist-link"[^>]*>Unmapped custom step<\/a>/.test(html),
+      'Unmapped step should not be wrapped in a checklist-link'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist link onclick reuses the existing data-tab click handler', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup pipeline', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The onclick must call the same selector pattern the template's footer
+    // script listens on (.nav-btn[data-tab="..."]). If the renderer ever
+    // diverges from that selector, sidebar tabs and checklist links will
+    // disagree and one of them will silently break.
+    assert.ok(
+      /\.nav-btn\[data-tab=&quot;pipelines&quot;\]/.test(html),
+      'onclick should query .nav-btn[data-tab="pipelines"] (matches template footer handler)'
+    );
+    assert.ok(
+      /window\.scrollTo\(0,0\)/.test(html),
+      'onclick should also scroll to top so the user lands at the tab header'
     );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -902,6 +902,29 @@ function buildHostChecklistSubBullet(d) {
   return `<ul class="checklist-substep-list"><li class="checklist-substep" id="check-ensure-host">&#8627; Ensure Pipelines host <span class="substep-note">(delegated by setup-pipeline)</span></li></ul>`;
 }
 
+// Maps a checklist step name to the tab the user most likely wants to inspect
+// when they click the step. Used by buildChecklistHtml() to wrap the step name
+// in an anchor that re-uses the existing data-tab click handler installed by
+// the template's footer script. Returns null when no tab is a clear match
+// (e.g. "Finalize" or skipped steps); the renderer then falls back to plain
+// text without a link.
+//
+// Order matters — more specific patterns first ("Test site" before "Setup").
+function tabForChecklistStep(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  if (/\btest\s+site\b/.test(n)) return 'validation';
+  if (/\b(deploy|deploy\s+via\s+pipeline|deploy\s+to)\b/.test(n)) return 'pipelines';
+  if (/\b(import|import\s+to)\b/.test(n)) return 'solutions';
+  if (/\bactivate\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+pipeline\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+solution\b/.test(n)) return 'solutions';
+  if (/\bexport\s+solution\b/.test(n)) return 'solutions';
+  if (/\bensure\s+pipelines\s+host\b/.test(n)) return 'pipelines';
+  if (/\bfinalize\b/.test(n)) return 'overview';
+  return null;
+}
+
 function buildChecklistHtml() {
   const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;', warning: '&#9888;' };
   const steps = Array.isArray(data.steps) ? data.steps : [];
@@ -976,9 +999,20 @@ function buildChecklistHtml() {
 </div>`;
     }
 
+    const targetTab = tabForChecklistStep(name);
+    const escapedName = escapeHtml(name);
+    // Wrap the step name in an anchor when there's a clear tab to navigate to.
+    // The onclick re-uses the .nav-btn click handler installed by the template's
+    // footer script (querySelector matches the sidebar button by data-tab).
+    // The href falls back to the section's id, so middle-click / right-click /
+    // copy-link still works in browsers that block JS.
+    const nameMarkup = targetTab
+      ? `<a class="checklist-link" href="#tab-${targetTab}" onclick="const b=document.querySelector('.nav-btn[data-tab=&quot;${targetTab}&quot;]');if(b){b.click();window.scrollTo(0,0);}return false;">${escapedName}</a>${skip}`
+      : `${escapedName}${skip}`;
+
     return `<div class="checklist-item status-${s}">
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
-  <span class="checklist-name">${escapeHtml(name)}${skip}</span>
+  <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
 </div>${envLine}${validationLine}`;
   }).join('\n');
