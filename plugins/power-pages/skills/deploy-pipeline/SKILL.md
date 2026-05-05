@@ -628,6 +628,51 @@ If **Failed**:
   and find the failed run for details on what caused the failure.
 ```
 
+**7.6.1 Diagnose the failure.** Before asking the user what to do, query the stage run record for error details so we can offer a targeted remediation prompt:
+
+```
+GET {hostEnvUrl}/api/data/v9.1/deploymentstageruns({STAGE_RUN_ID})?$select=errordetails,validationresults,stagerunstatus
+Authorization: Bearer {HOST_TOKEN}
+```
+
+Parse `errordetails` and `validationresults` as JSON / text. Check for these patterns (case-insensitive):
+
+| Pattern in error text | Diagnosis | Remediation prompt |
+|---|---|---|
+| `AttachmentBlocked` OR `-2147188706` OR `not a valid type` OR `\.js.*blocked` | **Blocked attachments** — the target env's `blockedattachments` setting rejects file types in the solution | See 7.6.2 below |
+| `MissingDependency` OR `Missing dependency` | Missing solution dependencies in target | Surface the dependencies; recommend the user install them and retry |
+| (anything else) | Unknown failure | Fall through to the generic retry/exit prompt |
+
+**7.6.2 Blocked-attachment remediation (gated).** Only run when the diagnostic in 7.6.1 matched the blocked-attachment pattern. **Never modify the env's `blockedattachments` setting without an explicit AskUserQuestion gate.** This is a tenant-wide security setting; auto-modifying it would silently weaken security posture across other apps in the same env.
+
+1. Switch PAC CLI to the **target** environment so the helper queries the right env's settings, then identify which file types are blocked. By default the helper checks `js`; pass `--extensions` if the error mentions other types (e.g. `js,css`):
+   ```bash
+   pac env select --environment "{TARGET_ENV_URL}"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+     --envUrl "{TARGET_ENV_URL}" \
+     --extensions js \
+     --dry-run
+   ```
+   Read the output JSON. The fields you care about: `wasBlocked[]` (the extensions currently blocked on the env that were on your `--extensions` list — these are what would be removed) and `unchanged[]` (extensions you asked to remove that aren't actually blocked, no-op).
+
+   If `wasBlocked` is empty, the failure is **not** caused by a blocked attachment on this list — fall back to 7.6.3's generic retry prompt and surface the raw error text from `errordetails`.
+
+2. Tell the user explicitly:
+   > "The deployment failed because the target environment **`{targetEnvName}`** blocks file types that this solution needs: **`{wasBlocked.join(', ')}`**. This is an environment-level security setting that affects all users of that env. To proceed, the block needs to be removed for these specific types. The change is reversible from the Power Platform Admin Center → Environments → `{targetEnvName}` → Settings → Product → Features → Blocked Attachments."
+
+3. Invoke `AskUserQuestion` (do NOT bury this in chat — the user must answer before any change happens):
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Allow removing the block on `{wasBlocked.join(', ')}` for the `{targetEnvName}` environment so the deployment can retry? This modifies a tenant-level security setting. | Unblock attachments | Yes — unblock these types and retry, No — leave settings unchanged (I'll investigate manually), Cancel |
+
+4. Branch on the answer:
+   - **Yes — unblock and retry**: invoke `fix-blocked-attachments.js` **without** `--dry-run` (with the same `--extensions`), then call `RetryFailedDeploymentAsync` and resume polling from Phase 6.2. Surface the change in the deploy summary so the user has a clear audit record. Switch PAC CLI back to the source env after the retry resolves so subsequent skill steps run against the source by default.
+   - **No / Cancel**: stop with a remediation pointer:
+     > "To unblock manually: open Power Platform Admin Center → Environments → **`{targetEnvName}`** → Settings → Product → Features → **Blocked Attachments** → remove `{blockedTypesPresent.join(', ')}` → Save. Then re-run `/power-pages:deploy-pipeline`."
+
+**7.6.3 Generic retry/exit prompt** (when 7.6.1 didn't match a known pattern, or the user declined the targeted remediation):
+
 Ask via `AskUserQuestion`:
 > "The deployment failed. What would you like to do?
 > 1. **Retry** — call `RetryFailedDeploymentAsync` to retry the same stage run
