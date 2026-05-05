@@ -71,7 +71,7 @@ natural size and is centered.
 ## Check 3 — FILLPORTIONS-DEFAULT (missing `FillPortions` on AutoLayout child)
 
 **Problem:** Children of an AutoLayout container inherit a PA-chosen default for
-`FillPortions` that varies by control type, so the intent isn't clear. 
+`FillPortions` that varies by control type, so the intent isn't clear.
 
 **Detect:** For every control whose parent has a `LayoutDirection` property
 (i.e., it is an AutoLayout child), check whether `FillPortions` is explicitly
