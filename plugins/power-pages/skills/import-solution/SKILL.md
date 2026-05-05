@@ -29,6 +29,61 @@ Imports a solution zip into a target Dataverse environment via `ImportSolutionAs
 
 ## Phases
 
+### Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
+- An environment variable / arg flag set by the orchestrator, or
+- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them if you also want a freshness check; otherwise the helper does an existence-only check, which is sufficient for the gate decision below.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, re-run the Phase 0 helper once to confirm freshness; if still stale, surface the detail and proceed to Phase 1 anyway (don't infinite-loop).
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Direct invocation of `import-solution` deploys a zip into a target environment without the orchestrator's deployment-strategy selection or post-import validation steps. Users running this skill standalone often skip the staged-import dependency check, miss env var override values for the target environment, and have no plan-tracked record of which environment received which artifact version. The gate ensures `plan-alm` either ran (so the strategy was selected, per-stage values were captured in `deployment-settings.json`, and the deployment is reproducible) or the user explicitly chose to bypass it.
+
 ### Phase 1 — Verify Prerequisites
 
 **Create all tasks upfront at the start of this phase.**
