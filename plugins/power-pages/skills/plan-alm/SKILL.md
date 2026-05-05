@@ -40,6 +40,26 @@ This skill detects the current project state (existing solution, pipeline), asks
 
 Steps:
 
+0. **Detect prior ALM deferral for this project.** Before any discovery work, check whether the project root contains a `.alm-deferred` marker file. The marker is written by users who explicitly opted ALM-skill validators out of "missing artifacts" warnings (e.g. *"this site is handled separately"* or *"ni-dev — no ALM"*). If a user is now invoking `plan-alm`, we should surface that the marker is present and ask what to do, rather than silently proceeding (which would build a plan the user previously decided not to maintain) or silently removing the marker (which would re-enable nags on every other ALM skill).
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+   ```
+
+   The helper returns `{ deferred, deferral, ... }`. If `deferred === true`, read the deferral reason (`deferral.reason` or the raw marker text) and ask via `AskUserQuestion`:
+
+   > "This project has an `.alm-deferred` marker — `{reason}`. ALM was previously deferred here, so the other ALM skills (`setup-solution`, `setup-pipeline`, `deploy-pipeline`, …) skip their plan-completeness checks for this project. How would you like to proceed?"
+
+   | Question | Header | Options |
+   |---|---|---|
+   | How would you like to proceed? | ALM deferral marker | Continue planning and remove the marker (Recommended), Continue planning but keep the marker (record deferral context in plan), Cancel |
+
+   - **Continue and remove marker (Recommended)** → delete `.alm-deferred` (the user is re-engaging with ALM). Set `DEFERRAL_CLEARED = true` and proceed to step 1.
+   - **Continue and keep marker** → set `DEFERRAL_PRESERVED = true` and `DEFERRAL_REASON = {reason}`. Proceed to step 1. Surface a one-line note in the Phase 1 step 9 user report (e.g. *"Note: `.alm-deferred` is preserved — other ALM skills will continue to skip plan-completeness checks for this project."*) so the user remembers the marker remains in effect after planning.
+   - **Cancel** → exit cleanly (don't touch the marker).
+
+   If `deferred === false`, skip this step silently and proceed to step 1.
+
 1. **Resolve the site identity from the local project.** ALM skills are normally invoked from a site-root directory where `pac pages download-code-site` (or a create-site scaffold followed by a deploy) has written `.powerpages-site/website.yml`. That YAML file is the source of truth for `websiteRecordId` and `siteName`.
 
    **Resolution order** (first match wins):
