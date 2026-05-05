@@ -560,7 +560,7 @@ x-ms-correlation-id: {uuid v4}
 - `202` + `Location` header + `Retry-After` header → poll the Location URL until lifecycle op completes.
 - `200` + immediate body (rare for env-create) → capture URLs.
 - `403` from initial POST → stop with *"Custom Host fast-path requires Global / Power Platform / Dynamics admin. Suggest Path 2 (Pipelines app on existing env) if you have system-admin on a Dataverse env, or Path 3 (PPAC UI) if you can request admin assistance."* Offer seamless fallback to 4.B / 4.C.
-- `409` with `code: "NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment"` (trial-license tenant) → surface the specific message *"Custom Host provisioning failed: trial licenses can only create Trial-sku envs. The D365_ProjectHost fast-path requires Production sku. Falling back to Path 2 (Pipelines app on existing env)."* Then re-enter Phase 3.C with the **original eligible-env list** from `RESOLUTION.candidates.eligibleForAppInstall[]` (Phase 2 inventory). **Do NOT** reuse the partially-created env's GUID for Path 4.B — that env doesn't exist (provisioning failed). Always pick from the Phase 2 inventory or accept "Other (paste URL)". Discard any env GUID returned in the 409 response body.
+- `409` with a capacity-related code (e.g. `NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment`, `NotEnoughCapacity`, `NotEnoughCapacity_OrganizationDisabled`, `EnvironmentCapacityExceeded`) → **offer a SKU-fallback prompt before falling back to Path 4.B**. The license / capacity constraint usually applies only to the requested SKU; smaller SKUs (Sandbox, Developer, Trial) often succeed on the same tenant and produce a Pipelines host that works identically (the Pipelines app installs on any SKU — only license allocation differs). See sub-step "4.A — SKU fallback prompt" below. Only after the user declines a SKU fallback OR the fallback also fails should we re-enter Phase 3.C / Path 4.B.
 - 4xx / 5xx other → surface error, ask user to retry or switch path. On switch to 4.B, follow the same "use original eligible-env list" rule above.
 
 **Polling:**
@@ -576,6 +576,42 @@ Interval = `Retry-After` seconds (default 10s). Timeout = 15min (configurable). 
 - `Failed` / `Canceled` → surface error, stop
 
 **On success:** set `RESOLUTION.finalHostEnvUrl`, `finalHostEnvId`, `instanceApiUrl`, `actionTaken = "fast-path-custom-d365projecthost"`. Proceed to Phase 5.
+
+##### 4.A — SKU fallback prompt (capacity-error remediation)
+
+When env-create returns a 409 capacity-related error, the user's tenant doesn't have spare license/capacity for the requested SKU but may have it for a smaller SKU. Surface the constraint clearly and offer fallback SKUs **before** suggesting Path 4.B:
+
+1. Read the error body. Extract:
+   - `error.code` (e.g. `NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment`)
+   - `error.message` (the human-readable explanation from BAP, e.g. *"Trial licenses are limited to creating Trial environments only."*)
+
+2. Build the fallback SKU list. The default order is **Production (recommended) → Sandbox → Developer → Trial**, dropping the SKU that just failed. Each SKU carries a different caveat:
+
+   | SKU | When to suggest | Caveat to surface |
+   |---|---|---|
+   | `Production` | Default first choice | None — the documented Pipelines host SKU |
+   | `Sandbox` | Tenants with subscription but no spare Production capacity | *"Sandbox SKU works for Pipelines but is documented as non-production. Microsoft may apply different SLAs to Sandbox-hosted apps."* |
+   | `Developer` | Individual-developer tenants | *"Developer SKU is single-user. Other team members will not be able to deploy through this host. Use only if this is a personal/dev-only ALM setup."* |
+   | `Trial` | Trial-license tenants (no other option works) | *"Trial environments expire after 30 days unless converted. The Pipelines host will need to be re-provisioned at expiry."* |
+
+3. Tell the user the constraint and present the prompt:
+
+   > "Custom Host provisioning failed with `{error.code}`: {error.message}
+   >
+   > The Pipelines app installs identically on any SKU — only the license allocation differs. You can retry env-create with a smaller SKU, or fall back to installing the Pipelines app on an existing env (Path 4.B)."
+
+   `AskUserQuestion` (build the option list dynamically — drop the SKU that just failed, append the caveats inline):
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Retry env-create with a different SKU? | SKU fallback | (one option per remaining SKU, with caveat in the description), Fall back to Path 4.B (install Pipelines app on existing env), Cancel |
+
+4. Branch on the answer:
+   - **Picked SKU**: re-issue the 4.A pre-call confirmation gate (NON-SKIPPABLE — see "Pre-call confirmation" above) with the new SKU substituted into the body, then re-call `provision-custom-host.js` with `--environmentSku <picked>`. If that also fails with a capacity error, present the prompt again with the next SKU dropped. After two consecutive capacity failures, stop offering SKU fallbacks and route to Path 4.B.
+   - **Path 4.B**: route to 4.B per the "original eligible-env list" rule below.
+   - **Cancel**: exit cleanly.
+
+   **Always** discard any env GUID returned in the 409 response body — provisioning failed, so the GUID either doesn't represent a usable env or is an artifact. Path 4.B must use the Phase 2 eligible-env inventory exclusively.
 
 #### 4.B — Guided manual: Install Pipelines app on an existing env
 
