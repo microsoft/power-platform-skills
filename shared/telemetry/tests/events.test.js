@@ -214,3 +214,163 @@ test("errorDescription dropped from *_started events (only allowed on completed)
   });
   assert.equal(ev.data.errorDescription, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// Type-safety tests — every column gets the right type or is dropped.
+// ---------------------------------------------------------------------------
+
+test("string fields drop non-string values (no silent coercion to '42' etc.)", () => {
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: 42, // wrong type
+    pluginName: { not: "a string" }, // wrong type
+    pluginVersion: ["1.0"], // wrong type
+  });
+  assert.equal(ev.data.skillName, undefined);
+  assert.equal(ev.data.pluginName, undefined);
+  // pluginVersion was set in `common` to "1.2.2" but caller passed array;
+  // the array overwrites and gets dropped, so field is undefined.
+  assert.equal(ev.data.pluginVersion, undefined);
+});
+
+test("string fields preserve empty strings (intentional for errorClass/errorDescription)", () => {
+  const ev = buildSkillCompleted(ENVELOPE, {
+    ...common,
+    skillName: "x",
+    outcome: "success",
+    durationMs: 0,
+    errorClass: "",
+    errorDescription: "",
+  });
+  assert.equal(ev.data.errorClass, "");
+  assert.equal(ev.data.errorDescription, "");
+});
+
+test("durationMs always lands as a non-negative integer (number type)", () => {
+  const cases = [
+    { input: 1234, expect: 1234 },
+    { input: 1234.7, expect: 1234 }, // floor
+    { input: -5, expect: 0 }, // negative clamp
+    { input: Number.NaN, expect: 0 },
+    { input: Number.POSITIVE_INFINITY, expect: 0 },
+    { input: "1234", expect: 1234 }, // string-int coerced
+    { input: "abc", expect: 0 }, // unparseable → 0
+    { input: "", expect: 0 }, // empty string → 0 (NOT '' on the wire)
+    { input: true, expect: 1 }, // boolean true coerces to 1 — drop guarded by clamp
+  ];
+  for (const { input, expect } of cases) {
+    const ev = buildSkillCompleted(ENVELOPE, {
+      ...common,
+      skillName: "x",
+      outcome: "success",
+      durationMs: input,
+      errorClass: "",
+    });
+    assert.equal(typeof ev.data.durationMs, "number", `input=${String(input)}`);
+    assert.equal(ev.data.durationMs, expect, `input=${String(input)}`);
+  }
+});
+
+test("durationMs absent when caller does not provide", () => {
+  const ev = buildSkillCompleted(ENVELOPE, {
+    ...common,
+    skillName: "x",
+    outcome: "success",
+    errorClass: "",
+  });
+  // Field absent → Kusto column will be null. Better than sending 0 by default.
+  assert.equal(ev.data.durationMs, undefined);
+});
+
+test("eventInfo drops non-object values (no Kusto dynamic-type confusion)", () => {
+  const cases = [
+    "a string", // strings rejected
+    42,         // numbers rejected
+    true,       // booleans rejected
+    new Date(), // Date rejected
+    /regex/,    // RegExp rejected
+  ];
+  for (const v of cases) {
+    const ev = buildSkillStarted(ENVELOPE, {
+      ...common,
+      skillName: "x",
+      eventInfo: v,
+    });
+    assert.equal(ev.data.eventInfo, undefined, `input=${String(v)}`);
+  }
+});
+
+test("eventInfo accepts arrays (valid JSON for dynamic column)", () => {
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: "x",
+    eventInfo: [1, 2, 3],
+  });
+  assert.deepEqual(ev.data.eventInfo, [1, 2, 3]);
+});
+
+test("outcome enforces enum: only 'success' or 'failure' pass through", () => {
+  const okSuccess = buildSkillCompleted(ENVELOPE, {
+    ...common, skillName: "x", outcome: "success", errorClass: "",
+  });
+  const okFailure = buildSkillCompleted(ENVELOPE, {
+    ...common, skillName: "x", outcome: "failure", errorClass: "",
+  });
+  const bogus = buildSkillCompleted(ENVELOPE, {
+    ...common, skillName: "x", outcome: "weird", errorClass: "",
+  });
+  const numeric = buildSkillCompleted(ENVELOPE, {
+    ...common, skillName: "x", outcome: 1, errorClass: "",
+  });
+  assert.equal(okSuccess.data.outcome, "success");
+  assert.equal(okFailure.data.outcome, "failure");
+  assert.equal(bogus.data.outcome, undefined);
+  assert.equal(numeric.data.outcome, undefined);
+});
+
+test("null and undefined dropped uniformly across all types", () => {
+  const ev = buildSkillCompleted(ENVELOPE, {
+    pluginName: null,
+    pluginVersion: undefined,
+    sessionId: null,
+    skillName: null,
+    durationMs: null,
+    outcome: null,
+    eventInfo: null,
+    errorClass: null,
+    errorDescription: undefined,
+  });
+  assert.equal(ev.data.pluginName, undefined);
+  assert.equal(ev.data.pluginVersion, undefined);
+  assert.equal(ev.data.sessionId, undefined);
+  assert.equal(ev.data.skillName, undefined);
+  assert.equal(ev.data.durationMs, undefined);
+  assert.equal(ev.data.outcome, undefined);
+  assert.equal(ev.data.eventInfo, undefined);
+  assert.equal(ev.data.errorClass, undefined);
+  assert.equal(ev.data.errorDescription, undefined);
+});
+
+test("severity defaults to Info when outcome is dropped (invalid enum)", () => {
+  // Even if outcome is a non-enum value, severity should fall back to Info,
+  // not crash.
+  const ev = buildSkillCompleted(ENVELOPE, {
+    ...common, skillName: "x", outcome: "weird-value", errorClass: "",
+  });
+  assert.equal(ev.data.severity, "Info");
+});
+
+test("FIELD_TYPES is exported and covers every field used in builders", () => {
+  const { FIELD_TYPES } = require("../lib/events");
+  const usedFields = [
+    "pluginName", "pluginVersion", "sessionId", "correlationId",
+    "osName", "osVersion", "nodeVersion",
+    "orgId", "tenantId", "pacCliVersion", "aiAgentName", "aiAgentVersion",
+    "eventInfo",
+    "skillName", "scriptName",
+    "outcome", "durationMs", "errorClass", "errorDescription",
+  ];
+  for (const f of usedFields) {
+    assert.ok(FIELD_TYPES[f], `FIELD_TYPES missing entry for "${f}"`);
+  }
+});

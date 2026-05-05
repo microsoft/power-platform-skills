@@ -1,5 +1,48 @@
 "use strict";
 
+// Per-field type metadata. Drives the type-aware picker so the wire payload
+// always matches the Kusto column type. Types and defaults:
+//
+//   "string"     — Kusto column type `string`. Empty strings ARE sent (lets
+//                  errorClass/errorDescription distinguish "explicit empty"
+//                  from "not present"). Non-strings are dropped.
+//   "int"        — Kusto column type `int`. Coerced via Number(); non-finite
+//                  or negative values clamp to 0. Sent as number, not string.
+//   "object"     — Kusto column type `dynamic` (JSON). Plain objects and
+//                  arrays pass through; primitives, Date, RegExp, etc. are
+//                  dropped to avoid Kusto type confusion.
+//   "enum:a|b|c" — Kusto column type `string`. Only the listed values are
+//                  accepted; anything else is dropped.
+//
+// Both `null` and `undefined` are dropped uniformly. Empty string is allowed
+// only for "string" types (deliberate — see above).
+const FIELD_TYPES = {
+  // Common — identity / context
+  pluginName: "string",
+  pluginVersion: "string",
+  sessionId: "string",
+  correlationId: "string",
+  osName: "string",
+  osVersion: "string",
+  nodeVersion: "string",
+  // Common — PAC + agent
+  orgId: "string",
+  tenantId: "string",
+  pacCliVersion: "string",
+  aiAgentName: "string",
+  aiAgentVersion: "string",
+  // Common — caller-supplied dynamic JSON
+  eventInfo: "object",
+  // Skill / script
+  skillName: "string",
+  scriptName: "string",
+  // Completed-only
+  outcome: "enum:success|failure",
+  durationMs: "int",
+  errorClass: "string",
+  errorDescription: "string",
+};
+
 const COMMON_FIELDS = [
   "pluginName",
   "pluginVersion",
@@ -20,25 +63,46 @@ const SKILL_FIELDS = ["skillName"];
 const SCRIPT_FIELDS = ["scriptName"];
 const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescription"];
 
-function pick(input, keys) {
-  const out = {};
-  if (!input) return out;
-  for (const k of keys) {
-    if (input[k] !== undefined) out[k] = input[k];
-  }
-  return out;
+function isPlainStructured(v) {
+  if (v === null || typeof v !== "object") return false;
+  if (Array.isArray(v)) return true;
+  if (v instanceof Date) return false;
+  if (v instanceof RegExp) return false;
+  if (v instanceof Map || v instanceof Set) return false;
+  return true;
 }
 
-function clampDuration(ms) {
-  const n = Number(ms);
+function clampInt(v) {
+  const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.floor(n);
 }
 
-function buildEvent(envelopeName, eventName, info, severity) {
-  if (info.durationMs !== undefined) {
-    info.durationMs = clampDuration(info.durationMs);
+// Type-aware pick. Drops null/undefined for every type. For each kept value,
+// validates against its declared type and coerces as needed.
+function pick(input, keys) {
+  const out = {};
+  if (!input || typeof input !== "object") return out;
+  for (const k of keys) {
+    const v = input[k];
+    if (v === undefined || v === null) continue;
+    const type = FIELD_TYPES[k];
+    if (type === "string") {
+      if (typeof v === "string") out[k] = v;
+    } else if (type === "int") {
+      out[k] = clampInt(v);
+    } else if (type === "object") {
+      if (isPlainStructured(v)) out[k] = v;
+    } else if (typeof type === "string" && type.startsWith("enum:")) {
+      const allowed = type.slice(5).split("|");
+      if (typeof v === "string" && allowed.includes(v)) out[k] = v;
+    }
+    // unknown types: drop (defensive — no field should hit this branch).
   }
+  return out;
+}
+
+function buildEvent(envelopeName, eventName, info, severity) {
   return {
     name: envelopeName,
     data: { eventName, eventType: "Trace", severity, ...info },
@@ -88,4 +152,5 @@ module.exports = {
   buildSkillCompleted,
   buildScriptStarted,
   buildScriptCompleted,
+  FIELD_TYPES,
 };
