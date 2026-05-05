@@ -83,7 +83,6 @@ Three shapes are supported:
   "kind": "kv",
   "label": "Scan details",
   "entries": [
-    { "key": "Score", "value": "82 / 100" },
     { "key": "Pages checked", "value": "117" }
   ]
 }

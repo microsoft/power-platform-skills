@@ -11,7 +11,6 @@
  *
  * REVIEW_DATA shape (see assets/security-review-report.html):
  *   {
- *     score: <0-100 or null>,
  *     summary: "...",
  *     totals: { critical, warning, info, pass },
  *     topFindings: [...],

@@ -67,7 +67,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/run-opengrep.js" \
 | Flag           | Required | Default     | Description |
 |----------------|----------|-------------|-------------|
 | `--projectRoot`| Yes      | —           | Directory to scan. |
-| `--ruleset`    | No       | `p/owasp-top-ten` | Opengrep ruleset name or local rules file. Use `p/owasp-top-ten` for quick, `p/security-audit` for deep. |
+| `--ruleset`    | No       | `p/owasp-top-ten` | Opengrep ruleset name or local rules file. Use `p/owasp-top-ten` for basic, `p/security-audit` for advanced. |
 | `--output`     | Yes      | —           | Path for the normalized findings JSON. |
 | `--include`    | No       | —           | Optional glob narrowing the file set. |
 | `--help`       | No       | —           | Show usage, flags, and exit codes. |

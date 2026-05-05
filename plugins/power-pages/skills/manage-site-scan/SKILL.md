@@ -2,10 +2,10 @@
 name: manage-site-scan
 description: >-
   Runs Power Pages security scans on a deployed site, retrieves the latest scan
-  report and security score, and produces an HTML summary. Supports a quick
-  check on public pages and a deep scan that can also include authenticated
-  pages. Use when the user wants to scan, check, test, or assess the security
-  of a published Power Pages site, or asks "how safe is my live site".
+  report, and produces an HTML summary. Supports a quick check on public pages
+  and a deep scan of the site's public surface. Use when the user wants to
+  scan, check, test, or assess the security of a published Power Pages site,
+  or asks "how safe is my live site".
 user-invocable: true
 argument-hint: "[optional: --data-only <out-dir>]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
@@ -21,7 +21,7 @@ Run security scans on a deployed Power Pages site, fetch the latest results, and
 There are two scan flavors:
 
 - **Quick check** — a faster alternative that checks public pages. Available via the API but not documented in the Security workspace UI.
-- **Deep check** — the primary scan type. By default scans anonymous pages only. Can include authenticated pages when the user provides a test account (username and password). May take several minutes to complete.
+- **Deep check** — the primary scan type. Scans the site's public pages. May take several minutes to complete.
 
 This skill talks to the Power Platform service that owns the site — it does not analyze local code. The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available. Pair it with `/manage-code-scan` for source-level analysis.
 
@@ -33,11 +33,9 @@ This skill talks to the Power Platform service that owns the site — it does no
 - **Deep scans are long-running.** The scan runs server-side for a substantial period. The skill polls for completion but should warn the user about the wait.
 - **Only one deep scan per site at a time.** `Z003` (handled as HTTP 204 or HTTP 400 with code `Z003` in `start-deep-scan.js`) surfaces when a start is attempted while a scan is already running. The script exits with code 0 and `{ "status": "already-running" }` — treat it as a normal outcome, not an error.
 - **Quick scan is not the same as deep scan.** Quick runs diagnostic checks against configuration patterns. Deep runs a dynamic scan of the public surface. Users often conflate them — clarify before proceeding.
-- **Deep scan defaults to anonymous.** By default only public pages are scanned. Authenticated-page scanning is supported by passing `--username` and `--password` to `start-deep-scan.js`. It is also available through Power Pages Studio.
-- **Security score is raw, not a grade.** The value is `{ totalRules, succeededRules }` from the latest deep scan. The skill computes a percentage as a convenience.
 - **Quick scan uses an LCID.** The diagnostic service expects a Microsoft Locale ID (e.g. `1033` for en-US). The `--lcid` flag defaults to `1033` when omitted, so it only needs to be set for non-English locales.
 - **Rate limits apply.** There are daily and weekly caps on scans per site. When exceeded, wait and retry later.
-- **A fresh site with no completed deep scan has no report and no score.** Run a deep scan first.
+- **A fresh site with no completed deep scan has no report.** Run a deep scan first.
 
 **Initial request:** $ARGUMENTS
 
@@ -46,7 +44,7 @@ This skill talks to the Power Platform service that owns the site — it does no
 1. **Phase 1: Prerequisites** — Locate the project, confirm sign-in, identify the site
 2. **Phase 2: Plan the scan** — Choose quick or deep, and confirm in plain language
 3. **Phase 3: Run the scan** — Run quick scan, or start a deep scan and wait for it
-4. **Phase 4: Fetch results** — Get the latest report and the security score
+4. **Phase 4: Fetch results** — Get the latest report
 5. **Phase 5: Build the report** — Normalize findings and write the HTML report
 6. **Phase 6: Present and next steps** — Show the report, record usage, suggest follow-ups
 
@@ -147,36 +145,12 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
       {
         "label": "Deep check",
         "description": "Full scan of your live site. (Recommended)",
-        "preview": "Runs a thorough scan of your site's public pages, checking for vulnerabilities across multiple security categories. Takes several minutes to complete — you will get an email when it finishes.\n\nProduces a detailed report with individual findings and a security score. You can optionally include signed-in pages if you have a test account."
+        "preview": "Runs a thorough scan of your site's public pages, checking for vulnerabilities across multiple security categories. Takes several minutes to complete — you will get an email when it finishes.\n\nProduces a detailed report with individual findings."
       },
       {
         "label": "Latest results",
         "description": "Show the last scan report without running a new one.",
-        "preview": "Fetches the most recent completed scan report and security score from the service. No new scan is started.\n\nUseful when you already ran a scan and want to review the results again."
-      }
-    ]
-  }]
-}
-```
-
-If the user picks **Deep check**, ask a follow-up about signed-in pages:
-
-```json
-{
-  "questions": [{
-    "question": "Should the scan also test pages that require signing in?",
-    "header": "Page scope",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Public only",
-        "description": "Scan only pages anyone can see. (Recommended)",
-        "preview": "The scan will test only pages that are visible without signing in. This is the default and covers most of the site's attack surface."
-      },
-      {
-        "label": "Include signed-in",
-        "description": "Also test pages behind login. Needs a test account.",
-        "preview": "The scan will also test pages that require authentication. You will need to provide a test username and password.\n\nThe credentials are passed only as command-line arguments — they are never written to disk or included in the report."
+        "preview": "Fetches the most recent completed scan report from the service. No new scan is started.\n\nUseful when you already ran a scan and want to review the results again."
       }
     ]
   }]
@@ -184,8 +158,6 @@ If the user picks **Deep check**, ask a follow-up about signed-in pages:
 ```
 
 If the user picks "Just show me the latest results", skip Phase 3 and go straight to Phase 4.
-
-If they choose to test signed-in pages for the thorough check, ask once for the test username and password using `AskUserQuestion`. Treat the values as sensitive — never log them, never write them to disk, and pass them only as command-line arguments to the scan script.
 
 Show a one-line plan in plain language and confirm: `Yes, start the check` / `Change something`.
 
@@ -213,8 +185,7 @@ Start the scan:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" \
-  --portalId "<PORTAL_ID>" \
-  [--username "<USER>" --password "<PASSWORD>"]
+  --portalId "<PORTAL_ID>"
 ```
 
 Then poll for completion with the same portalId from Phase 1.2:
@@ -235,10 +206,6 @@ The polling script prints progress lines every minute and exits when the scan fi
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/get-latest-report.js" \
   --portalId "<PORTAL_ID>" \
   --output "<TEMP_DIR>/latest.json"
-
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/get-security-score.js" \
-  --portalId "<PORTAL_ID>" \
-  --output "<TEMP_DIR>/score.json"
 ```
 
 If `get-latest-report.js` reports that no completed scan exists yet (HTTP 204), record an `info` finding explaining this and proceed without a report body.
@@ -269,7 +236,7 @@ Write `<TEMP_DIR>/site-scan-data.json` with:
 - `SITE_NAME` — site display name
 - `SUMMARY` — 2–3 sentences: "We checked X pages and Y endpoints. We found N important issues, M smaller ones, and Z things that look healthy."
 - `FINDINGS_DATA` — array of finding objects (`id, severity, title, tag?, location?, details?, reasoning, fix?`). Use the page URL or endpoint as `location` when available.
-- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Score', value: '<score>/100' }, { key: 'Scan type', value: '<Quick|Thorough>' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
+- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Scan type', value: '<Quick|Thorough>' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
 
 In **data-only mode**, write the file to `<DATA_ONLY_DIR>/manage-site-scan.json` and stop here — do not render or open HTML.
 
@@ -301,7 +268,7 @@ Open the rendered HTML.
 
 ### 6.3 Summarize and offer follow-ups
 
-Summarize in plain language: count of important / smaller issues, security score (if known), and the report path.
+Summarize in plain language: count of important / smaller issues and the report path.
 
 Use `AskUserQuestion`:
 
@@ -321,7 +288,6 @@ If the user wants help fixing items, group critical findings, explain the first 
 
 - **Plain language with users** — never lead with words like CSP, CORS, OWASP, hardening, or scan profile. Explain when asked.
 - **Background long-running calls** — start the deep scan, then poll in the background while the user can continue working.
-- **Never log credentials** — the optional username and password used for signed-in scanning are passed as flags only, never written to disk or echoed back.
 - **Read-only** — this skill only runs scans and reads results. It never enables WAF, deletes scans, or changes site configuration.
 - **Trial sites** — some scan features may be limited on trial or developer sites. Do not block the workflow; add an `info` finding instead.
 - **Scan results** — when a deep scan finishes, the service sends an email notification. The scan summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.

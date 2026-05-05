@@ -18,20 +18,20 @@ Why not start by asking the user which sub-skills to run? Because most users —
 
 ## Step 2 — Choose scope and depth
 
-The follow-up question depends on the goal. The choices map to concrete sub-skill behavior — quick vs. deep code scan, public-only vs. signed-in pages for the live site monitor, and so on.
+The follow-up question depends on the goal. The choices map to concrete sub-skill behavior — quick vs. deep code scan, and so on.
 
 For code-and-config there are two depth tiers: Quick (OWASP Top Ten ruleset, good balance) and Deep (full security audit ruleset, slower). Three tiers added complexity without clear user benefit — the difference between quick and deep is mainly time, not token cost, since the scanning tools do the heavy lifting outside the context window.
 
-When the user picks "Release readiness" we show all recommended checks as a multi-select list. Every check is described as recommended. The user can deselect any they want to skip (e.g., live site scan blocked by a firewall on this machine) without needing a separate "Custom" step.
+When the user picks "Release readiness" we show all recommended checks as a multi-select list. Every check is described as recommended. The user selects the ones they want to run without needing a separate "Custom" step.
 
 ## Step 3 — Confirm and start
 
 Show a one-line plan in plain language and an explicit time estimate. Examples:
 
 - "I will check your code, your packages, and your browser-side safety settings. This should take a few minutes."
-- "I will scan your live site (signed-in pages included). This may take several minutes. You can keep working while it runs."
+- "I will scan your live site's public pages. This may take several minutes. You can keep working while it runs."
 
-Confirmation matters because some sub-skills are long and require credentials. Surprising the user with an unexpectedly long wait is the fastest way to lose trust.
+Confirmation matters because some sub-skills are long-running. Surprising the user with an unexpectedly long wait is the fastest way to lose trust.
 
 ## Step 4 — Scan in progress
 
@@ -48,7 +48,7 @@ Do not narrate per-rule progress. Do not list every file scanned. The user wants
 
 Show, in chat:
 
-- A one-line headline ("Score: 82/100", or "All clear", or "1 important item to address").
+- A one-line headline ("All clear", or "1 important item to address", or "3 critical and 5 warning findings").
 - A two-line context sentence ("We checked X, Y, Z. We found N important and M smaller issues.").
 - A pointer to the saved HTML report.
 
@@ -56,7 +56,7 @@ Put detail in the report, not in the chat.
 
 ## Step 6 — Findings and remediation
 
-When the user opens the report (Step 5), they see the consolidated view: score, totals, top findings, then per-section sections, then a glossary. Each finding card has the same structure (title, severity, location, why this matters, suggested fix).
+When the user opens the report (Step 5), they see the consolidated view: totals, top findings, then per-section sections, then a glossary. Each finding card has the same structure (title, severity, location, why this matters, suggested fix).
 
 After they have had a moment to look, offer the next action with one question: walk through the criticals now, re-run after changes, or stop here. Pick the option that makes sense based on the current state — if there are zero criticals, the offer to "walk through criticals" should not be the first option.
 

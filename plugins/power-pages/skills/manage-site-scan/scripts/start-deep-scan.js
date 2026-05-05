@@ -6,12 +6,10 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`start-deep-scan.js — Triggers an asynchronous deep scan.
 
 Usage:
-  node start-deep-scan.js --portalId <guid> [--username <u> --password <p>]
+  node start-deep-scan.js --portalId <guid>
 
 Flags:
   --portalId   Admin-API portal identifier (resolved during prerequisites)
-  --username   Test account for signed-in scanning (optional, pair with --password)
-  --password   Password for the test account
   --help       Show this help message
 
 Exit codes:
@@ -24,12 +22,9 @@ Exit codes:
 
 const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
-const body = {};
-if (args.username) body.username = args.username;
-if (args.password) body.password = args.password;
 
 if (!portalId) {
-  fail('Usage: node start-deep-scan.js --portalId <guid> [--username <u> --password <p>]', 1);
+  fail('Usage: node start-deep-scan.js --portalId <guid>', 1);
 }
 
 (async () => {
@@ -40,7 +35,6 @@ if (!portalId) {
     context: ctx,
     method: 'POST',
     path: `/websites/${portalId}/scan/deep/start`,
-    body: Object.keys(body).length ? body : undefined,
   });
 
   if (res.statusCode === 202) {

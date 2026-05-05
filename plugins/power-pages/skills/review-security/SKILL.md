@@ -35,7 +35,7 @@ The conversation always follows the same seven steps. Each step maps to a phase 
 2. **Choose scope and depth** — one follow-up question that depends on step 1
 3. **Confirm and start** — show a one-line plan, give the user a chance to back out
 4. **Scan in progress** — run the matching sub-skills, surface progress
-5. **Results summary** — score, totals, top findings
+5. **Results summary** — totals, top findings
 6. **Findings and remediation** — group findings by section, offer to fix
 7. **Next steps and guidance** — concrete recommendations, link the next action
 
@@ -174,36 +174,14 @@ Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same st
 }
 ```
 
-**For `monitor`:**
-
-```json
-{
-  "questions": [{
-    "question": "Which pages should the scan cover?",
-    "header": "Scope",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Public only",
-        "description": "Pages anyone can see. (Recommended)",
-        "preview": "Scans only pages visible without signing in. Covers most of the site's attack surface.\n\nNo credentials needed."
-      },
-      {
-        "label": "Include signed-in",
-        "description": "Also test pages behind login.",
-        "preview": "Scans both public and authenticated pages. You will need to provide a test username and password.\n\nCredentials are never written to disk."
-      }
-    ]
-  }]
-}
-```
+**For `monitor`:** skip this step — the scan covers public pages automatically.
 
 **For `release`:**
 
 ```json
 {
   "questions": [{
-    "question": "Which checks should run? Deselect any you want to skip.",
+    "question": "Which checks should run? Select the ones you want.",
     "header": "Checks",
     "multiSelect": true,
     "options": [
@@ -259,7 +237,7 @@ Spawn background subagents for `manage-code-scan` and `manage-site-scan` (when s
 
 Spawn background subagents for the remaining selected skills (`manage-http-headers`, `manage-web-application-firewall`, `audit-permissions`). When the goal only includes Wave 1 skills, skip this wave.
 
-**Launch all waves together when possible.** If Wave 1 and Wave 2 subagents are independent (no credential prompts overlap), spawn them all in a single message with multiple `Agent` tool calls so they start concurrently. When credential prompts might interleave (e.g., `manage-site-scan` with signed-in pages), launch Wave 1 first and Wave 2 after Wave 1 subagents have completed their authentication steps.
+**Launch all waves together when possible.** Spawn all Wave 1 and Wave 2 subagents in a single message with multiple `Agent` tool calls so they start concurrently.
 
 **Inline checks (run while subagents work):**
 
@@ -324,15 +302,9 @@ Tell the user that all checks are running in parallel. As each subagent complete
 
 Load every JSON file in `.security-review-tmp/`. Each file should match the [section data format](references/section-data-format.md). Skip files marked `status: "skipped"` after capturing their reason for the per-section placeholder.
 
-### 5.2 Compute totals and score
+### 5.2 Compute totals
 
-- **Totals**: count `critical`, `warning`, `info`, and `pass` findings across all sections.
-- **Score**: when the deployed-site scan section has a numeric score, use it. Otherwise compute one with this shape:
-  - Start from `100`.
-  - Subtract `15` per `critical` finding.
-  - Subtract `5` per `warning` finding.
-  - Subtract `1` per `info` finding.
-  - Floor at `0`. Round to the nearest integer.
+Count `critical`, `warning`, `info`, and `pass` findings across all sections.
 
 ### 5.3 Pick top findings
 
@@ -359,7 +331,6 @@ Write the consolidated data to `.security-review-tmp/security-review-data.json`:
   "SCOPE_LABEL": "<plain-language scope label>",
   "GENERATED_AT": "<YYYY-MM-DD HH:MM>",
   "REVIEW_DATA": {
-    "score": <int|null>,
     "summary": "<2-4 plain-language sentences>",
     "totals": { "critical": 0, "warning": 0, "info": 0, "pass": 0 },
     "topFindings": [ <findingObj>, ... ],
@@ -406,7 +377,7 @@ Open `<DOCS_PATH>` in the user's default browser.
 
 ### 6.3 Step 7 summary
 
-Show a short plain-language summary in the chat: score (if any), counts of critical / warning / info findings, where the report lives. Then offer the next action with `AskUserQuestion`:
+Show a short plain-language summary in the chat: counts of critical / warning / info findings, where the report lives. Then offer the next action with `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
@@ -429,7 +400,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms. The glossary in the final report covers them.
-- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `manage-code-scan` and `manage-site-scan` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work. When credential prompts might interleave, stagger waves to avoid confusion.
+- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `manage-code-scan` and `manage-site-scan` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--data-only` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Glossary always present** — every report includes a Glossary section with at least the terms that appeared in the findings.

@@ -4,7 +4,7 @@ description: >-
   Inspects and configures the security headers a Power Pages code site sends
   to browsers — Content Security Policy, frame and clickjacking protection,
   cross-origin sharing, cookie behavior, and the related advanced site
-  settings. Produces an HTML report that scores the current setup and
+  settings. Produces an HTML report that evaluates the current setup and
   proposes fixes. Use when the user wants to review their site's headers,
   fix CSP errors, allow embedding in another site, control cross-origin
   access, or harden a site against common browser-side attacks — even if
@@ -19,7 +19,7 @@ model: opus
 
 # Manage HTTP Headers
 
-Review and configure the security-related response headers a Power Pages site sends to browsers. The skill reads the site's current configuration, scores it against well-known browser-side hardening practices, and (with the user's confirmation) writes the changes back as Power Pages site setting YAML files.
+Review and configure the security-related response headers a Power Pages site sends to browsers. The skill reads the site's current configuration, evaluates it against well-known browser-side hardening practices, and (with the user's confirmation) writes the changes back as Power Pages site setting YAML files.
 
 The headers and settings covered here:
 
@@ -109,7 +109,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-http-headers/scripts/inspect-headers.j
 
 The script reads every YAML file under `.powerpages-site/site-settings/` and returns a normalized structure listing each header-related setting found (name, value, file path, category) plus a `missing` array of expected settings that have no corresponding YAML file.
 
-### 2.2 Score against safe defaults
+### 2.2 Evaluate against safe defaults
 
 For each setting in `references/header-rules.md`, classify it using these rules. Use the agent's own reasoning (not a script) to interpret values and assign severity — do **not** rely on naive keyword matches.
 

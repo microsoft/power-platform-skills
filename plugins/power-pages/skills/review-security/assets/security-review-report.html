@@ -30,11 +30,6 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
-.score-pill{font-family:var(--mono);font-weight:800;padding:4px 10px;border-radius:14px;font-size:14px;}
-.score-pill.good{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
-.score-pill.warn{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
-.score-pill.bad{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
-
 .layout{display:flex;min-height:calc(100vh - 61px);}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);font-weight:700;padding:14px 22px 6px;}
@@ -61,13 +56,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;box-shadow:var(--shadow-4);}
 .stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;}
 .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
-
-.score-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;display:flex;align-items:center;gap:24px;box-shadow:var(--shadow-4);margin-bottom:20px;}
-.score-circle{width:96px;height:96px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;}
-.score-value{font-size:32px;font-weight:800;font-family:var(--mono);}
-.score-suffix{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;}
-.score-text{flex:1;}
-.score-text h3{margin-top:0;}
 
 .severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;}
 .severity-critical,.severity-high{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
@@ -126,7 +114,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <div class="topbar-sub">__SITE_NAME__ · Generated __GENERATED_AT__</div>
     </div>
   </div>
-  <div id="topbarScore"></div>
 </div>
 
 <div class="layout">
@@ -144,7 +131,6 @@ const REVIEW_DATA = __REVIEW_DATA__;
 
 // REVIEW_DATA shape:
 //   {
-//     score: <0-100 or null>,
 //     summary: "<plain-language summary>",
 //     totals: { critical, warning, info, pass },
 //     topFindings: [ findingObj, ... ],
@@ -164,13 +150,6 @@ const sevBucket = (s) => {
   return s === 'pass' ? 'pass' : 'info';
 };
 const sevLabel = (s) => ({ critical:'CRITICAL', high:'HIGH', warning:'WARNING', medium:'MEDIUM', info:'INFO', low:'LOW', pass:'PASSED' }[s] || s.toUpperCase());
-
-function renderScorePill(score) {
-  if (score === null || score === undefined) return '';
-  const cls = score >= 80 ? 'good' : (score >= 60 ? 'warn' : 'bad');
-  return '<span class="score-pill ' + cls + '">' + score + ' / 100</span>';
-}
-document.getElementById('topbarScore').innerHTML = renderScorePill(REVIEW_DATA.score);
 
 function findingHtml(f, idx) {
   const id = escAttr(f.id || ('f' + idx));
@@ -232,12 +211,6 @@ function overviewHtml() {
   return '<div class="section active" id="tab-overview">' +
     '<h2>Security Review</h2>' +
     '<p class="section-desc">' + esc(GOAL_LABEL || 'Review of ') + ' — ' + esc(SCOPE_LABEL) + '</p>' +
-    (REVIEW_DATA.score !== null && REVIEW_DATA.score !== undefined ?
-      ('<div class="score-card"><div class="score-circle" style="background:' + (REVIEW_DATA.score >= 80 ? 'var(--pass-bg)' : REVIEW_DATA.score >= 60 ? 'var(--warning-bg)' : 'var(--critical-bg)') + ';">' +
-       '<div class="score-value" style="color:' + (REVIEW_DATA.score >= 80 ? 'var(--pass)' : REVIEW_DATA.score >= 60 ? 'var(--warning)' : 'var(--critical)') + '">' + REVIEW_DATA.score + '</div>' +
-       '<div class="score-suffix">/ 100</div></div>' +
-       '<div class="score-text"><h3 style="margin-top:0;">Security score</h3><div style="font-size:13px;color:var(--text-dim);">' + (REVIEW_DATA.score >= 80 ? 'Healthy. Keep on top of the smaller items below.' : REVIEW_DATA.score >= 60 ? 'Some important items need attention.' : 'Several critical items need attention right away.') + '</div></div></div>')
-       : '') +
     '<div class="stats-grid">' +
       '<div class="stat-card"><div class="stat-num" style="color:var(--critical)">' + t.critical + '</div><div class="stat-label">Critical</div></div>' +
       '<div class="stat-card"><div class="stat-num" style="color:var(--warning)">' + t.warning + '</div><div class="stat-label">Warning</div></div>' +

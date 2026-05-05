@@ -21,7 +21,7 @@ Every script in this skill can exit with the following codes. Script-specific co
 - [`start-deep-scan.js`](#start-deep-scanjs)
 - [`poll-deep-scan.js`](#poll-deep-scanjs)
 - [`get-latest-report.js`](#get-latest-reportjs)
-- [`get-security-score.js`](#get-security-scorejs)
+
 - [Common error catalogue](#common-error-catalogue)
 - [Operating notes](#operating-notes)
 
@@ -151,8 +151,7 @@ Triggers a thorough scan asynchronously.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" \
-  --portalId <guid> \
-  [--username <u> --password <p>]
+  --portalId <guid>
 ```
 
 ### Parameters
@@ -160,8 +159,6 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" 
 | Flag           | Required | Description |
 |----------------|----------|-------------|
 | `--portalId`   | Yes      | Admin-API portalId resolved during Phase 1. |
-| `--username`   | No       | Test account for signed-in scanning. Pair with `--password`. |
-| `--password`   | No       | Password for the test account. |
 
 ### Response (stdout)
 
@@ -174,10 +171,6 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" 
 ```json
 { "status": "already-running" }
 ```
-
-### Notes
-
-- Credentials are passed only as flags — never written to disk and never echoed back. Use environment variables on shared machines.
 
 ---
 
@@ -278,43 +271,6 @@ Each alert: `AlertId`, `AlertName`, `Description`, `Mitigation`, `Risk` (0=Infor
 
 ---
 
-## `get-security-score.js`
-
-Fetches the security score for the site and writes the response to a file.
-
-### Usage
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/get-security-score.js" \
-  --portalId <guid> \
-  --output <file>
-```
-
-### Response (stdout summary)
-
-On success:
-
-```json
-{ "status": "ok", "output": "<file>" }
-```
-
-The file holds the service-defined score envelope. When no score is available yet:
-
-```json
-{ "status": "empty", "output": "<file>" }
-```
-
-The file holds `{ "status": "empty" }`.
-
-### Response shape — security score
-
-| Field | Type | Notes |
-|---|---|---|
-| `totalRules` | integer | Rules evaluated |
-| `succeededRules` | integer | Rules that passed |
-
----
-
 ## Common error catalogue
 
 These error codes appear in the service response body and are included in the stderr message when a script exits with code `1`. The exception is `Z003`, which `start-deep-scan.js` handles gracefully as exit `0` with `{ "status": "already-running" }`. Map the codes below to friendly messages before showing them to the user.
@@ -336,5 +292,5 @@ When `website.js --websiteId` returns `null`, the skill stops with a local error
 - The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available.
 - The deep scan is rate-limited per site. Running two starts in quick succession returns `Z003`; treat that as a normal "already running" outcome.
 - When a deep scan finishes, the service sends an email notification to the admin. The report summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
-- Trial sites may have limited scan and score availability. Surface any limitations as an `info` finding rather than an error.
+- Trial sites may have limited scan availability. Surface any limitations as an `info` finding rather than an error.
 - Resolution is a single admin-API call during Phase 1. The rest of the workflow uses the cached portalId, so adding more scan steps later does not multiply the lookup cost.
