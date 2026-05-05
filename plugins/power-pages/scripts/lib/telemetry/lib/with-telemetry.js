@@ -1,17 +1,26 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const os = require("node:os");
 const { getSessionId } = require("./session");
 const { buildScriptStarted, buildScriptCompleted } = require("./events");
 const { fireAndForget } = require("./emit-spawn");
 
+function osFriendlyName(platform) {
+  if (platform === "win32") return "Windows";
+  if (platform === "darwin") return "Mac";
+  if (platform === "linux") return "Linux";
+  return platform;
+}
+
 function commonFields({ pluginName, pluginVersion }) {
   return {
-    plugin_name: pluginName,
-    plugin_version: pluginVersion,
-    session_id: getSessionId(),
-    os_family: process.platform,
-    node_version: "v" + String(process.versions.node).split(".")[0],
+    pluginName,
+    pluginVersion,
+    sessionId: getSessionId(),
+    osName: osFriendlyName(process.platform),
+    osVersion: os.release(),
+    nodeVersion: "v" + String(process.versions.node).split(".")[0],
   };
 }
 
@@ -20,6 +29,7 @@ function defaultEmitter(event, spawnOpts) {
 }
 
 async function withTelemetry(scriptName, asyncFn, opts = {}) {
+  const envelopeName = opts.envelopeName || "";
   const pluginName = opts.pluginName;
   const pluginVersion = opts.pluginVersion;
   const emitter = opts.emitter || defaultEmitter;
@@ -29,15 +39,15 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
 
   try {
     emitter(
-      buildScriptStarted({
+      buildScriptStarted(envelopeName, {
         ...commonFields({ pluginName, pluginVersion }),
-        script_name: scriptName,
-        correlation_id: correlationId,
+        scriptName,
+        correlationId,
       }),
       spawnOpts
     );
   } catch {
-    // fail closed — never let telemetry throw
+    // fail closed
   }
 
   let outcome = "success";
@@ -50,16 +60,16 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
     errorClass = err && err.constructor ? err.constructor.name : "Error";
     caught = err;
   } finally {
-    const duration_ms = Date.now() - startTs;
+    const durationMs = Date.now() - startTs;
     try {
       emitter(
-        buildScriptCompleted({
+        buildScriptCompleted(envelopeName, {
           ...commonFields({ pluginName, pluginVersion }),
-          script_name: scriptName,
-          correlation_id: correlationId,
+          scriptName,
+          correlationId,
           outcome,
-          duration_ms,
-          error_class: errorClass,
+          durationMs,
+          errorClass,
         }),
         spawnOpts
       );
