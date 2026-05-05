@@ -7,7 +7,7 @@ user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas
 ---
 
-# Canvas App
+# Create or Edit a Canvas App
 
 Create or edit a Power Apps canvas app for the following requirements:
 
