@@ -10,11 +10,15 @@ const COMMON_FIELDS = [
   "nodeVersion",
   "orgId",
   "tenantId",
+  "pacCliVersion",
+  "aiAgentName",
+  "aiAgentVersion",
+  "eventObject",
 ];
 
 const SKILL_FIELDS = ["skillName"];
 const SCRIPT_FIELDS = ["scriptName"];
-const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass"];
+const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescription"];
 
 function pick(input, keys) {
   const out = {};

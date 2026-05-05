@@ -8,13 +8,14 @@ const os = require("node:os");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, correlationLib, sessionLib, pacAuthLib;
+let emitSpawn, eventsLib, correlationLib, sessionLib, pacAuthLib, agentInfoLib;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   correlationLib = require(path.join(TELEMETRY_DIR, "lib", "correlation"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
+  agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
 } catch {
   process.exit(0);
 }
@@ -94,6 +95,16 @@ function readStdin() {
     pacAuth = null;
   }
 
+  let agentInfo = {};
+  try {
+    agentInfo = {
+      ...agentInfoLib.readAiAgent(),
+      pacCliVersion: agentInfoLib.readPacCliVersion(),
+    };
+  } catch {
+    agentInfo = {};
+  }
+
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
@@ -106,6 +117,9 @@ function readStdin() {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
+  if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
+  if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
 
   try {
     emitSpawn.fireAndForget(

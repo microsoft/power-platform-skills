@@ -21,8 +21,13 @@
           "data_outcome:Outcome",
           "data_durationMs:DurationMs",
           "data_errorClass:ErrorClass",
+          "data_errorDescription:ErrorDescription",
           "data_orgId:OrgId",
           "data_tenantId:TenantId",
+          "data_pacCliVersion:PacCliVersion",
+          "data_aiAgentName:AiAgentName",
+          "data_aiAgentVersion:AiAgentVersion",
+          "data_eventObject:EventObject",
           "iKey:iKey",
           "ver:Ver"
         ],
@@ -32,8 +37,10 @@
           "SessionId", "CorrelationId",
           "OsName", "OsVersion", "NodeVersion",
           "SkillName", "ScriptName",
-          "Outcome", "DurationMs", "ErrorClass",
+          "Outcome", "DurationMs", "ErrorClass", "ErrorDescription",
           "OrgId", "TenantId",
+          "PacCliVersion", "AiAgentName", "AiAgentVersion",
+          "EventObject",
           "iKey", "Ver"
         ],
         "EnableOriginalMessage": false

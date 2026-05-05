@@ -142,12 +142,75 @@ test("data has stable key set across calls (no key drift)", () => {
     skillName: "x",
     orgId: "o",
     tenantId: "t",
+    pacCliVersion: "1.36.0",
+    aiAgentName: "Claude Code",
+    aiAgentVersion: "2.0.0",
+    eventObject: { detail: "anything" },
   });
   const expectedKeys = [
-    "correlationId", "eventName", "eventType",
+    "aiAgentName", "aiAgentVersion",
+    "correlationId", "eventName", "eventObject", "eventType",
     "nodeVersion", "orgId", "osName", "osVersion",
+    "pacCliVersion",
     "pluginName", "pluginVersion", "sessionId", "severity",
     "skillName", "tenantId",
   ];
   assert.deepEqual(Object.keys(ev.data).sort(), expectedKeys);
+});
+
+test("eventObject passes through as a dynamic object (not stringified)", () => {
+  const eventObject = { region: "us-west", attempt: 3, nested: { a: 1 } };
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: "add-seo",
+    eventObject,
+  });
+  assert.equal(typeof ev.data.eventObject, "object");
+  assert.deepEqual(ev.data.eventObject, eventObject);
+});
+
+test("buildSkillCompleted carries errorDescription", () => {
+  const ev = buildSkillCompleted(ENVELOPE, {
+    ...common,
+    skillName: "add-seo",
+    outcome: "failure",
+    durationMs: 50,
+    errorClass: "TypeError",
+    errorDescription: "Cannot read properties of undefined (reading 'foo')",
+  });
+  assert.equal(ev.data.errorDescription, "Cannot read properties of undefined (reading 'foo')");
+});
+
+test("buildScriptCompleted carries errorDescription", () => {
+  const ev = buildScriptCompleted(ENVELOPE, {
+    ...common,
+    scriptName: "deploy-site",
+    outcome: "failure",
+    durationMs: 12,
+    errorClass: "Error",
+    errorDescription: "boom",
+  });
+  assert.equal(ev.data.errorDescription, "boom");
+});
+
+test("AI agent + PAC CLI version pass through when supplied", () => {
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: "add-seo",
+    aiAgentName: "Claude Code",
+    aiAgentVersion: "2.0.0",
+    pacCliVersion: "1.36.0",
+  });
+  assert.equal(ev.data.aiAgentName, "Claude Code");
+  assert.equal(ev.data.aiAgentVersion, "2.0.0");
+  assert.equal(ev.data.pacCliVersion, "1.36.0");
+});
+
+test("errorDescription dropped from *_started events (only allowed on completed)", () => {
+  const ev = buildSkillStarted(ENVELOPE, {
+    ...common,
+    skillName: "add-seo",
+    errorDescription: "should not be here",
+  });
+  assert.equal(ev.data.errorDescription, undefined);
 });

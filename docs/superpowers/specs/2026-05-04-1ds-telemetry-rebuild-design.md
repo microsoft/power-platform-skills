@@ -107,6 +107,10 @@ Body is `JSON.stringify(envelope) + "\n"` for `application/x-json-stream` framin
 | `nodeVersion` | `NodeVersion` | string | major version, e.g. `"v22"` | ✓ |
 | `orgId` | `OrgId` | string | from active PAC auth profile | only when PAC active |
 | `tenantId` | `TenantId` | string | from active PAC auth profile | only when PAC active |
+| `pacCliVersion` | `PacCliVersion` | string | parsed from `pac --version` (cached per process) | only when PAC CLI installed |
+| `aiAgentName` | `AiAgentName` | string | `"Claude Code"` when `CLAUDECODE=1`; otherwise `AI_AGENT_NAME` env override | only when detected |
+| `aiAgentVersion` | `AiAgentVersion` | string | from Claude Code package.json via `CLAUDE_CODE_EXECPATH`; otherwise `AI_AGENT_VERSION` env override | only when detected |
+| `eventObject` | `EventObject` | dynamic | free-form per-call structured payload — caller-supplied | only when caller provides |
 
 ### Skill-event columns (`skill_started`, `skill_completed`)
 
@@ -127,10 +131,15 @@ Body is `JSON.stringify(envelope) + "\n"` for `application/x-json-stream` framin
 | `outcome` | `Outcome` | `"success"` or `"failure"`. Drives `Severity`. |
 | `durationMs` | `DurationMs` | non-negative integer; clamped to 0 if negative. |
 | `errorClass` | `ErrorClass` | constructor name only (e.g., `"TypeError"`); empty string on success. |
+| `errorDescription` | `ErrorDescription` | first 500 chars of the error's `.message` on failure; empty string on success. |
 
 ### Explicitly NOT sent
 
-File paths, working directories, environment variables (except the telemetry off-switch), error messages, stack traces, prompt text, tool inputs, Dataverse URLs, user names, host names. The `pick()` allowlist in `lib/events.js` is the single chokepoint that enforces this — anything not in the per-event allowlist is dropped at the builder boundary.
+File paths, working directories, environment variables (except the telemetry off-switch), stack traces, prompt text, tool inputs, Dataverse URLs, user names, host names. The `pick()` allowlist in `lib/events.js` is the single chokepoint that enforces this — anything not in the per-event allowlist is dropped at the builder boundary.
+
+`errorDescription` (the error's `.message`) IS sent on failure-outcome events, truncated to 500 characters at the wrapper boundary. Callers throwing errors should treat the message as analytics-visible — keep it short, non-secret, and not stack-trace-shaped. The truncation is a hard cap, not validation.
+
+`eventObject` is a caller-supplied dynamic payload. The privacy boundary moves to the caller for this column — only put data you want surfaced into Kusto. The schema does not validate or scrub its contents.
 
 ### Severity mapping
 
