@@ -1,70 +1,68 @@
 "use strict";
 
-const fs = require("node:fs");
-const path = require("node:path");
-const os = require("node:os");
+const { execFileSync } = require("node:child_process");
 
-const TENANT_KEYS = ["tenantId", "tenantID", "tenant"];
-const ORG_KEYS = ["organizationId", "orgId", "OrgId", "organizationID"];
+// Reads PAC CLI auth state by shelling out to `pac auth who` and parsing the
+// banner output. Matches the convention used by
+// plugins/power-pages/scripts/lib/validation-helpers.js (getPacAuthInfo /
+// getEnvironmentUrl) so telemetry stays consistent with the rest of the repo.
+//
+// PAC's JSON profile files are an internal/undocumented format that varies
+// across versions. The banner output is stable and is what other code paths
+// already parse via the AUTH_KEYS list documented in the VSCode 1DS extension.
+//
+// Best-effort and fail-closed: missing executable, timeout, non-zero exit, or
+// unparseable output all resolve to null. The result is cached per process so
+// repeated hook invocations only fork once.
 
-function defaultProfileDirs() {
-  if (process.platform === "win32") {
-    const localAppData =
-      process.env.LOCALAPPDATA ||
-      path.join(os.homedir(), "AppData", "Local");
-    return [path.join(localAppData, "Microsoft", "PowerAppsCLI", "auth")];
-  }
-  return [
-    path.join(os.homedir(), ".local", "share", "Microsoft", "PowerAppsCLI", "auth"),
-    path.join(os.homedir(), ".config", "Microsoft", "PowerAppsCLI", "auth"),
-  ];
+const TIMEOUT_MS = 3000;
+
+let cache;
+
+function _resetCache() {
+  cache = undefined;
 }
 
-function pickKey(obj, keys) {
-  for (const k of keys) {
-    if (typeof obj[k] === "string" && obj[k]) return obj[k];
-  }
-  return null;
-}
-
-function readProfile(filePath) {
-  try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function listProfileFiles(dir) {
-  try {
-    const entries = fs.readdirSync(dir);
-    return entries
-      .filter((e) => e.endsWith(".json"))
-      .map((e) => path.join(dir, e));
-  } catch {
-    return [];
-  }
+function pickLine(text, label) {
+  // Match "Label:    value" — case-insensitive, trims whitespace.
+  const re = new RegExp("^\\s*" + label + "\\s*:\\s*(\\S.*?)\\s*$", "im");
+  const match = text.match(re);
+  return match ? match[1] : null;
 }
 
 function readPacAuth(opts = {}) {
-  const dirs = opts.profileDir ? [opts.profileDir] : defaultProfileDirs();
-  for (const dir of dirs) {
-    const files = listProfileFiles(dir);
-    for (const file of files) {
-      const parsed = readProfile(file);
-      if (!parsed || typeof parsed !== "object") continue;
-      const tenantId = pickKey(parsed, TENANT_KEYS);
-      const orgId = pickKey(parsed, ORG_KEYS);
-      if (tenantId || orgId) {
-        return {
-          orgId: orgId || "",
-          tenantId: tenantId || "",
-        };
-      }
-    }
+  if (cache !== undefined) return cache;
+  if (opts._exec === false) {
+    cache = null;
+    return null;
   }
-  return null;
+  const exec = typeof opts._exec === "function" ? opts._exec : execFileSync;
+  let output;
+  try {
+    output = exec("pac", ["auth", "who"], {
+      encoding: "utf8",
+      timeout: TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    cache = null;
+    return null;
+  }
+  if (typeof output !== "string" || !output) {
+    cache = null;
+    return null;
+  }
+  const tenantId = pickLine(output, "Tenant Id");
+  const orgId = pickLine(output, "Organization Id");
+  if (!tenantId && !orgId) {
+    cache = null;
+    return null;
+  }
+  cache = {
+    orgId: orgId || "",
+    tenantId: tenantId || "",
+  };
+  return cache;
 }
 
-module.exports = { readPacAuth };
+module.exports = { readPacAuth, _resetCache };
