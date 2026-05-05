@@ -2,22 +2,35 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const crypto = require("node:crypto");
 
 const { detectSlashCommand } = require("./prompt-detector");
 const { buildSkillStarted } = require("./events");
 const { getSessionId } = require("./session");
 const { fireAndForget } = require("./emit-spawn");
+const { readPacAuth } = require("./pac-auth");
 
 function readIkey(telemetryDir) {
   try {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(telemetryDir, "ikey.json"), "utf8")
     );
-    return { ikey: cfg.ikey || "", collectorUrl: cfg.collector_url || "" };
+    return {
+      ikey: cfg.ikey || "",
+      collectorUrl: cfg.collector_url || "",
+      eventStreamName: cfg.event_stream_name || "",
+    };
   } catch {
-    return { ikey: "", collectorUrl: "" };
+    return { ikey: "", collectorUrl: "", eventStreamName: "" };
   }
+}
+
+function osFriendlyName(platform) {
+  if (platform === "win32") return "Windows";
+  if (platform === "darwin") return "Mac";
+  if (platform === "linux") return "Linux";
+  return platform;
 }
 
 function emitSkillStartedFromPrompt(promptText, opts = {}) {
@@ -27,22 +40,36 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     trackedSkills,
     telemetryDir,
     _emit, // test seam; defaults to fireAndForget
+    _readPacAuth, // test seam; defaults to lib/pac-auth
   } = opts;
 
   const skillName = detectSlashCommand(promptText, { pluginName, trackedSkills });
   if (!skillName) return { emitted: false, skillName: null };
 
-  const { ikey, collectorUrl } = readIkey(telemetryDir);
+  const { ikey, collectorUrl, eventStreamName } = readIkey(telemetryDir);
 
-  const event = buildSkillStarted({
-    plugin_name: pluginName,
-    plugin_version: pluginVersion || "unknown",
-    session_id: getSessionId(),
-    os_family: process.platform,
-    node_version: "v" + String(process.versions.node).split(".")[0],
-    skill_name: skillName,
-    correlation_id: crypto.randomUUID(),
-  });
+  const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
+  let pacAuth = null;
+  try {
+    pacAuth = pacReader();
+  } catch {
+    pacAuth = null;
+  }
+
+  const fields = {
+    pluginName,
+    pluginVersion: pluginVersion || "unknown",
+    sessionId: getSessionId(),
+    correlationId: crypto.randomUUID(),
+    osName: osFriendlyName(process.platform),
+    osVersion: os.release(),
+    nodeVersion: "v" + String(process.versions.node).split(".")[0],
+    skillName,
+  };
+  if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
+  if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+
+  const event = buildSkillStarted(eventStreamName, fields);
 
   const emit = typeof _emit === "function" ? _emit : fireAndForget;
   try {
