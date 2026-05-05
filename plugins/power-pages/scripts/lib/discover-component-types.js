@@ -12,10 +12,10 @@
 //
 // Output (JSON to stdout):
 //   {
-//     "websiteComponentType": 10427,      // observed for `powerpagesite` root
-//     "subComponentType": 10426,          // observed for `powerpagecomponent`; only if --powerpageComponentId provided
-//     "siteLanguageComponentType": 10428, // observed for `powerpagesitelanguage`; only if --siteLanguageId provided
-//     "resolved": [{ "objectId": "...", "componentType": 9999 }]  // for --objectIds
+//     "websiteComponentType": <int>,      // for `powerpagesite` root — typically 10427, observed as 10428 in some envs
+//     "subComponentType": <int>,          // for `powerpagecomponent` — typically 10426, observed as 10429; only if --powerpageComponentId provided
+//     "siteLanguageComponentType": <int>, // for `powerpagesitelanguage` — typically 10428, observed as 10430; only if --siteLanguageId provided
+//     "resolved": [{ "objectId": "...", "componentType": <int> }]  // for --objectIds (generic; use this for connection refs, env vars, etc.)
 //   }
 //
 // Exit 0 on success, exit 1 on failure.
@@ -26,6 +26,15 @@
 // solutioncomponent.componenttype. All three must be added to the user
 // solution; missing the language record silently breaks the target site
 // post-auth. See references/solution-api-patterns.md.
+//
+// Why these values are env-specific: Dataverse assigns componenttype IDs to
+// custom unified entities at install time, and the IDs are not stable across
+// tenants. Hard-coded values (e.g. "10427 for powerpagesite") work in the
+// test tenants we developed against but break in fresh tenants where the
+// Power Pages package was installed in a different order. The same applies
+// to other dynamic types — connection references have been observed as
+// 10137 and 10160 in different tenants. Always resolve at runtime via this
+// helper's `--objectIds` parameter.
 
 'use strict';
 

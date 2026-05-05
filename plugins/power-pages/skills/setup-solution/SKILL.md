@@ -222,7 +222,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
   --powerpageComponentId "{anyPowerpageComponentId}" \
   --siteLanguageId "{siteLanguageId}"
 ```
-Capture output as JSON; extract `.websiteComponentType` (~10427 for `powerpagesite`), `.subComponentType` (~10426 for `powerpagecomponent`), and `.siteLanguageComponentType` (~10428 for `powerpagesitelanguage`). The three sibling unified entities each have their own componenttype — site language is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly. See `references/solution-api-patterns.md` for the full 3-entity model.
+Capture output as JSON; extract `.websiteComponentType`, `.subComponentType`, and `.siteLanguageComponentType`. **Use the JSON values returned by the helper exactly as-is — do not substitute "typical" values from documentation.** Observed reference values across tenants include `10426`/`10427`/`10428` and `10429`/`10428`/`10430`, but the actual values vary per environment and must come from this script's runtime query. The three sibling unified entities each have their own componenttype — site language is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly. See `references/solution-api-patterns.md` for the full 3-entity model.
 
 If the script reports the website record is not yet in any solution, stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If `subComponentType` is absent (no sub-components indexed yet), proceed anyway — you will discover all component IDs in Step 5.2.
 
@@ -294,6 +294,34 @@ Same pattern as Query E. Query type-27 `powerpagecomponent` records, discover th
 GET {envUrl}/api/data/v9.2/bots({botId})?$select=name,botid,statecode
 ```
 And discover bot component type via `solutioncomponents`. Store as `botComponents`. If no type-27 records exist, store `botComponents = []` and skip.
+
+**G. Connection references used by cloud flows in this solution:**
+
+Cloud flows reference connectors via `connectionreference` records. These records are separate Dataverse entities; if they aren't in the solution, the solution will export cleanly but **fail to import** in the target environment with a `MissingDependency` / connection-reference validation error. We must enumerate them here and add them in Step 5.6.
+
+Skip this query if Query E returned `cloudFlows = []`.
+
+1. Query connection references owned by this site's publisher:
+   ```
+   GET {envUrl}/api/data/v9.2/connectionreferences
+     ?$filter=startswith(connectionreferencelogicalname,'{publisherPrefix}_')
+     &$select=connectionreferenceid,connectionreferencelogicalname,connectionreferencedisplayname,connectorid
+   ```
+
+2. For each cloud flow (from Query E), parse its `clientdata` JSON (`workflows({workflowId})?$select=clientdata`) to find which `connectionReferenceLogicalName`s it uses. Filter the Query G.1 result to just those references — these are the ones that **must** be in the solution.
+
+3. **Resolve the connection-reference componenttype at runtime** — the value is environment-specific (observed values include `10137` and `10160` across tenants; do NOT hardcode):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+     --envUrl "{envUrl}" --token "{token}" \
+     --websiteRecordId "{websiteRecordId}" \
+     --objectIds "{firstConnectionReferenceId}"
+   ```
+   Read `.resolved[0].componentType` and store as `connectionReferenceComponentType`. If the connection ref is not yet in any solution (`resolved[0].componentType === null`), it has never been added — fall back to passing one ID per call until one resolves, or query a known sibling connection ref. Without a runtime-resolved value, do **not** guess.
+
+   Store the filtered list as `connectionReferences[]`.
+
+If Query G returns no references (the cloud flows don't use connectors, or the publisher prefix doesn't match — rare), store `connectionReferences = []` and skip. Surface a soft warning if cloud flows exist but no matching connection refs were found — the user should verify whether their flows are using connectors that need binding in target envs.
 
 #### Step 5.3 — Categorize Site Settings
 
@@ -437,9 +465,9 @@ If the real-content orphan list (or `missing.siteLanguages`) is non-empty, promp
 
 Collect selections into `adoptedPpcs: [{ id, name, type, typeLabel }]`.
 
-When the user selects, call `AddSolutionComponent` per entry with `AddRequiredComponents: false` and the right `ComponentType`:
-- `subComponentType` (~10426) for `missing.powerpagecomponents` entries
-- `siteLanguageComponentType` (~10428) for `missing.siteLanguages` entries
+When the user selects, call `AddSolutionComponent` per entry with `AddRequiredComponents: false` and the right `ComponentType` (use the values resolved by `discover-component-types.js` in Step 5.1 — do not hardcode):
+- `subComponentType` for `missing.powerpagecomponents` entries
+- `siteLanguageComponentType` for `missing.siteLanguages` entries
 
 Do **not** set `DoNotIncludeSubcomponents: true` — the Dataverse API rejects that flag for non-Entity root components (HTTP 400 `0x80040216`) and it's not needed for these unified-entity rows.
 
@@ -548,7 +576,8 @@ The components array should be built in this order:
 5. **Dataverse tables** — `{ componentType: 1, componentId: MetadataId }`
 6. **Confirmed cloud flows** (from Step 5.5) — `{ componentId: workflowId, componentType: workflowComponentType }` (uses runtime-discovered type)
 7. **Confirmed bot components** — `{ componentId: botId, componentType: botComponentType }` (uses runtime-discovered type)
-8. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: 10373, addRequired: false }`. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
+8. **Connection references used by the confirmed cloud flows** (from Step 5.2 Query G) — one entry per reference: `{ componentId: connectionReferenceId, componentType: connectionReferenceComponentType, addRequired: false }`. Skip if `connectionReferences = []`. Use the **runtime-resolved** `connectionReferenceComponentType` — do **not** hardcode (observed values across tenants include `10137` and `10160`; the value is env-specific). Without these entries, the solution exports cleanly but the target import fails with a `MissingDependency` error — `deploy-pipeline` Phase 6.6.1 will surface it as a "missing connection reference" validation failure.
+9. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: subComponentType, addRequired: false }`. Use the `subComponentType` value resolved by `discover-component-types.js` in Step 5.1 — do **not** hardcode. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
 
 Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
 ```bash
