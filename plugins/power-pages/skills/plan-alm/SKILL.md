@@ -726,7 +726,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
   --data "<projectRoot>/docs/.alm-plan-data.json"
 ```
 
-Delete `docs/.alm-plan-data.json` after success.
+**Keep `docs/.alm-plan-data.json` on disk.** Phases 5 / 6 / 7 / 8 read this file to refresh `hostResolution`, `pipelineMeta`, `validationRuns`, `risks`, and the plan footer after each run step, then re-render `docs/alm-plan.html` so the rendered tabs reflect actual run state (not the pre-run plan). The file is also what `check-alm-plan.js` reads for the Phase 0 ALM-plan gate in `setup-pipeline` / `deploy-pipeline` / `setup-solution` / `export-solution` / `import-solution` / `configure-env-variables` — deleting it makes every downstream skill think no plan exists. Earlier guidance to delete this file after the initial render was incorrect and caused the Pipelines tab + risks list to stay frozen at pre-run state for the lifetime of the plan.
 
 Write `.alm-plan-context.json` to the project root (persists so `setup-solution` can read it):
 ```json
@@ -881,7 +881,16 @@ Invoke the skill:
 /power-pages:setup-pipeline
 ```
 
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then refresh `pipelineMeta` from the freshly-written `.last-pipeline.json` and re-render `docs/alm-plan.html` so the Pipelines tab reflects the actual pipeline name + ACTIVE chip (no `lastDeploy` yet — that fills in after Phase 7 Step A).
+After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then run the post-run plan refresh — this is **not optional**; without it the Pipelines tab stays at "Will be ensured during setup-pipeline" and the risks list keeps surfacing the pre-run NoHost warning even though the host now exists:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase setup-pipeline \
+  --render
+```
+
+This (a) reads `.last-host-check.json` and rewrites `planData.hostResolution` to the post-run state (status flips from `NoHost` to `AvailableUsingCustomHost`, all the `willEnsure*` / `willProvision*` / `chosenEnvUrl` flags clear), (b) reads `.last-pipeline.json` and populates `planData.pipelineMeta` with the actual pipeline name + ID + host URL + stages (no `lastDeploy` yet — that fills in after Phase 7 Step A), (c) drops resolved entries from `planData.risks` (NoHost / *Unbound* / Platform-Host warnings), then (d) re-renders `docs/alm-plan.html`. If the helper exits with `ok:false`, surface the reason — the most likely cause is that `docs/.alm-plan-data.json` is missing (Phase 3 must have written it; the file should never be deleted between phases).
 
 ### Manual path
 
@@ -921,7 +930,16 @@ Invoke the skill:
 
 After completion: mark deploy task as `completed`. Update HTML checklist step to `status-completed`.
 
-**Refresh `pipelineMeta` and re-render the plan.** Re-read `.last-pipeline.json` and `.last-deploy.json` (using the snippet documented in the `pipelineMeta` block above), update `planData.pipelineMeta`, write `docs/.alm-plan-data.json`, and re-render `docs/alm-plan.html` so the Pipelines tab now shows the actual pipeline name, ACTIVE chip, and last-run footer (succeeded/failed status + version + component count). This re-render is cheap and runs once per stage.
+**Refresh the plan after each stage's deploy.** Run the helper:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+The helper reads `.last-deploy.json`, populates `planData.pipelineMeta.lastDeploy` (status, stageName, deployedAt, artifactVersion, componentCount, activationStatus, siteUrl), and re-renders `docs/alm-plan.html`. The Pipelines tab now shows the actual pipeline name + ACTIVE chip + last-run footer (Succeeded / Failed status + version + component count + stage label). Cheap; runs once per stage in the deploy loop.
 
 **Step B — Activate (immediately after deploy for this stage):**
 Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
@@ -953,26 +971,17 @@ If a URL is available, invoke the skill (forwarding the URL as the argument):
 /power-pages:test-site --siteUrl {activatedUrl}
 ```
 
-When `test-site` completes, ingest its `.last-test-site.json` marker file directly into `validationRuns[stageName]` — the file's shape is exactly the validationRuns entry shape (see "validationRuns block" in Phase 3). No transformation needed:
+When `test-site` completes, ingest its `.last-test-site.json` marker into `validationRuns[stageName]` and re-render via the same refresh helper used by other phases:
 
 ```bash
-node -e "
-const fs = require('fs');
-const stage = process.argv[1];
-const planData = JSON.parse(fs.readFileSync('docs/.alm-plan-data.json','utf8'));
-const run = JSON.parse(fs.readFileSync('.last-test-site.json','utf8'));
-planData.validationRuns = planData.validationRuns || {};
-planData.validationRuns[stage] = run;
-fs.writeFileSync('docs/.alm-plan-data.json', JSON.stringify(planData, null, 2));
-" "{stageName}"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase test-site \
+  --stageName "{stageName}" \
+  --render
 ```
 
-Then re-render the plan so the Validation tab updates immediately:
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
-  --output "<projectRoot>/docs/alm-plan.html" \
-  --data "<projectRoot>/docs/.alm-plan-data.json"
-```
+The helper reads `.last-test-site.json`, populates `planData.validationRuns[{stageName}]` with the test outcome (runOutcome, summary counts, categories), and re-renders `docs/alm-plan.html` so the Validation tab updates immediately.
 
 `runOutcome` is set by `test-site` itself (see Phase 6.7a in the test-site skill): `"failed"` when any critical/high failure exists, `"passed-with-warnings"` for any non-critical failure or console errors, `"passed"` otherwise. Trust the value as written — do not re-compute.
 
@@ -1033,9 +1042,16 @@ Mark the "Finalize" task as `in_progress`.
 
 ### 8.1 Update HTML plan status
 
-Update the HTML plan footer via `Edit` tool:
-- Replace `<span class="plan-status">In Execution</span>` with `<span class="plan-status">Completed ✓</span>`
-- Replace the completion timestamp placeholder with the current ISO timestamp
+Run the post-run plan refresh in `finalize` mode and re-render. This sets `planData.PLAN_STATUS = "Completed"` and produces the final HTML with all post-run state (latest hostResolution, pipelineMeta + lastDeploy, validationRuns, status footer) consistent across every tab:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase finalize \
+  --render
+```
+
+If you also need to surface a timestamp in the footer (e.g. plan completion time), apply that via `Edit` tool **after** the re-render — the renderer doesn't currently emit a completion timestamp.
 
 ### 8.2 Run skill tracking
 
