@@ -61,17 +61,30 @@ The envelope name is per-plugin configuration carried alongside the iKey in `ike
 
 ## 3. Per-Plugin Configuration
 
-`ikey.json` gains one new field:
+`ikey.json` carries four fields:
 
 ```json
 {
   "ikey": "<plugin's tenant iKey, write-only identifier>",
   "collector_url": "<region-appropriate OneCollector URL>",
-  "event_stream_name": "PowerPagesPluginEvent"
+  "event_stream_name": "PowerPagesPluginEvent",
+  "disabled": true
 }
 ```
 
 Each adopting plugin sets its own `event_stream_name` to match the registered annotation for its own cluster. The dev-time `shared/telemetry/ikey.json` keeps the placeholder iKey + a placeholder stream name (`"PluginEventStreamPlaceholder"`). The synced plugin copy under `plugins/<plugin>/scripts/lib/telemetry/ikey.json` carries the real plugin-specific values.
+
+### `disabled` — repo-side kill switch
+
+When `disabled` is `true`, the dispatcher exits silently before consent / iKey / placeholder logic — no HTTPS POST, no local JSONL write. This lets the infrastructure code land (so reviewers can audit the wire format, hooks, allowlists, etc.) without emitting any traffic until the tenant-side annotation + Kusto table are provisioned.
+
+Default in committed `ikey.json`: `true`. A single PR flips it to `false` (in either the shared file followed by a re-sync, or directly in a plugin's synced copy) and telemetry resumes. The flag is the very first gate in the dispatcher and overrides every other path.
+
+A test seam env var, `POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH=1`, opens the gate for unit tests that need to exercise the emission paths. Production code never sets it.
+
+The user-side kill switches still work and take precedence regardless of this flag's state:
+- `POWER_PLATFORM_SKILLS_TELEMETRY=0` env var
+- `~/.power-platform-skills/telemetry.json` with `enabled: false`
 
 ---
 
