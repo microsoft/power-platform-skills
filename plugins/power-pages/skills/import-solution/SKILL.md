@@ -9,12 +9,6 @@ user-invocable: true
 argument-hint: "Optional: path to solution zip file"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/import-solution/scripts/validate-import.js"'
-          timeout: 30
 ---
 
 # import-solution

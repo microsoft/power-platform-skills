@@ -9,12 +9,6 @@ user-invocable: true
 argument-hint: "Optional: solution unique name (e.g., 'ContosoSite')"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-solution/scripts/validate-solution.js"'
-          timeout: 30
 ---
 
 # setup-solution

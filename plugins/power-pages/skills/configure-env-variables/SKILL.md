@@ -12,12 +12,6 @@ user-invocable: true
 argument-hint: "Optional: site setting name or env var schema name to pre-select"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/configure-env-variables/scripts/validate-env-variables.js"'
-          timeout: 30
 ---
 
 # configure-env-variables

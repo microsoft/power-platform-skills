@@ -14,12 +14,6 @@ user-invocable: true
 argument-hint: "Optional: 'pipelines' or 'manual' to skip strategy selection"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/validate-plan-alm.js"'
-          timeout: 30
 ---
 
 # plan-alm

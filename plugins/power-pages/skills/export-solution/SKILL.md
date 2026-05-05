@@ -9,12 +9,6 @@ user-invocable: true
 argument-hint: "Optional: 'managed' or 'unmanaged' (default: asks)"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/export-solution/scripts/validate-export.js"'
-          timeout: 30
 ---
 
 # export-solution

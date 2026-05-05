@@ -12,12 +12,6 @@ user-invocable: true
 argument-hint: "Optional: stage name or environment label (e.g. 'staging', 'production') to skip stage selection"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/scripts/validate-deploy-pipeline.js"'
-          timeout: 30
 ---
 
 # deploy-pipeline

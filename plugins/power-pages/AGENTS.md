@@ -44,7 +44,7 @@ references/                    ← Shared reference docs used by multiple skills
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
 skills/
   create-site/
-    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools, hooks)
+    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
     scripts/validate-site.js   ← Node script validating generated sites
@@ -86,7 +86,7 @@ skills/
     SKILL.md                   ← Solution import skill definition
     scripts/validate-import.js ← Validates .last-import.json marker and checks for component failures
   diagnose-deployment/
-    SKILL.md                   ← Deployment diagnostics skill definition (prompt hook only)
+    SKILL.md                   ← Deployment diagnostics skill definition (no validator — no artifacts created)
   setup-pipeline/
     SKILL.md                   ← CI/CD pipeline setup skill (Power Platform Pipelines — full implementation; GitHub/ADO coming soon)
     scripts/validate-pipeline.js ← Validates .last-pipeline.json marker (PP Pipelines) or pipeline YAML (GitHub/ADO)
@@ -143,29 +143,21 @@ User-invocable via `/power-pages:<skill-name>`:
 
 For small mid-cycle changes (one file, one snippet, one site setting) that previously used a separate hotfix solution: instead, run `setup-solution` in sync mode to adopt the modified components into the existing base solution, bump the solution version, and use `deploy-pipeline` to ship. This keeps a single solution lineage (cleaner audit trail, simpler dependency management) and avoids solution sprawl. Power Platform Pipelines computes incremental imports internally, so re-deploying the base after a small fix is fast.
 
-Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
+Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model). Skill-specific `hooks:` blocks are not used — hook registration is centralized.
 
 ### Hooks
 
-Defined in each skill's SKILL.md frontmatter:
+Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner consults the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js`, looks up the validator for the skill that just completed, and invokes it with the current cwd.
 
-- Stop hooks run when a skill session ends. Each skill defines its own hooks so validation only runs in the correct context:
-  - `create-site`: command hook runs `validate-site.js` + prompt hook checks site completeness
-  - `setup-datamodel`: command hook runs `validate-datamodel.js` + prompt hook checks data model completeness
-  - `add-sample-data`: prompt hook checks sample data insertion completeness
-  - `activate-site`: command hook runs `validate-activation.js` + prompt hook checks activation completeness
-  - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
-  - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
-  - `integrate-webapi`: command hook runs `validate-webapi-integration.js` + prompt hook checks integration completeness
-  - `setup-auth`: command hook runs `validate-auth.js` + prompt hook checks auth setup completeness
-  - `setup-solution`: command hook runs `validate-solution.js` + prompt hook checks solution creation completeness
-  - `export-solution`: command hook runs `validate-export.js` + prompt hook checks export completeness
-  - `import-solution`: command hook runs `validate-import.js` + prompt hook checks import completeness
-  - `diagnose-deployment`: prompt hook checks diagnostics completeness (no command hook — no artifacts created)
-  - `setup-pipeline`: command hook runs `validate-pipeline.js` + prompt hook checks .last-pipeline.json completeness (pipelineId, hostEnvUrl, sourceDeploymentEnvironmentId, non-empty stages)
-  - `deploy-pipeline`: command hook runs `validate-deploy-pipeline.js` + prompt hook checks all 6 success conditions (pipeline read, stage selected, package validated, deployment completed, .last-deploy.json written, summary presented)
-  - `plan-alm`: command hook runs `validate-plan-alm.js` + prompt hook checks all 5 success conditions (strategy gathered, docs/alm-plan.html written, plan approved or deferred, skills invoked in sequence, HTML status updated)
-- Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
+To wire a new skill into validation:
+
+1. Write the validator at `skills/<skill>/scripts/validate-<skill>.js` using the `runValidation((cwd) => { ... })` pattern from `scripts/lib/validation-helpers.js`.
+2. Register the skill in `TRACKED_SKILLS` (in `scripts/lib/powerpages-hook-utils.js`) with its `validatorScript` path.
+3. Add test coverage in `scripts/tests/powerpages-hook-utils.test.js` so an unregistered skill is caught in CI.
+
+Skills currently registered with command-backed validators: `activate-site`, `add-cloud-flow`, `add-seo`, `add-server-logic`, `audit-permissions`, `configure-env-variables`, `create-site`, `create-webroles`, `deploy-pipeline`, `ensure-pipelines-host`, `export-solution`, `import-solution`, `integrate-webapi`, `plan-alm`, `setup-auth`, `setup-datamodel`, `setup-pipeline`, `setup-solution`. `add-sample-data`, `diagnose-deployment`, and `test-site` are tracked without command validators (no artifacts to verify).
+
+**Anti-patterns** (see `PLUGIN_DEVELOPMENT_GUIDE.md` for the rationale): do not add `hooks: Stop:` blocks to individual SKILL.md frontmatter — they duplicate the centralized PostToolUse hook and fire too often. Do not use `type: prompt` Stop hooks for skill-completion checks — they create runaway forced-continuation loops.
 
 ### Shared Scripts
 

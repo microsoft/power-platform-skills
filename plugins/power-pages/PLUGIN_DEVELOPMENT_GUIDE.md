@@ -408,7 +408,7 @@ echo '{"reason":"ni-dev — ALM handled by infra"}' > .alm-deferred
 
 PostToolUse on the `Skill` tool fires **once per skill invocation**. Stop fires on **every assistant pause** (including user-input waits — every "Continue?" prompt fires it).
 
-This plugin already uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. The Stop hooks in skill frontmatter are largely redundant with this pattern. New skills should NOT add Stop hooks for completion validation — the centralized PostToolUse already handles it.
+This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. To wire validation for a new skill, register it in the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js` (see `AGENTS.md` → "Hooks" for the registration steps).
 
 #### 4. Skills write explicit status, not just artifact presence
 

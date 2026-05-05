@@ -14,12 +14,6 @@ user-invocable: true
 argument-hint: "Optional: 'power-platform', 'github', or 'ado' to skip platform selection"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-pipeline/scripts/validate-pipeline.js"'
-          timeout: 30
 ---
 
 # setup-pipeline
