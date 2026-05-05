@@ -74,6 +74,7 @@ process.stdin.on('end', async () => {
     const correlationLib = require(path.join(TELEMETRY_DIR, 'lib', 'correlation'));
     const sessionLib = require(path.join(TELEMETRY_DIR, 'lib', 'session'));
     const pacAuthLib = require(path.join(TELEMETRY_DIR, 'lib', 'pac-auth'));
+    const agentInfoLib = require(path.join(TELEMETRY_DIR, 'lib', 'agent-info'));
 
     const ikeyCfg = (() => {
       try {
@@ -112,6 +113,16 @@ process.stdin.on('end', async () => {
       pacAuth = null;
     }
 
+    let agentInfo = {};
+    try {
+      agentInfo = {
+        ...agentInfoLib.readAiAgent(),
+        pacCliVersion: agentInfoLib.readPacCliVersion(),
+      };
+    } catch {
+      agentInfo = {};
+    }
+
     const fields = {
       pluginName: 'power-pages',
       pluginVersion,
@@ -124,9 +135,13 @@ process.stdin.on('end', async () => {
       outcome,
       durationMs: Date.now() - (corr.start_ts || startTs),
       errorClass: '',
+      errorDescription: '',
     };
     if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
     if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+    if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
+    if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
+    if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
 
     emitSpawn.fireAndForget(
       eventsLib.buildSkillCompleted(

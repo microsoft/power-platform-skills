@@ -10,6 +10,7 @@ const { buildSkillStarted } = require("./events");
 const { getSessionId } = require("./session");
 const { fireAndForget } = require("./emit-spawn");
 const { readPacAuth } = require("./pac-auth");
+const { readPacCliVersion, readAiAgent } = require("./agent-info");
 
 function readIkey(telemetryDir) {
   try {
@@ -41,6 +42,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     telemetryDir,
     _emit, // test seam; defaults to fireAndForget
     _readPacAuth, // test seam; defaults to lib/pac-auth
+    _readAgentInfo, // test seam; defaults to lib/agent-info
   } = opts;
 
   const skillName = detectSlashCommand(promptText, { pluginName, trackedSkills });
@@ -56,6 +58,20 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     pacAuth = null;
   }
 
+  const agentReader =
+    typeof _readAgentInfo === "function"
+      ? _readAgentInfo
+      : () => ({
+          ...readAiAgent(),
+          pacCliVersion: readPacCliVersion(),
+        });
+  let agentInfo;
+  try {
+    agentInfo = agentReader() || {};
+  } catch {
+    agentInfo = {};
+  }
+
   const fields = {
     pluginName,
     pluginVersion: pluginVersion || "unknown",
@@ -68,6 +84,9 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
+  if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
+  if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;
 
   const event = buildSkillStarted(eventStreamName, fields);
 

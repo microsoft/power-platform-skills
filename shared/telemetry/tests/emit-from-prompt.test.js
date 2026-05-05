@@ -23,7 +23,7 @@ function mkTelemetryDir({ ikey, collectorUrl, eventStreamName }) {
 
 const TRACKED = { "add-seo": {}, "create-site": {} };
 
-function callWithStub({ promptText, telemetryDir, captured, pacAuth }) {
+function callWithStub({ promptText, telemetryDir, captured, pacAuth, agentInfo }) {
   return emitSkillStartedFromPrompt(promptText, {
     pluginName: "power-pages",
     pluginVersion: "1.2.3",
@@ -34,6 +34,7 @@ function callWithStub({ promptText, telemetryDir, captured, pacAuth }) {
       captured.spawnOpts = spawnOpts;
     },
     _readPacAuth: pacAuth === undefined ? () => null : () => pacAuth,
+    _readAgentInfo: agentInfo === undefined ? () => ({}) : () => agentInfo,
   });
 }
 
@@ -99,6 +100,46 @@ test("populates orgId/tenantId when PAC auth is present", () => {
   });
   assert.equal(captured.event.data.orgId, "22222222-2222-2222-2222-222222222222");
   assert.equal(captured.event.data.tenantId, "11111111-1111-1111-1111-111111111111");
+});
+
+test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is present", () => {
+  const telemetryDir = mkTelemetryDir({
+    ikey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    agentInfo: {
+      aiAgentName: "Claude Code",
+      aiAgentVersion: "2.0.0",
+      pacCliVersion: "1.36.0",
+    },
+  });
+  assert.equal(captured.event.data.aiAgentName, "Claude Code");
+  assert.equal(captured.event.data.aiAgentVersion, "2.0.0");
+  assert.equal(captured.event.data.pacCliVersion, "1.36.0");
+});
+
+test("omits agent fields when agentInfo returns empty values", () => {
+  const telemetryDir = mkTelemetryDir({
+    ikey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    agentInfo: { aiAgentName: "", aiAgentVersion: "", pacCliVersion: "" },
+  });
+  assert.equal(captured.event.data.aiAgentName, undefined);
+  assert.equal(captured.event.data.aiAgentVersion, undefined);
+  assert.equal(captured.event.data.pacCliVersion, undefined);
 });
 
 test("omits orgId/tenantId when PAC auth is absent", () => {

@@ -25,6 +25,11 @@ test("success path emits started + completed with envelope name", async () => {
       envelopeName: ENVELOPE,
       pluginName: "power-pages",
       pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({
+        aiAgentName: "Claude Code",
+        aiAgentVersion: "2.0.0",
+        pacCliVersion: "1.36.0",
+      }),
     }
   );
   assert.equal(result, 42);
@@ -59,6 +64,69 @@ test("failure path emits completed with outcome=failure and severity=Error", asy
   assert.equal(rec.events[1].data.outcome, "failure");
   assert.equal(rec.events[1].data.errorClass, "TypeError");
   assert.equal(rec.events[1].data.severity, "Error");
+  assert.equal(rec.events[1].data.errorDescription, "boom");
+});
+
+test("populates aiAgentName / aiAgentVersion / pacCliVersion from _readAgentInfo", async () => {
+  const rec = recorder();
+  await withTelemetry(
+    "deploy-site",
+    async () => null,
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({
+        aiAgentName: "Claude Code",
+        aiAgentVersion: "2.0.0",
+        pacCliVersion: "1.36.0",
+      }),
+    }
+  );
+  for (const ev of rec.events) {
+    assert.equal(ev.data.aiAgentName, "Claude Code");
+    assert.equal(ev.data.aiAgentVersion, "2.0.0");
+    assert.equal(ev.data.pacCliVersion, "1.36.0");
+  }
+});
+
+test("errorDescription truncated to 500 characters on failure", async () => {
+  const rec = recorder();
+  const longMessage = "x".repeat(800);
+  await assert.rejects(
+    withTelemetry(
+      "deploy-site",
+      async () => {
+        throw new Error(longMessage);
+      },
+      {
+        emitter: rec.emit,
+        envelopeName: ENVELOPE,
+        pluginName: "power-pages",
+        pluginVersion: "1.2.2",
+        _readAgentInfo: () => ({}),
+      }
+    ),
+    Error
+  );
+  assert.equal(rec.events[1].data.errorDescription.length, 500);
+});
+
+test("errorDescription is empty string on success", async () => {
+  const rec = recorder();
+  await withTelemetry(
+    "deploy-site",
+    async () => null,
+    {
+      emitter: rec.emit,
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({}),
+    }
+  );
+  assert.equal(rec.events[1].data.errorDescription, "");
 });
 
 test("started and completed share the same correlationId", async () => {
@@ -71,6 +139,11 @@ test("started and completed share the same correlationId", async () => {
       envelopeName: ENVELOPE,
       pluginName: "power-pages",
       pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({
+        aiAgentName: "Claude Code",
+        aiAgentVersion: "2.0.0",
+        pacCliVersion: "1.36.0",
+      }),
     }
   );
   assert.equal(rec.events[0].data.correlationId, rec.events[1].data.correlationId);
@@ -91,6 +164,11 @@ test("emit is called synchronously before asyncFn starts", async () => {
       envelopeName: ENVELOPE,
       pluginName: "power-pages",
       pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({
+        aiAgentName: "Claude Code",
+        aiAgentVersion: "2.0.0",
+        pacCliVersion: "1.36.0",
+      }),
     }
   );
   assert.equal(asyncFnSeenEventsAtStart, 1);
@@ -122,6 +200,11 @@ test("durationMs is non-negative integer on success", async () => {
       envelopeName: ENVELOPE,
       pluginName: "power-pages",
       pluginVersion: "1.2.2",
+      _readAgentInfo: () => ({
+        aiAgentName: "Claude Code",
+        aiAgentVersion: "2.0.0",
+        pacCliVersion: "1.36.0",
+      }),
     }
   );
   assert.ok(Number.isInteger(rec.events[1].data.durationMs));
