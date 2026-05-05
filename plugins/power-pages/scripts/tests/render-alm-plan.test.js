@@ -1686,6 +1686,133 @@ test('render-alm-plan: checklist step with no tab match renders as plain text (n
   }
 });
 
+test('render-alm-plan: stage cards show envName prominently when present, with URL as a clickable navigation link', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      stages: [
+        { label: 'Dev', type: 'source', envName: 'ni-dev', envUrl: 'https://orgc4f78248.crm5.dynamics.com/' },
+        { label: 'Staging', type: 'target', envName: 'Supplier Portal Staging', envUrl: 'https://orgd6a9894f.crm5.dynamics.com/' },
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Env name renders in the stage-env-name slot for both Overview and Pipelines tab
+    const envNameMatches = html.match(/<div class="stage-env-name">[^<]*<\/div>/g) || [];
+    assert.ok(envNameMatches.some((m) => m.includes('ni-dev')), 'Dev stage card should surface env display name');
+    assert.ok(envNameMatches.some((m) => m.includes('Supplier Portal Staging')), 'Staging stage card should surface env display name');
+    // The same env names should appear in BOTH the Overview pipeline and the Pipelines tab
+    // (i.e. at least 2 occurrences each — once per render site).
+    assert.ok((html.match(/ni-dev/g) || []).length >= 2, 'env name should appear in both Overview and Pipelines tab cards');
+
+    // URL is wrapped in an anchor with target="_blank" so users can click to navigate
+    assert.ok(
+      /<div class="stage-env"><a href="https:\/\/orgc4f78248\.crm5\.dynamics\.com\/" target="_blank"/.test(html),
+      'Stage env URL should be a clickable link opening in a new tab'
+    );
+    assert.ok(
+      /rel="noopener"/.test(html),
+      'Stage env link should set rel="noopener" for tab safety'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: stage cards omit envName slot when name is missing (URL-only fallback)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      stages: [
+        { label: 'Dev', type: 'source', envUrl: 'https://dev.crm.dynamics.com/' },
+        // intentionally no envName
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The stage-env-name slot should NOT appear in the Overview pipeline diagram
+    // when no name is available — leaving the URL alone (older behaviour).
+    const overviewSection = html.slice(html.indexOf('id="tab-overview"'), html.indexOf('id="tab-size"'));
+    assert.ok(!overviewSection.includes('stage-env-name'),
+      'Empty envName must not produce an empty stage-env-name div');
+    // URL still renders, still clickable.
+    assert.ok(/<a href="https:\/\/dev\.crm\.dynamics\.com\/"/.test(html));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: host card surfaces hostEnvName above the URL when present', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://pipelineshost.crm.dynamics.com/',
+        hostEnvName: 'Supplier Portal Pipelines Host',
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.1.0.0',
+        candidatesCount: 1,
+        willEnsureDuringExecution: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Host card should show name first, URL second (clickable).
+    assert.ok(
+      /<div class="card-env-name">Supplier Portal Pipelines Host<\/div>/.test(html),
+      'Host card should lead with the env display name'
+    );
+    assert.ok(
+      /<div class="card-env-url"><a href="https:\/\/pipelineshost\.crm\.dynamics\.com\/" target="_blank" rel="noopener">/.test(html),
+      'Host URL should be a clickable link beneath the name'
+    );
+    // The URL-only "card-value" headline (used when name is missing) should NOT appear
+    // when name IS present — they're mutually exclusive paths.
+    const hostCard = html.slice(html.indexOf('host-card-ok'), html.indexOf('host-card-ok') + 600);
+    assert.ok(!/<div class="card-value">https/.test(hostCard),
+      'When hostEnvName is present, the URL-only card-value path must not also render');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: host card falls back to URL-only when hostEnvName is missing (older planData)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://oldplan.crm.dynamics.com/',
+        // no hostEnvName — simulates planData generated before the field existed
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.0.0.0',
+        candidatesCount: 1,
+        willEnsureDuringExecution: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // Falls back to the original URL-as-headline rendering.
+    assert.ok(/<div class="card-value">https:\/\/oldplan\.crm\.dynamics\.com\/<\/div>/.test(html),
+      'Without hostEnvName, host card should keep the URL-as-headline render');
+    assert.ok(!/<div class="card-env-name">/.test(html),
+      'Empty hostEnvName must not produce an empty card-env-name div');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('render-alm-plan: checklist link onclick reuses the existing data-tab click handler', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');

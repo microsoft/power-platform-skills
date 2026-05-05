@@ -116,7 +116,14 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .pipeline-stage:not(:last-child)::after{content:'';position:absolute;right:-12px;top:50%;transform:translateY(-50%);width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:12px solid var(--border);z-index:2;}
 .pipeline-stage:not(:last-child)::before{content:'';position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:0;height:0;border-top:11px solid transparent;border-bottom:11px solid transparent;border-left:11px solid var(--surface);z-index:3;}
 .stage-name{font-size:14px;font-weight:800;color:var(--text-bright);}
+.stage-env-name{font-size:13px;font-weight:600;color:var(--text);margin-top:6px;line-height:1.3;word-break:break-word;}
 .stage-env{font-size:11px;font-family:var(--mono);color:var(--accent);margin-top:4px;}
+.stage-env a{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;}
+.stage-env a:hover{border-bottom-color:var(--accent);}
+.host-card .card-env-name{font-size:14px;font-weight:600;color:var(--text-bright);margin-bottom:4px;}
+.host-card .card-env-url{font-size:11px;font-family:var(--mono);color:var(--accent);}
+.host-card .card-env-url a{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;}
+.host-card .card-env-url a:hover{border-bottom-color:var(--accent);}
 .stage-active{background:var(--accent-bg);border-color:var(--accent-border);}
 .stage-active .stage-name{color:var(--accent);}
 .pipeline-solution-label{display:flex;align-items:center;gap:10px;margin:22px 0 8px;padding:10px 14px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border);}

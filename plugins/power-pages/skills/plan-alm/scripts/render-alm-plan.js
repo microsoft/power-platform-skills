@@ -106,15 +106,31 @@ function buildOverviewSummary() {
   return msg;
 }
 
-function buildStagesHtml() {
-  return (data.stages || []).map((stage) => {
-    const activeClass = stage.type === 'source' ? 'stage-active' : '';
-    const url = stage.envUrl ? `<div class="stage-env">${escapeHtml(stage.envUrl)}</div>` : '';
-    return `<div class="pipeline-stage ${activeClass}">
-  <div class="stage-name">${escapeHtml(stage.label || '')}</div>
-  ${url}
+// Render a single stage card. Used by both the Overview pipeline diagram and
+// the Pipelines tab body — keeping the card markup in one place ensures the
+// two views stay visually consistent. Layout (top → bottom):
+//   1. stage label  (e.g. "Dev", "Staging", "Production") — large, bold, the
+//      stage's role in the pipeline
+//   2. env display name (e.g. "ni-dev", "Supplier Portal Staging") — medium,
+//      the friendly identifier humans recognize
+//   3. env URL (clickable, opens in new tab) — small, monospace, useful for
+//      one-click jump-to-env without leaving the plan
+function buildStageCardHtml(stage) {
+  const activeClass = stage && stage.type === 'source' ? 'stage-active' : '';
+  const label = escapeHtml(stage?.label || '');
+  const envName = stage?.envName ? `<div class="stage-env-name">${escapeHtml(stage.envName)}</div>` : '';
+  const envUrl = stage?.envUrl
+    ? `<div class="stage-env"><a href="${escapeHtml(stage.envUrl)}" target="_blank" rel="noopener">${escapeHtml(stage.envUrl)}</a></div>`
+    : '';
+  return `<div class="pipeline-stage ${activeClass}">
+  <div class="stage-name">${label}</div>
+  ${envName}
+  ${envUrl}
 </div>`;
-  }).join('\n');
+}
+
+function buildStagesHtml() {
+  return (data.stages || []).map(buildStageCardHtml).join('\n');
 }
 
 function buildRisksHtml() {
@@ -511,10 +527,11 @@ function buildPipelineActiveAnnotations(meta, color) {
 function buildPipelinesHtml() {
   const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387'];
   const stages = Array.isArray(data.stages) ? data.stages : [];
-  const stagesHtml = stages.map((st) => `<div class="pipeline-stage ${st.type === 'source' ? 'stage-active' : ''}">
-    <div class="stage-name">${escapeHtml(st.label || '')}</div>
-    <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
-  </div>`).join('');
+  // Reuse the shared card builder so the Pipelines tab body matches the
+  // Overview pipeline diagram exactly (env name + clickable URL). Without
+  // this the two views drifted — Overview included envName, Pipelines tab
+  // didn't.
+  const stagesHtml = stages.map(buildStageCardHtml).join('');
 
   const meta = data.pipelineMeta && typeof data.pipelineMeta === 'object' ? data.pipelineMeta : null;
   const activeColor = colors[0];
@@ -837,13 +854,22 @@ function buildHostCardHtml(d) {
   const status = String(hr.status);
   if (status.startsWith('AvailableUsing')) {
     const url = hr.hostEnvUrl || '';
+    const name = hr.hostEnvName || '';
     const meta = [];
     if (hr.hostType) meta.push(escapeHtml(hr.hostType));
     if (hr.pipelinesSolutionVersion) meta.push('Pipelines v' + escapeHtml(hr.pipelinesSolutionVersion));
     meta.push('&#10003; Reachable');
+    // When we have the env display name, lead with it (humans recognize names,
+    // not GUIDs in URLs) and demote the URL to a clickable navigation aid.
+    // Falls back to URL-as-headline when name is missing (older planData /
+    // detection paths that didn't capture the BAP displayName).
+    const headline = name
+      ? `<div class="card-env-name">${escapeHtml(name)}</div>
+  <div class="card-env-url"><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>`
+      : `<div class="card-value">${escapeHtml(url)}</div>`;
     return `<div class="card host-card host-card-ok">
   <div class="card-label">Pipelines Host</div>
-  <div class="card-value">${escapeHtml(url)}</div>
+  ${headline}
   <div class="card-meta">${meta.join(' &middot; ')}</div>
 </div>`;
   }

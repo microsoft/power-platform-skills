@@ -91,6 +91,7 @@ function buildHostResolutionFromCheck(check) {
     status: check.resolutionStatus || 'DetectionFailed',
     hostEnvUrl: check.finalHostEnvUrl || null,
     hostEnvId: check.finalHostEnvId || null,
+    hostEnvName: check.finalHostEnvName || null,    // BAP env displayName — surfaces in the renderer's host card so the env is identifiable by name, not by URL alone
     hostType: check.hostType || null,
     pipelinesSolutionVersion: check.pipelinesSolutionVersion || null,
     candidatesCount: check.candidates?.existingCustomHosts?.length || 0,

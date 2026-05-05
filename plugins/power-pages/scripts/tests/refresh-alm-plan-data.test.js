@@ -34,12 +34,14 @@ test('buildHostResolutionFromCheck maps a successful host-check to plan-alm shap
     resolutionStatus: 'AvailableUsingCustomHost',
     finalHostEnvUrl: 'https://orgc4f78248.crm5.dynamics.com/',
     finalHostEnvId: '334f023b-d8eb-e86d-b973-5c6d98170696',
+    finalHostEnvName: 'Supplier Portal Pipelines Host',
     hostType: 'custom',
     pipelinesSolutionVersion: '9.1.0.0',
     actionTaken: 'fast-path-custom-d365projecthost',
   });
   assert.equal(next.status, 'AvailableUsingCustomHost');
   assert.equal(next.hostEnvUrl, 'https://orgc4f78248.crm5.dynamics.com/');
+  assert.equal(next.hostEnvName, 'Supplier Portal Pipelines Host', 'env display name should flow through to plan-alm shape');
   assert.equal(next.hostType, 'custom');
   assert.equal(next.pipelinesSolutionVersion, '9.1.0.0');
   // Post-run flags must all clear so the renderer's "Will be ensured" branch
@@ -48,6 +50,15 @@ test('buildHostResolutionFromCheck maps a successful host-check to plan-alm shap
   assert.equal(next.willProvisionCustom, false);
   assert.equal(next.willUsePpac, false);
   assert.equal(next.chosenEnvUrl, null);
+});
+
+test('buildHostResolutionFromCheck preserves null hostEnvName when the check did not capture it', () => {
+  const next = buildHostResolutionFromCheck({
+    resolutionStatus: 'AvailableUsingCustomHost',
+    finalHostEnvUrl: 'https://x.crm.dynamics.com/',
+    // no finalHostEnvName — older detect runs before the field existed
+  });
+  assert.equal(next.hostEnvName, null, 'Missing displayName should become null, not "undefined" or empty string');
 });
 
 test('buildHostResolutionFromCheck handles null/empty input safely', () => {

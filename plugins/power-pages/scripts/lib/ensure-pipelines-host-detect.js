@@ -182,6 +182,7 @@ async function detect(opts = {}) {
     actionTaken: 'none',
     finalHostEnvUrl: null,
     finalHostEnvId: null,
+    finalHostEnvName: null,         // BAP env displayName — surfaces in plan-alm host card so reviewers see "Supplier Portal Host" instead of just the GUID-y instance URL
     finalHostInstanceApiUrl: null,
     isPlatformHost: false,
     tenantDefaultCustomHostEnvId: null,
@@ -227,6 +228,7 @@ async function detect(opts = {}) {
 
     baseOut.finalHostEnvId = env.envId;
     baseOut.finalHostEnvUrl = env.instanceUrl;
+    baseOut.finalHostEnvName = env.displayName || null;
     baseOut.finalHostInstanceApiUrl = env.instanceApiUrl;
     baseOut.isPlatformHost = env.environmentSku === 'Platform';
 
@@ -283,6 +285,7 @@ async function detect(opts = {}) {
       baseOut.resolutionStatus = 'AvailableUnboundCustomHost';
       baseOut.finalHostEnvId = h.envId;
       baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvName = h.displayName || null;
       baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
       baseOut.isPlatformHost = false;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;
@@ -294,6 +297,7 @@ async function detect(opts = {}) {
       baseOut.resolutionStatus = 'PlatformHostExistsUnbound';
       baseOut.finalHostEnvId = h.envId;
       baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvName = h.displayName || null;
       baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
       baseOut.isPlatformHost = true;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;

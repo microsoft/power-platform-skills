@@ -367,7 +367,9 @@ Options:
 
 If option 4: accept free-text description (via "Other") and build a stage list from the response.
 
-Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the source.
+Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev is always the source.
+
+For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
 
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
