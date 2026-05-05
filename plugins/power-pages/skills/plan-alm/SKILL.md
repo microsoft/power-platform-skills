@@ -247,13 +247,14 @@ Steps:
     ```
     Capture the output as `BAP_TOKEN`. If acquisition fails, set `HOST_RESOLUTION = { status: 'DetectionFailed', error: '<stderr>' }` and skip the detect call.
 
-    Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `.alm-host-resolution.json` is preserved if the script fails mid-write:
+    Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `.alm-host-resolution.json` is preserved if the script fails mid-write. Pass `--skus Production,Sandbox,Trial` so trial-license and developer tenants see their eligible envs in the env-first menu (the helper's default is `Production,Sandbox`; we widen to include Trial here because plan-alm's NoHost branch always offers an existing-env install path that Trial envs can take, even though Trial envs cannot use the create-new fast-path):
     ```bash
     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}" \
       --bapToken "{BAP_TOKEN}" \
       --projectRoot "." \
-      --cacheMaxAgeHours 24 > ./.alm-host-resolution.json.tmp \
+      --cacheMaxAgeHours 24 \
+      --skus Production,Sandbox,Trial > ./.alm-host-resolution.json.tmp \
       && mv ./.alm-host-resolution.json.tmp ./.alm-host-resolution.json
     ```
 

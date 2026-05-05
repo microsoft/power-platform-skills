@@ -257,7 +257,10 @@ async function detect(opts = {}) {
     // Phase 2.5 — no org binding. Tenant-wide enumeration.
     const list = await listTenantEnvs({
       bapToken,
-      skus: skus || ['Production'],
+      // Default to Production+Sandbox so trial-license tenants (Sandbox-only)
+      // still see eligible existing envs in the env-first menu. See
+      // list-tenant-envs.js DEFAULT_SKUS for rationale.
+      skus: skus || ['Production', 'Sandbox'],
       maxEnvsToProbe: maxEnvsToProbe || undefined,
       firstHitWins: true,
       includeName,

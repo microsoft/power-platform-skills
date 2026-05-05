@@ -272,10 +272,10 @@ Steps:
 
    **Pre-filter** (avoid probing every env in large tenants — recon found tenants with 1000+ envs):
    - Skip envs without Dataverse (`linkedEnvironmentMetadata.instanceApiUrl == null`).
-   - Skip envs not in `--skus` (default: `Production` only — covers Custom Hosts and PE; can pass `Production,Sandbox` to widen). PE always reports `environmentSku === 'Platform'` and is included regardless.
+   - Skip envs not in `--skus` (default: `Production,Sandbox` — both are valid hosts for the Pipelines app via Phase 4.B install-on-existing). PE always reports `environmentSku === 'Platform'` and is included regardless. Pass `--skus Production,Sandbox,Trial` to include Trial envs (eligible for app-install via 4.B but **not** for env-create via 4.A — Trial-license tenants get `NotEnoughCapacity_HasTrialLicense` from env-create).
    - Sort remaining by `lastModifiedTime` desc.
    - Cap at `--maxEnvsToProbe` (default 50; covers the typical-tenant 80% case in <5s with 10-concurrent).
-   - If cap is reached and no host found, surface a warning: `"Scanned N of M envs (filter: Production, sorted by lastModifiedTime). Pass --maxEnvsToProbe N+ or --skus Production,Sandbox to widen."`
+   - If cap is reached and no host found, surface a warning: `"Scanned N of M envs (filter: Production+Sandbox, sorted by lastModifiedTime). Pass --maxEnvsToProbe N+ or --skus Production,Sandbox,Trial to widen."`
 
    **Probe query** (single query covers presence-check AND version-capture):
    ```
@@ -413,7 +413,7 @@ The prompt asks the user to pick the **host environment** first (option 1's nest
 
 **Step 1: build the eligible-env list and apply role labels.**
 
-Take `RESOLUTION.candidates.eligibleForAppInstall[]` from Phase 2 (envs with Dataverse, caller has access, Pipelines NOT yet installed, sku ∈ {Production, Sandbox}).
+Take `RESOLUTION.candidates.eligibleForAppInstall[]` from Phase 2 (envs with Dataverse, caller has access, Pipelines NOT yet installed, sku ∈ default filter — `{Production, Sandbox}`; widen to `Production,Sandbox,Trial` via `--skus` for trial-license tenants).
 
 For each entry, decorate with project-context labels at presentation time. Match by **URL origin** (lowercase, trailing slash stripped, path/query ignored). Multiple labels join with ` · `.
 
@@ -428,7 +428,13 @@ Envs with no role match show without a label.
 
 **Step 2: check eligibility-list emptiness.**
 
-If the list has zero entries after the filters above, **drop option 1 from the prompt entirely** (no "list of nothing" dead-end). Prompt collapses to the 3-option variant shown below; renumber accordingly.
+If the list has zero entries after the filters above, **first try widening the SKU filter to include Trial** before collapsing the prompt. Re-invoke `ensure-pipelines-host-detect.js` with `--skus Production,Sandbox,Trial` (one extra round-trip; cached after the first probe). If Trial envs surface, present them in option 1 with a *(Trial)* tag — they're eligible for the install-on-existing path (4.B) even though they cannot use the env-create fast-path (4.A would 409 on a trial-license tenant).
+
+If the widened list is **still** zero, drop option 1 from the prompt — but always print the SKU-filter detail so the user can override:
+
+> *"No existing environments matched the SKU filter (Production, Sandbox, Trial). If you have an env in this tenant that should host Pipelines, pick option N+1 (Other → paste URL) on the next prompt or run `--skus <comma-list>` to widen further. Otherwise, options:"*
+
+Then collapse to the 3-option variant shown below; renumber accordingly.
 
 **Step 3: present the prompt.**
 
