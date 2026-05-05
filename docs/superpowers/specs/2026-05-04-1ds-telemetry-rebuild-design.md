@@ -93,7 +93,7 @@ Body is `JSON.stringify(envelope) + "\n"` for `application/x-json-stream` framin
 
 ### Common columns (every event)
 
-| Wire key (camelCase) | Kusto column | Type | Source | Always populated |
+| Wire key (camelCase) | Kusto column | Kusto type | Source | Always populated |
 |---|---|---|---|---|
 | `eventName` | `EventName` | string | per-event identifier | ✓ |
 | `eventType` | `EventType` | string | always `"Trace"` | ✓ |
@@ -110,7 +110,7 @@ Body is `JSON.stringify(envelope) + "\n"` for `application/x-json-stream` framin
 | `pacCliVersion` | `PacCliVersion` | string | parsed from `pac --version` (cached per process) | only when PAC CLI installed |
 | `aiAgentName` | `AiAgentName` | string | `"Claude Code"` when `CLAUDECODE=1`; otherwise `AI_AGENT_NAME` env override | only when detected |
 | `aiAgentVersion` | `AiAgentVersion` | string | from Claude Code package.json via `CLAUDE_CODE_EXECPATH`; otherwise `AI_AGENT_VERSION` env override | only when detected |
-| `eventInfo` | `EventInfo` | dynamic (Kusto JSON) | free-form per-call structured payload — caller-supplied | only when caller provides |
+| `eventInfo` | `EventInfo` | dynamic | free-form per-call structured payload (Kusto JSON column) — caller-supplied | only when caller provides |
 
 ### Skill-event columns (`skill_started`, `skill_completed`)
 
@@ -126,12 +126,12 @@ Body is `JSON.stringify(envelope) + "\n"` for `application/x-json-stream` framin
 
 ### Completion-event columns (`*_completed`)
 
-| Wire key | Kusto column | Notes |
-|---|---|---|
-| `outcome` | `Outcome` | `"success"` or `"failure"`. Drives `Severity`. |
-| `durationMs` | `DurationMs` | non-negative integer; clamped to 0 if negative. |
-| `errorClass` | `ErrorClass` | constructor name only (e.g., `"TypeError"`); empty string on success. |
-| `errorDescription` | `ErrorDescription` | first 500 chars of the error's `.message` on failure; empty string on success. |
+| Wire key | Kusto column | Kusto type | Notes |
+|---|---|---|---|
+| `outcome` | `Outcome` | string | only `"success"` or `"failure"` accepted; other values dropped. Drives `Severity`. |
+| `durationMs` | `DurationMs` | int | non-negative integer; non-finite/negative clamped to 0; absent (null) when caller omits. |
+| `errorClass` | `ErrorClass` | string | constructor name only (e.g., `"TypeError"`); empty string on success. |
+| `errorDescription` | `ErrorDescription` | string | first 500 chars of the error's `.message` on failure; empty string on success. |
 
 ### Explicitly NOT sent
 
@@ -140,6 +140,21 @@ File paths, working directories, environment variables (except the telemetry off
 `errorDescription` (the error's `.message`) IS sent on failure-outcome events, truncated to 500 characters at the wrapper boundary. Callers throwing errors should treat the message as analytics-visible — keep it short, non-secret, and not stack-trace-shaped. The truncation is a hard cap, not validation.
 
 `eventInfo` is a caller-supplied JSON payload (Kusto column type `dynamic`). The privacy boundary moves to the caller for this column — only put data you want surfaced into Kusto. The schema does not validate or scrub its contents. Queryable directly via dot-path: `where EventInfo.someKey == "..."`.
+
+### Type-safety guarantees at the builder boundary
+
+`lib/events.js` enforces these rules per field via the `FIELD_TYPES` map and the type-aware `pick()`. The wire payload never carries values whose JSON type would mismatch the declared Kusto column type.
+
+| Declared type | Coercion / validation | Drop conditions | Default when dropped |
+|---|---|---|---|
+| `string` | Pass through any `string` (including empty `""`). | Non-strings (numbers, objects, arrays, booleans, etc.). | Field absent → Kusto null. |
+| `int` | `Number(v)` then `Math.floor()`. Negative or non-finite values clamp to `0`. | None — every value either coerces or clamps. | Caller-omitted → field absent → Kusto null. |
+| `object` (`dynamic`) | Pass through plain objects and arrays only. | Strings, numbers, booleans, `Date`, `RegExp`, `Map`, `Set`, `null`. | Field absent → Kusto null. |
+| `enum:a\|b\|c` | Accept only the listed strings exactly. | Anything else (including non-strings). | Field absent → Kusto null. |
+
+`null` and `undefined` are dropped uniformly across every type. This is the only way the wire payload can be missing a field — bad data never hits Kusto with the wrong JSON type.
+
+Why empty strings are deliberately allowed for `string` columns: `errorClass` and `errorDescription` use empty string `""` as a "no failure context" signal, distinguishable from "field never set" (which would be Kusto null). Analytics queries can use `where ErrorClass != ""` to mean "failure events only," which is more reliable than checking for null on a column that's also populated for success-completed events.
 
 ### Severity mapping
 
