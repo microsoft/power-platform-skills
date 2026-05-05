@@ -6,12 +6,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const {
-  approve, block, runValidation,
-  findProjectRoot, getAuthToken, getEnvironmentUrl, makeRequest,
-} = require('../../../scripts/lib/validation-helpers');
+const { approve, block, runValidation, findProjectRoot, getAuthToken, getEnvironmentUrl, makeRequest, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
+  if (readDeferralMarker(findProjectRoot(cwd) || cwd)) return approve();  // ALM deferred — silent-approve.
   const projectRoot = findProjectRoot(cwd);
 
   // Not a setup-solution session — no project root found

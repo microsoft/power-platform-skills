@@ -1114,12 +1114,15 @@ test('render-alm-plan: failed validationRun escalates Test step status from comp
     const html = fs.readFileSync(outputPath, 'utf8');
 
     const idx = html.indexOf('Test site in Staging');
-    const stepCtx = html.slice(idx - 200, idx + 200);
+    // Lookback widened from 200 → 500 because the step name is now wrapped in
+    // a <a class="checklist-link"> anchor (~100 chars of extra markup before
+    // the literal step name) so the wrapper div is further upstream.
+    const stepCtx = html.slice(idx - 500, idx + 500);
     // Status modifier on the wrapper div should be status-warning, not
     // status-completed, when the run failed.
     assert.ok(/checklist-item status-warning/.test(stepCtx),
       'A failed run should escalate the step status from completed to warning');
-    assert.ok(/test-result-fail">FAILED</.test(html.slice(idx, idx + 1200)),
+    assert.ok(/test-result-fail">FAILED</.test(html.slice(idx, idx + 1500)),
       'Failed run should render the FAILED badge in the substep');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1289,6 +1292,549 @@ test('render-alm-plan: pipelineMeta.reusedByWiring renders the reused-name annot
       'Should also surface the requested name so reviewers see why the actual name differs');
     assert.ok(!/Last run:/.test(html),
       'Should not render a "Last run:" footer when lastDeploy is null');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Env Variables tab + Overview stat reconcile with sizeAnalysis.envVarCount ─
+// Regression: a plan generated with sizeAnalysis.envVarCount.value > 0 but an
+// empty envVars[] array previously showed three contradictory views — Overview
+// stat "0", size signal "5", and tab "No env var definitions detected", while
+// the agent injected "(5 detected)" into the warning. Renderer should reconcile
+// these by falling back to the size estimator's count when per-variable details
+// haven't been enumerated yet.
+
+test('render-alm-plan: Env Variables tab shows count-aware info note when envVars[] empty but sizeAnalysis count > 0', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 5, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // The envvars tab section should NOT show the "no detections" neutral note
+    const tabStart = html.indexOf('id="tab-envvars"');
+    const tabEnd = html.indexOf('id="tab-solutions"');
+    assert.ok(tabStart !== -1 && tabEnd !== -1, 'Both tab markers must exist');
+    const envvarsSection = html.slice(tabStart, tabEnd);
+
+    assert.ok(
+      !envvarsSection.includes('No environment variable definitions detected'),
+      'Tab must not show the "no detections" copy when sizeAnalysis count > 0'
+    );
+    assert.ok(
+      /5 environment variable definitions detected/.test(envvarsSection),
+      'Tab should show the count from sizeAnalysis.envVarCount.value'
+    );
+    assert.ok(
+      /class="note-box info"/.test(envvarsSection),
+      'Count-aware note should use the info class, not neutral'
+    );
+    assert.ok(
+      /configure-env-variables/.test(envvarsSection) && /deploy-pipeline/.test(envvarsSection),
+      'Note should point to the skills that will enumerate details and collect per-stage values'
+    );
+
+    // Overview stat card must reflect the same count, not "0"
+    const statMatch = envvarsSection ? html.match(/<div class="stat-num"[^>]*>(\d+)<\/div><div class="stat-label">Env Variables<\/div>/) : null;
+    assert.ok(statMatch, 'Overview Env Variables stat card must be present');
+    assert.equal(statMatch[1], '5', 'Overview stat should fall back to sizeAnalysis count when envVars[] is empty');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab still shows neutral note when envVars[] empty AND sizeAnalysis count is 0', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 0, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('No environment variable definitions detected'),
+      'When the count is also 0, the original neutral copy still applies'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab renders the per-variable table when envVars[] is populated (count fallback inactive)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [
+        { schemaName: 'cr_LocalLoginEnabled', type: 'Boolean', siteSetting: 'Authentication/Local/Enabled', defaultValue: 'true' },
+        { schemaName: 'cr_ApiBaseUrl', type: 'String', siteSetting: 'Api/BaseUrl', defaultValue: 'https://dev.api' },
+      ],
+      sizeAnalysis: {
+        totalSizeMB: { value: 2.7, tier: 'green' },
+        componentCount: { value: 286, tier: 'green' },
+        schemaAttrCount: { value: 100, tier: 'green' },
+        tableCount: { value: 5, tier: 'green' },
+        webFilesAggregateMB: { value: 1.0, tier: 'green' },
+        envVarCount: { value: 5, tier: 'green' },
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // Per-variable table renders, neither neutral nor count-info note appears.
+    assert.ok(html.includes('cr_LocalLoginEnabled'), 'Per-variable schema name should appear in the table');
+    assert.ok(html.includes('cr_ApiBaseUrl'), 'Second per-variable schema name should appear');
+    assert.ok(!html.includes('No environment variable definitions detected'), 'Neutral note must not appear');
+    assert.ok(!/\d+ environment variable definitions detected/.test(html), 'Count-info note must not appear when table renders');
+
+    // Overview stat reflects envVars.length, not sizeAnalysis.envVarCount.value
+    const statMatch = html.match(/<div class="stat-num"[^>]*>(\d+)<\/div><div class="stat-label">Env Variables<\/div>/);
+    assert.ok(statMatch, 'Overview stat card must be present');
+    assert.equal(statMatch[1], '2', 'Overview stat should reflect envVars[].length when populated, not sizeAnalysis count');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── NoHost host card reflects the env-first choice from plan-alm Phase 2 Q4 ─
+// Regression: the plan-alm Q4 NoHost prompt was changed to surface an env-first
+// menu (install on existing / create new / PPAC / switch to manual) instead of
+// a simple yes/no provisioning confirmation. The renderer's host card text
+// must agree with the user's choice, otherwise the rendered plan misrepresents
+// what setup-pipeline will actually do.
+
+test('render-alm-plan: NoHost host card reflects chosenEnvUrl when user picked existing env', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        hostEnvId: null,
+        hostType: null,
+        pipelinesSolutionVersion: null,
+        candidatesCount: 2,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        willUsePpac: false,
+        chosenEnvUrl: 'https://orgc4f78248.crm5.dynamics.com/',
+        userChoseDeferToSetupPipeline: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0, 'Expected exit 0');
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      html.includes('Will install Pipelines app on existing env'),
+      'Card should describe the existing-env install path'
+    );
+    assert.ok(
+      html.includes('orgc4f78248.crm5.dynamics.com'),
+      'Card should surface the chosen env URL'
+    );
+    assert.ok(
+      !html.includes('Will provision new Custom Host'),
+      'Card must not say "provision new" when user picked an existing env'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: NoHost host card reflects willUsePpac when user picked PPAC manual', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: false,
+        willUsePpac: true,
+        chosenEnvUrl: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      /Will create new Custom Host via PPAC manual flow/.test(html),
+      'Card should describe the PPAC manual flow'
+    );
+    assert.ok(
+      !html.includes('D365_ProjectHost'),
+      'Card must not mention the env-create template when PPAC manual is the chosen path'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: NoHost host card defaults to provision-new when no flags carry the choice', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionCustom: true,
+        willUsePpac: false,
+        chosenEnvUrl: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      /Will provision new Custom Host with <code>D365_ProjectHost<\/code> template/.test(html),
+      'Card should fall back to the create-new description when willProvisionCustom is true'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ── Execution checklist step names link to the relevant tab ────────────────
+// The Execution Checklist tab lists steps but, before this change, was a
+// dead-end — the step labels were inert text. Each step now wraps its name in
+// an anchor that triggers the existing data-tab click handler so the user can
+// jump directly to the tab that has the actual run details.
+
+function checklistMatchFor(html, stepName, expectedTab) {
+  const escaped = stepName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const linkPattern = new RegExp(
+    `<a class="checklist-link"\\s+href="#tab-${expectedTab}"[^>]*data-tab=&quot;${expectedTab}&quot;[^>]*>${escaped}<\\/a>`,
+    's'
+  );
+  return linkPattern.test(html);
+}
+
+test('render-alm-plan: checklist step "Setup solution" links to the Solutions tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup solution', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Setup solution', 'solutions'),
+      'Setup solution should be wrapped in a checklist-link to tab-solutions');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Setup pipeline" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup pipeline', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Setup pipeline', 'pipelines'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Deploy via pipeline to Staging" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Deploy via pipeline to Staging', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Deploy via pipeline to Staging', 'pipelines'),
+      'Deploy step should link to Pipelines tab regardless of stage suffix');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Test site in Staging" links to the Validation tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Test site in Staging', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Test site in Staging', 'validation'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Activate site in Staging" links to the Pipelines tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Activate site in Staging', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Activate site in Staging', 'pipelines'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Import to Production" links to the Solutions tab (manual path)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      STRATEGY: 'manual',
+      steps: [{ name: 'Import to Production', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Import to Production', 'solutions'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step "Finalize" links to the Overview tab', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Finalize', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(checklistMatchFor(html, 'Finalize', 'overview'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist step with no tab match renders as plain text (no link)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Unmapped custom step', status: 'pending' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The step name should appear, but NOT inside a checklist-link anchor.
+    assert.ok(html.includes('Unmapped custom step'), 'Step name still rendered');
+    assert.ok(
+      !/<a class="checklist-link"[^>]*>Unmapped custom step<\/a>/.test(html),
+      'Unmapped step should not be wrapped in a checklist-link'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: stage cards show envName prominently when present, with URL as a clickable navigation link', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      stages: [
+        { label: 'Dev', type: 'source', envName: 'ni-dev', envUrl: 'https://orgc4f78248.crm5.dynamics.com/' },
+        { label: 'Staging', type: 'target', envName: 'Supplier Portal Staging', envUrl: 'https://orgd6a9894f.crm5.dynamics.com/' },
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Env name renders in the stage-env-name slot for both Overview and Pipelines tab
+    const envNameMatches = html.match(/<div class="stage-env-name">[^<]*<\/div>/g) || [];
+    assert.ok(envNameMatches.some((m) => m.includes('ni-dev')), 'Dev stage card should surface env display name');
+    assert.ok(envNameMatches.some((m) => m.includes('Supplier Portal Staging')), 'Staging stage card should surface env display name');
+    // The same env names should appear in BOTH the Overview pipeline and the Pipelines tab
+    // (i.e. at least 2 occurrences each — once per render site).
+    assert.ok((html.match(/ni-dev/g) || []).length >= 2, 'env name should appear in both Overview and Pipelines tab cards');
+
+    // URL is wrapped in an anchor with target="_blank" so users can click to navigate
+    assert.ok(
+      /<div class="stage-env"><a href="https:\/\/orgc4f78248\.crm5\.dynamics\.com\/" target="_blank"/.test(html),
+      'Stage env URL should be a clickable link opening in a new tab'
+    );
+    assert.ok(
+      /rel="noopener"/.test(html),
+      'Stage env link should set rel="noopener" for tab safety'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: stage cards omit envName slot when name is missing (URL-only fallback)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      stages: [
+        { label: 'Dev', type: 'source', envUrl: 'https://dev.crm.dynamics.com/' },
+        // intentionally no envName
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The stage-env-name slot should NOT appear in the Overview pipeline diagram
+    // when no name is available — leaving the URL alone (older behaviour).
+    const overviewSection = html.slice(html.indexOf('id="tab-overview"'), html.indexOf('id="tab-size"'));
+    assert.ok(!overviewSection.includes('stage-env-name'),
+      'Empty envName must not produce an empty stage-env-name div');
+    // URL still renders, still clickable.
+    assert.ok(/<a href="https:\/\/dev\.crm\.dynamics\.com\/"/.test(html));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: host card surfaces hostEnvName above the URL when present', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://pipelineshost.crm.dynamics.com/',
+        hostEnvName: 'Supplier Portal Pipelines Host',
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.1.0.0',
+        candidatesCount: 1,
+        willEnsureDuringExecution: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+
+    // Host card should show name first, URL second (clickable).
+    assert.ok(
+      /<div class="card-env-name">Supplier Portal Pipelines Host<\/div>/.test(html),
+      'Host card should lead with the env display name'
+    );
+    assert.ok(
+      /<div class="card-env-url"><a href="https:\/\/pipelineshost\.crm\.dynamics\.com\/" target="_blank" rel="noopener">/.test(html),
+      'Host URL should be a clickable link beneath the name'
+    );
+    // The URL-only "card-value" headline (used when name is missing) should NOT appear
+    // when name IS present — they're mutually exclusive paths.
+    const hostCard = html.slice(html.indexOf('host-card-ok'), html.indexOf('host-card-ok') + 600);
+    assert.ok(!/<div class="card-value">https/.test(hostCard),
+      'When hostEnvName is present, the URL-only card-value path must not also render');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: host card falls back to URL-only when hostEnvName is missing (older planData)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'AvailableUsingCustomHost',
+        hostEnvUrl: 'https://oldplan.crm.dynamics.com/',
+        // no hostEnvName — simulates planData generated before the field existed
+        hostType: 'custom',
+        pipelinesSolutionVersion: '9.0.0.0',
+        candidatesCount: 1,
+        willEnsureDuringExecution: false,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // Falls back to the original URL-as-headline rendering.
+    assert.ok(/<div class="card-value">https:\/\/oldplan\.crm\.dynamics\.com\/<\/div>/.test(html),
+      'Without hostEnvName, host card should keep the URL-as-headline render');
+    assert.ok(!/<div class="card-env-name">/.test(html),
+      'Empty hostEnvName must not produce an empty card-env-name div');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: checklist link onclick reuses the existing data-tab click handler', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+  try {
+    const data = makeValidData({
+      steps: [{ name: 'Setup pipeline', status: 'completed' }],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+    const html = fs.readFileSync(outputPath, 'utf8');
+    // The onclick must call the same selector pattern the template's footer
+    // script listens on (.nav-btn[data-tab="..."]). If the renderer ever
+    // diverges from that selector, sidebar tabs and checklist links will
+    // disagree and one of them will silently break.
+    assert.ok(
+      /\.nav-btn\[data-tab=&quot;pipelines&quot;\]/.test(html),
+      'onclick should query .nav-btn[data-tab="pipelines"] (matches template footer handler)'
+    );
+    assert.ok(
+      /window\.scrollTo\(0,0\)/.test(html),
+      'onclick should also scroll to top so the user lands at the tab header'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

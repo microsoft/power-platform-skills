@@ -44,7 +44,7 @@ references/                    ← Shared reference docs used by multiple skills
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
 skills/
   create-site/
-    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools, hooks)
+    SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
     scripts/validate-site.js   ← Node script validating generated sites
@@ -86,22 +86,29 @@ skills/
     SKILL.md                   ← Solution import skill definition
     scripts/validate-import.js ← Validates .last-import.json marker and checks for component failures
   diagnose-deployment/
-    SKILL.md                   ← Deployment diagnostics skill definition (prompt hook only)
+    SKILL.md                   ← Deployment diagnostics skill definition (no validator — no artifacts created)
   setup-pipeline/
     SKILL.md                   ← CI/CD pipeline setup skill (Power Platform Pipelines — full implementation; GitHub/ADO coming soon)
     scripts/validate-pipeline.js ← Validates .last-pipeline.json marker (PP Pipelines) or pipeline YAML (GitHub/ADO)
   deploy-pipeline/
     SKILL.md                   ← Deployment run skill — creates stage runs, validates package, deploys via PP Pipelines API
     scripts/validate-deploy-pipeline.js ← Validates .last-deploy.json marker for required fields; blocks on Failed status
-  hotfix-solution/
-    SKILL.md                   ← Hotfix solution skill definition
-    scripts/validate-hotfix.js ← Validates .last-hotfix.json marker for required fields and component count
   plan-alm/
     SKILL.md                   ← ALM orchestrator skill definition (8-phase: detect, gather, plan, approve, execute skills in sequence)
     assets/alm-plan-template.html ← HTML template with __PLACEHOLDER__ tokens for the ALM plan document
     scripts/render-alm-plan.js ← Renders alm-plan-template.html from planData JSON (stages diagram, checklist, risks)
     scripts/validate-plan-alm.js ← Validates docs/alm-plan.html exists and is > 500 bytes; gracefully exits 0 if not a plan-alm session
 ```
+
+## ALM intent routing — `plan-alm` is the front door
+
+When the user expresses an **ALM intent** in natural language — *promote this site to {env}, ship to staging, deploy to production, set up CI/CD, move to next environment, push out a release, run the pipeline, export and import to staging* — invoke **`/power-pages:plan-alm` first**, before any individual ALM skill. The orchestrator detects the project state, runs the pre-plan completeness check, asks about promotion strategy, and dispatches to the right skills (`setup-solution`, `setup-pipeline`, `deploy-pipeline`, `activate-site`, `test-site`) in the right order.
+
+**Do not** jump straight to `/power-pages:setup-pipeline`, `/power-pages:deploy-pipeline`, `/power-pages:export-solution`, or `/power-pages:import-solution` in response to an ALM intent. Those are individual building blocks; running them out of order misses the orchestrator's gates (completeness check, host resolution, deployment-strategy selection, post-deploy validation, rendered HTML plan).
+
+**Skip `plan-alm` only when the user is explicit about the individual skill.** Phrases like *"just run setup-pipeline"*, *"skip planning, just deploy"*, *"I only need to export the solution zip"* are direct invocations — honor them. Anything ambiguous about deployment intent → `plan-alm` first.
+
+`setup-pipeline` and `deploy-pipeline` enforce this with a Phase 0 ALM-plan gate. If a user invokes them directly without a plan, those skills surface the recommendation to run `plan-alm` first (with an "I know what I'm doing" escape hatch). The Phase 0 gate is meant to fail closed — don't bypass it on the user's behalf.
 
 ## Plugin Components
 
@@ -132,33 +139,25 @@ User-invocable via `/power-pages:<skill-name>`:
 - `diagnose-deployment`: 7-step workflow — verify prerequisites and locate project, collect artifacts (config, manifests, build output), surface upload errors by re-running `pac pages upload-code-site` in capture mode and parsing via `scripts/parse-deployment-errors.js`, query recent Dataverse async operation failures, pattern-match against `references/deployment-error-catalog.md`, offer auto-fixes for fixable errors with explicit per-fix user confirmation, present findings table (severity/type/status). Never auto-applies any fix without user permission.
 - `setup-pipeline`: 7-phase workflow — detect project context (`powerpages.config.json`, `.solution-manifest.json`, `pac env who`, `pac env list`, `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')` on dev env to auto-discover host environment), select platform (Power Platform Pipelines = full; GitHub/ADO = coming soon), confirm pipeline configuration with auto-filled values (pipeline name, host env URL, target environments), run preflight checks (Pipelines installed, solution exists, no name conflict), create `deploymentenvironments` records for source + each target (poll `validationstatus` until Succeeded), create `deploymentpipelines` record + `$ref` associate source env (relative path + `@odata.context`) + create `deploymentstages` per target, verify and write `.last-pipeline.json` + `docs/pipeline-setup.md` + commit. Uses `references/cicd-pipeline-patterns.md` for all HAR-confirmed API patterns.
 - `deploy-pipeline`: 7-phase workflow — verify prerequisites (`.last-pipeline.json`, az login, host env token), select target stage (from stages in `.last-pipeline.json`; warn if last deploy failed), resolve pipeline info via `RetrieveDeploymentPipelineInfo` (v9.1) to get `SourceDeploymentEnvironmentId` and available artifacts, create `deploymentstageruns` record + call `ValidatePackageAsync` (204) + poll `operation` field until not `200000201` (surface `validationresults` issues), optionally PATCH `deploymentsettingsjson` for env var / connection reference overrides, call `DeployPackageAsync` + poll `stagerunstatus` until terminal (handle approval gates with user pause), write `.last-deploy.json` + present deployment summary.
-- `hotfix-solution`: 7-phase workflow — verify prerequisites (PAC CLI auth, Azure CLI token, `.solution-manifest.json`), discover modified components (ask time window, query `powerpagecomponents` by `modifiedon`, resolve type labels), review and confirm components (with security warning for Site Settings type 9), create timestamped hotfix solution (name: `{base}Hotfix{YYYYMMDDHHmm}`, dynamic componenttype discovery, add all components via `AddSolutionComponent`), export solution (ask managed/unmanaged, `ExportSolutionAsync`, poll, download zip), import to target environment (ask target env, `StageSolution` dependency check, `ImportSolutionAsync`, poll, full `AttachmentBlocked` remediation flow), verify and write `.last-hotfix.json`. Reuses `scripts/poll-async-operation.js`, `scripts/encode-solution-file.js`, and `references/solution-api-patterns.md`.
 - `plan-alm`: 8-phase orchestrator workflow — detect project state (powerpages.config.json, existing manifests, pac env who), gather ALM strategy via branched question flow (PP Pipelines or Manual export/import path), generate HTML ALM plan (docs/alm-plan.html with pipeline diagram and execution checklist), get user approval, then execute: setup-solution (conditional), setup-pipeline or export-solution (path-dependent), deploy-pipeline or import-solution per stage, finalize with HTML status update and git commit.
 
-Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model, hooks).
+For small mid-cycle changes (one file, one snippet, one site setting) that previously used a separate hotfix solution: instead, run `setup-solution` in sync mode to adopt the modified components into the existing base solution, bump the solution version, and use `deploy-pipeline` to ship. This keeps a single solution lineage (cleaner audit trail, simpler dependency management) and avoids solution sprawl. Power Platform Pipelines computes incremental imports internally, so re-deploying the base after a small fix is fast.
+
+Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model). Skill-specific `hooks:` blocks are not used — hook registration is centralized.
 
 ### Hooks
 
-Defined in each skill's SKILL.md frontmatter:
+Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner consults the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js`, looks up the validator for the skill that just completed, and invokes it with the current cwd.
 
-- Stop hooks run when a skill session ends. Each skill defines its own hooks so validation only runs in the correct context:
-  - `create-site`: command hook runs `validate-site.js` + prompt hook checks site completeness
-  - `setup-datamodel`: command hook runs `validate-datamodel.js` + prompt hook checks data model completeness
-  - `add-sample-data`: prompt hook checks sample data insertion completeness
-  - `activate-site`: command hook runs `validate-activation.js` + prompt hook checks activation completeness
-  - `add-seo`: command hook runs `validate-seo.js` + prompt hook checks SEO asset completeness
-  - `create-webroles`: command hook runs `validate-webroles.js` + prompt hook checks web role creation completeness
-  - `integrate-webapi`: command hook runs `validate-webapi-integration.js` + prompt hook checks integration completeness
-  - `setup-auth`: command hook runs `validate-auth.js` + prompt hook checks auth setup completeness
-  - `setup-solution`: command hook runs `validate-solution.js` + prompt hook checks solution creation completeness
-  - `export-solution`: command hook runs `validate-export.js` + prompt hook checks export completeness
-  - `import-solution`: command hook runs `validate-import.js` + prompt hook checks import completeness
-  - `diagnose-deployment`: prompt hook checks diagnostics completeness (no command hook — no artifacts created)
-  - `setup-pipeline`: command hook runs `validate-pipeline.js` + prompt hook checks .last-pipeline.json completeness (pipelineId, hostEnvUrl, sourceDeploymentEnvironmentId, non-empty stages)
-  - `deploy-pipeline`: command hook runs `validate-deploy-pipeline.js` + prompt hook checks all 6 success conditions (pipeline read, stage selected, package validated, deployment completed, .last-deploy.json written, summary presented)
-  - `hotfix-solution`: command hook runs `validate-hotfix.js` + prompt hook checks all 5 success conditions (components discovered, solution created, zip exported, import succeeded, summary displayed)
-  - `plan-alm`: command hook runs `validate-plan-alm.js` + prompt hook checks all 5 success conditions (strategy gathered, docs/alm-plan.html written, plan approved or deferred, skills invoked in sequence, HTML status updated)
-- Hooks are defined in SKILL.md frontmatter (not a global hooks.json) so they only fire for the relevant skill session
+To wire a new skill into validation:
+
+1. Write the validator at `skills/<skill>/scripts/validate-<skill>.js` using the `runValidation((cwd) => { ... })` pattern from `scripts/lib/validation-helpers.js`.
+2. Register the skill in `TRACKED_SKILLS` (in `scripts/lib/powerpages-hook-utils.js`) with its `validatorScript` path.
+3. Add test coverage in `scripts/tests/powerpages-hook-utils.test.js` so an unregistered skill is caught in CI.
+
+Skills currently registered with command-backed validators: `activate-site`, `add-cloud-flow`, `add-seo`, `add-server-logic`, `audit-permissions`, `configure-env-variables`, `create-site`, `create-webroles`, `deploy-pipeline`, `ensure-pipelines-host`, `export-solution`, `import-solution`, `integrate-webapi`, `plan-alm`, `setup-auth`, `setup-datamodel`, `setup-pipeline`, `setup-solution`. `add-sample-data`, `diagnose-deployment`, and `test-site` are tracked without command validators (no artifacts to verify).
+
+**Anti-patterns** (see `PLUGIN_DEVELOPMENT_GUIDE.md` for the rationale): do not add `hooks: Stop:` blocks to individual SKILL.md frontmatter — they duplicate the centralized PostToolUse hook and fire too often. Do not use `type: prompt` Stop hooks for skill-completion checks — they create runaway forced-continuation loops.
 
 ### Shared Scripts
 
@@ -167,15 +166,15 @@ Shared utility scripts live at `scripts/` and are referenced by multiple skills 
 - `generate-uuid.js`: Generates a random UUID v4. Self-contained, no dependencies. Used by `create-webroles` and the main agent when creating table permission / site setting files from the `webapi-permissions` agent plan.
 - `update-skill-tracking.js`: Updates skill usage tracking site settings. Takes `--projectRoot`, `--skillName`, and `--authoringTool` args. The agent passes its own name as `--authoringTool` (e.g., `ClaudeCode`, `GitHubCopilot`). Creates/increments a per-skill counter (`Site-AI-<SkillName>.sitesetting.yml`) and records the authoring tool (`Site-AI-AuthoringTool.sitesetting.yml`). Exits silently if `.powerpages-site/site-settings/` does not exist. Used by all 9 skills.
 - `check-activation-status.js`: Checks whether a Power Pages site is already activated (provisioned) in the environment. Takes `--projectRoot` arg. Reads `siteName` from `powerpages.config.json`, looks up `websiteRecordId` via `pac pages list`, queries the Power Platform GET websites API, and matches by both `websiteRecordId` and `name`. Outputs JSON: `{ activated: true/false, siteName, websiteRecordId, websiteUrl }` or `{ error }`. Used by `deploy-site` and `activate-site`.
-- `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--token` (optional, refreshed via Azure CLI if omitted), `--intervalMs` (default 5000), `--maxAttempts` (default 60). Outputs JSON status. Used by `export-solution`, `import-solution`, and `hotfix-solution`.
-- `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution` and `hotfix-solution`.
+- `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--token` (optional, refreshed via Azure CLI if omitted), `--intervalMs` (default 5000), `--maxAttempts` (default 60). Outputs JSON status. Used by `export-solution` and `import-solution`.
+- `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution`.
 - `parse-deployment-errors.js`: Parses PAC CLI stderr output or OData error JSON into structured findings array. Each finding has `{ patternId, type, severity, message, rawMatch, autoFixAvailable, suggestedFix }`. Reads from `--input`, `--file`, or stdin. Used by `diagnose-deployment`.
 
 Shared lib modules live at `scripts/lib/` and are imported by other scripts via `require('./validation-helpers')` or sibling requires. Never inline their logic in skill scripts — always require from `scripts/lib/`.
 
 #### ALM Prerequisites & Context
 
-- `scripts/lib/verify-alm-prerequisites.js`: Verifies all prerequisites for ALM skills — PAC CLI installed + authenticated (`pac env who`), Azure CLI installed + logged in, Dataverse API reachable (`WhoAmI`). Args: `--envUrl` (opt, overrides env from PAC CLI), `--require-manifest` (fails if `.solution-manifest.json` not found). Output: `{ envUrl, token, userId, organizationId, tenantId }`. Exit 0 on success, exit 1 on any failure. Used by `setup-solution`, `export-solution`, `import-solution`, `setup-pipeline`, `deploy-pipeline`, `hotfix-solution`, `plan-alm`.
+- `scripts/lib/verify-alm-prerequisites.js`: Verifies all prerequisites for ALM skills — PAC CLI installed + authenticated (`pac env who`), Azure CLI installed + logged in, Dataverse API reachable (`WhoAmI`). Args: `--envUrl` (opt, overrides env from PAC CLI), `--require-manifest` (fails if `.solution-manifest.json` not found). Output: `{ envUrl, token, userId, organizationId, tenantId }`. Exit 0 on success, exit 1 on any failure. Used by `setup-solution`, `export-solution`, `import-solution`, `setup-pipeline`, `deploy-pipeline`, `plan-alm`.
 - `scripts/lib/detect-project-context.js`: Reads Power Pages project context files from the project root — `powerpages.config.json`, `.solution-manifest.json`, and `.datamodel-manifest.json`. Args: `--projectRoot` (opt, auto-discovered from cwd if omitted). Output: `{ projectRoot, siteName, websiteRecordId, environmentUrl, solutionManifest, datamodelManifest }`. Exit 0 on success, exit 1 if `powerpages.config.json` not found.
 
 #### Solution Splitting Decision Tree (v1.3.0+)
@@ -192,6 +191,8 @@ Shared lib modules live at `scripts/lib/` and are imported by other scripts via 
 - `scripts/lib/add-components-to-solution.js`: Bulk-adds solution components via `AddSolutionComponent` OData action. Refreshes the Azure CLI token every `--batchSize` calls (default 20). Treats "already in solution" as success (idempotent). Args: `--envUrl`, `--componentsFile` (path to JSON array of `{ componentId, componentType, addRequired?, description? }`), `--solutionUniqueName`, `--batchSize` (opt), `--token` (opt). Output: `{ total, success, skipped, failed, failures[] }`. Progress goes to stderr; exits 0 always (caller inspects `failures`); exits 1 on fatal setup errors.
 - `scripts/lib/create-env-var-definition.js`: Creates an `environmentvariabledefinition` record in Dataverse. Handles 409 (duplicate) by returning the existing definition's ID. Args: `--envUrl`, `--token`, `--schemaName`, `--displayName`, `--type` (opt, default String — 100000000=String, 100000001=Number, 100000002=Boolean, 100000003=Secret), `--defaultValue` (opt). Output: `{ definitionId, schemaName, created }`.
 - `scripts/lib/link-site-setting-to-env-var.js`: Links an `mspp_sitesetting` record to an `environmentvariabledefinition` via OData PATCH on the v9.0 API (not v9.2). HAR-confirmed: navigation property is `EnvironmentValue@odata.bind`; headers `if-match: *` and `clienthost: Browser` are required (omitting causes 400). Args: `--envUrl`, `--token`, `--siteSettingId`, `--definitionId`, `--schemaName`. Output: `{ ok, verified, siteSettingId, definitionId }`.
+- `scripts/lib/discover-env-var-definitions.js`: Enumerates env var definitions matching a publisher prefix and joins each with its bound `mspp_sitesetting` (if any). Used by `plan-alm` Phase 1 Step 10b to populate `planData.envVars[]` with row-level metadata so the rendered plan's Env Variables tab shows schema name, type, default value, and bound site setting per definition (instead of just a count). Args: `--envUrl`, `--publisherPrefix`, `--websiteRecordId`, `--token` (opt). Output: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Degrades gracefully (empty array, exit 0) on auth failure or query errors so the renderer's count-summary fallback can take over.
+- `scripts/lib/refresh-alm-plan-data.js`: Updates `docs/.alm-plan-data.json` with post-run state from the marker files written by setup-pipeline / deploy-pipeline / ensure-pipelines-host / test-site, then optionally re-renders `docs/alm-plan.html`. Used by plan-alm Phases 6 / 7 / 8 so the rendered Pipelines tab, Validation tab, hostResolution card, and risks list reflect actual run state instead of frozen pre-run intent. Args: `--projectRoot`, `--phase` (`setup-solution`/`setup-pipeline`/`deploy-pipeline`/`test-site`/`finalize`), `--render` (also invoke renderer), `--stageName` (required for `test-site`). Output: `{ ok, phase, dataPath, htmlPath, rendered }`. Returns `ok:false` (soft no-op) when `docs/.alm-plan-data.json` is missing — caller should preserve that file across phases for the helper to work. Plan-alm Phase 3 must NOT delete the file after the initial render — it's read by `check-alm-plan.js` for downstream Phase 0 ALM-plan gates and by this helper for post-run refreshes.
 
 #### PP Pipelines
 
@@ -216,7 +217,7 @@ Shared reference documents live at `references/` and are referenced by multiple 
 - `framework-conventions.md`: Supported frameworks, framework → build tool / router / build output / public dir / index HTML mapping, framework detection via `package.json`, route discovery patterns. Used by `create-site` and `add-seo`.
 - `datamodel-manifest-schema.md`: Schema spec for `.datamodel-manifest.json` (fields, types, usage). Written by `setup-datamodel`, read by `add-sample-data`, validated by `validate-datamodel.js`.
 - `skill-tracking-reference.md`: Skill usage tracking instructions — script invocation syntax, skill name mapping table, and YAML format. Referenced by all skills to record usage via `update-skill-tracking.js`.
-- `solution-api-patterns.md`: OData body templates for publisher POST, solution POST, `AddSolutionComponent`, `ExportSolutionAsync`, `DownloadSolutionExportData`, `ImportSolutionAsync`, `StageSolution`. Also documents `.solution-manifest.json` format. Used by `setup-solution`, `export-solution`, `import-solution`, and `hotfix-solution`.
+- `solution-api-patterns.md`: OData body templates for publisher POST, solution POST, `AddSolutionComponent`, `ExportSolutionAsync`, `DownloadSolutionExportData`, `ImportSolutionAsync`, `StageSolution`. Also documents `.solution-manifest.json` format. Used by `setup-solution`, `export-solution`, and `import-solution`.
 - `deployment-error-catalog.md`: Catalog of 10 known deployment failure patterns (stale manifest, blocked JS, missing websiteRecordId, auth expiry, empty build output, solution missing dependencies, solution timeout, PAC CLI not installed, environment mismatch, duplicate component). Each entry includes root cause, severity, auto-fix availability, and fix procedure. Used by `diagnose-deployment`.
 - `cicd-pipeline-patterns.md`: PAC CLI service principal auth syntax; complete ADO `azure-pipelines.yml` template; complete GitHub Actions `deploy.yml` template; commented solution export/import blocks; secrets/variables setup tables; manual steps that cannot be automated; **Power Platform Pipelines API patterns** (HAR-confirmed): host env discovery via `RetrieveSetting`, `deploymentenvironments` create + `validationstatus` poll, `deploymentpipelines` create, `$ref` associate source (relative path format), `deploymentstages` create, `RetrieveDeploymentPipelineInfo`, stage run create + `ValidatePackageAsync` (204) + `operation` poll, `deploymentsettingsjson` PATCH, `DeployPackageAsync`, `stagerunstatus` terminal values, `.last-pipeline.json` and `.last-deploy.json` formats. Used by `setup-pipeline` and `deploy-pipeline`.
 
@@ -275,10 +276,6 @@ Checks for `.last-pipeline.json` (Power Platform Pipelines path) — validates r
 ### `deploy-pipeline/scripts/validate-deploy-pipeline.js`
 
 Checks `.last-deploy.json` marker for required fields (`pipelineId`, `stageRunId`, `solutionName`, `status`, `deployedAt`). Blocks if `status === "Failed"` — a failed deployment requires investigation before retrying. Gracefully exits 0 when no deploy marker is found (not a deploy-pipeline session).
-
-### `hotfix-solution/scripts/validate-hotfix.js`
-
-Checks `.last-hotfix.json` marker for required fields (`solutionName`, `targetEnvironment`, `exportedAt`, `importedAt`). Blocks if `componentCount` is 0 or missing, or if `components` array is empty. Gracefully exits 0 when no hotfix marker is found (not a hotfix-solution session).
 
 ## Skill Development Guide
 

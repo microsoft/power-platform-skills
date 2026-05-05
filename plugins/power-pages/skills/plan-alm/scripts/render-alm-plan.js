@@ -106,15 +106,31 @@ function buildOverviewSummary() {
   return msg;
 }
 
-function buildStagesHtml() {
-  return (data.stages || []).map((stage) => {
-    const activeClass = stage.type === 'source' ? 'stage-active' : '';
-    const url = stage.envUrl ? `<div class="stage-env">${escapeHtml(stage.envUrl)}</div>` : '';
-    return `<div class="pipeline-stage ${activeClass}">
-  <div class="stage-name">${escapeHtml(stage.label || '')}</div>
-  ${url}
+// Render a single stage card. Used by both the Overview pipeline diagram and
+// the Pipelines tab body — keeping the card markup in one place ensures the
+// two views stay visually consistent. Layout (top → bottom):
+//   1. stage label  (e.g. "Dev", "Staging", "Production") — large, bold, the
+//      stage's role in the pipeline
+//   2. env display name (e.g. "ni-dev", "Supplier Portal Staging") — medium,
+//      the friendly identifier humans recognize
+//   3. env URL (clickable, opens in new tab) — small, monospace, useful for
+//      one-click jump-to-env without leaving the plan
+function buildStageCardHtml(stage) {
+  const activeClass = stage && stage.type === 'source' ? 'stage-active' : '';
+  const label = escapeHtml(stage?.label || '');
+  const envName = stage?.envName ? `<div class="stage-env-name">${escapeHtml(stage.envName)}</div>` : '';
+  const envUrl = stage?.envUrl
+    ? `<div class="stage-env"><a href="${escapeHtml(stage.envUrl)}" target="_blank" rel="noopener">${escapeHtml(stage.envUrl)}</a></div>`
+    : '';
+  return `<div class="pipeline-stage ${activeClass}">
+  <div class="stage-name">${label}</div>
+  ${envName}
+  ${envUrl}
 </div>`;
-  }).join('\n');
+}
+
+function buildStagesHtml() {
+  return (data.stages || []).map(buildStageCardHtml).join('\n');
 }
 
 function buildRisksHtml() {
@@ -286,8 +302,27 @@ function buildAdvisoryHtml() {
   return html;
 }
 
+function envVarSummaryCount() {
+  // Source of truth when per-variable details haven't been enumerated into
+  // envVars[] yet. The size estimator counts env var definitions matching the
+  // publisher prefix during plan-alm Phase 1 and stores the count in
+  // sizeAnalysis.envVarCount.value — that count is what drives the size
+  // signal card and the agent-generated "(N detected)" warning.
+  const v = sizeAnalysis?.envVarCount?.value;
+  return Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0;
+}
+
 function buildEnvVarsHtml() {
   if (envVars.length === 0) {
+    const summaryCount = envVarSummaryCount();
+    if (summaryCount > 0) {
+      // Count-only path: the size estimator found env var definitions but the
+      // gathering phase did not enumerate per-variable metadata into envVars[].
+      // Show a count-aware info note so this tab agrees with the Overview
+      // stat, the size analysis signal, and the "(N detected)" warning.
+      const noun = summaryCount === 1 ? 'definition' : 'definitions';
+      return `<div class="note-box info">${summaryCount} environment variable ${noun} detected. Per-variable details (schema name, type, bound site setting) will be reviewed during <code>setup-solution</code> / <code>configure-env-variables</code>, and per-stage values will be collected before <code>deploy-pipeline</code>.</div>`;
+    }
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
   const envNames = Object.keys(envVars[0]?.values || {});
@@ -356,9 +391,53 @@ function buildSolutionMembershipBanner() {
 </div>`;
 }
 
+function buildSynthesizedSingleSolution() {
+  // Compose a single proposedSolution entry from other planData fields when
+  // the caller passed proposedSolutions = []. Returns null if there isn't
+  // enough information to synthesize anything useful.
+  //
+  // Sources, in priority order:
+  //   - data.solutionContents.solution (if the orchestrator wrote it)
+  //   - data.solution / data.SOLUTION_INFO (legacy field)
+  //   - .solution-manifest.json data already merged into planData
+  //   - Fall back to SITE_NAME for both unique and display names
+
+  const fromContents = (data.solutionContents && data.solutionContents.solution) || null;
+  const fromTopLevel = data.solution || data.SOLUTION_INFO || null;
+  const src = fromContents || fromTopLevel || {};
+
+  const uniqueName = src.uniqueName || src.unique_name || data.solutionUniqueName ||
+    (data.SITE_NAME ? String(data.SITE_NAME).replace(/\s+/g, '') : null);
+  const displayName = src.friendlyName || src.displayName || data.SITE_NAME || uniqueName;
+
+  if (!uniqueName && !displayName) return null;
+
+  return {
+    uniqueName: uniqueName || 'Solution',
+    displayName: displayName || uniqueName || 'Solution',
+    order: 1,
+    sizeMB: totalSizeMB || 0,
+    componentCount: componentCount || 0,
+    componentTypes: ['All site components'],
+    tableLogicalNames: Array.isArray(data.solutionContents && data.solutionContents.tables) ? data.solutionContents.tables : [],
+    description: 'Single managed solution containing all Power Pages site components. No split was recommended by the size estimator.',
+    isFutureBuffer: false,
+  };
+}
+
 function buildSolutionsHtml() {
+  // Safety net: when proposedSolutions is empty (caller forgot to populate
+  // the single-solution entry, or planData was hand-built), synthesize one
+  // base-solution entry from other planData fields rather than showing the
+  // useless "structure will be determined" placeholder. Reviewers always
+  // see SOMETHING about the solution that's about to ship.
   if (proposedSolutions.length === 0) {
-    return '<div class="note-box neutral">Solution structure will be determined during Setup Solution.</div>';
+    const synthesized = buildSynthesizedSingleSolution();
+    if (synthesized) {
+      proposedSolutions.push(synthesized);
+    } else {
+      return '<div class="note-box neutral">Solution structure will be determined during Setup Solution. <em>(Fallback shown because <code>planData.proposedSolutions</code> was empty — populate it from the size estimator output for a richer view.)</em></div>';
+    }
   }
   const membershipHtml = buildSolutionMembershipBanner();
   const calloutHtml = buildAssetAdvisoryCallout();
@@ -448,10 +527,11 @@ function buildPipelineActiveAnnotations(meta, color) {
 function buildPipelinesHtml() {
   const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387'];
   const stages = Array.isArray(data.stages) ? data.stages : [];
-  const stagesHtml = stages.map((st) => `<div class="pipeline-stage ${st.type === 'source' ? 'stage-active' : ''}">
-    <div class="stage-name">${escapeHtml(st.label || '')}</div>
-    <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
-  </div>`).join('');
+  // Reuse the shared card builder so the Pipelines tab body matches the
+  // Overview pipeline diagram exactly (env name + clickable URL). Without
+  // this the two views drifted — Overview included envName, Pipelines tab
+  // didn't.
+  const stagesHtml = stages.map(buildStageCardHtml).join('');
 
   const meta = data.pipelineMeta && typeof data.pipelineMeta === 'object' ? data.pipelineMeta : null;
   const activeColor = colors[0];
@@ -774,13 +854,22 @@ function buildHostCardHtml(d) {
   const status = String(hr.status);
   if (status.startsWith('AvailableUsing')) {
     const url = hr.hostEnvUrl || '';
+    const name = hr.hostEnvName || '';
     const meta = [];
     if (hr.hostType) meta.push(escapeHtml(hr.hostType));
     if (hr.pipelinesSolutionVersion) meta.push('Pipelines v' + escapeHtml(hr.pipelinesSolutionVersion));
     meta.push('&#10003; Reachable');
+    // When we have the env display name, lead with it (humans recognize names,
+    // not GUIDs in URLs) and demote the URL to a clickable navigation aid.
+    // Falls back to URL-as-headline when name is missing (older planData /
+    // detection paths that didn't capture the BAP displayName).
+    const headline = name
+      ? `<div class="card-env-name">${escapeHtml(name)}</div>
+  <div class="card-env-url"><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>`
+      : `<div class="card-value">${escapeHtml(url)}</div>`;
     return `<div class="card host-card host-card-ok">
   <div class="card-label">Pipelines Host</div>
-  <div class="card-value">${escapeHtml(url)}</div>
+  ${headline}
   <div class="card-meta">${meta.join(' &middot; ')}</div>
 </div>`;
   }
@@ -793,7 +882,21 @@ function buildHostCardHtml(d) {
     } else if (status === 'PlatformHostExistsUnbound') {
       note = 'Will use existing Platform Host (free, no admin role required).';
     } else if (status === 'NoHost') {
-      note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      // The NoHost env-first menu in plan-alm Phase 2 Q4 asks the user to pick a
+      // host strategy: install on existing env / provision new / PPAC manual /
+      // switch to manual strategy. Reflect the choice rather than always saying
+      // "will provision new", so the rendered plan agrees with what
+      // ensure-pipelines-host will actually do at execution time.
+      if (hr.chosenEnvUrl) {
+        note = 'Will install Pipelines app on existing env <code>' + escapeHtml(hr.chosenEnvUrl) + '</code>.';
+      } else if (hr.willUsePpac === true) {
+        note = 'Will create new Custom Host via PPAC manual flow (admin opens <code>https://admin.powerplatform.microsoft.com/deployments</code> &#8594; <em>New custom host</em>).';
+      } else if (hr.willProvisionCustom === true) {
+        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      } else {
+        // Fallback for older planData that did not capture the choice.
+        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      }
     } else {
       note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
     }
@@ -823,6 +926,29 @@ function buildHostChecklistSubBullet(d) {
   // in a <ul> so it is valid HTML when slotted directly into the template.
   if (!d || !d.hostResolution || d.hostResolution.willEnsureDuringExecution !== true) return '';
   return `<ul class="checklist-substep-list"><li class="checklist-substep" id="check-ensure-host">&#8627; Ensure Pipelines host <span class="substep-note">(delegated by setup-pipeline)</span></li></ul>`;
+}
+
+// Maps a checklist step name to the tab the user most likely wants to inspect
+// when they click the step. Used by buildChecklistHtml() to wrap the step name
+// in an anchor that re-uses the existing data-tab click handler installed by
+// the template's footer script. Returns null when no tab is a clear match
+// (e.g. "Finalize" or skipped steps); the renderer then falls back to plain
+// text without a link.
+//
+// Order matters — more specific patterns first ("Test site" before "Setup").
+function tabForChecklistStep(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  if (/\btest\s+site\b/.test(n)) return 'validation';
+  if (/\b(deploy|deploy\s+via\s+pipeline|deploy\s+to)\b/.test(n)) return 'pipelines';
+  if (/\b(import|import\s+to)\b/.test(n)) return 'solutions';
+  if (/\bactivate\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+pipeline\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+solution\b/.test(n)) return 'solutions';
+  if (/\bexport\s+solution\b/.test(n)) return 'solutions';
+  if (/\bensure\s+pipelines\s+host\b/.test(n)) return 'pipelines';
+  if (/\bfinalize\b/.test(n)) return 'overview';
+  return null;
 }
 
 function buildChecklistHtml() {
@@ -899,9 +1025,20 @@ function buildChecklistHtml() {
 </div>`;
     }
 
+    const targetTab = tabForChecklistStep(name);
+    const escapedName = escapeHtml(name);
+    // Wrap the step name in an anchor when there's a clear tab to navigate to.
+    // The onclick re-uses the .nav-btn click handler installed by the template's
+    // footer script (querySelector matches the sidebar button by data-tab).
+    // The href falls back to the section's id, so middle-click / right-click /
+    // copy-link still works in browsers that block JS.
+    const nameMarkup = targetTab
+      ? `<a class="checklist-link" href="#tab-${targetTab}" onclick="const b=document.querySelector('.nav-btn[data-tab=&quot;${targetTab}&quot;]');if(b){b.click();window.scrollTo(0,0);}return false;">${escapedName}</a>${skip}`
+      : `${escapedName}${skip}`;
+
     return `<div class="checklist-item status-${s}">
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
-  <span class="checklist-name">${escapeHtml(name)}${skip}</span>
+  <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
 </div>${envLine}${validationLine}`;
   }).join('\n');
@@ -918,7 +1055,7 @@ const replacements = {
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
-  STAT_ENVVARS: String(envVars.length || 0),
+  STAT_ENVVARS: String(envVars.length || envVarSummaryCount() || 0),
   STAT_SIZE: totalSizeMB.toFixed(1),
   STAT_SIZE_COLOR: sizeColor,
   STAT_SOLUTIONS: String(proposedSolutions.length || 1),

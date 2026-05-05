@@ -14,21 +14,6 @@ user-invocable: true
 argument-hint: "Optional: 'pipelines' or 'manual' to skip strategy selection"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/validate-plan-alm.js"'
-          timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the plan-alm skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. ALM strategy inputs were gathered from the user (promotion method, environments)
-            2. docs/alm-plan.html was written to the project root docs/ folder
-            3. The plan was presented to the user and either approved or deferred
-            4. If approved: all selected skills were invoked in sequence
-            5. docs/alm-plan.html reflects final status (Completed or Deferred)
-          timeout: 30
 ---
 
 # plan-alm
@@ -48,6 +33,26 @@ This skill detects the current project state (existing solution, pipeline), asks
 **Do NOT create tasks yet.** Use natural language progress reporting only during this phase.
 
 Steps:
+
+0. **Detect prior ALM deferral for this project.** Before any discovery work, check whether the project root contains a `.alm-deferred` marker file. The marker is written by users who explicitly opted ALM-skill validators out of "missing artifacts" warnings (e.g. *"this site is handled separately"* or *"ni-dev — no ALM"*). If a user is now invoking `plan-alm`, we should surface that the marker is present and ask what to do, rather than silently proceeding (which would build a plan the user previously decided not to maintain) or silently removing the marker (which would re-enable nags on every other ALM skill).
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+   ```
+
+   The helper returns `{ deferred, deferral, ... }`. If `deferred === true`, read the deferral reason (`deferral.reason` or the raw marker text) and ask via `AskUserQuestion`:
+
+   > "This project has an `.alm-deferred` marker — `{reason}`. ALM was previously deferred here, so the other ALM skills (`setup-solution`, `setup-pipeline`, `deploy-pipeline`, …) skip their plan-completeness checks for this project. How would you like to proceed?"
+
+   | Question | Header | Options |
+   |---|---|---|
+   | How would you like to proceed? | ALM deferral marker | Continue planning and remove the marker (Recommended), Continue planning but keep the marker (record deferral context in plan), Cancel |
+
+   - **Continue and remove marker (Recommended)** → delete `.alm-deferred` (the user is re-engaging with ALM). Set `DEFERRAL_CLEARED = true` and proceed to step 1.
+   - **Continue and keep marker** → set `DEFERRAL_PRESERVED = true` and `DEFERRAL_REASON = {reason}`. Proceed to step 1. Surface a one-line note in the Phase 1 step 9 user report (e.g. *"Note: `.alm-deferred` is preserved — other ALM skills will continue to skip plan-completeness checks for this project."*) so the user remembers the marker remains in effect after planning.
+   - **Cancel** → exit cleanly (don't touch the marker).
+
+   If `deferred === false`, skip this step silently and proceed to step 1.
 
 1. **Resolve the site identity from the local project.** ALM skills are normally invoked from a site-root directory where `pac pages download-code-site` (or a create-site scaffold followed by a deploy) has written `.powerpages-site/website.yml`. That YAML file is the source of truth for `websiteRecordId` and `siteName`.
 
@@ -170,6 +175,24 @@ Steps:
     Asset advisory: {K} files flagged for Azure Blob externalization.
     ```
 
+10b. **Enumerate environment variable definitions** (runs whenever `DEV_TOKEN` is available — the size estimator gives a count but not per-variable metadata).
+
+    The renderer's Env Variables tab needs schema name, type, default value, and bound site setting per definition. Without this step, the tab can only show a count-summary note while the size signal and the warning quote a number — three views that don't fully agree. Running this query produces the row-level data so the table renders properly.
+
+    ```bash
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+      --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" \
+      --publisherPrefix "{publisherPrefix}" \
+      --websiteRecordId "{websiteRecordId}" > ./.alm-env-vars.json.tmp \
+      && mv ./.alm-env-vars.json.tmp ./.alm-env-vars.json
+    ```
+
+    Read the JSON: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Store the array as `ENV_VARS_DETAILS` for use when building `planData.envVars` in Phase 3 (see line ~659 — pass through `ENV_VARS_DETAILS` unchanged).
+
+    The helper degrades gracefully (returns `{ envVars: [], count: 0 }`) when the publisher prefix is unknown, the token has expired, or the query errors. In those cases the renderer falls back to the size estimator's count via `sizeAnalysis.envVarCount.value` (commit `8cbc39a`) — `ENV_VARS_DETAILS = []` is acceptable.
+
+    **Skip rule**: if `DEV_TOKEN` is null (auth was unavailable in step 6), skip this step and set `ENV_VARS_DETAILS = []`. The renderer's count-summary fallback covers this case.
+
 11. **Pre-plan completeness check** (only runs when `SOLUTION_DONE = true`).
 
     Before the user approves a plan, verify the existing solution already covers everything on the live site. Components created after the last `/power-pages:setup-solution` run (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` or `setup-auth`) are silently excluded from any plan built on top of a stale solution.
@@ -224,13 +247,14 @@ Steps:
     ```
     Capture the output as `BAP_TOKEN`. If acquisition fails, set `HOST_RESOLUTION = { status: 'DetectionFailed', error: '<stderr>' }` and skip the detect call.
 
-    Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `.alm-host-resolution.json` is preserved if the script fails mid-write:
+    Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `.alm-host-resolution.json` is preserved if the script fails mid-write. Pass `--skus Production,Sandbox,Trial` so trial-license and developer tenants see their eligible envs in the env-first menu (the helper's default is `Production,Sandbox`; we widen to include Trial here because plan-alm's NoHost branch always offers an existing-env install path that Trial envs can take, even though Trial envs cannot use the create-new fast-path):
     ```bash
     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}" \
       --bapToken "{BAP_TOKEN}" \
       --projectRoot "." \
-      --cacheMaxAgeHours 24 > ./.alm-host-resolution.json.tmp \
+      --cacheMaxAgeHours 24 \
+      --skus Production,Sandbox,Trial > ./.alm-host-resolution.json.tmp \
       && mv ./.alm-host-resolution.json.tmp ./.alm-host-resolution.json
     ```
 
@@ -343,11 +367,15 @@ Options:
 
 If option 4: accept free-text description (via "Other") and build a stage list from the response.
 
-Store stages as `PP_STAGES` (array of `{ label, envUrl }`). Dev is always the source.
+Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev is always the source.
+
+For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
 
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
-This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false`.
+This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `CHOSEN_ENV_URL`, `WILL_PROVISION_CUSTOM`, `WILL_USE_PPAC`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false` / null.
+
+**Why the NoHost branch presents the env-first menu here instead of deferring to ensure-pipelines-host Phase 3.C:** the original design asked a yes/no "we'll provision new — continue?" question in plan-alm and let 3.C surface the env-first choice at execution time. In practice the agent treated the plan-alm yes-confirmation as authorization to skip 3.C entirely (or to skip 4.A's pre-call gate), and users hit 4.A → 409 trial-license errors when an existing env install (4.B) would have been a clean path. Surfacing the env-first menu **here** — once, at planning time, when the user has full context — eliminates the ambiguity. ensure-pipelines-host then trusts `CHOSEN_ENV_URL` and skips its own 3.C menu (see ensure-pipelines-host Phase 3 skip rule).
 
 | `status` | Q4 prompt | Result |
 |---|---|---|
@@ -355,11 +383,11 @@ This question consumes `HOST_RESOLUTION` populated by the new detect-only wrappe
 | `AvailableUnboundCustomHost` | "Existing Custom Host `{displayName}` (`{finalHostEnvUrl}`) found in tenant — not yet bound to dev env. setup-pipeline will reuse it (recommended; avoids duplicates). Use this host?" Options: 1. Yes, use this / 2. Use a different host environment (Other) | Y → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. N → fall back to "enter different URL". |
 | `MultipleUnboundCustomHosts` | "{N} Custom Hosts found in tenant. Which one should setup-pipeline use?" Options: enumerate `HOST_RESOLUTION.candidates.existingCustomHosts[]` (up to 3) by display name + URL, plus "Other" for a custom URL, plus "Decide later — setup-pipeline will ask". | Picked candidate → `HOST_ENV_URL = candidate.instanceApiUrl`, `WILL_ENSURE_HOST = true`. Decide-later → `HOST_ENV_URL = null`, `WILL_ENSURE_HOST = true`, `USER_CHOSE_DEFER_TO_SETUP_PIPELINE = true`. |
 | `PlatformHostExistsUnbound` | "Tenant Platform Host `{finalHostEnvUrl}` exists. Use it (free, no admin role) or create a new Custom Host?" Options: 1. Use Platform Host / 2. Create new Custom Host / 3. Cancel | 1 → `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, `WILL_ENSURE_HOST = true`. 2 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 3 → exit. |
-| `NoHost` | "No host detected. setup-pipeline will provision a new Custom Host (D365_ProjectHost template, ~5–10 min, requires Power Platform admin). Continue with this plan?" Options: 1. Yes / 2. Switch to manual export/import / 3. Cancel | 1 → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. 2 → restart Phase 2 with strategy = manual. 3 → exit. |
+| `NoHost` | **Env-first prompt** — same shape as `ensure-pipelines-host` Phase 3.C so the user makes the host choice once, here, instead of being asked again at execution time. Build the eligible-env list from `HOST_RESOLUTION.candidates.eligibleForAppInstall[]` with role labels (`dev env`, `source env`, `staging env`, `production env`) per origin match. Present: *"No Pipelines host bound to `{devEnvUrl}`. Which environment should host Pipelines? Pipelines lives in one env per tenant; pipelines, stages, and run history are stored there. Source envs deploy through it."* Options: 1. Each eligible env (display name + URL + role labels) labeled "*Install Pipelines app on this env*" — sandbox-sku envs add a "(Sandbox — confirmation gate)" suffix; **N+1.** "Create a brand-new dedicated host env (D365_ProjectHost template, ~5–10 min, requires Power Platform admin)"; **N+2.** "Open PPAC and create one manually (admin fallback)"; **N+3.** "Switch to Manual export/import strategy"; **N+4.** "Cancel". When the eligible list is empty, drop the per-env options and present the four create/switch/cancel options. | Picked eligible env → `HOST_ENV_URL = picked.instanceApiUrl`, `CHOSEN_ENV_URL = picked.instanceApiUrl`, `WILL_ENSURE_HOST = true`, `WILL_PROVISION_CUSTOM = false`. (Sandbox confirmation gate, if applicable, must be passed before this resolution stands.) Create-new (N+1) → `HOST_ENV_URL = null`, `WILL_PROVISION_CUSTOM = true`, `WILL_ENSURE_HOST = true`. PPAC manual (N+2) → `HOST_ENV_URL = null`, `WILL_USE_PPAC = true`, `WILL_ENSURE_HOST = true`. Manual strategy (N+3) → restart Phase 2 with `STRATEGY = manual`. Cancel (N+4) → exit. |
 | `CannotRedirect` | **Block.** Show the org-setting vs tenant-default mismatch error from `HOST_RESOLUTION.candidates`/`warnings` and stop the skill — only a Power Platform admin can resolve. | Exit with the specific error. |
 | `OrgSettingStale`, `PermissionDenied`, `DetectionFailed` | Surface the error; ask the user to enter the host URL manually with `pac env list` pre-fill (today's fallback). Pre-fill options from `ENV_LIST` (up to 3 known environment URLs) plus "Other" for a custom URL; pre-fill first option from `.last-pipeline.json` if present. | `HOST_ENV_URL = user-supplied`. |
 
-Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliary flags `WILL_PROVISION_CUSTOM`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` feed the planData `hostResolution` block in Phase 3 and the inline summary in Phase 4.
+Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliary flags `CHOSEN_ENV_URL`, `WILL_PROVISION_CUSTOM`, `WILL_USE_PPAC`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` feed the planData `hostResolution` block in Phase 3 and the inline summary in Phase 4. ensure-pipelines-host reads `chosenEnvUrl`, `willProvisionCustom`, and `willUsePpac` from that block to bypass its own Phase 3.C menu when the user has already made the choice here.
 
 **Q5:** Ask via `AskUserQuestion`:
 > "Should deployments require approval before each stage?"
@@ -373,7 +401,14 @@ Store as `PP_APPROVAL_MODE`.
 
 **Note:** PP Pipelines always exports as a **managed** solution to target environments. Set `EXPORT_TYPE = "managed"` automatically — no question needed.
 
-**Q6 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values. If manifest not present (SOLUTION_DONE=false), set `HAS_ENV_VARS = false` — variables will be discovered during setup-solution.
+**Q6 (auto-detect, no question):** Resolve `HAS_ENV_VARS` in this order:
+
+1. If `ENV_VARS_DETAILS.length > 0` (Phase 1 Step 10b returned per-variable rows): `HAS_ENV_VARS = true`. This is the most accurate signal — we've enumerated the definitions directly.
+2. Else if `SPLIT_PLAN.sizeAnalysis.envVarCount.value > 0` (the size estimator counted definitions but the enumerator didn't return rows — usually because the publisher prefix or token was missing): `HAS_ENV_VARS = true`. The plan's count-summary fallback will explain to the user that per-variable details will be enumerated later.
+3. Else if `SOLUTION_DONE = true` and `.solution-manifest.json` lists components with `componenttype 380`: `HAS_ENV_VARS = true`. (Stale-manifest fallback — should rarely fire now that 10b is in place.)
+4. Otherwise: `HAS_ENV_VARS = false`. Variables will be discovered during setup-solution.
+
+When `HAS_ENV_VARS = true`, the plan notes that `deploy-pipeline` will prompt for per-stage env var values (see Phase 3 risks population).
 
 **Q7:** Ask via `AskUserQuestion`:
 > "Is this project's code tracked in Git source control?"
@@ -534,9 +569,9 @@ Build a `planData` object with all gathered strategy inputs:
   "assetAdvisory": { /* candidates + recommendation from SPLIT_PLAN.assetAdvisory */ },
   "splitStrategy": "single | strategy-1-layer | strategy-2-change-frequency | strategy-3-schema-segmentation | strategy-4-config-isolation",
   "appliedStrategies": ["strategy-1-layer"],
-  "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions */ ],
+  "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions — ALWAYS at least 1 entry */ ],
   "recommendations": [ /* from SPLIT_PLAN.recommendations */ ],
-  "envVars": [ /* optional: env var metadata with per-environment values */ ],
+  "envVars": [ /* from ENV_VARS_DETAILS (Phase 1 Step 10b) — { schemaName, type, defaultValue, siteSetting } per definition; empty array when DEV_TOKEN unavailable */ ],
   "breakdown": { /* bytes-per-category from the estimate */ },
   "estimationMethod": "metadata-based",
   "estimationAccuracyPct": 15,
@@ -551,6 +586,8 @@ Build a `planData` object with all gathered strategy inputs:
     "candidatesCount": 0,
     "willEnsureDuringExecution": true | false,
     "willProvisionCustom": true | false,
+    "willUsePpac": true | false,
+    "chosenEnvUrl": "https://orgc4f78248.crm5.dynamics.com/" | null,
     "userChoseDeferToSetupPipeline": false
   }
 }
@@ -651,7 +688,9 @@ process.stdout.write(JSON.stringify(meta));
 ```
 Embed the result as `planData.pipelineMeta`.
 
-**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
+**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer. **`envVars`** comes from `ENV_VARS_DETAILS` populated in Phase 1 Step 10b — pass it through unchanged. When the array is empty, the renderer's count-aware fallback uses `sizeAnalysis.envVarCount.value` so the Env Variables tab still shows a count-summary note.
+
+> **`proposedSolutions[]` is never empty.** Even when `splitStrategy === "single"` and the decision tree recommends one solution, `compute-split-plan.js` returns one entry describing the base solution (uniqueName, displayName, sizeMB, componentCount, componentTypes). Pass that through. The renderer drives the Solutions tab off this array — leaving it empty produces an unhelpful "structure will be determined" placeholder. If you find yourself with `proposedSolutions = []` because compute-split-plan wasn't run, synthesize a single base entry from `solutionContents.solution` / `data.SITE_NAME` / `componentCount` / `totalSizeMB` rather than passing through an empty array. The renderer has a safety-net synthesizer for this case but the right fix is upstream — populate it explicitly.
 
 **`hostResolution` block** (PP Pipelines path only — omit for Manual path). Built from `HOST_RESOLUTION` (Phase 1 step 12) plus the auxiliary flags set by Phase 2 Q4:
 
@@ -663,10 +702,12 @@ Embed the result as `planData.pipelineMeta`.
 - `candidatesCount` ← `HOST_RESOLUTION.candidates.existingCustomHosts.length`
 - `willEnsureDuringExecution` ← `WILL_ENSURE_HOST` flag from Q4 (true whenever setup-pipeline will need to consult ensure-pipelines-host at execution time — i.e. status is `NoHost`, any `*Unbound*`, or the user deferred)
 - `willProvisionCustom` ← `WILL_PROVISION_CUSTOM` flag from Q4
+- `willUsePpac` ← `WILL_USE_PPAC` flag from Q4 (set when the user picks "Open PPAC and create one manually" in the NoHost env-first menu; ensure-pipelines-host treats this as a directive to go straight to Phase 4.C)
+- `chosenEnvUrl` ← `CHOSEN_ENV_URL` flag from Q4 (set when the user picks an existing env in the NoHost env-first menu; ensure-pipelines-host treats this as a directive to skip its Phase 3.C menu and go straight to Phase 4.B with this env)
 - `userChoseDeferToSetupPipeline` ← `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` flag from Q4 (only set in the `MultipleUnboundCustomHosts` "Decide later" branch)
 
 Populate `risks` based on gathered data:
-- If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables — you will be prompted for per-stage values during deployment." }`
+- If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables ({N} detected) — you will be prompted for per-stage values during deployment." }`. Substitute `{N}` from `ENV_VARS_DETAILS.length` if it's > 0, otherwise from `SPLIT_PLAN.sizeAnalysis.envVarCount.value` (the count the size estimator reported). When neither source has a positive count, drop the parenthetical (`"This solution has environment variables — you will be prompted..."`).
 - If `GIT_STATUS = "no"`: `{ type: "info", message: "Consider enabling source control to track changes before deploying to production." }`
 - If `EXPORT_TYPE = "unmanaged"` and strategy includes a production target: `{ type: "warning", message: "Unmanaged solutions can be edited in the target environment — consider using Managed for production." }`
 - If `SOLUTION_DONE = false`: `{ type: "info", message: "A Dataverse solution will be created first — publisher prefix is irreversible once chosen." }`
@@ -687,7 +728,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
   --data "<projectRoot>/docs/.alm-plan-data.json"
 ```
 
-Delete `docs/.alm-plan-data.json` after success.
+**Keep `docs/.alm-plan-data.json` on disk.** Phases 5 / 6 / 7 / 8 read this file to refresh `hostResolution`, `pipelineMeta`, `validationRuns`, `risks`, and the plan footer after each run step, then re-render `docs/alm-plan.html` so the rendered tabs reflect actual run state (not the pre-run plan). The file is also what `check-alm-plan.js` reads for the Phase 0 ALM-plan gate in `setup-pipeline` / `deploy-pipeline` / `setup-solution` / `export-solution` / `import-solution` / `configure-env-variables` — deleting it makes every downstream skill think no plan exists. Earlier guidance to delete this file after the initial render was incorrect and caused the Pipelines tab + risks list to stay frozen at pre-run state for the lifetime of the plan.
 
 Write `.alm-plan-context.json` to the project root (persists so `setup-solution` can read it):
 ```json
@@ -708,31 +749,43 @@ This file is intentionally NOT deleted — `setup-solution` and other skills rea
 
 The inline Markdown summary presented in Phase 4 is intentionally compact — reviewers need to see the full rendered plan (size gauge, signal cards, per-solution breakdown, asset advisory, pipeline stages) before giving informed approval. Launch `docs/alm-plan.html` in the default browser **before** the approval prompt so the user can scan the full plan while reading the CLI summary.
 
-Run this cross-platform opener via Node.js. It uses `Start-Process` on Windows (which respects file associations and is the most reliable launcher — `cmd /c start` can get suppressed by some terminals), `open` on macOS, `xdg-open` on Linux. Always print an absolute `file://` URL after invoking, so if the GUI launch is blocked (sandboxed terminal, SSH session, headless environment), the user can Ctrl/Cmd-click the URL in their terminal to open it manually:
+> **Why no Node wrapper.** The earlier `node -e "spawn('powershell.exe', [...])"` chain hits the agent's sandbox classifier (Node spawning a process that spawns another process is the textbook pattern the classifier blocks). The agent should use the **OS-native shell tool directly** — no Node detour, no `child_process`, no detached subprocess.
+
+**Step 1. Print the absolute `file://` URL prominently *first*.** This is the user's reliable fallback if the launcher gets blocked:
 
 ```bash
-node -e "
-const path = require('path');
-const { spawn } = require('child_process');
-const p = path.resolve('docs/alm-plan.html');
-const fileUrl = 'file:///' + p.replace(/\\\\/g, '/');
-try {
-  if (process.platform === 'win32') {
-    spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Start-Process \"' + p + '\"'], { detached: true, stdio: 'ignore' }).unref();
-  } else if (process.platform === 'darwin') {
-    spawn('open', [p], { detached: true, stdio: 'ignore' }).unref();
-  } else {
-    spawn('xdg-open', [p], { detached: true, stdio: 'ignore' }).unref();
-  }
-} catch (_) {}
-console.log('Plan URL: ' + fileUrl);
-"
+node -e "process.stdout.write('Plan URL: file:///' + require('path').resolve('docs/alm-plan.html').replace(/\\\\/g, '/') + '\n')"
 ```
 
-Report to the user (single line — include the file:// URL the script just printed):
+(Single Node call, no spawn, never blocked. Output: `Plan URL: file:///C:/Projects/.../docs/alm-plan.html`.)
+
+**Step 2. Launch the browser via the OS-native shell.** Pick the shell tool the agent has available:
+
+- **Windows / PowerShell tool** — call `Start-Process` directly:
+  ```powershell
+  Start-Process "docs/alm-plan.html"
+  ```
+
+- **Windows / Bash tool (Git Bash, WSL passthrough)** — call PowerShell from Bash, but as a single direct invocation (no Node wrapper):
+  ```bash
+  powershell.exe -NoProfile -Command "Start-Process 'docs/alm-plan.html'"
+  ```
+
+- **macOS** — call `open` directly:
+  ```bash
+  open docs/alm-plan.html
+  ```
+
+- **Linux** — call `xdg-open` directly:
+  ```bash
+  xdg-open docs/alm-plan.html
+  ```
+
+**Step 3. Report the URL to the user.** After the launch attempt, surface the file:// URL the agent printed in Step 1, so the user always has a clickable backup:
+
 > "Opened `docs/alm-plan.html` in your browser. If it didn't open automatically, use this link: `file:///C:/Projects/.../docs/alm-plan.html`. Review it, then answer the approval prompt below."
 
-If the browser fails to launch (headless environment, restricted sandbox, Bash-tool runner without GUI), do not block. The printed `file://` URL lets the user open the HTML manually. Continue to Phase 4 and rely on the CLI summary as backup.
+If the launch silently fails (sandboxed terminal, SSH session, headless environment), do not retry, do not block, do not loop. Step 1's printed URL is the contract — the user can click or paste it themselves. Continue to Phase 4 and rely on the CLI summary as backup.
 
 Mark task 1 as `completed`.
 
@@ -830,7 +883,16 @@ Invoke the skill:
 /power-pages:setup-pipeline
 ```
 
-After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then refresh `pipelineMeta` from the freshly-written `.last-pipeline.json` and re-render `docs/alm-plan.html` so the Pipelines tab reflects the actual pipeline name + ACTIVE chip (no `lastDeploy` yet — that fills in after Phase 7 Step A).
+After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then run the post-run plan refresh — this is **not optional**; without it the Pipelines tab stays at "Will be ensured during setup-pipeline" and the risks list keeps surfacing the pre-run NoHost warning even though the host now exists:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase setup-pipeline \
+  --render
+```
+
+This (a) reads `.last-host-check.json` and rewrites `planData.hostResolution` to the post-run state (status flips from `NoHost` to `AvailableUsingCustomHost`, all the `willEnsure*` / `willProvision*` / `chosenEnvUrl` flags clear), (b) reads `.last-pipeline.json` and populates `planData.pipelineMeta` with the actual pipeline name + ID + host URL + stages (no `lastDeploy` yet — that fills in after Phase 7 Step A), (c) drops resolved entries from `planData.risks` (NoHost / *Unbound* / Platform-Host warnings), then (d) re-renders `docs/alm-plan.html`. If the helper exits with `ok:false`, surface the reason — the most likely cause is that `docs/.alm-plan-data.json` is missing (Phase 3 must have written it; the file should never be deleted between phases).
 
 ### Manual path
 
@@ -870,7 +932,16 @@ Invoke the skill:
 
 After completion: mark deploy task as `completed`. Update HTML checklist step to `status-completed`.
 
-**Refresh `pipelineMeta` and re-render the plan.** Re-read `.last-pipeline.json` and `.last-deploy.json` (using the snippet documented in the `pipelineMeta` block above), update `planData.pipelineMeta`, write `docs/.alm-plan-data.json`, and re-render `docs/alm-plan.html` so the Pipelines tab now shows the actual pipeline name, ACTIVE chip, and last-run footer (succeeded/failed status + version + component count). This re-render is cheap and runs once per stage.
+**Refresh the plan after each stage's deploy.** Run the helper:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+The helper reads `.last-deploy.json`, populates `planData.pipelineMeta.lastDeploy` (status, stageName, deployedAt, artifactVersion, componentCount, activationStatus, siteUrl), and re-renders `docs/alm-plan.html`. The Pipelines tab now shows the actual pipeline name + ACTIVE chip + last-run footer (Succeeded / Failed status + version + component count + stage label). Cheap; runs once per stage in the deploy loop.
 
 **Step B — Activate (immediately after deploy for this stage):**
 Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
@@ -902,26 +973,17 @@ If a URL is available, invoke the skill (forwarding the URL as the argument):
 /power-pages:test-site --siteUrl {activatedUrl}
 ```
 
-When `test-site` completes, ingest its `.last-test-site.json` marker file directly into `validationRuns[stageName]` — the file's shape is exactly the validationRuns entry shape (see "validationRuns block" in Phase 3). No transformation needed:
+When `test-site` completes, ingest its `.last-test-site.json` marker into `validationRuns[stageName]` and re-render via the same refresh helper used by other phases:
 
 ```bash
-node -e "
-const fs = require('fs');
-const stage = process.argv[1];
-const planData = JSON.parse(fs.readFileSync('docs/.alm-plan-data.json','utf8'));
-const run = JSON.parse(fs.readFileSync('.last-test-site.json','utf8'));
-planData.validationRuns = planData.validationRuns || {};
-planData.validationRuns[stage] = run;
-fs.writeFileSync('docs/.alm-plan-data.json', JSON.stringify(planData, null, 2));
-" "{stageName}"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase test-site \
+  --stageName "{stageName}" \
+  --render
 ```
 
-Then re-render the plan so the Validation tab updates immediately:
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
-  --output "<projectRoot>/docs/alm-plan.html" \
-  --data "<projectRoot>/docs/.alm-plan-data.json"
-```
+The helper reads `.last-test-site.json`, populates `planData.validationRuns[{stageName}]` with the test outcome (runOutcome, summary counts, categories), and re-renders `docs/alm-plan.html` so the Validation tab updates immediately.
 
 `runOutcome` is set by `test-site` itself (see Phase 6.7a in the test-site skill): `"failed"` when any critical/high failure exists, `"passed-with-warnings"` for any non-critical failure or console errors, `"passed"` otherwise. Trust the value as written — do not re-compute.
 
@@ -982,9 +1044,16 @@ Mark the "Finalize" task as `in_progress`.
 
 ### 8.1 Update HTML plan status
 
-Update the HTML plan footer via `Edit` tool:
-- Replace `<span class="plan-status">In Execution</span>` with `<span class="plan-status">Completed ✓</span>`
-- Replace the completion timestamp placeholder with the current ISO timestamp
+Run the post-run plan refresh in `finalize` mode and re-render. This sets `planData.PLAN_STATUS = "Completed"` and produces the final HTML with all post-run state (latest hostResolution, pipelineMeta + lastDeploy, validationRuns, status footer) consistent across every tab:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase finalize \
+  --render
+```
+
+If you also need to surface a timestamp in the footer (e.g. plan completion time), apply that via `Edit` tool **after** the re-render — the renderer doesn't currently emit a completion timestamp.
 
 ### 8.2 Run skill tracking
 

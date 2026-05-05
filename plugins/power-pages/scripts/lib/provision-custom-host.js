@@ -75,6 +75,17 @@ const POLL_TIMEOUT_MS = 30000;
 
 const TEMPLATE_NAME = 'D365_ProjectHost';
 
+// SKUs the env-create API accepts when provisioning a Custom Host. Production
+// is the documented fast-path target (the eng.ms doc and PPAC's "New custom
+// host" UI both use Production). The other SKUs are useful as license-aware
+// fallbacks: trial-license tenants return 409
+// NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment for Production but
+// can create Trial; subscription tenants without spare Production capacity
+// can use Sandbox or Developer. The Pipelines app installs successfully
+// regardless of SKU — the SKU only governs license allocation.
+const ALLOWED_SKUS = new Set(['Production', 'Sandbox', 'Developer', 'Trial']);
+const DEFAULT_SKU = 'Production';
+
 function parseArgs(argv) {
   const args = argv.slice(2);
   const opts = {
@@ -85,6 +96,7 @@ function parseArgs(argv) {
     timeoutSec: DEFAULT_TIMEOUT_SEC,
     apiVersion: DEFAULT_API_VERSION,
     bapBase: DEFAULT_BAP_BASE,
+    environmentSku: DEFAULT_SKU,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -97,6 +109,7 @@ function parseArgs(argv) {
     else if (a === '--timeoutSec' && next) opts.timeoutSec = Number(args[++i]) || DEFAULT_TIMEOUT_SEC;
     else if (a === '--apiVersion' && next) opts.apiVersion = args[++i];
     else if (a === '--bapBase' && next) opts.bapBase = args[++i];
+    else if (a === '--environmentSku' && next) opts.environmentSku = args[++i];
   }
 
   return opts;
@@ -149,6 +162,7 @@ async function provisionCustomHost(opts = {}) {
     timeoutSec = DEFAULT_TIMEOUT_SEC,
     apiVersion = DEFAULT_API_VERSION,
     bapBase = DEFAULT_BAP_BASE,
+    environmentSku = DEFAULT_SKU,
     // Test injection points:
     sleepImpl = null,
     nowImpl = null,
@@ -157,6 +171,9 @@ async function provisionCustomHost(opts = {}) {
   if (!bapToken) throw new Error('--bapToken is required');
   if (!displayName) throw new Error('--displayName is required');
   if (!region) throw new Error('--region is required');
+  if (!ALLOWED_SKUS.has(environmentSku)) {
+    throw new Error(`--environmentSku must be one of: ${[...ALLOWED_SKUS].join(', ')} (got "${environmentSku}")`);
+  }
 
   const sleep = sleepImpl || defaultSleep;
   const now = nowImpl || (() => Date.now());
@@ -169,7 +186,7 @@ async function provisionCustomHost(opts = {}) {
     location: region,
     properties: {
       displayName,
-      environmentSku: 'Production',
+      environmentSku,
       databaseType: 'CommonDataService',
       linkedEnvironmentMetadata: { templates: [TEMPLATE_NAME] },
     },
@@ -214,7 +231,11 @@ async function provisionCustomHost(opts = {}) {
   let envId = envBody?.name || null;
   let instanceUrl = envBody?.properties?.linkedEnvironmentMetadata?.instanceUrl || null;
   let instanceApiUrl = envBody?.properties?.linkedEnvironmentMetadata?.instanceApiUrl || null;
-  let environmentSku = envBody?.properties?.environmentSku || 'Production';
+  // Prefer the SKU BAP reports back (it's authoritative once provisioning
+  // succeeds — BAP may have substituted a different SKU based on tenant policy)
+  // and fall back to the requested SKU on synchronous responses where the body
+  // is sparse.
+  let resolvedSku = envBody?.properties?.environmentSku || environmentSku;
   let provisioningState = extractProvisioningState(envBody) || 'Creating';
   const locationHeader = postRes.headers?.location || postRes.headers?.Location || null;
   let retryAfterSec = readRetryAfterSec(postRes.headers) || DEFAULT_RETRY_AFTER_SEC;
@@ -227,7 +248,7 @@ async function provisionCustomHost(opts = {}) {
       instanceUrl,
       instanceApiUrl,
       displayName,
-      environmentSku,
+      environmentSku: resolvedSku,
       provisioningState,
       durationSec: (now() - startedAt) / 1000,
       correlationId: cid,
@@ -315,7 +336,7 @@ async function provisionCustomHost(opts = {}) {
           const final = JSON.parse(envFinalRes.body);
           instanceApiUrl = final?.properties?.linkedEnvironmentMetadata?.instanceApiUrl || instanceApiUrl;
           instanceUrl = final?.properties?.linkedEnvironmentMetadata?.instanceUrl || instanceUrl;
-          environmentSku = final?.properties?.environmentSku || environmentSku;
+          resolvedSku = final?.properties?.environmentSku || resolvedSku;
         } catch {}
       }
     }
@@ -325,7 +346,7 @@ async function provisionCustomHost(opts = {}) {
       instanceUrl,
       instanceApiUrl,
       displayName,
-      environmentSku,
+      environmentSku: resolvedSku,
       provisioningState,
       durationSec: (now() - startedAt) / 1000,
       correlationId: cid,
@@ -361,4 +382,6 @@ module.exports = {
   isTerminalFailed,
   readRetryAfterSec,
   TEMPLATE_NAME,
+  ALLOWED_SKUS,
+  DEFAULT_SKU,
 };

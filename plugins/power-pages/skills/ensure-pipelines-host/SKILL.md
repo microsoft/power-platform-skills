@@ -272,10 +272,10 @@ Steps:
 
    **Pre-filter** (avoid probing every env in large tenants — recon found tenants with 1000+ envs):
    - Skip envs without Dataverse (`linkedEnvironmentMetadata.instanceApiUrl == null`).
-   - Skip envs not in `--skus` (default: `Production` only — covers Custom Hosts and PE; can pass `Production,Sandbox` to widen). PE always reports `environmentSku === 'Platform'` and is included regardless.
+   - Skip envs not in `--skus` (default: `Production,Sandbox` — both are valid hosts for the Pipelines app via Phase 4.B install-on-existing). PE always reports `environmentSku === 'Platform'` and is included regardless. Pass `--skus Production,Sandbox,Trial` to include Trial envs (eligible for app-install via 4.B but **not** for env-create via 4.A — Trial-license tenants get `NotEnoughCapacity_HasTrialLicense` from env-create).
    - Sort remaining by `lastModifiedTime` desc.
    - Cap at `--maxEnvsToProbe` (default 50; covers the typical-tenant 80% case in <5s with 10-concurrent).
-   - If cap is reached and no host found, surface a warning: `"Scanned N of M envs (filter: Production, sorted by lastModifiedTime). Pass --maxEnvsToProbe N+ or --skus Production,Sandbox to widen."`
+   - If cap is reached and no host found, surface a warning: `"Scanned N of M envs (filter: Production+Sandbox, sorted by lastModifiedTime). Pass --maxEnvsToProbe N+ or --skus Production,Sandbox,Trial to widen."`
 
    **Probe query** (single query covers presence-check AND version-capture):
    ```
@@ -396,25 +396,100 @@ A PE already exists in the tenant (one is provisioned automatically the first ti
 - No → fall through to Phase 3.C `NoHost` decision tree (admin-created Custom Host preferred for governance).
 - Cancel → exit.
 
-#### 3.C — Status `NoHost` (decision tree)
+#### 3.C — Status `NoHost` (env-first decision tree)
 
-Present three paths plus cancel. Order: automated fast-path first; manual fallbacks second.
+The prompt asks the user to pick the **host environment** first (option 1's nested list); the install method follows from that choice. Options 2–4 cover the create-new-env paths and cancel. See `PowerPipelines/host-env-selection-flow.html` for the full design walkthrough.
 
-> "No Pipelines host bound to this dev env. Pick a path:
+**Skip rule — caller already collected the env-first answer.** When this skill is invoked from `setup-pipeline` and `.last-pipeline.json` carries a `hostResolution` block populated by plan-alm Phase 2 Q4 (commit added in 2026-05-05), inspect those flags before showing the prompt:
+
+| Upstream signal | Action |
+|---|---|
+| `hostResolution.chosenEnvUrl` is a non-empty URL | Skip Phase 3.C entirely. Set `CHOSEN_ENV_URL = hostResolution.chosenEnvUrl`, route directly to **Phase 4.B** with that env (4.B step 1's "already chosen" path applies). Set `ACTION_TAKEN` per the existing 3.C step 4 mapping (`"user-installed-app-on-dev"` when origin matches `devEnvUrl`, else `"user-installed-app"`). |
+| `hostResolution.willProvisionCustom === true` AND `chosenEnvUrl` empty | Skip Phase 3.C. Route directly to **Phase 4.A** (provision new Custom Host). The pre-call confirmation gate in 4.A still runs — see 4.A "Pre-call confirmation (NON-SKIPPABLE)" below. |
+| `hostResolution.willUsePpac === true` AND `chosenEnvUrl` empty | Skip Phase 3.C. Route directly to **Phase 4.C** (PPAC manual). |
+| None of the above | Run Phase 3.C as written below. |
+
+**Why this skip rule exists.** plan-alm Phase 2 Q4 NoHost branch presents the same env-first menu (with the same 4-option shape) so the user makes the host choice once, at planning time, with the rendered ALM plan in front of them. Re-prompting in 3.C at execution time would force a second answer to the same question and risks the agent treating one of the answers as authoritative and ignoring the other (the bug behind the trial-license-409 → wrong-env-fallback chain that surfaced on 2026-05-05). Whenever the upstream signal is present, trust it.
+
+**Step 1: build the eligible-env list and apply role labels.**
+
+Take `RESOLUTION.candidates.eligibleForAppInstall[]` from Phase 2 (envs with Dataverse, caller has access, Pipelines NOT yet installed, sku ∈ default filter — `{Production, Sandbox}`; widen to `Production,Sandbox,Trial` via `--skus` for trial-license tenants).
+
+For each entry, decorate with project-context labels at presentation time. Match by **URL origin** (lowercase, trailing slash stripped, path/query ignored). Multiple labels join with ` · `.
+
+| Label | Source signal |
+|---|---|
+| `dev env` | The env URL the skill is running against (`devEnvUrl` from caller / `pac env who`) |
+| `source env` | `sourceEnvironmentUrl` from `.last-pipeline.json` (typically same env as dev) |
+| `staging env` | `targetEnvironmentUrl` of any stage in `.last-pipeline.json` whose stage name matches `/stag\|test\|uat/i` |
+| `production env` | `targetEnvironmentUrl` of any stage whose name matches `/prod/i` |
+
+Envs with no role match show without a label.
+
+**Step 2: check eligibility-list emptiness.**
+
+If the list has zero entries after the filters above, **first try widening the SKU filter to include Trial** before collapsing the prompt. Re-invoke `ensure-pipelines-host-detect.js` with `--skus Production,Sandbox,Trial` (one extra round-trip; cached after the first probe). If Trial envs surface, present them in option 1 with a *(Trial)* tag — they're eligible for the install-on-existing path (4.B) even though they cannot use the env-create fast-path (4.A would 409 on a trial-license tenant).
+
+If the widened list is **still** zero, drop option 1 from the prompt — but always print the SKU-filter detail so the user can override:
+
+> *"No existing environments matched the SKU filter (Production, Sandbox, Trial). If you have an env in this tenant that should host Pipelines, pick option N+1 (Other → paste URL) on the next prompt or run `--skus <comma-list>` to widen further. Otherwise, options:"*
+
+Then collapse to the 3-option variant shown below; renumber accordingly.
+
+**Step 3: present the prompt.**
+
+> "No Pipelines host bound to `{devEnvUrl}`. Which environment should host Pipelines?
 >
-> 1. **Provision new Custom Host (recommended)** — automated env-create with template `D365_ProjectHost`. Pipelines app pre-installed. Requires Global / Power Platform / Dynamics admin. ~5–10 min. *(eng.ms-documented; same template PPAC `New custom host` uses.)*
-> 2. **Install Pipelines app on an existing env** (guided manual) — pick an env with Dataverse + system-admin role; install via PPAC → Resources → Dynamics 365 apps. Use this if you don't have tenant-admin role but do have system-admin on an existing env. *(Public-docs path.)*
-> 3. **Create new Custom Host via PPAC UI** (guided manual) — fallback if path 1 fails. *(Public-docs path.)*
+> Pipelines lives in one env per tenant; pipelines, stages, and run history are stored there. Source envs deploy through it.
+>
+> 1. **Use an existing environment** — install the Pipelines app on it. Pick from your eligible envs:
+>    - `{env[0].displayName}` (`{env[0].instanceApiUrl}`) — `{environmentSku}` — *{labels if any}*
+>    - `{env[1].displayName}` (...)
+>    - …
+>    - *Other (paste URL)*
+>
+>    *⚠ Sandbox-sku envs trigger a confirmation prompt before install.*
+>
+> 2. **Create a brand-new dedicated host env** — automated env-create with template `D365_ProjectHost`. Pipelines app pre-installed. Requires Global / Power Platform / Dynamics admin. ~5–10 min.
+> 3. **Open PPAC and create one manually** — fallback if option 2 fails.
 > 4. **Cancel** — exit.
 >
 > *Note: Platform-Environment auto-provisioning is intentionally not offered in this iteration. If you'd prefer the free Platform Host, navigate to `make.powerapps.com` → any solution → Pipelines page in the browser; PE auto-provisions on first navigation, then re-run this skill — it will detect and use the new PE.*"
 
-- Option 1 → `ACTION_TAKEN = "fast-path-custom-d365projecthost"`, Phase 4.A (sub-prompts: name, region)
-- Option 2 → `ACTION_TAKEN = "user-installed-app"`, Phase 4.B (sub-prompt: which env)
-- Option 3 → `ACTION_TAKEN = "user-created-custom-ppac"`, Phase 4.C
-- Option 4 → exit
+**3-option variant (when option 1's list is empty):** drop option 1 entirely; renumber options 2/3/4 → 1/2/3. Replace the lead sentence with: *"No existing environments in this tenant qualify for hosting Pipelines. Options:"*.
 
-For path 1, a **second confirmation gate** echoes the exact API call about to be made (URL, body, tenant) before firing.
+**Step 4: route the answer.**
+
+| Selection | Phase 4 path | `ACTION_TAKEN` |
+|---|---|---|
+| Option 1 — picked env from list, URL matches `devEnvUrl` (origin-equal) | **4.B** (skip the "which env" sub-prompt; pass the picked env URL through as `CHOSEN_ENV_URL`) | `"user-installed-app-on-dev"` |
+| Option 1 — picked any other listed env | **4.B** (skip sub-prompt; pass `CHOSEN_ENV_URL`) | `"user-installed-app"` |
+| Option 1 — "Other (paste URL)" | **4.B** with user-supplied URL as `CHOSEN_ENV_URL` | `"user-installed-app"` |
+| Option 1 — picked env where `environmentSku === "Sandbox"` | **3.C-sandbox sub-prompt below**, then 4.B if confirmed | (deferred until confirmation) |
+| Option 2 | **4.A** (sub-prompts: name, region, admin confirmation) | `"fast-path-custom-d365projecthost"` |
+| Option 3 | **4.C** | `"user-created-custom-ppac"` |
+| Option 4 | exit | n/a |
+
+For option 2, a **second confirmation gate** echoes the exact API call about to be made (URL, body, tenant) before firing.
+
+**Step 5 (conditional): Sandbox confirmation gate.**
+
+If the env picked in option 1 has `environmentSku === "Sandbox"`, present:
+
+> "⚠ `{displayName}` is a **Sandbox** env (`environmentSku: Sandbox`).
+>
+> Power Platform Pipelines is documented to run on Production envs. Sandbox should work but isn't on the supported matrix.
+>
+> Proceed?
+> 1. Yes, proceed at my own risk
+> 2. Pick a different env
+> 3. Cancel"
+
+- Yes → continue to 4.B with the Sandbox env. Set `ACTION_TAKEN` per the dev-env-match rule above.
+- Pick a different env → re-show option 1's env list (keep the rest of the picker state).
+- Cancel → back to the top-level Phase 3.C prompt.
+
+**Telemetry note.** Splitting `"user-installed-app"` and `"user-installed-app-on-dev"` lets us see, after rollout, how often users co-locate Pipelines with their dev env vs. dedicating a separate env.
 
 #### 3.D — Status `HostWithoutPipelines` (rare)
 
@@ -443,7 +518,7 @@ Standard env-create API with the `D365_ProjectHost` template (eng.ms-documented;
 2. Region (default: tenant home geo from BAP `tenant` endpoint; offer override)
 3. Confirm caller is admin — single AskUserQuestion *"Are you a Global / Power Platform / Dynamics admin in this tenant? Yes / No / Not sure"*. If No or Not sure, recommend Path 4.B/4.C and fall back.
 
-**Pre-call confirmation (second consent gate):**
+**Pre-call confirmation (NON-SKIPPABLE second consent gate):**
 
 > "About to call `POST https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments?api-version=2021-04-01` for tenant `{tenantId}` with body:
 > ```json
@@ -458,6 +533,8 @@ Standard env-create API with the `D365_ProjectHost` template (eng.ms-documented;
 > }
 > ```
 > Provisions a Custom Host with the Pipelines app pre-installed (~5–10 min). Proceed? 1. Yes / 2. Cancel"
+
+> **This gate must always run.** Do NOT skip it because plan-alm Q4 already received a "continue with PP Pipelines" confirmation, or because `hostResolution.willProvisionCustom === true` upstream, or because the user said yes to the admin attestation moments earlier. plan-alm Q4 and the admin attestation are about *strategy*; this gate echoes the *exact API call body* (URL, region, tenant, template) and is the user's last chance to catch a wrong-tenant or wrong-region provisioning. The bug fixed on 2026-05-05 surfaced precisely because the agent treated the plan-alm pre-confirmation as covering this gate.
 
 **Call:**
 
@@ -483,7 +560,8 @@ x-ms-correlation-id: {uuid v4}
 - `202` + `Location` header + `Retry-After` header → poll the Location URL until lifecycle op completes.
 - `200` + immediate body (rare for env-create) → capture URLs.
 - `403` from initial POST → stop with *"Custom Host fast-path requires Global / Power Platform / Dynamics admin. Suggest Path 2 (Pipelines app on existing env) if you have system-admin on a Dataverse env, or Path 3 (PPAC UI) if you can request admin assistance."* Offer seamless fallback to 4.B / 4.C.
-- 4xx / 5xx other → surface error, ask user to retry or switch path.
+- `409` with a capacity-related code (e.g. `NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment`, `NotEnoughCapacity`, `NotEnoughCapacity_OrganizationDisabled`, `EnvironmentCapacityExceeded`) → **offer a SKU-fallback prompt before falling back to Path 4.B**. The license / capacity constraint usually applies only to the requested SKU; smaller SKUs (Sandbox, Developer, Trial) often succeed on the same tenant and produce a Pipelines host that works identically (the Pipelines app installs on any SKU — only license allocation differs). See sub-step "4.A — SKU fallback prompt" below. Only after the user declines a SKU fallback OR the fallback also fails should we re-enter Phase 3.C / Path 4.B.
+- 4xx / 5xx other → surface error, ask user to retry or switch path. On switch to 4.B, follow the same "use original eligible-env list" rule above.
 
 **Polling:**
 
@@ -499,12 +577,53 @@ Interval = `Retry-After` seconds (default 10s). Timeout = 15min (configurable). 
 
 **On success:** set `RESOLUTION.finalHostEnvUrl`, `finalHostEnvId`, `instanceApiUrl`, `actionTaken = "fast-path-custom-d365projecthost"`. Proceed to Phase 5.
 
+##### 4.A — SKU fallback prompt (capacity-error remediation)
+
+When env-create returns a 409 capacity-related error, the user's tenant doesn't have spare license/capacity for the requested SKU but may have it for a smaller SKU. Surface the constraint clearly and offer fallback SKUs **before** suggesting Path 4.B:
+
+1. Read the error body. Extract:
+   - `error.code` (e.g. `NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment`)
+   - `error.message` (the human-readable explanation from BAP, e.g. *"Trial licenses are limited to creating Trial environments only."*)
+
+2. Build the fallback SKU list. The default order is **Production (recommended) → Sandbox → Developer → Trial**, dropping the SKU that just failed. Each SKU carries a different caveat:
+
+   | SKU | When to suggest | Caveat to surface |
+   |---|---|---|
+   | `Production` | Default first choice | None — the documented Pipelines host SKU |
+   | `Sandbox` | Tenants with subscription but no spare Production capacity | *"Sandbox SKU works for Pipelines but is documented as non-production. Microsoft may apply different SLAs to Sandbox-hosted apps."* |
+   | `Developer` | Individual-developer tenants | *"Developer SKU is single-user. Other team members will not be able to deploy through this host. Use only if this is a personal/dev-only ALM setup."* |
+   | `Trial` | Trial-license tenants (no other option works) | *"Trial environments expire after 30 days unless converted. The Pipelines host will need to be re-provisioned at expiry."* |
+
+3. Tell the user the constraint and present the prompt:
+
+   > "Custom Host provisioning failed with `{error.code}`: {error.message}
+   >
+   > The Pipelines app installs identically on any SKU — only the license allocation differs. You can retry env-create with a smaller SKU, or fall back to installing the Pipelines app on an existing env (Path 4.B)."
+
+   `AskUserQuestion` (build the option list dynamically — drop the SKU that just failed, append the caveats inline):
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Retry env-create with a different SKU? | SKU fallback | (one option per remaining SKU, with caveat in the description), Fall back to Path 4.B (install Pipelines app on existing env), Cancel |
+
+4. Branch on the answer:
+   - **Picked SKU**: re-issue the 4.A pre-call confirmation gate (NON-SKIPPABLE — see "Pre-call confirmation" above) with the new SKU substituted into the body, then re-call `provision-custom-host.js` with `--environmentSku <picked>`. If that also fails with a capacity error, present the prompt again with the next SKU dropped. After two consecutive capacity failures, stop offering SKU fallbacks and route to Path 4.B.
+   - **Path 4.B**: route to 4.B per the "original eligible-env list" rule below.
+   - **Cancel**: exit cleanly.
+
+   **Always** discard any env GUID returned in the 409 response body — provisioning failed, so the GUID either doesn't represent a usable env or is an artifact. Path 4.B must use the Phase 2 eligible-env inventory exclusively.
+
 #### 4.B — Guided manual: Install Pipelines app on an existing env
 
-1. Sub-prompt: *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list as choices, plus "Other (paste URL)".
+1. **If the env was already chosen** (`CHOSEN_ENV_URL` is set, either from Phase 3.C option 1 OR from the upstream skip rule on `hostResolution.chosenEnvUrl`): skip the "which env" sub-prompt entirely — proceed directly to step 2 with the chosen env. Set `ACTION_TAKEN` per the Phase 3.C step 4 mapping (`"user-installed-app-on-dev"` when `CHOSEN_ENV_URL` origin matches `devEnvUrl`, else `"user-installed-app"`).
+
+   **Otherwise** (legacy entry path — caller invoked 4.B directly without going through 3.C, or arrived here via the 4.A failure fallback): present the sub-prompt: *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list **from `RESOLUTION.candidates.eligibleForAppInstall[]`** as choices, plus "Other (paste URL)". When arriving from 4.A's 409 trial-license fallback, the eligible list still applies — discard any env GUID surfaced in the 409 response body.
+
+> **Sanity check before printing the PPAC URL in step 2.** The env GUID injected into the URL must come from the chosen env's `name` field as enumerated in Phase 2 (or from `pac env list` for a user-pasted URL). Never substitute a GUID from a 4.A failure response, from `.last-host-check.json` of a different run, or from any other state path. If you cannot determine the GUID with confidence, ask the user to confirm via `AskUserQuestion` showing the env display name + URL + GUID before printing the PPAC link.
+
 2. Print PPAC URL: `https://admin.powerplatform.microsoft.com/manage/environments/{envId}/dynamics365apps` and instructions: *"Click 'Install app' → 'Power Platform Pipelines' → Next → accept terms → Install. Wait until the app shows 'Installed'."*
 3. Two-option AskUserQuestion: *"Done — proceed"* / *"Cancel"*.
-4. After confirmation, poll `verify-host-readiness.js` (Phase 5) against the chosen env URL. On Pipelines tables present, capture URLs, `actionTaken = "user-installed-app"`. Proceed to Phase 5.
+4. After confirmation, poll `verify-host-readiness.js` (Phase 5) against the chosen env URL. On Pipelines tables present, capture URLs and proceed to Phase 5.
 
 #### 4.C — Guided manual: PPAC `New custom host`
 
@@ -562,7 +681,7 @@ Write `.last-host-check.json` to the project root (or `--outputPath` if invoked 
   "finalHostInstanceApiUrl": "...",
   "isPlatformHost": true | false,
   "tenantDefaultCustomHostEnvId": "...",
-  "actionTaken": "none" | "reuse-existing-custom" | "reuse-existing-pe" | "fast-path-custom-d365projecthost" | "user-installed-app" | "user-created-custom-ppac",
+  "actionTaken": "none" | "reuse-existing-custom" | "reuse-existing-pe" | "fast-path-custom-d365projecthost" | "user-installed-app" | "user-installed-app-on-dev" | "user-created-custom-ppac",
   "pipelinesSolutionVersion": "9.x.y.z",
   "ready": true,
   "warnings": [
@@ -587,6 +706,15 @@ Write `.last-host-check.json` to the project root (or `--outputPath` if invoked 
 ```
 
 > **Schema version bump (1 → 2):** added `candidates.*` block to record the tenant-wide enumeration result. Cache fast-path (Phase 1 step 0) reads `finalHostEnvUrl` regardless of schemaVersion; the candidates block is informational and helps debug / re-run decisions. Old v1 files remain readable — any missing field is treated as "not yet enumerated".
+
+> **`actionTaken` enum — value definitions:**
+> - `"none"` — host already established before this run; no install/provision performed (Phase 3.A path or cache fast-path).
+> - `"reuse-existing-custom"` — user picked an unbound Custom Host that already existed in the tenant (Phase 3.C-pre or 3.C-pre').
+> - `"reuse-existing-pe"` — user picked the existing Platform Host (Phase 3.C-pre'').
+> - `"fast-path-custom-d365projecthost"` — Phase 4.A provisioned a new Custom Host via the env-create API.
+> - `"user-installed-app"` — Phase 4.B installed Pipelines on an existing env that is **not** the same as the dev env.
+> - `"user-installed-app-on-dev"` — Phase 4.B installed Pipelines on the **dev env itself** (URL origin matches `devEnvUrl`). Telemetry-distinct from `"user-installed-app"` so we can see how often users co-locate Pipelines with their dev env.
+> - `"user-created-custom-ppac"` — Phase 4.C — user created the env via the PPAC UI; flow detected it post-create.
 
 This file is consumed by `setup-pipeline` and `deploy-pipeline`.
 

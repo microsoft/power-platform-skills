@@ -7,11 +7,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const {
-  approve, block, runValidation, findProjectRoot, findPath,
-} = require('../../../scripts/lib/validation-helpers');
+const { approve, block, runValidation, findProjectRoot, findPath, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
 
 runValidation(async (cwd) => {
+  if (readDeferralMarker(findProjectRoot(cwd) || cwd)) return approve();  // ALM deferred — silent-approve.
   const projectRoot = findProjectRoot(cwd) || cwd;
 
   // Check for Power Platform Pipelines marker (primary path)

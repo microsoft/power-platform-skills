@@ -37,9 +37,15 @@
 // Power Pages site model uses three sibling unified entities, each with its own
 // solutioncomponent.componenttype. The discovery flow MUST query all three or
 // it will undercount the site and the solution that ships it:
-//   - powerpagecomponent       (componenttype 10426) — sub-records (most types)
-//   - powerpagesite            (componenttype 10427) — site root (1 per site)
-//   - powerpagesitelanguage    (componenttype 10428) — site languages (≥1 per site)
+//   - powerpagecomponent       (componenttype env-specific; typically 10426,
+//                               also observed as 10429 — query at runtime)
+//   - powerpagesite            (componenttype env-specific; typically 10427,
+//                               also observed as 10428 — query at runtime)
+//   - powerpagesitelanguage    (componenttype env-specific; typically 10428,
+//                               also observed as 10430 — query at runtime)
+//
+// Use scripts/lib/discover-component-types.js to resolve these for a specific
+// environment before any AddSolutionComponent call.
 //
 // Authoritative powerpagecomponenttype enum (picklist values) from
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/powerpagecomponent

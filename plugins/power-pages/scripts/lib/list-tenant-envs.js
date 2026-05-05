@@ -45,7 +45,18 @@ const { listEnvsViaPac } = require('./pac-bap-shim');
 
 const DEFAULT_API_VERSION = '2020-06-01';
 const DEFAULT_BAP_BASE = 'https://api.bap.microsoft.com';
-const DEFAULT_SKUS = ['Production'];
+// Default SKU filter for eligible-host enumeration. Production + Sandbox are
+// both valid hosts for the Power Platform Pipelines app — the eng.ms doc
+// describes the create-new fast-path as Production-only, but the *install on
+// existing env* path (Phase 4.B) works on Sandbox too. Trial is opt-in
+// (--skus Production,Sandbox,Trial) because Trial envs cannot use the
+// env-create fast-path; surfacing them here would mislead users about
+// what create-new can do, but they ARE valid for app-install. Defaulting to
+// Production-only used to push trial-license tenants straight to the
+// create-new path (which then fails with NotEnoughCapacity_HasTrialLicense),
+// so widening the default to include Sandbox restores the existing-env
+// option for the common Sandbox-only developer tenant.
+const DEFAULT_SKUS = ['Production', 'Sandbox'];
 const DEFAULT_MAX_ENVS = 30;
 const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;

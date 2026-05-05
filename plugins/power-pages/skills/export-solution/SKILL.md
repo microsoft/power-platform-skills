@@ -9,22 +9,6 @@ user-invocable: true
 argument-hint: "Optional: 'managed' or 'unmanaged' (default: asks)"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/export-solution/scripts/validate-export.js"'
-          timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the export-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. The solution was identified (by name) in the target Dataverse environment
-            2. The export type (managed or unmanaged) was confirmed with the user
-            3. An async export job was triggered and polled to completion
-            4. The solution zip file was downloaded and written to disk
-            5. The zip file was verified to contain Solution.xml
-            6. A completion summary was presented with the zip path and size
-          timeout: 30
 ---
 
 # export-solution
@@ -38,6 +22,65 @@ Triggers an async Dataverse solution export, polls until complete, downloads the
 - Solution exists in the environment (run `setup-solution` first if needed)
 
 ## Phases
+
+### Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
+- An environment variable / arg flag set by the orchestrator, or
+- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+  --projectRoot "." \
+  --envUrl "{envUrl from .solution-manifest.json or pac env who, if available}" \
+  --token "{token, if Phase 1 already acquired one}" \
+  --solutionId "{solutionId from .solution-manifest.json, if available}"
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. The freshness check requires env credentials + solutionId; without those the helper does an existence-only check.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, re-run the Phase 0 helper once to confirm freshness; if still stale, surface the detail and proceed to Phase 1 anyway (don't infinite-loop).
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Direct invocation of `export-solution` produces a zip without the orchestrator's pre-export completeness check. Users running this skill standalone often miss components that should have been added to the solution (cloud flows, env var values referenced by site settings, sample data references) and ship a zip that imports cleanly into staging but produces a broken site post-deploy. The pre-plan completeness check surfaces those gaps before any zip is built. The gate ensures `plan-alm` either ran (so completeness was verified and the export was scoped to the right solution lineage) or the user explicitly chose to bypass it.
 
 ### Phase 1 — Verify Prerequisites
 

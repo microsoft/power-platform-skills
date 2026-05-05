@@ -341,3 +341,110 @@ Exits 0 with `alm-lint: 0 findings` when clean; exits 1 and prints file/rule/mes
 > **Acceptance criterion:** No component-creation skill may ship that leaves a Dataverse record orphaned in `Default`. The lint, the resolver, and the discovery module together make this the path of least resistance — please use them.
 
 ---
+
+## Hook design for skill validation
+
+Hook validators run after a skill executes (or, badly, every time the assistant pauses) to surface incomplete state to the agent. **Get this wrong and you cost users real money.** A real incident on this plugin (BYOC supplier portal, 2026-05-04) had three Stop hooks LLM-evaluating skill-completion every turn, all returning `{ ok: false }` with multi-paragraph reasons because the user had explicitly deferred ALM. The agent kept acknowledging, the hooks kept refiring on each acknowledgement, and the transcript grew quadratically until the cost was visible.
+
+### Anti-patterns — do not use these
+
+| Pattern | Why it's wrong |
+|---|---|
+| **`type: prompt` Stop hooks for skill-completion** | Stop fires on every assistant pause, including user-input waits. LLM-evaluation can't reliably tell "this skill wasn't supposed to run" from "this skill failed", so it returns `ok: false` whenever artifacts are missing — forcing continuation. Combine with multiple skills' hooks all firing per turn, and you have a runaway loop. The plugin removed all of these in commit `e670581`. **Do not re-introduce.** |
+| **`process.exit(2)` (block) for soft "did this complete?" checks** | Blocking exit forces continuation. For "did the skill complete cleanly?" you almost never want forced continuation — you want a one-time advisory the agent acknowledges and moves on. Reserve `block()` for **hard correctness gates** only: malformed marker files, `.last-deploy.json.status === "Failed"`, lint failures, secrets in diffs. |
+| **Re-deriving completion from ephemeral artifacts** | If a validator checks `docs/foo.html` exists and the user legitimately deletes that file (cleanup, project move), the hook fails forever. Validation should reflect *intent*, not *artifact presence*. Use marker files the skill writes deliberately. |
+| **Stop hooks that duplicate PostToolUse hooks** | If a skill is already validated by `hooks/hooks.json` PostToolUse on the `Skill` tool (which fires once per skill invocation), a Stop hook running the same validator just adds noise — fires too often. Pick one. **Prefer PostToolUse.** |
+
+### Recommended patterns
+
+#### 1. Deterministic command validators with marker-file gates
+
+Each skill writes a marker file at completion (`.last-pipeline.json`, `.last-deploy.json`, `docs/alm-plan.html`, `.solution-manifest.json`, etc.). The validator:
+
+```js
+const { runValidation, findProjectRoot, approve, block, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
+
+runValidation((cwd) => {
+  const projectRoot = findProjectRoot(cwd) || cwd;
+
+  // 1. Honor explicit deferral first — silent-approve regardless of state.
+  if (readDeferralMarker(projectRoot)) return approve();
+
+  // 2. No marker -> not a foo session -> silent-approve.
+  const markerPath = path.join(projectRoot, '.last-foo.json');
+  if (!fs.existsSync(markerPath)) return approve();
+
+  // 3. Marker exists -> validate its shape. Block ONLY on hard failures.
+  let marker;
+  try { marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')); }
+  catch { return block('.last-foo.json could not be parsed as JSON.'); }
+
+  if (marker.status === 'Failed') {
+    return block('Last foo run failed (id: ' + marker.runId + '). Investigate before retrying.');
+  }
+  if (!marker.requiredField) {
+    return block('.last-foo.json is missing required field: requiredField');
+  }
+
+  return approve();
+});
+```
+
+This pattern doesn't loop: silent-approve produces no output, no forced continuation. Block fires only when the marker exists AND is genuinely broken.
+
+#### 2. Honor deferral markers before any other check
+
+If a user explicitly defers a skill family (e.g. ALM for a project handled by infra team's pipeline), they drop a marker file (`.alm-deferred` for ALM). All related validators short-circuit on this marker as their FIRST check.
+
+`scripts/lib/validation-helpers.js` exports `readDeferralMarker(projectRoot)` — every ALM validator on this plugin calls it first. The marker is recognized in three formats: empty (touch file), plain text (one-line reason), or JSON (`{ deferredAt, deferredBy, reason, scope }`).
+
+User-facing usage:
+```bash
+# At the project root:
+echo '{"reason":"ni-dev — ALM handled by infra"}' > .alm-deferred
+```
+
+#### 3. Prefer PostToolUse over Stop for skill-completion
+
+PostToolUse on the `Skill` tool fires **once per skill invocation**. Stop fires on **every assistant pause** (including user-input waits — every "Continue?" prompt fires it).
+
+This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. To wire validation for a new skill, register it in the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js` (see `AGENTS.md` → "Hooks" for the registration steps).
+
+#### 4. Skills write explicit status, not just artifact presence
+
+Marker files include a `status` field:
+
+```json
+{
+  "status": "Completed",   // or "Draft" | "Approved" | "In Execution" | "Deferred" | "Failed"
+  ...
+}
+```
+
+Validators check `status` when present rather than re-deriving completion from secondary artifacts. A `"Deferred"` status in the marker file is also a valid signal — silent-approve regardless of other field presence.
+
+### When you genuinely need a hard gate
+
+Some checks DO warrant blocking — they're not "did the skill complete?" checks but "did something go wrong that requires the agent to retry?" Examples that justify `block()`:
+
+- Marker file exists but is malformed JSON.
+- Marker file's `status === "Failed"` and the agent should investigate before continuing.
+- Required field is missing from a present marker (e.g. `.last-pipeline.json` without `pipelineId`).
+- Lint failure on a file the skill just wrote.
+- Secrets detected in a diff the skill is about to commit.
+
+These all share a property: the artifact is present, not absent. Absent artifacts always silent-approve.
+
+### Acceptance criterion
+
+A new skill's validator must:
+
+1. Silent-approve when its marker file is absent.
+2. Silent-approve when `.alm-deferred` (or skill-specific deferral marker) is present.
+3. Block ONLY when the marker is present AND in a state that requires retry.
+4. Not register a `type: prompt` Stop hook under any circumstances.
+5. Use `runValidation()` from `validation-helpers.js` so it inherits the standard try/catch and silent-approve-on-error fallback.
+
+If your validator can return `block()` when no skill-related work happened in the session, fix it before merging. The cost of getting this wrong is real-money runaway loops, not just noisy errors.
+
+---

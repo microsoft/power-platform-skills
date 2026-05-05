@@ -12,22 +12,6 @@ user-invocable: true
 argument-hint: "Optional: stage name or environment label (e.g. 'staging', 'production') to skip stage selection"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/deploy-pipeline/scripts/validate-deploy-pipeline.js"'
-          timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the deploy-pipeline skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. .last-pipeline.json was read and pipelineId, hostEnvUrl, stages were available
-            2. A target stage was selected by the user
-            3. ValidatePackageAsync was called and validation completed (operation changed away from 200000201)
-            4. DeployPackageAsync was called and deployment reached a terminal stagerunstatus (not still in-progress)
-            5. .last-deploy.json was written with pipelineId, stageRunId, solutionName, status, and deployedAt
-            6. A summary was presented with deployment outcome
-          timeout: 30
 ---
 
 # deploy-pipeline
@@ -48,6 +32,65 @@ Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeli
 - PAC CLI logged in (`pac env who` succeeds)
 
 ## Phases
+
+### Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / move to staging / push to prod / release this version*), the orchestrator (`/power-pages:plan-alm`) should run first. Direct invocation of `deploy-pipeline` bypasses the orchestrator's pre-plan completeness check, env-var resolution per stage, activation steps, and validation runs. This gate makes that bypass explicit.
+
+**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
+- An environment variable / arg flag set by the orchestrator, or
+- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+  --projectRoot "." \
+  --envUrl "{devEnvUrl}" \
+  --token "{token}" \
+  --solutionId "{solutionId from .solution-manifest.json, if available}"
+```
+
+The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. The freshness check requires env credentials + solutionId; without those the helper does an existence-only check.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy, and orchestrates this skill in the right order alongside setup-solution / setup-pipeline / activate-site / test-site. Want me to run plan-alm now?"
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I just want to deploy), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1. The deploy will still work, but env-var per-stage values, activation, and post-deploy validation aren't orchestrated.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). The plan's component count, size analysis, and split decisions may be outdated. Re-running `plan-alm` will refresh the analysis."
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, re-run the Phase 0 helper once to confirm freshness; if still stale, surface the detail and proceed to Phase 1 anyway (don't infinite-loop).
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Relationship to Phase 3.5 (pre-deploy completeness check).** Phase 3.5 (later in this skill) catches solution gaps right before deploy. Phase 0 catches the *bigger* miss: the user who never ran the orchestrator at all and is about to push a half-baked deploy through. The two are complementary.
 
 ### Phase 1 — Verify Prerequisites
 
@@ -584,6 +627,51 @@ If **Failed**:
   To investigate: open Power Platform make.powerapps.com → Solutions → Pipelines
   and find the failed run for details on what caused the failure.
 ```
+
+**7.6.1 Diagnose the failure.** Before asking the user what to do, query the stage run record for error details so we can offer a targeted remediation prompt:
+
+```
+GET {hostEnvUrl}/api/data/v9.1/deploymentstageruns({STAGE_RUN_ID})?$select=errordetails,validationresults,stagerunstatus
+Authorization: Bearer {HOST_TOKEN}
+```
+
+Parse `errordetails` and `validationresults` as JSON / text. Check for these patterns (case-insensitive):
+
+| Pattern in error text | Diagnosis | Remediation prompt |
+|---|---|---|
+| `AttachmentBlocked` OR `-2147188706` OR `not a valid type` OR `\.js.*blocked` | **Blocked attachments** — the target env's `blockedattachments` setting rejects file types in the solution | See 7.6.2 below |
+| `MissingDependency` OR `Missing dependency` | Missing solution dependencies in target | Surface the dependencies; recommend the user install them and retry |
+| (anything else) | Unknown failure | Fall through to the generic retry/exit prompt |
+
+**7.6.2 Blocked-attachment remediation (gated).** Only run when the diagnostic in 7.6.1 matched the blocked-attachment pattern. **Never modify the env's `blockedattachments` setting without an explicit AskUserQuestion gate.** This is a tenant-wide security setting; auto-modifying it would silently weaken security posture across other apps in the same env.
+
+1. Switch PAC CLI to the **target** environment so the helper queries the right env's settings, then identify which file types are blocked. By default the helper checks `js`; pass `--extensions` if the error mentions other types (e.g. `js,css`):
+   ```bash
+   pac env select --environment "{TARGET_ENV_URL}"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+     --envUrl "{TARGET_ENV_URL}" \
+     --extensions js \
+     --dry-run
+   ```
+   Read the output JSON. The fields you care about: `wasBlocked[]` (the extensions currently blocked on the env that were on your `--extensions` list — these are what would be removed) and `unchanged[]` (extensions you asked to remove that aren't actually blocked, no-op).
+
+   If `wasBlocked` is empty, the failure is **not** caused by a blocked attachment on this list — fall back to 7.6.3's generic retry prompt and surface the raw error text from `errordetails`.
+
+2. Tell the user explicitly:
+   > "The deployment failed because the target environment **`{targetEnvName}`** blocks file types that this solution needs: **`{wasBlocked.join(', ')}`**. This is an environment-level security setting that affects all users of that env. To proceed, the block needs to be removed for these specific types. The change is reversible from the Power Platform Admin Center → Environments → `{targetEnvName}` → Settings → Product → Features → Blocked Attachments."
+
+3. Invoke `AskUserQuestion` (do NOT bury this in chat — the user must answer before any change happens):
+
+   | Question | Header | Options |
+   |---|---|---|
+   | Allow removing the block on `{wasBlocked.join(', ')}` for the `{targetEnvName}` environment so the deployment can retry? This modifies a tenant-level security setting. | Unblock attachments | Yes — unblock these types and retry, No — leave settings unchanged (I'll investigate manually), Cancel |
+
+4. Branch on the answer:
+   - **Yes — unblock and retry**: invoke `fix-blocked-attachments.js` **without** `--dry-run` (with the same `--extensions`), then call `RetryFailedDeploymentAsync` and resume polling from Phase 6.2. Surface the change in the deploy summary so the user has a clear audit record. Switch PAC CLI back to the source env after the retry resolves so subsequent skill steps run against the source by default.
+   - **No / Cancel**: stop with a remediation pointer:
+     > "To unblock manually: open Power Platform Admin Center → Environments → **`{targetEnvName}`** → Settings → Product → Features → **Blocked Attachments** → remove `{blockedTypesPresent.join(', ')}` → Save. Then re-run `/power-pages:deploy-pipeline`."
+
+**7.6.3 Generic retry/exit prompt** (when 7.6.1 didn't match a known pattern, or the user declined the targeted remediation):
 
 Ask via `AskUserQuestion`:
 > "The deployment failed. What would you like to do?

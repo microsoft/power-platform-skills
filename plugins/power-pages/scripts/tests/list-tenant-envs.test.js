@@ -26,6 +26,32 @@ test('originOf extracts scheme + host', () => {
   assert.equal(originOf('not a url'), null);
 });
 
+test('preFilter: default SKU filter (Production+Sandbox) keeps Sandbox envs (regression)', () => {
+  // Bias fix 2026-05-05: the Production-only default was forcing Sandbox-only
+  // tenants into the create-new env path because eligibleForAppInstall came
+  // back empty. The default now includes Sandbox so an existing Sandbox env
+  // is a viable host candidate.
+  const envs = [
+    fakeEnv({ name: 'prod', environmentSku: 'Production' }),
+    fakeEnv({ name: 'sand', environmentSku: 'Sandbox' }),
+    fakeEnv({ name: 'trial', environmentSku: 'Trial' }),
+  ];
+  const r = preFilter(envs, ['Production', 'Sandbox']);
+  assert.deepEqual(r.candidates.map((c) => c.envId).sort(), ['prod', 'sand']);
+  assert.equal(r.envsAfterFilter, 2);
+});
+
+test('preFilter: widening to Production+Sandbox+Trial includes Trial envs', () => {
+  const envs = [
+    fakeEnv({ name: 'prod', environmentSku: 'Production' }),
+    fakeEnv({ name: 'sand', environmentSku: 'Sandbox' }),
+    fakeEnv({ name: 'trial', environmentSku: 'Trial' }),
+  ];
+  const r = preFilter(envs, ['Production', 'Sandbox', 'Trial']);
+  assert.deepEqual(r.candidates.map((c) => c.envId).sort(), ['prod', 'sand', 'trial']);
+  assert.equal(r.envsAfterFilter, 3);
+});
+
 test('preFilter: skips envs without Dataverse (no instanceApiUrl)', () => {
   const envs = [
     fakeEnv({ name: 'a' }), // has dv
@@ -223,7 +249,12 @@ test('listTenantEnvs: classifies hosts correctly with mocked verify', async () =
   assert.equal(result.envsAfterFilter, 4);
   assert.equal(result.envsProbed, 4);
   assert.equal(result.hitProbeCap, false);
-  assert.deepEqual(result.skusFilter, ['Production']);
+  // Default SKU filter widened from Production-only to Production+Sandbox on
+  // 2026-05-05 to fix a structural bias toward "create new env" — Sandbox-only
+  // tenants (common for individual developers and trial-license orgs) were
+  // seeing an empty eligibleForAppInstall list and getting forced into the
+  // create-new path. See list-tenant-envs.js DEFAULT_SKUS for rationale.
+  assert.deepEqual(result.skusFilter, ['Production', 'Sandbox']);
 });
 
 test('listTenantEnvs: respects maxEnvsToProbe cap and reports hitProbeCap', async () => {

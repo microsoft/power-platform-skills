@@ -9,21 +9,6 @@ user-invocable: true
 argument-hint: "Optional: solution unique name (e.g., 'ContosoSite')"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/setup-solution/scripts/validate-solution.js"'
-          timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the setup-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. A Dataverse publisher was verified or created (publisherId captured)
-            2. A Dataverse solution was verified or created (solutionId captured)
-            3. The Power Pages website component was added to the solution (component type discovered dynamically, not hardcoded)
-            4. A .solution-manifest.json file was written to the project root
-            5. A completion summary was presented showing solution details and component count
-          timeout: 30
 ---
 
 # setup-solution
@@ -37,6 +22,61 @@ Creates a Dataverse publisher and solution, then adds Power Pages site component
 - `powerpages.config.json` exists in the project root (site must be deployed at least once so `.powerpages-site/` exists with component records)
 
 ## Phases
+
+### Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
+- An environment variable / arg flag set by the orchestrator, or
+- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Sync mode (when `.solution-manifest.json` already exists) may additionally pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them, but for the initial gate the existence-only check is sufficient.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, re-run the Phase 0 helper once to confirm freshness; if still stale, surface the detail and proceed to Phase 1 anyway (don't infinite-loop).
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Direct invocation of `setup-solution` builds (or syncs) a solution without consulting the orchestrator's plan. If a plan already exists and recommends a multi-solution split, running this skill standalone may consolidate components into the wrong base solution. If no plan exists yet, `plan-alm` would have surfaced split recommendations, the asset-size advisory, and missing-component gaps before any solution was created — running `setup-solution` first burns through those decisions silently. The gate ensures `setup-solution` runs in the right context, while still leaving an explicit bypass for users who genuinely know they want a one-off solution.
 
 ### Phase 1 — Verify Prerequisites
 
@@ -182,7 +222,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
   --powerpageComponentId "{anyPowerpageComponentId}" \
   --siteLanguageId "{siteLanguageId}"
 ```
-Capture output as JSON; extract `.websiteComponentType` (~10427 for `powerpagesite`), `.subComponentType` (~10426 for `powerpagecomponent`), and `.siteLanguageComponentType` (~10428 for `powerpagesitelanguage`). The three sibling unified entities each have their own componenttype — site language is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly. See `references/solution-api-patterns.md` for the full 3-entity model.
+Capture output as JSON; extract `.websiteComponentType`, `.subComponentType`, and `.siteLanguageComponentType`. **Use the JSON values returned by the helper exactly as-is — do not substitute "typical" values from documentation.** Observed reference values across tenants include `10426`/`10427`/`10428` and `10429`/`10428`/`10430`, but the actual values vary per environment and must come from this script's runtime query. The three sibling unified entities each have their own componenttype — site language is NOT included by `AddRequiredComponents: true` on the website and must be added explicitly. See `references/solution-api-patterns.md` for the full 3-entity model.
 
 If the script reports the website record is not yet in any solution, stop and inform the user that the site must be deployed (via `/power-pages:deploy-site`) before it can be solutionized. If `subComponentType` is absent (no sub-components indexed yet), proceed anyway — you will discover all component IDs in Step 5.2.
 
@@ -254,6 +294,34 @@ Same pattern as Query E. Query type-27 `powerpagecomponent` records, discover th
 GET {envUrl}/api/data/v9.2/bots({botId})?$select=name,botid,statecode
 ```
 And discover bot component type via `solutioncomponents`. Store as `botComponents`. If no type-27 records exist, store `botComponents = []` and skip.
+
+**G. Connection references used by cloud flows in this solution:**
+
+Cloud flows reference connectors via `connectionreference` records. These records are separate Dataverse entities; if they aren't in the solution, the solution will export cleanly but **fail to import** in the target environment with a `MissingDependency` / connection-reference validation error. We must enumerate them here and add them in Step 5.6.
+
+Skip this query if Query E returned `cloudFlows = []`.
+
+1. Query connection references owned by this site's publisher:
+   ```
+   GET {envUrl}/api/data/v9.2/connectionreferences
+     ?$filter=startswith(connectionreferencelogicalname,'{publisherPrefix}_')
+     &$select=connectionreferenceid,connectionreferencelogicalname,connectionreferencedisplayname,connectorid
+   ```
+
+2. For each cloud flow (from Query E), parse its `clientdata` JSON (`workflows({workflowId})?$select=clientdata`) to find which `connectionReferenceLogicalName`s it uses. Filter the Query G.1 result to just those references — these are the ones that **must** be in the solution.
+
+3. **Resolve the connection-reference componenttype at runtime** — the value is environment-specific (observed values include `10137` and `10160` across tenants; do NOT hardcode):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-component-types.js" \
+     --envUrl "{envUrl}" --token "{token}" \
+     --websiteRecordId "{websiteRecordId}" \
+     --objectIds "{firstConnectionReferenceId}"
+   ```
+   Read `.resolved[0].componentType` and store as `connectionReferenceComponentType`. If the connection ref is not yet in any solution (`resolved[0].componentType === null`), it has never been added — fall back to passing one ID per call until one resolves, or query a known sibling connection ref. Without a runtime-resolved value, do **not** guess.
+
+   Store the filtered list as `connectionReferences[]`.
+
+If Query G returns no references (the cloud flows don't use connectors, or the publisher prefix doesn't match — rare), store `connectionReferences = []` and skip. Surface a soft warning if cloud flows exist but no matching connection refs were found — the user should verify whether their flows are using connectors that need binding in target envs.
 
 #### Step 5.3 — Categorize Site Settings
 
@@ -397,9 +465,9 @@ If the real-content orphan list (or `missing.siteLanguages`) is non-empty, promp
 
 Collect selections into `adoptedPpcs: [{ id, name, type, typeLabel }]`.
 
-When the user selects, call `AddSolutionComponent` per entry with `AddRequiredComponents: false` and the right `ComponentType`:
-- `subComponentType` (~10426) for `missing.powerpagecomponents` entries
-- `siteLanguageComponentType` (~10428) for `missing.siteLanguages` entries
+When the user selects, call `AddSolutionComponent` per entry with `AddRequiredComponents: false` and the right `ComponentType` (use the values resolved by `discover-component-types.js` in Step 5.1 — do not hardcode):
+- `subComponentType` for `missing.powerpagecomponents` entries
+- `siteLanguageComponentType` for `missing.siteLanguages` entries
 
 Do **not** set `DoNotIncludeSubcomponents: true` — the Dataverse API rejects that flag for non-Entity root components (HTTP 400 `0x80040216`) and it's not needed for these unified-entity rows.
 
@@ -508,7 +576,8 @@ The components array should be built in this order:
 5. **Dataverse tables** — `{ componentType: 1, componentId: MetadataId }`
 6. **Confirmed cloud flows** (from Step 5.5) — `{ componentId: workflowId, componentType: workflowComponentType }` (uses runtime-discovered type)
 7. **Confirmed bot components** — `{ componentId: botId, componentType: botComponentType }` (uses runtime-discovered type)
-8. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: 10373, addRequired: false }`. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
+8. **Connection references used by the confirmed cloud flows** (from Step 5.2 Query G) — one entry per reference: `{ componentId: connectionReferenceId, componentType: connectionReferenceComponentType, addRequired: false }`. Skip if `connectionReferences = []`. Use the **runtime-resolved** `connectionReferenceComponentType` — do **not** hardcode (observed values across tenants include `10137` and `10160`; the value is env-specific). Without these entries, the solution exports cleanly but the target import fails with a `MissingDependency` error — `deploy-pipeline` Phase 6.6.1 will surface it as a "missing connection reference" validation failure.
+9. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: subComponentType, addRequired: false }`. Use the `subComponentType` value resolved by `discover-component-types.js` in Step 5.1 — do **not** hardcode. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
 
 Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
 ```bash
