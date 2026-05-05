@@ -175,6 +175,24 @@ Steps:
     Asset advisory: {K} files flagged for Azure Blob externalization.
     ```
 
+10b. **Enumerate environment variable definitions** (runs whenever `DEV_TOKEN` is available — the size estimator gives a count but not per-variable metadata).
+
+    The renderer's Env Variables tab needs schema name, type, default value, and bound site setting per definition. Without this step, the tab can only show a count-summary note while the size signal and the warning quote a number — three views that don't fully agree. Running this query produces the row-level data so the table renders properly.
+
+    ```bash
+    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+      --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" \
+      --publisherPrefix "{publisherPrefix}" \
+      --websiteRecordId "{websiteRecordId}" > ./.alm-env-vars.json.tmp \
+      && mv ./.alm-env-vars.json.tmp ./.alm-env-vars.json
+    ```
+
+    Read the JSON: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Store the array as `ENV_VARS_DETAILS` for use when building `planData.envVars` in Phase 3 (see line ~659 — pass through `ENV_VARS_DETAILS` unchanged).
+
+    The helper degrades gracefully (returns `{ envVars: [], count: 0 }`) when the publisher prefix is unknown, the token has expired, or the query errors. In those cases the renderer falls back to the size estimator's count via `sizeAnalysis.envVarCount.value` (commit `8cbc39a`) — `ENV_VARS_DETAILS = []` is acceptable.
+
+    **Skip rule**: if `DEV_TOKEN` is null (auth was unavailable in step 6), skip this step and set `ENV_VARS_DETAILS = []`. The renderer's count-summary fallback covers this case.
+
 11. **Pre-plan completeness check** (only runs when `SOLUTION_DONE = true`).
 
     Before the user approves a plan, verify the existing solution already covers everything on the live site. Components created after the last `/power-pages:setup-solution` run (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` or `setup-auth`) are silently excluded from any plan built on top of a stale solution.
@@ -378,7 +396,14 @@ Store as `PP_APPROVAL_MODE`.
 
 **Note:** PP Pipelines always exports as a **managed** solution to target environments. Set `EXPORT_TYPE = "managed"` automatically — no question needed.
 
-**Q6 (auto-detect, no question):** Check `.solution-manifest.json` for `envVarDefinitions` or components with `componenttype 380`. If found, set `HAS_ENV_VARS = true` — note in plan that `deploy-pipeline` will prompt for per-stage env var values. If manifest not present (SOLUTION_DONE=false), set `HAS_ENV_VARS = false` — variables will be discovered during setup-solution.
+**Q6 (auto-detect, no question):** Resolve `HAS_ENV_VARS` in this order:
+
+1. If `ENV_VARS_DETAILS.length > 0` (Phase 1 Step 10b returned per-variable rows): `HAS_ENV_VARS = true`. This is the most accurate signal — we've enumerated the definitions directly.
+2. Else if `SPLIT_PLAN.sizeAnalysis.envVarCount.value > 0` (the size estimator counted definitions but the enumerator didn't return rows — usually because the publisher prefix or token was missing): `HAS_ENV_VARS = true`. The plan's count-summary fallback will explain to the user that per-variable details will be enumerated later.
+3. Else if `SOLUTION_DONE = true` and `.solution-manifest.json` lists components with `componenttype 380`: `HAS_ENV_VARS = true`. (Stale-manifest fallback — should rarely fire now that 10b is in place.)
+4. Otherwise: `HAS_ENV_VARS = false`. Variables will be discovered during setup-solution.
+
+When `HAS_ENV_VARS = true`, the plan notes that `deploy-pipeline` will prompt for per-stage env var values (see Phase 3 risks population).
 
 **Q7:** Ask via `AskUserQuestion`:
 > "Is this project's code tracked in Git source control?"
@@ -541,7 +566,7 @@ Build a `planData` object with all gathered strategy inputs:
   "appliedStrategies": ["strategy-1-layer"],
   "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions — ALWAYS at least 1 entry */ ],
   "recommendations": [ /* from SPLIT_PLAN.recommendations */ ],
-  "envVars": [ /* optional: env var metadata with per-environment values */ ],
+  "envVars": [ /* from ENV_VARS_DETAILS (Phase 1 Step 10b) — { schemaName, type, defaultValue, siteSetting } per definition; empty array when DEV_TOKEN unavailable */ ],
   "breakdown": { /* bytes-per-category from the estimate */ },
   "estimationMethod": "metadata-based",
   "estimationAccuracyPct": 15,
@@ -656,7 +681,7 @@ process.stdout.write(JSON.stringify(meta));
 ```
 Embed the result as `planData.pipelineMeta`.
 
-**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `envVars`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer.
+**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer. **`envVars`** comes from `ENV_VARS_DETAILS` populated in Phase 1 Step 10b — pass it through unchanged. When the array is empty, the renderer's count-aware fallback uses `sizeAnalysis.envVarCount.value` so the Env Variables tab still shows a count-summary note.
 
 > **`proposedSolutions[]` is never empty.** Even when `splitStrategy === "single"` and the decision tree recommends one solution, `compute-split-plan.js` returns one entry describing the base solution (uniqueName, displayName, sizeMB, componentCount, componentTypes). Pass that through. The renderer drives the Solutions tab off this array — leaving it empty produces an unhelpful "structure will be determined" placeholder. If you find yourself with `proposedSolutions = []` because compute-split-plan wasn't run, synthesize a single base entry from `solutionContents.solution` / `data.SITE_NAME` / `componentCount` / `totalSizeMB` rather than passing through an empty array. The renderer has a safety-net synthesizer for this case but the right fix is upstream — populate it explicitly.
 
@@ -673,7 +698,7 @@ Embed the result as `planData.pipelineMeta`.
 - `userChoseDeferToSetupPipeline` ← `USER_CHOSE_DEFER_TO_SETUP_PIPELINE` flag from Q4 (only set in the `MultipleUnboundCustomHosts` "Decide later" branch)
 
 Populate `risks` based on gathered data:
-- If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables — you will be prompted for per-stage values during deployment." }`
+- If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables ({N} detected) — you will be prompted for per-stage values during deployment." }`. Substitute `{N}` from `ENV_VARS_DETAILS.length` if it's > 0, otherwise from `SPLIT_PLAN.sizeAnalysis.envVarCount.value` (the count the size estimator reported). When neither source has a positive count, drop the parenthetical (`"This solution has environment variables — you will be prompted..."`).
 - If `GIT_STATUS = "no"`: `{ type: "info", message: "Consider enabling source control to track changes before deploying to production." }`
 - If `EXPORT_TYPE = "unmanaged"` and strategy includes a production target: `{ type: "warning", message: "Unmanaged solutions can be edited in the target environment — consider using Managed for production." }`
 - If `SOLUTION_DONE = false`: `{ type: "info", message: "A Dataverse solution will be created first — publisher prefix is irreversible once chosen." }`
