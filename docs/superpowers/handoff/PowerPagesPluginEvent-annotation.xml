@@ -27,7 +27,7 @@
           "data_pacCliVersion:PacCliVersion",
           "data_aiAgentName:AiAgentName",
           "data_aiAgentVersion:AiAgentVersion",
-          "data_eventObject:EventObject",
+          "data_eventInfo:EventInfo",
           "iKey:iKey",
           "ver:Ver"
         ],
@@ -40,7 +40,7 @@
           "Outcome", "DurationMs", "ErrorClass", "ErrorDescription",
           "OrgId", "TenantId",
           "PacCliVersion", "AiAgentName", "AiAgentVersion",
-          "EventObject",
+          "EventInfo",
           "iKey", "Ver"
         ],
         "EnableOriginalMessage": false

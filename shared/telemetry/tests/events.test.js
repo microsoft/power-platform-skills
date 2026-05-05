@@ -145,11 +145,11 @@ test("data has stable key set across calls (no key drift)", () => {
     pacCliVersion: "1.36.0",
     aiAgentName: "Claude Code",
     aiAgentVersion: "2.0.0",
-    eventObject: { detail: "anything" },
+    eventInfo: { detail: "anything" },
   });
   const expectedKeys = [
     "aiAgentName", "aiAgentVersion",
-    "correlationId", "eventName", "eventObject", "eventType",
+    "correlationId", "eventInfo", "eventName", "eventType",
     "nodeVersion", "orgId", "osName", "osVersion",
     "pacCliVersion",
     "pluginName", "pluginVersion", "sessionId", "severity",
@@ -158,15 +158,15 @@ test("data has stable key set across calls (no key drift)", () => {
   assert.deepEqual(Object.keys(ev.data).sort(), expectedKeys);
 });
 
-test("eventObject passes through as a dynamic object (not stringified)", () => {
-  const eventObject = { region: "us-west", attempt: 3, nested: { a: 1 } };
+test("eventInfo passes through as a dynamic object (not stringified)", () => {
+  const eventInfo = { region: "us-west", attempt: 3, nested: { a: 1 } };
   const ev = buildSkillStarted(ENVELOPE, {
     ...common,
     skillName: "add-seo",
-    eventObject,
+    eventInfo,
   });
-  assert.equal(typeof ev.data.eventObject, "object");
-  assert.deepEqual(ev.data.eventObject, eventObject);
+  assert.equal(typeof ev.data.eventInfo, "object");
+  assert.deepEqual(ev.data.eventInfo, eventInfo);
 });
 
 test("buildSkillCompleted carries errorDescription", () => {
