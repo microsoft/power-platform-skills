@@ -235,7 +235,7 @@ If the user picks **Add a rule**, use a follow-up `AskUserQuestion`:
 
 A fifth option for "Allow trusted IPs" can be offered when contextually appropriate (same structured format).
 
-Translate the answer into the parameters required by `set-rules.js`. Keep the user out of the priority-numbering and rule-naming details: pick safe defaults (priority `1000+i`, rule names like `Block-Countries`, `Allow-Office-IP`).
+Translate the answer into the parameters required by `set-rules.js`. Keep the user out of the priority-numbering and rule-naming details: pick safe defaults (priority `1000+i`, rule names like `BlockCountries`, `AllowOfficeIP`).
 
 If the user picks **Remove a rule**, list current rules with friendly names and pick by name.
 
@@ -319,7 +319,8 @@ Use `AskUserQuestion`:
 - **Background long-running calls** — enable / disable are asynchronous. Run them via `run_in_background` and rely on the helper script's built-in polling.
 - **Idempotent operations** — re-running the same action is safe. Track success / failure per call and continue on partial failures.
 - **Never replace rules silently** — `set-rules.js` writes the full rule list; the skill must read existing rules first and merge them with the new rule unless the user explicitly chose "replace".
-- **No company names in rule examples** — use generic names ("Allow-Office-IP", "Block-Bot-Traffic") and avoid referencing real organizations.
+- **Rule naming** — rule names must start with a letter and contain only letters and numbers (no hyphens, underscores, or spaces). Use PascalCase (e.g., `BlockCountries`, `AllowOfficeIP`, `RateLimitPerIP`).
+- **No company names in rule examples** — use generic names (`AllowOfficeIP`, `BlockBotTraffic`) and avoid referencing real organizations.
 
 ## References
 

@@ -38,6 +38,15 @@ try {
   fail(`Failed to read rules file: ${err.message}`, 1);
 }
 
+const RULE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
+if (Array.isArray(payload.CustomRules)) {
+  for (const rule of payload.CustomRules) {
+    if (rule.name && !RULE_NAME_RE.test(rule.name)) {
+      fail(`Invalid rule name "${rule.name}": must start with a letter and contain only letters and numbers.`, 1);
+    }
+  }
+}
+
 (async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);

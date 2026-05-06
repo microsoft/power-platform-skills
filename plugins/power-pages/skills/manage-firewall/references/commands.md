@@ -174,7 +174,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" \
 {
   "CustomRules": [
     {
-      "name": "Block-Malicious-IPs",
+      "name": "BlockMaliciousIPs",
       "priority": 1000,
       "enabledState": "Enabled",
       "ruleType": "MatchRule",
@@ -292,7 +292,7 @@ Each object in the `CustomRules` array follows this schema:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Unique rule name. Use descriptive names like `Block-Countries`, `Allow-Office-IP`. |
+| `name` | string | Yes | Unique rule name. Must start with a letter and contain only letters and numbers — no hyphens, underscores, or spaces. Use PascalCase (e.g., `BlockCountries`, `AllowOfficeIP`). |
 | `priority` | integer | Yes | Evaluation order (first-match-wins). Must be >= 11. Lower numbers evaluate first. |
 | `enabledState` | string | Yes | `"Enabled"` or `"Disabled"`. |
 | `ruleType` | string | Yes | `"MatchRule"` (standard) or `"RateLimitRule"` (rate limiting). |
