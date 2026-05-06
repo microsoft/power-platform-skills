@@ -436,17 +436,27 @@ If the widened list is **still** zero, drop option 1 from the prompt — but alw
 
 Then collapse to the 3-option variant shown below; renumber accordingly.
 
-**Step 3: present the prompt.**
+**Step 3a: rank and cap the eligible-env list before building the prompt.**
+
+`AskUserQuestion` becomes unusable past about 7-8 options, and the eligible list can run to dozens of envs in tenants with many environments. Apply a **5-env presentation cap** before rendering the prompt, with role-aware ranking so the most relevant envs always appear first:
+
+1. **Always-visible role-labeled envs** (highest priority — these are the project's own envs and are almost always what the user wants to pick): include any eligible env that carries a `dev env`, `source env`, `staging env`, or `production env` label from Step 1's role decoration. Dedupe by URL origin.
+2. **Fill remaining slots up to 5** from the rest of the eligible list, in `list-tenant-envs.js`'s native order (name-hint pattern → admin-perms → lastModifiedTime).
+3. **Always append** an "Other (paste URL)" option as the last entry inside option 1's nested list.
+
+Track the **total** eligible count separately from the visible count — when `eligible.length > 5`, surface the gap inline so the user knows they can reach the long tail via "Other".
+
+**Step 3b: present the prompt.**
 
 > "No Pipelines host bound to `{devEnvUrl}`. Which environment should host Pipelines?
 >
 > Pipelines lives in one env per tenant; pipelines, stages, and run history are stored there. Source envs deploy through it.
 >
-> 1. **Use an existing environment** — install the Pipelines app on it. Pick from your eligible envs:
+> 1. **Use an existing environment** — install the Pipelines app on it.{eligibleCountSuffix} Pick from your eligible envs:
 >    - `{env[0].displayName}` (`{env[0].instanceApiUrl}`) — `{environmentSku}` — *{labels if any}*
 >    - `{env[1].displayName}` (...)
->    - …
->    - *Other (paste URL)*
+>    - … (up to 5 entries)
+>    - *Other (paste URL) — for any eligible env not on this short list*
 >
 >    *⚠ Sandbox-sku envs trigger a confirmation prompt before install.*
 >
@@ -455,6 +465,18 @@ Then collapse to the 3-option variant shown below; renumber accordingly.
 > 4. **Cancel** — exit.
 >
 > *Note: Platform-Environment auto-provisioning is intentionally not offered in this iteration. If you'd prefer the free Platform Host, navigate to `make.powerapps.com` → any solution → Pipelines page in the browser; PE auto-provisions on first navigation, then re-run this skill — it will detect and use the new PE.*"
+
+`{eligibleCountSuffix}` substitution rules:
+- `eligible.length <= 5` → empty string (no suffix; all envs visible).
+- `eligible.length > 5` → ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` (leading space).
+
+When the user picks "Other (paste URL)", **pre-fill** the URL input with `pac env list --output json` results so they can paste-or-pick from the full tenant inventory rather than typing a URL by hand.
+
+**Test scenarios to verify when changing this prompt:**
+- 0 eligible → 3-option variant (drop option 1 entirely, see the empty-list branch above).
+- 1-5 eligible → list all inline, no suffix.
+- 6+ eligible with role-labeled envs (dev/staging/prod) present → all role-labeled envs surface first; remaining slots filled by ranking; suffix shows count gap.
+- 6+ eligible with NO role-labeled envs → top 5 by ranking; suffix shows count gap.
 
 **3-option variant (when option 1's list is empty):** drop option 1 entirely; renumber options 2/3/4 → 1/2/3. Replace the lead sentence with: *"No existing environments in this tenant qualify for hosting Pipelines. Options:"*.
 
