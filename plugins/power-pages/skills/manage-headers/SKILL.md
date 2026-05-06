@@ -258,18 +258,6 @@ If yes, invoke `/deploy-site`. If no, remind the user that the new headers only 
 - **Track failures, don't roll back** — record per-setting success/failure and continue.
 - **Read-only by default** — without explicit confirmation in Phase 4, the skill writes nothing.
 
-## Progress tracking table
-
-Keep this table in your final response, filling each status as phases complete:
-
-| Phase | Status |
-|---|---|
-| 1. Check prerequisites | ☐ |
-| 2. Review configured headers | ☐ |
-| 3. Plan the changes | ☐ |
-| 4. Apply the changes | ☐ |
-| 5. Summarize and next steps | ☐ |
-
 ## References
 
 - `references/header-rules.md` — the per-setting safe defaults, why they matter, and the corresponding Power Pages site setting names

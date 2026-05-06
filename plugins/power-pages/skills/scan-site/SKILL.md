@@ -269,19 +269,6 @@ If the user wants help fixing items, group critical findings, explain the first 
 - **Trial sites** — some scan features may be limited on trial or developer sites. Do not block the workflow; add an `info` finding instead.
 - **Scan results** — when the scan finishes, the service sends an email notification. The scan summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
 
-## Progress tracking table
-
-Keep this table in your final response, filling each status as phases complete:
-
-| Phase | Status |
-|---|---|
-| 1. Check prerequisites | ☐ |
-| 2. Plan the scan | ☐ |
-| 3. Run the scan | ☐ |
-| 4. Fetch results | ☐ |
-| 5. Build the report | ☐ |
-| 6. Present and next steps | ☐ |
-
 ## References
 
 - `references/commands.md` — flags, response, and error catalogue for the scan scripts

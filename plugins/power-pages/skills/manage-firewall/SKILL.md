@@ -313,18 +313,6 @@ Use `AskUserQuestion`:
 - **Never replace rules silently** — `set-rules.js` writes the full rule list; the skill must read existing rules first and merge them with the new rule unless the user explicitly chose "replace".
 - **No company names in rule examples** — use generic names ("Allow-Office-IP", "Block-Bot-Traffic") and avoid referencing real organizations.
 
-## Progress tracking table
-
-Keep this table in your final response, filling each status as phases complete:
-
-| Phase | Status |
-|---|---|
-| 1. Check prerequisites | ☐ |
-| 2. Read current firewall state | ☐ |
-| 3. Decide what to do | ☐ |
-| 4. Apply the change | ☐ |
-| 5. Summarize and next steps | ☐ |
-
 ## References
 
 - `references/commands.md` — flags, response shape and error catalogue for the firewall scripts
