@@ -2,11 +2,11 @@
 name: canvas-app-planner
 description: >-
   Writes the plan document and App.pa.yaml for Canvas Apps. Receives an approved
-  plan from the edit-canvas-app skill. Discovers available controls, APIs, and
+  plan from the canvas-app skill. Discovers available controls, APIs, and
   data sources; gathers control property definitions via describe_control; then
   writes App.pa.yaml (CREATE mode) and canvas-app-plan.md for downstream
   canvas-screen-builder agents.
-  Called by edit-canvas-app — not invoked directly by users.
+  Called by canvas-app — not invoked directly by users.
 color: cyan
 tools:
   - Read
@@ -24,7 +24,7 @@ tools:
 
 # Canvas App Plan Writer
 
-You receive an **approved plan** from the orchestrating `edit-canvas-app` skill. Your job
+You receive an **approved plan** from the orchestrating `canvas-app` skill. Your job
 is to discover available resources, gather control property definitions, write output files,
 and return a summary. You do NOT design the plan or interact with the user — the plan has
 already been approved.

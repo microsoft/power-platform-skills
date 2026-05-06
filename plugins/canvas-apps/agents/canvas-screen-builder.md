@@ -5,8 +5,8 @@ description: >-
   canvas-app-plan.md for all context. For Create actions, writes a new screen
   .pa.yaml from scratch. For Modify actions, reads the existing .pa.yaml and
   applies targeted changes. Does not validate — compilation is handled by the
-  edit-canvas-app skill after all builders finish.
-  Called by edit-canvas-app in parallel — not invoked directly by users.
+  canvas-app skill after all builders finish.
+  Called by canvas-app in parallel — not invoked directly by users.
 color: green
 tools:
   - Read

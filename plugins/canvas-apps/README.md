@@ -25,12 +25,12 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
 
 ## Skills
 
-### `/edit-canvas-app`
+### `/canvas-app`
 
 Create or edit a Canvas App. Automatically detects whether to generate a new app from scratch
 or edit an existing one based on the current app state.
 
-**Usage:** Invoke directly with `/edit-canvas-app`, or use natural language to trigger it:
+**Usage:** Invoke directly with `/canvas-app`, or use natural language to trigger it:
 
 - `Create a Canvas App for managing inventory`
 - `I need a Canvas App for tracking employee time off`
