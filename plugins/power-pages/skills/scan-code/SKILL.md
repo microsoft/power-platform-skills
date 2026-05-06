@@ -1,5 +1,5 @@
 ---
-name: manage-code-scan
+name: scan-code
 description: >-
   Scans a Power Pages code site project for security issues in source code and dependencies.
   Runs static analysis with opengrep and dependency scanning with trivy, then produces an
@@ -14,7 +14,7 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Manage Code Scan
+# Scan Code
 
 Run security analysis on a Power Pages code site's source files and installed packages, then summarize the results in an HTML report.
 
@@ -78,7 +78,7 @@ Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user 
 Run the prerequisite check script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/check-tools.js"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/check-tools.js"
 ```
 
 The script prints a JSON object describing which tools are present. Handle the result based on availability:
@@ -198,7 +198,7 @@ Skip this phase if the user opted out of code analysis.
 Code scans can take several minutes on larger projects. Run the script in the background and monitor its output:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/run-opengrep.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --ruleset "<chosen_ruleset>" \
   --output "<TEMP_DIR>/opengrep.json"
@@ -215,7 +215,7 @@ If opengrep exits non-zero, treat it as a single `info` finding with the capture
 Skip this phase if the user opted out of package analysis.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/run-trivy.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --severity "<chosen_severity>" \
   --output "<TEMP_DIR>/trivy.json"
@@ -253,7 +253,7 @@ Write the merged data to `<TEMP_DIR>/code-scan-data.json` with these keys:
 - `FINDINGS_DATA` — array of finding objects: `{ id, severity, title, tag?, location?, details?, reasoning, fix }`
 - `DETAILS_DATA` — `{ label: 'Tools used', kind: 'kv', entries: [{ key: 'opengrep', value: '<version>' }, { key: 'trivy', value: '<version>' }, { key: 'Ruleset', value: '<ruleset>' }, { key: 'Trivy scanners', value: '<vuln,secret,license>' }, { key: 'Severity floor', value: '<severity>' }] }`
 
-If running in **data-only mode**, write the data file to `<DATA_ONLY_DIR>/manage-code-scan.json` and stop here. Do **not** render or open the HTML.
+If running in **data-only mode**, write the data file to `<DATA_ONLY_DIR>/scan-code.json` and stop here. Do **not** render or open the HTML.
 
 ### 5.3 Render HTML report
 
@@ -284,7 +284,7 @@ Open the generated HTML in the user's default browser.
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "ManageCodeScan"`.
+> Use `--skillName "ScanCode"`.
 
 ### 6.3 Summarize and offer follow-ups
 

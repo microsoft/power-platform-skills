@@ -3,7 +3,7 @@
  * render-scan-report.js — Renders a scan report HTML file from a JSON data file.
  *
  * Used by skills that report findings in a uniform Overview/Findings/Details
- * layout (manage-code-scan, manage-site-scan, manage-headers, manage-firewall).
+ * layout (scan-code, scan-site, manage-headers, manage-firewall).
  *
  * Usage:
  *   node render-scan-report.js --output <path> --data <json-file>

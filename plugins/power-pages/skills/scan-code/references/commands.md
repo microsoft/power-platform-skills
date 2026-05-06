@@ -1,4 +1,4 @@
-# Manage Code Scan — Commands
+# Scan Code — Commands
 
 Reference for the helper scripts under `scripts/`. Each script is non-interactive, accepts flags only, prints structured JSON, and uses non-zero exit codes for invocation errors only — empty findings still exit zero. All scripts support `--help` to display usage, flags, and exit codes.
 
@@ -18,7 +18,7 @@ Detects whether `opengrep` and `trivy` are installed and on `PATH`.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/check-tools.js"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/check-tools.js"
 ```
 
 | Flag     | Required | Description |
@@ -55,7 +55,7 @@ Runs `opengrep scan` against a project directory and writes a normalized finding
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/run-opengrep.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" \
   --projectRoot <path> \
   --ruleset <ruleset> \
   --output <json-file> \
@@ -119,7 +119,7 @@ Runs `trivy fs` against the project root, scanning for vulnerabilities in depend
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-code-scan/scripts/run-trivy.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" \
   --projectRoot <path> \
   --severity <list> \
   --output <json-file> \

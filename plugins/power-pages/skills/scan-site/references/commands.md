@@ -1,4 +1,4 @@
-# Manage Site Scan — Commands
+# Scan Site — Commands
 
 Reference for the helper scripts under `scripts/`. Every script is non-interactive, accepts flags only, and prints a JSON object on success. All scripts support `--help` to display usage, flags, and exit codes. The first stage is always `resolveContext()` from the shared admin-api client, so every script can fail with exit code `2` ("sign-in required") before doing any work.
 
@@ -97,7 +97,7 @@ Triggers a thorough scan asynchronously.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" \
   --portalId <guid>
 ```
 
@@ -128,7 +128,7 @@ Polls the "is ongoing" endpoint until the scan finishes or the timeout elapses.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/poll-deep-scan.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" \
   --portalId <guid> \
   [--timeoutMinutes <n>] \
   [--intervalSeconds <n>]
@@ -177,7 +177,7 @@ Fetches the latest completed deep-scan report and writes the response to a file.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/get-latest-report.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" \
   --portalId <guid> \
   --output <file>
 ```

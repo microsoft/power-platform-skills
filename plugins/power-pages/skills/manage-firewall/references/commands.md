@@ -30,7 +30,7 @@ The skill resolves `websiteId` → `portalId` once during Phase 1 by reading `.p
 
 If `.powerpages-site/website.yml` does not exist, the site has not been deployed yet. The skill does **not** try to identify the site by name or URL (two sites in the same environment can share a name, and the URL changes when the subdomain is updated) — it directs the user to `/deploy-site` and stops.
 
-See the resolution helper section in `manage-site-scan/references/commands.md` for the full `website.js` contract.
+See the resolution helper section in `scan-site/references/commands.md` for the full `website.js` contract.
 
 ---
 

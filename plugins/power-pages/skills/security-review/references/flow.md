@@ -35,7 +35,7 @@ Confirmation matters because some sub-skills are long-running. Surprising the us
 
 ## Step 4 — Scan in progress
 
-Sub-skills run as **parallel subagents**. Long-running scans (`manage-code-scan`, `manage-site-scan`) launch first to get a head start, then the remaining checks launch immediately after. The user sees one progress line when each subagent completes. Examples:
+Sub-skills run as **parallel subagents**. Long-running scans (`scan-code`, `scan-site`) launch first to get a head start, then the remaining checks launch immediately after. The user sees one progress line when each subagent completes. Examples:
 
 - "All checks are running now…"
 - "Code check finished — 2 important issues, 4 smaller ones."
@@ -65,7 +65,7 @@ After they have had a moment to look, offer the next action with one question: w
 Always end with concrete, actionable next steps. Examples:
 
 - "Fix the three critical items in **Browser headers** (`/manage-headers`)."
-- "Run the full live-site scan once the headers are deployed (`/manage-site-scan`)."
+- "Run the full live-site scan once the headers are deployed (`/scan-site`)."
 - "Add a rate-limit rule to your sign-in pages (`/manage-firewall`)."
 
 The next steps are also stored in the consolidated HTML so the user can refer back to them after the chat session is over.

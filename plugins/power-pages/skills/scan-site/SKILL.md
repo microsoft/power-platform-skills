@@ -1,5 +1,5 @@
 ---
-name: manage-site-scan
+name: scan-site
 description: >-
   Runs a Power Pages security scan on a deployed site, retrieves the latest scan
   report, and produces an HTML summary. Scans the site's public surface for
@@ -13,13 +13,13 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Manage Site Scan
+# Scan Site
 
 Run a security scan on a deployed Power Pages site, fetch the latest results, and surface them in a uniform HTML report.
 
 The scan checks the site's public pages for vulnerabilities across multiple security categories. It runs server-side and may take several minutes to complete.
 
-This skill talks to the Power Platform service that owns the site — it does not analyze local code. The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available. Pair it with `/manage-code-scan` for source-level analysis.
+This skill talks to the Power Platform service that owns the site — it does not analyze local code. The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available. Pair it with `/scan-code` for source-level analysis.
 
 ## Gotchas
 
@@ -161,14 +161,14 @@ Let the user know the scan may take several minutes and remind them they can kee
 Start the scan:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/start-deep-scan.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" \
   --portalId "<PORTAL_ID>"
 ```
 
 Then poll for completion with the same portalId from Phase 1.2:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/poll-deep-scan.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" \
   --portalId "<PORTAL_ID>" \
   --timeoutMinutes 20
 ```
@@ -180,7 +180,7 @@ The polling script prints progress lines every minute and exits when the scan fi
 ## Phase 4: Fetch results
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-site-scan/scripts/get-latest-report.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" \
   --portalId "<PORTAL_ID>" \
   --output "<TEMP_DIR>/latest.json"
 ```
@@ -215,7 +215,7 @@ Write `<TEMP_DIR>/site-scan-data.json` with:
 - `FINDINGS_DATA` — array of finding objects (`id, severity, title, tag?, location?, details?, reasoning, fix?`). Use the page URL or endpoint as `location` when available.
 - `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Scan type', value: 'Deep' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
 
-In **data-only mode**, write the file to `<DATA_ONLY_DIR>/manage-site-scan.json` and stop here — do not render or open HTML.
+In **data-only mode**, write the file to `<DATA_ONLY_DIR>/scan-site.json` and stop here — do not render or open HTML.
 
 ### 5.3 Render HTML
 
@@ -241,7 +241,7 @@ Open the rendered HTML.
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "ManageSiteScan"`.
+> Use `--skillName "ScanSite"`.
 
 ### 6.3 Summarize and offer follow-ups
 

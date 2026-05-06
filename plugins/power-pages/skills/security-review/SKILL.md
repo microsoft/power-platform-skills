@@ -87,7 +87,7 @@ Only this one task. Do not create any other tasks until Phase 1 completes.
 
 Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user the site needs to be created first with `/create-site`, then stop.
 
-For the `monitor` and `release` goals (any goal that delegates to `manage-site-scan` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
+For the `monitor` and `release` goals (any goal that delegates to `scan-site` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
 
 For the `code-config` goal, the deploy check is not required: code and package scanning works on local source files alone.
 
@@ -142,9 +142,9 @@ Map the answer to a goal id:
 
 | Option | Goal id | Sub-skills involved (Phase 4) |
 |--------|---------|-------------------------------|
-| Code and config | `code-config` | manage-code-scan, audit-permissions (and read-only check of setup-auth state) |
-| Release readiness | `release` | manage-code-scan, manage-site-scan, manage-headers, manage-firewall, audit-permissions (and read-only check of setup-auth state) |
-| Deployed site | `monitor` | manage-site-scan |
+| Code and config | `code-config` | scan-code, audit-permissions (and read-only check of setup-auth state) |
+| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions (and read-only check of setup-auth state) |
+| Deployed site | `monitor` | scan-site |
 
 ### 2.2 Step 2 — Choose scope and depth
 
@@ -206,7 +206,7 @@ Sub-skills run as **parallel subagents** using the `Agent` tool. Launch the long
 
 **Wave 1 — long-running scans (launch first):**
 
-Spawn background subagents for `manage-code-scan` and `manage-site-scan` (when selected). These sub-skills take the most time and benefit from an early start.
+Spawn background subagents for `scan-code` and `scan-site` (when selected). These sub-skills take the most time and benefit from an early start.
 
 **Wave 2 — remaining checks (launch immediately after Wave 1):**
 
@@ -232,8 +232,8 @@ Example subagent call:
 
 ```
 Agent({
-  description: "Run manage-code-scan",
-  prompt: "Invoke the skill `manage-code-scan` with argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/manage-code-scan.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  description: "Run scan-code",
+  prompt: "Invoke the skill `scan-code` with argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
   run_in_background: true
 })
 ```
@@ -244,8 +244,8 @@ After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-rev
 
 ```text
 .security-review-tmp/
-├── manage-code-scan.json
-├── manage-site-scan.json
+├── scan-code.json
+├── scan-site.json
 ├── manage-headers.json
 ├── manage-firewall.json
 └── audit-permissions.json   (when invoked)
@@ -375,7 +375,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms. The glossary in the final report covers them.
-- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `manage-code-scan` and `manage-site-scan` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
+- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `scan-code` and `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--data-only` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Glossary always present** — every report includes a Glossary section with at least the terms that appeared in the findings.

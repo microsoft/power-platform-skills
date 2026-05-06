@@ -1,6 +1,6 @@
 # Installing opengrep and trivy
 
-`manage-code-scan` only **runs** these tools. It never installs them. When `check-tools.js` reports that one of them is missing, share the matching block below with the user and stop. After they install the tool and confirm, re-run the prerequisites step.
+`scan-code` only **runs** these tools. It never installs them. When `check-tools.js` reports that one of them is missing, share the matching block below with the user and stop. After they install the tool and confirm, re-run the prerequisites step.
 
 The commands below mirror each tool's official install guidance. When in doubt, link the user to the source pages:
 
