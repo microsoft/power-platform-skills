@@ -220,7 +220,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 | `dataverse-request.js` | Generic authenticated Dataverse API request helper |
 | `verify-dataverse-access.js` | Verifies Dataverse connectivity and permissions |
 | `check-activation-status.js` | Queries Power Platform API for site activation status |
-| `clear-site-cache.js` | Clears site cache via Power Platform admin API |
+| `clear-site-cache.js` | Clears site cache via Power Platform API |
 
 ### Usage Pattern
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// Shared client for the Power Pages admin HTTP API used by administrative
-// operations (security scans, firewall, etc.).
+// Shared client for the Power Platform API used by Power Pages operations
+// (security scans, firewall, etc.).
 //
 // Resolves auth/tenant/environment context from the local PAC + Azure CLI
 // state and issues HTTP requests with consistent error handling and
@@ -35,8 +35,8 @@ function getTenantId() {
 }
 
 /**
- * Resolves the full admin-API context from local CLI state. Callers build
- * site-specific URL paths themselves using a portalId — the admin API URL
+ * Resolves the full Power Platform API context from local CLI state. Callers build
+ * site-specific URL paths themselves using a portalId — the Power Platform API URL
  * segment is portalId, never websiteRecordId. See `lib/website.js` for the
  * resolution from a Dataverse websiteRecordId to a portalId.
  *
@@ -70,7 +70,7 @@ function buildQuery(params) {
 }
 
 /**
- * Issues a request against the admin API. Returns a normalized envelope.
+ * Issues a request against the Power Platform API. Returns a normalized envelope.
  *
  * @param {object} options
  * @param {object} options.context  - Result of resolveContext()
@@ -79,9 +79,10 @@ function buildQuery(params) {
  * @param {object} [options.query]  - Query parameters (encoded)
  * @param {object|string} [options.body] - JSON body (object) or raw string
  * @param {object} [options.extraHeaders]
+ * @param {number} [options.timeout] - Request timeout in ms (default: 15000)
  * @returns {Promise<{ ok: boolean, statusCode: number, body: any, headers: object, error?: { code, message } }>}
  */
-async function request({ context, method, path, query, body, extraHeaders }) {
+async function request({ context, method, path, query, body, extraHeaders, timeout }) {
   if (!context || !context.baseUrl) throw new Error('context is required');
   if (!path.startsWith('/')) throw new Error('path must start with /');
 
@@ -103,7 +104,7 @@ async function request({ context, method, path, query, body, extraHeaders }) {
     }
   }
 
-  const res = await makeRequest({ url, method, headers, body: payload, includeHeaders: true });
+  const res = await makeRequest({ url, method, headers, body: payload, includeHeaders: true, ...(timeout != null && { timeout }) });
   if (res.error) {
     return { ok: false, statusCode: 0, body: null, headers: {}, error: { code: 'NetworkError', message: res.error } };
   }

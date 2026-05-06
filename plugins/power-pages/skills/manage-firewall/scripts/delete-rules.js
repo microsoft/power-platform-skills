@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/admin-api');
+const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
 
 if (process.argv.includes('--help')) {
   process.stdout.write(`delete-rules.js — Deletes custom firewall rules by name.
@@ -9,7 +9,7 @@ Usage:
   node delete-rules.js --portalId <guid> --names <name1,name2,...>
 
 Flags:
-  --portalId   Admin-API portal identifier (resolved during prerequisites)
+  --portalId   Power Platform API portal identifier (resolved during prerequisites)
   --names      Comma-separated list of custom rule names to delete
   --help       Show this help message
 
@@ -18,6 +18,9 @@ Exit codes:
   2  Sign-in required
   4  Unsupported
   1  Other failure
+
+Example:
+  node delete-rules.js --portalId <guid> --names BlockBotTraffic,RateLimitPerIP
 `);
   process.exit(0);
 }
@@ -42,6 +45,7 @@ if (names.length === 0) fail('No rule names provided.', 1);
     method: 'PUT',
     path: `/websites/${portalId}/deleteWafCustomRules`,
     body: names,
+    timeout: 240_000, // 4 min — deletion can take longer than the default 15s
   });
 
   if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023')) {

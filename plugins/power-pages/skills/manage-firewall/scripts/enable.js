@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, pollUntil, parseCliArgs, fail } = require('../../../scripts/lib/admin-api');
+const { resolveContext, request, pollUntil, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
 
 if (process.argv.includes('--help')) {
   process.stdout.write(`enable.js — Turns on the web application firewall for a site.
@@ -9,7 +9,7 @@ Usage:
   node enable.js --portalId <guid> [--timeoutMinutes <n>]
 
 Flags:
-  --portalId         Admin-API portal identifier (resolved during prerequisites)
+  --portalId         Power Platform API portal identifier (resolved during prerequisites)
   --timeoutMinutes   Maximum wait time (default: 15)
   --help             Show this help message
 
@@ -19,12 +19,17 @@ Exit codes:
   3  Polling timed out
   4  Unsupported (trial site or region restriction)
   1  Other failure
+
+Example:
+  node enable.js --portalId <guid>
+  node enable.js --portalId <guid> --timeoutMinutes 20
 `);
   process.exit(0);
 }
 
 const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
+// 15 min default — WAF enable typically completes in 5-10 min; 15 allows headroom
 const timeoutMs = (parseInt(args.timeoutMinutes || '15', 10)) * 60 * 1000;
 
 if (!portalId) {
@@ -54,7 +59,7 @@ if (!portalId) {
     },
     isDone: (status) => status.includes('enabled') && !status.includes('disabling'),
     timeoutMs,
-    intervalMs: 30_000,
+    intervalMs: 30_000, // 30s between polls — balances API load vs responsiveness
   });
 
   if (!poll.ok && poll.error === 'timeout') fail('Enable did not complete before timeout.', 3);

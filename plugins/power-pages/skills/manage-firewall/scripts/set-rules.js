@@ -1,41 +1,44 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/admin-api');
+const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`set-rules.js — Creates or updates firewall rules from a JSON file.
+  process.stdout.write(`set-rules.js — Creates or updates specific firewall rules.
+Only include the rules being added or modified; existing rules not in the payload are preserved.
 
 Usage:
-  node set-rules.js --portalId <guid> --rules <json-file>
+  node set-rules.js --portalId <guid> --data-inline '<json>'
 
 Flags:
-  --portalId   Admin-API portal identifier (resolved during prerequisites)
-  --rules      Path to a JSON file with CustomRules and/or ManagedRules
-  --help       Show this help message
+  --portalId      Power Platform API portal identifier (resolved during prerequisites)
+  --data-inline   JSON string with the CustomRules and/or ManagedRules to create or update
+  --help          Show this help message
 
 Exit codes:
   0  Success
   2  Sign-in required
   4  Unsupported (trial site or region restriction)
   1  Other failure
+
+Example:
+  node set-rules.js --portalId <guid> --data-inline '{"CustomRules":[...]}'
 `);
   process.exit(0);
 }
 
 const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
-const rulesFile = args.rules;
+const dataInline = args['data-inline'] || args.dataInline;
 
-if (!portalId || !rulesFile) {
-  fail('Usage: node set-rules.js --portalId <guid> --rules <json-file>', 1);
+if (!portalId || !dataInline) {
+  fail('Usage: node set-rules.js --portalId <guid> --data-inline \'<json>\'', 1);
 }
 
 let payload;
 try {
-  payload = JSON.parse(fs.readFileSync(rulesFile, 'utf8'));
+  payload = JSON.parse(dataInline);
 } catch (err) {
-  fail(`Failed to read rules file: ${err.message}`, 1);
+  fail(`Failed to parse JSON: ${err.message}`, 1);
 }
 
 const RULE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
@@ -56,6 +59,7 @@ if (Array.isArray(payload.CustomRules)) {
     method: 'PUT',
     path: `/websites/${portalId}/createWafRules`,
     body: payload,
+    timeout: 240_000, // 4 min — rule creation can take longer than the default 15s
   });
 
   if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023')) {
@@ -63,5 +67,5 @@ if (Array.isArray(payload.CustomRules)) {
   }
   if (!res.ok) fail(`Set firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
 
-  process.stdout.write(JSON.stringify({ status: 'ok', body: res.body }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ status: 'ok', body: res.body }) + '\n');
 })();

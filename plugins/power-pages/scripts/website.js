@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * website.js — Resolves a Power Pages website record against the admin API.
+ * website.js — Resolves a Power Pages website record against the Power Platform API.
  *
  * Two distinct identifiers float around in the codebase. They look the same
  * (both are GUIDs) but they are not interchangeable:
@@ -9,14 +9,14 @@
  *               `.powerpages-site/website.yml` stores as `id`, what
  *               `pac pages list` surfaces as "Website Record ID", and
  *               therefore what user-facing CLI flags accept. It maps to the
- *               `WebsiteRecordId` field on the admin-API response.
+ *               `WebsiteRecordId` field on the Power Platform API response.
  *
- *   portalId    The admin-API URL segment. Every per-site admin call
+ *   portalId    The Power Platform API URL segment. Every per-site admin call
  *               (`/websites/{id}/...`) takes this value. It maps to the
- *               `Id` field on the admin-API response.
+ *               `Id` field on the Power Platform API response.
  *
  * The skill calls this helper once during prerequisites to translate the
- * Dataverse `websiteId` into the admin-API portalId for the rest of the run.
+ * Dataverse `websiteId` into the Power Platform API portalId for the rest of the run.
  *
  * Usage:
  *   node website.js --websiteId <guid>
@@ -29,13 +29,13 @@
  *   2 = sign-in required
  */
 
-const { resolveContext, request, parseCliArgs, fail } = require('./lib/admin-api');
+const { resolveContext, request, parseCliArgs, fail } = require('./lib/power-platform-api');
 
 // Hard cap on pagination — far above any realistic site count. Exists only
 // so a misbehaving server cannot keep the helper looping forever.
 const MAX_PAGES = 500;
 
-// Field projection sent to the admin API. Covers everything the skill needs
+// Field projection sent to the Power Platform API. Covers everything the skill needs
 // from the response (portalId via `Id`, the websiteId echo via
 // `WebsiteRecordId`, plus the metadata used for trial-site warnings, summaries,
 // and the report header).
@@ -80,7 +80,7 @@ function recordIdOf(website) {
  * Resolves a Dataverse `websiteId` to its full website record by paginating
  * `/websites` and matching on `WebsiteRecordId` (case-insensitive — tolerates
  * GUID casing differences between local YAML, `pac pages list`, and the
- * admin-API response).
+ * Power Platform API response).
  *
  * @param {string} websiteId
  * @returns {Promise<object|null>}
