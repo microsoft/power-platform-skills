@@ -1,12 +1,17 @@
 ---
 name: scan-site
 description: >-
-  Runs a Power Pages security scan on a deployed site, retrieves the latest scan
-  report, and produces an HTML summary. Scans the site's public surface for
-  vulnerabilities. Use when the user wants to scan, check, test, or assess the
-  security of a published Power Pages site, or asks "how safe is my live site".
+  Runs a security scan on a deployed Power Pages site, fetches the latest
+  scan report, and produces a plain-language summary. Scans the live site's
+  public surface for vulnerabilities and surfaces issues by severity. Use
+  when the user wants to scan, check, test, audit, or assess a published
+  site, find vulnerabilities on production, view the latest scan report,
+  see previous scan results, run a security audit, or asks "how safe is
+  my live site?", "is my site vulnerable?", "audit my production site" —
+  even if they say "find issues" or "check for problems" without mentioning
+  "scan" or "security".
 user-invocable: true
-argument-hint: "[optional: --data-only <out-dir>]"
+argument-hint: "[optional: --review <out-dir>]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
@@ -15,262 +20,232 @@ model: opus
 
 # Scan Site
 
-Run a security scan on a deployed Power Pages site, fetch the latest results, and surface them in a uniform HTML report.
+Run a security scan on a deployed Power Pages site, fetch the latest scan report, and surface findings in a plain-language summary. The scan runs server-side; duration depends on site size — small sites finish in minutes, large sites can take hours.
 
-The scan checks the site's public pages for vulnerabilities across multiple security categories. It runs server-side and may take several minutes to complete.
-
-This skill talks to the Power Platform service that owns the site — it does not analyze local code. The site must be running **Power Pages Core version 1.0.2403.84 or later** for scan features to be available. Pair it with `/scan-code` for source-level analysis.
-
-## Gotchas
-
-- **Website record id vs portal id.** `.powerpages-site/website.yml` stores the website record id, not the portal id. Every script takes `--portalId`. Resolve once via `website.js --websiteId` in Phase 1.
-- **Never resolve by name.** Site names can duplicate inside an environment; only the website record id is safe for resolution.
-- **A `null` from the resolver means** the site is not deployed, or the authenticated profile is pointing at a different environment than the one that owns the site.
-- **Scans are long-running.** The scan runs server-side for a substantial period. The skill polls for completion but should warn the user about the wait.
-- **Only one scan per site at a time.** `Z003` (handled as HTTP 204 or HTTP 400 with code `Z003` in `start-deep-scan.js`) surfaces when a start is attempted while a scan is already running. The script exits with code 0 and `{ "status": "already-running" }` — treat it as a normal outcome, not an error.
-- **Rate limits apply.** There are daily and weekly caps on scans per site. When exceeded, wait and retry later.
-- **A fresh site with no completed scan has no report.** Run a scan first.
+This skill scans the live deployed site, not local source code. Pair with `/scan-code` for source-level analysis.
 
 **Initial request:** $ARGUMENTS
 
+## Gotchas
+
+- **Website record id vs portal id.** `.powerpages-site/website.yml` stores the website record id, not the portal id. Every script takes `--portalId`. Resolve once via `website.js --websiteId` during prerequisites.
+- **Never resolve by name.** Site names can duplicate inside an environment; only the website record id is safe.
+- **`null` from the resolver** means the site is not deployed, or the authenticated profile points at a different environment.
+- **Scans are long-running.** Duration depends on site size — small sites finish in minutes, large sites can take hours. Poll in the background and increase `--timeoutMinutes` for large sites.
+- **Only one scan per site at a time.** A start while a scan is running returns `Z003` — `start-deep-scan.js` reports it as `{ "status": "already-running" }` (exit 0).
+- **Rate limits apply.** Daily and weekly caps per site. When exceeded, wait and retry later.
+- **No completed scan yet.** A fresh site or a site mid-scan has no completed report — `get-latest-report.js` returns `{ "status": "empty" }`.
+
 ## Workflow
 
-1. **Phase 1: Prerequisites** — Locate the project, confirm sign-in, identify the site
-2. **Phase 2: Plan the scan** — Choose to run a new scan or view the latest results, and confirm in plain language
-3. **Phase 3: Run the scan** — Start the scan and wait for it
-4. **Phase 4: Fetch results** — Get the latest report
-5. **Phase 5: Build the report** — Normalize findings and write the HTML report
-6. **Phase 6: Present and next steps** — Show the report, record usage, suggest follow-ups
+1. **Prerequisites** — Locate project, confirm sign-in, identify site
+2. **Check scan state** — Detect whether a scan is currently running
+3. **Choose an action** — Context-aware recommendation (run new scan / show latest)
+4. **Run the scan** — Start and poll for completion
+5. **Fetch and summarize** — Get the report, present findings
+6. **Walk through follow-ups** — Route issues to the right downstream skill (only if the report contains issues)
 
 ## Task Tracking
 
-Create tasks in three batches. Mark each `in_progress` when you start and `completed` when you are done.
+Create tasks in four groups. Mark each `in_progress` when starting, `completed` when done.
 
-**Batch 1 — create at the start of Phase 1:**
-
-| Task subject | activeForm |
-|--------------|------------|
-| Check prerequisites | Checking prerequisites |
-
-Only this one task. Do not create any other tasks until Phase 1 completes and the site is resolved.
-
-**Batch 2 — create after Phase 1 completes** (site resolved):
-
-| Task subject | activeForm |
-|--------------|------------|
-| Plan the scan | Planning the scan |
-
-**Batch 3 — create after Phase 2 completes** (user confirmed scan type). Only create tasks for phases that will actually run:
-
-| Task subject | activeForm | When to create |
-|--------------|------------|----------------|
-| Run the scan | Running the scan | Only if the user chose to run a new scan. Do NOT create if the user chose "Just show me the latest results". |
-| Fetch results | Fetching results | Always |
-| Build the report | Building the report | Always |
-| Present findings | Presenting findings | Always |
+| Group | When to create | Tasks |
+|-------|----------------|-------|
+| 1 | At start | Check prerequisites |
+| 2 | After prerequisites pass | Check scan state · Choose an action (skip in review mode) |
+| 3 | After user confirms an action (or in review mode) | Run the scan (skip only if the user chose to view latest results in interactive mode) · Fetch and summarize (always) |
+| 4 | After fetch and summarize | Walk through follow-ups (only if the report contains issues AND not in review mode) |
 
 ---
 
-## Phase 1: Prerequisites
+## 1. Prerequisites
 
-### 1.1 Locate the project and detect data-only mode
+### 1.1 Locate the project, detect review mode
 
-Use `Glob` to find `**/powerpages.config.json`. Read it to extract the site name. If `$ARGUMENTS` contains `--data-only <out-dir>`, remember that directory — the skill will skip rendering and write only the JSON data file there.
+Use `Glob` to find `**/powerpages.config.json`. If `$ARGUMENTS` contains `--review <out-dir>`, remember the output directory — Step 3 (choose an action) is skipped, Step 4 (run scan) executes automatically (start a fresh scan or attach to a running one), Step 5 writes JSON only, and Step 6 (follow-ups) is skipped.
 
 ### 1.2 Resolve site identifiers
 
-Two distinct GUIDs identify a Power Pages site, and the rest of the skill needs both:
+Read `.powerpages-site/website.yml` → extract `id` field → that is `<WEBSITE_ID>`.
 
-- **websiteId** — the Dataverse website record id. Stored in `.powerpages-site/website.yml` as `id`. The user-facing identifier.
-- **portalId** — the admin-API id used in `/websites/{id}/...` URL paths. Returned as the `Id` field on the admin-API response.
+If missing, the site has not been deployed. Tell the user and recommend `/deploy-site`. Stop. Do **not** resolve by name or URL.
 
-The consumer scripts in this skill only accept `--portalId`, so resolve both values once here and reuse them for the rest of the run.
-
-**Step 1 — read the local websiteId.** Read `.powerpages-site/website.yml`. Extract the `id` field — that is `<WEBSITE_ID>`.
-
-If `.powerpages-site/website.yml` is missing, the site has not been deployed yet. Tell the user (in plain language) that the site needs to be deployed once before it can be scanned, and recommend they run `/deploy-site`. Then stop. Do **not** try to identify the site by name or URL — different sites can share the same name and the URL is not a reliable identifier.
-
-**Step 2 — resolve to portalId.** Call the shared lookup with the Dataverse `<WEBSITE_ID>` from Step 1:
+Resolve to portalId:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --websiteId "<WEBSITE_ID>"
 ```
 
-The script returns the full website record. Read the `Id` field — that is `<PORTAL_ID>`. Also capture the `Type`, `WebsiteUrl`, and `Name` fields (used for trial-site warnings, summaries, and the report header).
-
-**Sign-in failures show up here.** If the call exits with code `2`, the user is not signed in. Tell them (plainly) which CLI to fix and stop:
-
-- Power Platform CLI: `pac auth create`
-- Azure CLI: `az login`
-
-If the call returns `null` (no match), tell the user the local `id` does not exist in this environment and stop. Do **not** attempt to log in or create the site for them.
-
-If the matched site is a trial or developer site, mention that some scan features may be limited; continue anyway.
-
-### 1.3 Check current scan state
-
-Before asking the user what they want, check whether a scan is currently running. This changes Phase 2's available options:
-
-- **If a scan is ongoing** — the user cannot start a new scan. They can fetch an older report or wait.
-- **If idle** — all options are available.
-
-Summarize the state to the user in one sentence before continuing.
+Capture `Id` (portalId), `Type`, `Name`, `WebsiteUrl`. If exit code `2` → sign-in required (`pac auth create` or `az login`). If `null` → site not found in this environment. Stop in either case.
 
 ---
 
-## Phase 2: Plan the scan
+## 2. Check scan state
 
-**IMPORTANT:** Each question below is a **separate** `AskUserQuestion` call. Do NOT combine them into one multi-step form. Wait for the user's answer to one question before deciding whether to ask the next.
-
-Call `AskUserQuestion` using the structured `questions` array. Keep `label` to **1-5 words** — long labels wrap and look broken. Put "(Recommended)" in `description`, never in `label`. Every option MUST include `description` and `preview`.
-
-```json
-{
-  "questions": [
-    {
-      "question": "Which check do you want to run?",
-      "header": "Scan type",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Deep check",
-          "description": "Full scan of your live site. (Recommended)",
-          "preview": "Runs a thorough scan of your site's public pages, checking for vulnerabilities across multiple security categories. Takes several minutes to complete — you will get an email when it finishes.\n\nProduces a detailed report with individual findings."
-        },
-        {
-          "label": "Latest results",
-          "description": "Show the last scan report without running a new one.",
-          "preview": "Fetches the most recent completed scan report from the service. No new scan is started.\n\nUseful when you already ran a scan and want to review the results again."
-        }
-      ]
-    }
-  ]
-}
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>" --once
 ```
 
-If the user picks "Just show me the latest results", skip Phase 3 and go straight to Phase 4.
+`--once` does a single status check, exits 0, and prints:
 
-Show a one-line plan in plain language and confirm: `Yes, start the check` / `Change something`.
+- `{ "status": "ongoing" }` → a scan is currently running.
+- `{ "status": "idle" }` → no scan running.
+
+Then call `get-latest-report.js` to know whether a completed report exists:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId "<PORTAL_ID>"
+```
+
+`{ "status": "ok" }` means a report is available. `{ "status": "empty" }` means no completed scan exists.
 
 ---
 
-## Phase 3: Run the scan
+## 3. Choose an action
 
-All scripts in this phase take `--portalId` (the admin-API id from Phase 1.2). They never look up the site themselves — Phase 1.2 already did the resolution.
+Skip in **review mode** — go straight to Step 4 (which always runs in review mode).
 
-Let the user know the scan may take several minutes and remind them they can keep working — the skill will check progress in the background.
+MUST use plain language only. Never use words like CSP, CORS, OWASP, hardening, or scan profile.
+
+### Default approach
+
+Analyze the site's current state and **recommend the single most relevant action**. Present the recommendation with a plain-language explanation of why. The user can accept or choose differently.
+
+- Scan running, no completed report → recommend waiting for the running scan to finish.
+- Scan running, report exists → recommend showing the latest results while the new scan continues.
+- Idle, no completed report → recommend running a new scan.
+- Idle, recent report exists → ask whether to use the existing report or run a fresh scan.
+
+If the site's state does not warrant a specific recommendation, do not force one — ask what the user wants to do.
+
+### Option rules
+
+When presenting options via `AskUserQuestion`:
+- Keep `label` to 1–5 words. Include `description` on every option.
+- Include `preview` only when the option represents a concrete change (starting a new scan). Do not add `preview` to "show latest" or informational choices.
+- Only show options that are actionable given the current state. If a scan is already running, do not offer "Start a new scan".
+- Mark "(Recommended)" only when the site's state justifies it.
+
+### Confirm before scanning
+
+Before starting a new scan, warn the user:
+- Scan duration depends on site size — small sites finish in minutes, large sites can take hours.
+- Daily and weekly per-site rate limits apply.
+- The service will email a notification when the scan completes.
+
+---
+
+## 4. Run the scan
+
+In **review mode**, always execute this step: if a scan is already running, attach to it and poll; otherwise start a fresh scan and poll. Do not ask — review mode runs end-to-end without user interaction.
+
+In interactive mode, skip if the user chose to view the latest results.
 
 Start the scan:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" \
-  --portalId "<PORTAL_ID>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId "<PORTAL_ID>"
 ```
 
-Then poll for completion with the same portalId from Phase 1.2:
+If stdout is `{ "status": "already-running" }`, skip ahead to polling — there is already a scan in progress.
+
+Then poll for completion:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" \
-  --portalId "<PORTAL_ID>" \
-  --timeoutMinutes 20
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId "<PORTAL_ID>"
 ```
 
-The polling script prints progress lines every minute and exits when the scan finishes or the timeout passes. If it times out, fetch whatever partial result is available in Phase 4 and note the timeout in the report.
+Run polling with `run_in_background: true` so the user can keep working. The script exits when the scan finishes or the timeout passes (default 20 minutes). If it times out, fetch whatever report is available and note the timeout in the summary.
 
 ---
 
-## Phase 4: Fetch results
+## 5. Fetch and summarize
+
+### 5.1 Fetch the report
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" \
-  --portalId "<PORTAL_ID>" \
-  --output "<TEMP_DIR>/latest.json"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId "<PORTAL_ID>"
 ```
 
-If `get-latest-report.js` reports that no completed scan exists yet (HTTP 204), record an `info` finding explaining this and proceed without a report body.
+Parse the stdout JSON. `{ "status": "ok", "body": { ... } }` returns the full report. `{ "status": "empty" }` means no completed report — record an `info` finding explaining this and continue.
 
----
+### 5.2 Normalize findings
 
-## Phase 5: Build the report
+Read `references/scan-reference.md` for the report shape, alert fields, risk values, and severity mapping (including how to handle `RulePassed`, `RuleNotRun`, and `RuleTimedOut`).
 
-### 5.1 Normalize findings
+For every finding, write:
+- `title` — the alert name in plain language
+- `severity` — from the mapping in `scan-reference.md`
+- `details` — the alert description
+- `fix` — the alert mitigation
+- `location` — the URL or endpoint when available
 
-Each scan result describes individual checks. Map them into the unified report structure:
+### 5.3 Review mode
 
-| Normalized severity | Unified severity |
-|---------------------|------------------|
-| `Critical` / `High` | `critical` |
-| `Medium`            | `warning` |
-| `Low` / `Informational` | `info` |
-| `Pass` / `OK`       | `pass` |
-
-For every finding, write a `reasoning` line in plain language that explains the risk to a non-technical reader (e.g., "Anyone visiting your site can reach a sign-in helper page that is normally only used by the service. Showing that page can leak version details that attackers use to plan an attack."). Include a `fix` line with the change to make.
-
-### 5.2 Write data file
-
-Write `<TEMP_DIR>/site-scan-data.json` with:
+In **review mode**, skip the HTML report — write `<REVIEW_DIR>/scan-site.json` with:
 
 - `REPORT_TITLE` — `"Live Site Scan"`
-- `REPORT_DESC` — short description naming the site and the scan type
+- `REPORT_DESC` — short description naming the site
 - `SITE_NAME` — site display name
-- `SUMMARY` — 2–3 sentences: "We checked X pages and Y endpoints. We found N important issues, M smaller ones, and Z things that look healthy."
-- `FINDINGS_DATA` — array of finding objects (`id, severity, title, tag?, location?, details?, reasoning, fix?`). Use the page URL or endpoint as `location` when available.
-- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Scan type', value: 'Deep' }, { key: 'Started', value: '<iso-date>' }, { key: 'Pages checked', value: '<n>' }] }`
+- `SUMMARY` — 2–3 sentences in plain language
+- `FINDINGS_DATA` — array of findings as defined above. Assess severity from the API `Risk` values — do not invent severities the API does not produce.
+- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Started', value: '<StartTime>' }, { key: 'Ended', value: '<EndTime>' }, { key: 'Rules evaluated', value: '<TotalRuleCount>' }] }`
 
-In **data-only mode**, write the file to `<DATA_ONLY_DIR>/scan-site.json` and stop here — do not render or open HTML.
+Then stop — the orchestrating skill handles presentation.
 
-### 5.3 Render HTML
+### 5.4 Render HTML report
 
-Pick `<PROJECT_ROOT>/docs/site-scan.html`, falling back to a date-suffixed name if it exists. Render via the shared script:
+Skip in **review mode**.
+
+The shared render script requires `--data <file>`. Write the scan data JSON to the system temp directory, render, then delete immediately:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" \
-  --output "<OUTPUT_PATH>" \
-  --data "<TEMP_DIR>/site-scan-data.json"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" --data "<system-temp>/site-scan-data.json" --output "<PROJECT_ROOT>/docs/site-scan.html"
 ```
 
-Delete the temp data file when the render succeeds.
+Delete `<system-temp>/site-scan-data.json` after the render succeeds. Open the rendered HTML in the browser.
 
----
+### 5.5 Present summary
 
-## Phase 6: Present and next steps
+Plain-language summary in the chat: total findings, count by severity, and what changed since the last scan if available. Do not lead with technical names.
 
-### 6.1 Open in browser
-
-Open the rendered HTML.
-
-### 6.2 Record skill usage
+### 5.6 Record skill usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "ScanSite"`.
 
-### 6.3 Summarize and offer follow-ups
+---
 
-Summarize in plain language: count of important / smaller issues and the report path.
+## 6. Walk through follow-ups
 
-Use `AskUserQuestion`:
+Skip in **review mode**. Skip if the report has no issues.
 
-| Question | Options |
-|----------|---------|
-| What would you like to do next? | Walk me through fixing the important items; Stop here, I will read the report |
-
-If the user wants help fixing items, group critical findings, explain the first one in plain language, and propose actions. For findings that map to other skills, suggest:
+Group findings by which downstream skill can help:
 
 - Header / cookie issues → `/manage-headers`
-- Permission issues → `/audit-permissions`
+- WAF / firewall issues (block bots, rate-limit pages, restrict IPs/countries) → `/manage-firewall`
+- Permission issues → `/audit-permissions` to review existing table permissions, and/or `/create-webroles` to set up role-based access
 - Login or external identity issues → `/setup-auth`
+- Code-level issues (exposed debug pages, information leakage, source visible publicly) → suggest a manual code fix; do NOT route to `/scan-code` (that skill scans local source code, it does not fix live-site findings)
+
+Suggest only the skills that match findings actually present in the report. If a finding does not map to any skill, surface it as a manual follow-up the user can act on. If no meaningful follow-up exists, end the skill — do not ask just to ask.
 
 ---
 
 ## Constraints
 
-- **Plain language with users** — never lead with words like CSP, CORS, OWASP, hardening, or scan profile. Explain when asked.
-- **Background long-running calls** — start the scan, then poll in the background while the user can continue working.
+- **Plain language** — MUST NOT use technical jargon with the user. Use everyday language; explain the technical name only when asked.
 - **Read-only** — this skill only runs scans and reads results. It never enables WAF, deletes scans, or changes site configuration.
-- **Trial sites** — some scan features may be limited on trial or developer sites. Do not block the workflow; add an `info` finding instead.
-- **Scan results** — when the scan finishes, the service sends an email notification. The scan summary is available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
+- **Background long-running calls** — start the scan, then poll via `run_in_background: true` so the user can continue working.
+- **Severity comes from `Risk`** — MUST map findings using the values in `scan-reference.md`. Never invent severity buckets the API does not produce.
+- **Context-aware interactions** — every recommendation MUST reflect the site's current state:
+  - Never offer "Start a new scan" while one is already running.
+  - Never offer "Show latest results" when no completed report exists.
+  - Mark "(Recommended)" only when the state justifies it.
+- **Preview is for change review only** — include `preview` only on options that start a new scan. Do not add to navigation or informational choices.
 
 ## References
 
-- `references/commands.md` — flags, response, and error catalogue for the scan scripts
+- `references/commands.md` — script flags, response shapes, error catalogue, operating notes. Read § "Common error catalogue" when a script returns a non-zero exit code.
+- `references/scan-reference.md` — field-level schema for the deep-scan report, alert risk values, rule statuses, and severity mapping. Read when normalizing findings.
