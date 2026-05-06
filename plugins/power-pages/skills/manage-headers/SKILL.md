@@ -165,22 +165,24 @@ For each finding (or group of related findings), call `AskUserQuestion` using th
 
 ```json
 {
-  "questions": [{
-    "question": "<plain-language risk explanation — 1-2 sentences>. What would you like to do?",
-    "header": "<max 12 ch>",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Apply",
-        "description": "Adds this setting to your site. (Recommended)",
-        "preview": "Setting: <setting-name>\n\nValue:\n  <planned-value>\n\nNote: <any caveat>"
-      },
-      {
-        "label": "Skip",
-        "description": "Leave the site without this setting."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "<plain-language risk explanation — 1-2 sentences>. What would you like to do?",
+      "header": "<max 12 ch>",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Apply",
+          "description": "Adds this setting to your site. (Recommended)",
+          "preview": "Setting: <setting-name>\n\nValue:\n  <planned-value>\n\nNote: <any caveat>"
+        },
+        {
+          "label": "Skip",
+          "description": "Leave the site without this setting."
+        }
+      ]
+    }
+  ]
 }
 ```
 

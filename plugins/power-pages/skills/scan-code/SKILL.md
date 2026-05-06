@@ -108,33 +108,35 @@ The questions in this phase adapt to which tools are available (determined in Ph
 
 ```json
 {
-  "questions": [{
-    "question": "What do you want to check?",
-    "header": "Scope",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Everything",
-        "description": "Runs all checks — code, packages, secrets, and licenses. (Recommended)",
-        "preview": "Runs two tools back to back:\n\n1. Code pattern scan — checks your source files against hundreds of known risky patterns (unsafe rendering, weak crypto, missing input checks). You will be asked to pick a depth (basic or advanced).\n\n2. Package, secret, and license scan — checks every installed library for known vulnerabilities, scans source files for hard-coded passwords or API keys, and flags packages with restrictive licenses.\n\nTypically finishes in under a minute for small projects; larger ones may take a few minutes."
-      },
-      {
-        "label": "Code patterns only",
-        "description": "Scans source files for risky code. Skips packages, secrets, and licenses.",
-        "preview": "Runs the code pattern scanner against your source files using a ruleset of hundreds of known risky patterns — unsafe rendering, weak crypto, missing input checks, and more.\n\nYou will be asked to pick a depth next (basic or advanced). The basic scan uses the OWASP Top Ten ruleset covering the most common web security issues.\n\nDoes not check installed libraries, hard-coded secrets, or licenses."
-      },
-      {
-        "label": "Packages, secrets, licenses",
-        "description": "Checks libraries, secrets, and licenses. Skips code patterns.",
-        "preview": "Runs three checks in one pass:\n\n• Package vulnerabilities — compares every installed library against a database of known security issues, updated daily.\n• Hard-coded secrets — scans source files for passwords, API keys, or tokens that should not be in code.\n• License compliance — flags packages with restrictive licenses (e.g., GPL) that may conflict with your project.\n\nUsually finishes in seconds. Does not look at code patterns."
-      },
-      {
-        "label": "Let me pick",
-        "description": "Choose exactly which checks to run.",
-        "preview": "Pick from four individual checks:\n\n• Code patterns — risky code like unsafe rendering or weak crypto (uses opengrep with OWASP rulesets)\n• Package vulnerabilities — known issues in installed libraries\n• Hard-coded secrets — passwords, tokens, or keys left in source files\n• License compliance — packages with restrictive licenses\n\nYou can combine any of these."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "What do you want to check?",
+      "header": "Scope",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Everything",
+          "description": "Runs all checks — code, packages, secrets, and licenses. (Recommended)",
+          "preview": "Runs two tools back to back:\n\n1. Code pattern scan — checks your source files against hundreds of known risky patterns (unsafe rendering, weak crypto, missing input checks). You will be asked to pick a depth (basic or advanced).\n\n2. Package, secret, and license scan — checks every installed library for known vulnerabilities, scans source files for hard-coded passwords or API keys, and flags packages with restrictive licenses.\n\nTypically finishes in under a minute for small projects; larger ones may take a few minutes."
+        },
+        {
+          "label": "Code patterns only",
+          "description": "Scans source files for risky code. Skips packages, secrets, and licenses.",
+          "preview": "Runs the code pattern scanner against your source files using a ruleset of hundreds of known risky patterns — unsafe rendering, weak crypto, missing input checks, and more.\n\nYou will be asked to pick a depth next (basic or advanced). The basic scan uses the OWASP Top Ten ruleset covering the most common web security issues.\n\nDoes not check installed libraries, hard-coded secrets, or licenses."
+        },
+        {
+          "label": "Packages, secrets, licenses",
+          "description": "Checks libraries, secrets, and licenses. Skips code patterns.",
+          "preview": "Runs three checks in one pass:\n\n• Package vulnerabilities — compares every installed library against a database of known security issues, updated daily.\n• Hard-coded secrets — scans source files for passwords, API keys, or tokens that should not be in code.\n• License compliance — flags packages with restrictive licenses (e.g., GPL) that may conflict with your project.\n\nUsually finishes in seconds. Does not look at code patterns."
+        },
+        {
+          "label": "Let me pick",
+          "description": "Choose exactly which checks to run.",
+          "preview": "Pick from four individual checks:\n\n• Code patterns — risky code like unsafe rendering or weak crypto (uses opengrep with OWASP rulesets)\n• Package vulnerabilities — known issues in installed libraries\n• Hard-coded secrets — passwords, tokens, or keys left in source files\n• License compliance — packages with restrictive licenses\n\nYou can combine any of these."
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -144,23 +146,25 @@ If the user picks **Let me pick**, make a **separate** `AskUserQuestion` call (s
 
 ```json
 {
-  "questions": [{
-    "question": "How wide should the code check be?",
-    "header": "Depth",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Basic",
-        "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
-        "preview": "Uses the OWASP Top Ten ruleset — covers the ten most exploited web vulnerability categories (injection, broken access control, security misconfiguration, etc.).\n\nGood balance of speed and coverage. Flags medium severity and above from package checks.\n\nBest choice for most projects."
-      },
-      {
-        "label": "Advanced",
-        "description": "Full security audit ruleset. Slowest.",
-        "preview": "Uses the full security audit ruleset — the most comprehensive set of patterns, including low-severity and informational findings.\n\nFlags everything from package checks, including low-severity issues and license warnings. May take several minutes on larger projects.\n\nBest when preparing for a release or a security review."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "How wide should the code check be?",
+      "header": "Depth",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Basic",
+          "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
+          "preview": "Uses the OWASP Top Ten ruleset — covers the ten most exploited web vulnerability categories (injection, broken access control, security misconfiguration, etc.).\n\nGood balance of speed and coverage. Flags medium severity and above from package checks.\n\nBest choice for most projects."
+        },
+        {
+          "label": "Advanced",
+          "description": "Full security audit ruleset. Slowest.",
+          "preview": "Uses the full security audit ruleset — the most comprehensive set of patterns, including low-severity and informational findings.\n\nFlags everything from package checks, including low-severity issues and license warnings. May take several minutes on larger projects.\n\nBest when preparing for a release or a security review."
+        }
+      ]
+    }
+  ]
 }
 ```
 

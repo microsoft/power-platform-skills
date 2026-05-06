@@ -156,72 +156,80 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
 
 ```json
 {
-  "questions": [{
-    "question": "What do you want to do with your site's protection?",
-    "header": "Action",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Turn it on",
-        "description": "Enable the firewall. (Recommended if currently off)",
-        "preview": "Enables the web application firewall in front of your site. It starts blocking known attack patterns (cross-site scripting, file inclusion, session attacks) using a set of managed rules that are kept up to date automatically.\n\nThe operation takes a minute or two to complete. Once enabled, the firewall is always on — you can add custom rules or turn it off later."
-      },
-      {
-        "label": "Turn it off",
-        "description": "Disable the firewall.",
-        "preview": "Disables the firewall. Your site will no longer be protected by managed or custom rules until you re-enable it.\n\nThe operation takes a minute or two. Any custom rules you created are preserved and will be active again when you re-enable."
-      },
-      {
-        "label": "Add a rule",
-        "description": "Add a new custom rule.",
-        "preview": "Add a custom rule to control who can reach your site. You can block or allow traffic based on:\n\n• Country — block or allow visitors from specific countries\n• IP address — block or allow specific IPs or ranges\n• Page path — block requests to specific URLs\n• Request rate — slow down visitors making too many requests\n\nYou will pick the type next."
-      },
-      {
-        "label": "Remove a rule",
-        "description": "Delete an existing custom rule.",
-        "preview": "Remove one or more custom rules you previously added. Managed rules (the built-in protection set) are not affected.\n\nYou will see your current rules and pick which ones to remove."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "What do you want to do with your site's protection?",
+      "header": "Action",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Turn it on",
+          "description": "Enable the firewall. (Recommended if currently off)",
+          "preview": "Enables the web application firewall in front of your site. It starts blocking known attack patterns (cross-site scripting, file inclusion, session attacks) using a set of managed rules that are kept up to date automatically.\n\nThe operation takes a minute or two to complete. Once enabled, the firewall is always on — you can add custom rules or turn it off later."
+        },
+        {
+          "label": "Turn it off",
+          "description": "Disable the firewall.",
+          "preview": "Disables the firewall. Your site will no longer be protected by managed or custom rules until you re-enable it.\n\nThe operation takes a minute or two. Any custom rules you created are preserved and will be active again when you re-enable."
+        },
+        {
+          "label": "Add a rule",
+          "description": "Add a new custom rule.",
+          "preview": "Add a custom rule to control who can reach your site. You can block or allow traffic based on:\n\n• Country — block or allow visitors from specific countries\n• IP address — block or allow specific IPs or ranges\n• Page path — block requests to specific URLs\n• Request rate — slow down visitors making too many requests\n\nYou will pick the type next."
+        },
+        {
+          "label": "Remove a rule",
+          "description": "Delete an existing custom rule.",
+          "preview": "Remove one or more custom rules you previously added. Managed rules (the built-in protection set) are not affected.\n\nYou will see your current rules and pick which ones to remove."
+        }
+      ]
+    }
+  ]
 }
 ```
 
 If the firewall is already off, also offer a "Just show me" option:
 ```json
-{ "label": "Just show me", "description": "View the current state without changes.", "preview": "Shows whether the firewall is on or off, which managed rules are active, and what custom rules are configured.\n\nNo changes are made." }
+{
+  "label": "Just show me",
+  "description": "View the current state without changes.",
+  "preview": "Shows whether the firewall is on or off, which managed rules are active, and what custom rules are configured.\n\nNo changes are made."
+}
 ```
 
 If the user picks **Add a rule**, use a follow-up `AskUserQuestion`:
 
 ```json
 {
-  "questions": [{
-    "question": "What kind of rule do you want to add?",
-    "header": "Rule type",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Block countries",
-        "description": "Block visitors from specific countries.",
-        "preview": "Creates a rule that blocks traffic from the countries you specify, using two-letter country codes.\n\nCommon use: restrict access to regions where you have no customers, reducing unwanted traffic and attack surface."
-      },
-      {
-        "label": "Block IPs",
-        "description": "Block specific IP addresses or ranges.",
-        "preview": "Creates a rule that blocks traffic from specific IP addresses or CIDR ranges you provide.\n\nCommon use: block known bad actors or suspicious IPs you have seen in your logs."
-      },
-      {
-        "label": "Block pages",
-        "description": "Block requests to specific page paths.",
-        "preview": "Creates a rule that blocks requests matching a URL pattern you specify (e.g., paths containing '/admin' or '/_services').\n\nCommon use: hide internal endpoints or admin pages from the public internet."
-      },
-      {
-        "label": "Slow down requests",
-        "description": "Limit how many requests one visitor can make.",
-        "preview": "Creates a rate-limit rule that blocks any single visitor who exceeds a request threshold within a time window (1 to 5 minutes).\n\nCommon use: protect sign-in pages from brute-force attempts, or prevent bots from scraping your site too fast."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "What kind of rule do you want to add?",
+      "header": "Rule type",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Block countries",
+          "description": "Block visitors from specific countries.",
+          "preview": "Creates a rule that blocks traffic from the countries you specify, using two-letter country codes.\n\nCommon use: restrict access to regions where you have no customers, reducing unwanted traffic and attack surface."
+        },
+        {
+          "label": "Block IPs",
+          "description": "Block specific IP addresses or ranges.",
+          "preview": "Creates a rule that blocks traffic from specific IP addresses or CIDR ranges you provide.\n\nCommon use: block known bad actors or suspicious IPs you have seen in your logs."
+        },
+        {
+          "label": "Block pages",
+          "description": "Block requests to specific page paths.",
+          "preview": "Creates a rule that blocks requests matching a URL pattern you specify (e.g., paths containing '/admin' or '/_services').\n\nCommon use: hide internal endpoints or admin pages from the public internet."
+        },
+        {
+          "label": "Slow down requests",
+          "description": "Limit how many requests one visitor can make.",
+          "preview": "Creates a rate-limit rule that blocks any single visitor who exceeds a request threshold within a time window (1 to 5 minutes).\n\nCommon use: protect sign-in pages from brute-force attempts, or prevent bots from scraping your site too fast."
+        }
+      ]
+    }
+  ]
 }
 ```
 

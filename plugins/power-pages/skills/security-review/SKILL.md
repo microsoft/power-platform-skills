@@ -113,28 +113,30 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
 
 ```json
 {
-  "questions": [{
-    "question": "What would you like to review?",
-    "header": "Goal",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Code and config",
-        "description": "Check code, configs, dependencies, and access control.",
-        "preview": "Scans code for risky patterns, checks packages, and reviews authentication, roles, and permissions.\n\nWorks entirely on local files. Good for frequent checks during development."
-      },
-      {
-        "label": "Release readiness",
-        "description": "End-to-end review before you publish. (Recommended)",
-        "preview": "Runs every check: code, packages, secrets, headers, firewall, authentication, permissions, and live site scan.\n\nCovers both local files and the deployed site. Best before going live."
-      },
-      {
-        "label": "Deployed site",
-        "description": "Detect issues from real user traffic.",
-        "preview": "Scans your deployed site for runtime vulnerabilities, exposed pages, and missing protections.\n\nFocuses on what is happening on your live site right now. Requires deployment."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "What would you like to review?",
+      "header": "Goal",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Code and config",
+          "description": "Check code, configs, dependencies, and access control.",
+          "preview": "Scans code for risky patterns, checks packages, and reviews authentication, roles, and permissions.\n\nWorks entirely on local files. Good for frequent checks during development."
+        },
+        {
+          "label": "Release readiness",
+          "description": "End-to-end review before you publish. (Recommended)",
+          "preview": "Runs every check: code, packages, secrets, headers, firewall, authentication, permissions, and live site scan.\n\nCovers both local files and the deployed site. Best before going live."
+        },
+        {
+          "label": "Deployed site",
+          "description": "Detect issues from real user traffic.",
+          "preview": "Scans your deployed site for runtime vulnerabilities, exposed pages, and missing protections.\n\nFocuses on what is happening on your live site right now. Requires deployment."
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -154,23 +156,25 @@ Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same st
 
 ```json
 {
-  "questions": [{
-    "question": "How thorough should the check be?",
-    "header": "Depth",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Basic",
-        "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
-        "preview": "OWASP Top Ten ruleset — covers the most exploited web vulnerability categories.\n\nFlags medium+ severity. Best choice for most projects."
-      },
-      {
-        "label": "Advanced",
-        "description": "Full security audit ruleset. Slowest.",
-        "preview": "Full security audit ruleset — all patterns including low-severity findings.\n\nMay take several minutes on larger projects. Best before a PR."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "How thorough should the check be?",
+      "header": "Depth",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Basic",
+          "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
+          "preview": "OWASP Top Ten ruleset — covers the most exploited web vulnerability categories.\n\nFlags medium+ severity. Best choice for most projects."
+        },
+        {
+          "label": "Advanced",
+          "description": "Full security audit ruleset. Slowest.",
+          "preview": "Full security audit ruleset — all patterns including low-severity findings.\n\nMay take several minutes on larger projects. Best before a PR."
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -307,21 +311,46 @@ Write the consolidated data to `.security-review-tmp/security-review-data.json`:
   "GENERATED_AT": "<YYYY-MM-DD HH:MM>",
   "REVIEW_DATA": {
     "summary": "<2-4 plain-language sentences>",
-    "totals": { "critical": 0, "warning": 0, "info": 0, "pass": 0 },
-    "topFindings": [ <findingObj>, ... ],
+    "totals": {
+      "critical": 0,
+      "warning": 0,
+      "info": 0,
+      "pass": 0
+    },
+    "topFindings": [
+      <findingObj>,
+      ...
+    ],
     "sections": [
       {
         "id": "code-scan",
         "icon": "▦",
         "label": "Code & Packages",
         "description": "Review of source files and installed packages.",
-        "findings": [ <findingObj>, ... ],
-        "details": { "kind": "kv", "label": "Tools used", "entries": [ ... ] }
+        "findings": [
+          <findingObj>,
+          ...
+        ],
+        "details": {
+          "kind": "kv",
+          "label": "Tools used",
+          "entries": [
+            ...
+          ]
+        }
       }
       // … one entry per section
     ],
-    "nextSteps": [ "..." ],
-    "glossary": [ { "term": "...", "aka": "...", "definition": "..." } ]
+    "nextSteps": [
+      "..."
+    ],
+    "glossary": [
+      {
+        "term": "...",
+        "aka": "...",
+        "definition": "..."
+      }
+    ]
   }
 }
 ```

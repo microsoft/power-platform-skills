@@ -126,23 +126,25 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
 
 ```json
 {
-  "questions": [{
-    "question": "Which check do you want to run?",
-    "header": "Scan type",
-    "multiSelect": false,
-    "options": [
-      {
-        "label": "Deep check",
-        "description": "Full scan of your live site. (Recommended)",
-        "preview": "Runs a thorough scan of your site's public pages, checking for vulnerabilities across multiple security categories. Takes several minutes to complete — you will get an email when it finishes.\n\nProduces a detailed report with individual findings."
-      },
-      {
-        "label": "Latest results",
-        "description": "Show the last scan report without running a new one.",
-        "preview": "Fetches the most recent completed scan report from the service. No new scan is started.\n\nUseful when you already ran a scan and want to review the results again."
-      }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "Which check do you want to run?",
+      "header": "Scan type",
+      "multiSelect": false,
+      "options": [
+        {
+          "label": "Deep check",
+          "description": "Full scan of your live site. (Recommended)",
+          "preview": "Runs a thorough scan of your site's public pages, checking for vulnerabilities across multiple security categories. Takes several minutes to complete — you will get an email when it finishes.\n\nProduces a detailed report with individual findings."
+        },
+        {
+          "label": "Latest results",
+          "description": "Show the last scan report without running a new one.",
+          "preview": "Fetches the most recent completed scan report from the service. No new scan is started.\n\nUseful when you already ran a scan and want to review the results again."
+        }
+      ]
+    }
+  ]
 }
 ```
 

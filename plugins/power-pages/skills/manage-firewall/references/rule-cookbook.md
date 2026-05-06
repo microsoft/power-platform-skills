@@ -21,7 +21,7 @@ Copy-paste rule shapes for the most common things users want to add. Every examp
 
 ```json
 {
-  "name": "Block-Malicious-IPs",
+  "name": "BlockMaliciousIPs",
   "priority": 1000,
   "enabledState": "Enabled",
   "ruleType": "MatchRule",
@@ -44,7 +44,7 @@ Use a **lower** priority number so the allow rule wins over later block rules.
 
 ```json
 {
-  "name": "Allow-Office-IPs",
+  "name": "AllowOfficeIPs",
   "priority": 100,
   "enabledState": "Enabled",
   "ruleType": "MatchRule",
@@ -65,7 +65,7 @@ Match on a request URI to block requests targeting specific URL patterns.
 
 ```json
 {
-  "name": "Block-Admin-Paths",
+  "name": "BlockAdminPaths",
   "priority": 1500,
   "enabledState": "Enabled",
   "ruleType": "MatchRule",
@@ -88,7 +88,7 @@ Match on the `RemoteAddr` variable using the `GeoMatch` operator. Use ISO 3166-1
 
 ```json
 {
-  "name": "Block-Selected-Countries",
+  "name": "BlockSelectedCountries",
   "priority": 2000,
   "enabledState": "Enabled",
   "ruleType": "MatchRule",
@@ -111,7 +111,7 @@ Use a `RateLimitRule`. The example below blocks any single client IP that makes 
 
 ```json
 {
-  "name": "Rate-Limit-Per-IP",
+  "name": "RateLimitPerIP",
   "priority": 3000,
   "enabledState": "Enabled",
   "ruleType": "RateLimitRule",

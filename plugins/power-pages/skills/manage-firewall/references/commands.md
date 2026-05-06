@@ -234,7 +234,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" \
 ### Response (stdout)
 
 ```json
-{ "status": "accepted", "deleted": ["Block-Malicious-IPs"] }
+{ "status": "accepted", "deleted": ["BlockMaliciousIPs"] }
 ```
 
 The deletion is asynchronous; the response is `202 Accepted`. To confirm the change, re-run `get-rules.js` after a short delay.
