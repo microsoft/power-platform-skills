@@ -41,7 +41,7 @@ Returns the current firewall status (Enabled / Disabled / Enabling / Disabling).
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/get-status.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" \
   --portalId <guid> \
   --output <file>
 ```
@@ -78,7 +78,7 @@ Returns the full firewall configuration (managed rule sets and custom rules).
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/get-rules.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" \
   --portalId <guid> \
   --output <file> \
   [--ruleType <name>]
@@ -109,7 +109,7 @@ Turns the firewall on. The underlying operation is asynchronous — the script p
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/enable.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/enable.js" \
   --portalId <guid> \
   [--timeoutMinutes <n>]
 ```
@@ -156,7 +156,7 @@ Creates or updates the full set of firewall rules. The service replaces the exis
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/set-rules.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" \
   --portalId <guid> \
   --rules <json-file>
 ```
@@ -226,7 +226,7 @@ Deletes one or more **custom** rules by name. Managed rule sets are not affected
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/delete-rules.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" \
   --portalId <guid> \
   --names <name1,name2,...>
 ```

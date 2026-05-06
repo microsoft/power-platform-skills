@@ -1,5 +1,5 @@
 ---
-name: review-security
+name: security-review
 description: >-
   Runs a guided, end-to-end security review of a Power Pages code site by
   delegating to the focused security skills (code and dependencies, live
@@ -87,7 +87,7 @@ Only this one task. Do not create any other tasks until Phase 1 completes.
 
 Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user the site needs to be created first with `/create-site`, then stop.
 
-For the `monitor` and `release` goals (any goal that delegates to `manage-site-scan` or `manage-web-application-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
+For the `monitor` and `release` goals (any goal that delegates to `manage-site-scan` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
 
 For the `code-config` goal, the deploy check is not required: code and package scanning works on local source files alone.
 
@@ -143,7 +143,7 @@ Map the answer to a goal id:
 | Option | Goal id | Sub-skills involved (Phase 4) |
 |--------|---------|-------------------------------|
 | Code and config | `code-config` | manage-code-scan, audit-permissions (and read-only check of setup-auth state) |
-| Release readiness | `release` | manage-code-scan, manage-site-scan, manage-http-headers, manage-web-application-firewall, audit-permissions (and read-only check of setup-auth state) |
+| Release readiness | `release` | manage-code-scan, manage-site-scan, manage-headers, manage-firewall, audit-permissions (and read-only check of setup-auth state) |
 | Deployed site | `monitor` | manage-site-scan |
 
 ### 2.2 Step 2 — Choose scope and depth
@@ -210,7 +210,7 @@ Spawn background subagents for `manage-code-scan` and `manage-site-scan` (when s
 
 **Wave 2 — remaining checks (launch immediately after Wave 1):**
 
-Spawn background subagents for the remaining selected skills (`manage-http-headers`, `manage-web-application-firewall`, `audit-permissions`). When the goal only includes Wave 1 skills, skip this wave.
+Spawn background subagents for the remaining selected skills (`manage-headers`, `manage-firewall`, `audit-permissions`). When the goal only includes Wave 1 skills, skip this wave.
 
 **Launch all waves together when possible.** Spawn all Wave 1 and Wave 2 subagents in a single message with multiple `Agent` tool calls so they start concurrently.
 
@@ -246,8 +246,8 @@ After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-rev
 .security-review-tmp/
 ├── manage-code-scan.json
 ├── manage-site-scan.json
-├── manage-http-headers.json
-├── manage-web-application-firewall.json
+├── manage-headers.json
+├── manage-firewall.json
 └── audit-permissions.json   (when invoked)
 ```
 
@@ -331,7 +331,7 @@ The glossary entries come from `references/glossary.md`. Include only the terms 
 ### 5.6 Render the master HTML
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/review-security/scripts/render-review.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/security-review/scripts/render-review.js" \
   --output "<DOCS_PATH>" \
   --data "<TEMP_DIR>/security-review-data.json"
 ```
@@ -348,7 +348,7 @@ Open `<DOCS_PATH>` in the user's default browser.
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "ReviewSecurity"`.
+> Use `--skillName "SecurityReview"`.
 
 ### 6.3 Step 7 summary
 
@@ -358,7 +358,7 @@ Show a short plain-language summary in the chat: counts of critical / warning / 
 |----------|---------|
 | What would you like to do next? | Walk me through fixing the critical items now; Re-run the review after I make changes; Stop here, I will read the report myself |
 
-If the user picks "walk me through", group critical findings by section and offer the matching focused skill for each (`/manage-http-headers`, `/manage-web-application-firewall`, `/audit-permissions`, etc.).
+If the user picks "walk me through", group critical findings by section and offer the matching focused skill for each (`/manage-headers`, `/manage-firewall`, `/audit-permissions`, etc.).
 
 If the user picks "re-run", invoke this skill again with the same goal and scope.
 

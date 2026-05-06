@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * render-review.js — Renders the master security-review report HTML from a
- * JSON data file produced by the review-security skill.
+ * JSON data file produced by the security-review skill.
  *
  * Usage:
  *   node render-review.js --output <path> --data <json-file>

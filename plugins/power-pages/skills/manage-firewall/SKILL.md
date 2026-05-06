@@ -1,5 +1,5 @@
 ---
-name: manage-web-application-firewall
+name: manage-firewall
 description: >-
   Inspects and configures the web application firewall (WAF) in front of a
   Power Pages production site — the network shield that filters out common
@@ -131,13 +131,13 @@ Check the captured `Type` field. The firewall is only available for production s
 ## Phase 2: Read current firewall state
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/get-status.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" \
   --portalId "<PORTAL_ID>" \
   --output "<TEMP_DIR>/waf-status.json"
 ```
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-web-application-firewall/scripts/get-rules.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" \
   --portalId "<PORTAL_ID>" \
   --output "<TEMP_DIR>/waf-rules.json"
 ```
@@ -273,7 +273,7 @@ After the script completes, re-run the Phase 2 status and rules calls to verify 
 
 ### 5.1 Data-only mode
 
-In **data-only mode**, write a JSON data file to `<DATA_ONLY_DIR>/manage-web-application-firewall.json` with:
+In **data-only mode**, write a JSON data file to `<DATA_ONLY_DIR>/manage-firewall.json` with:
 
 - `REPORT_TITLE` — `"Web Application Firewall"`
 - `REPORT_DESC` — short description naming the site
@@ -292,7 +292,7 @@ Show a plain-language summary in the chat: whether the shield is on or off, how 
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "ManageWebApplicationFirewall"`.
+> Use `--skillName "ManageFirewall"`.
 
 ### 5.4 Offer follow-ups
 

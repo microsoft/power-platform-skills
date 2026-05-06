@@ -1,6 +1,6 @@
 # The Seven-Step Conversation
 
-This document walks through the conversation pattern the `review-security` skill uses, with the questions and the rationale behind each step. The skill's SKILL.md contains the executable workflow — this file explains *why* the conversation looks the way it does so future revisions stay consistent.
+This document walks through the conversation pattern the `security-review` skill uses, with the questions and the rationale behind each step. The skill's SKILL.md contains the executable workflow — this file explains *why* the conversation looks the way it does so future revisions stay consistent.
 
 ## Step 1 — Ask the goal
 
@@ -64,8 +64,8 @@ After they have had a moment to look, offer the next action with one question: w
 
 Always end with concrete, actionable next steps. Examples:
 
-- "Fix the three critical items in **Browser headers** (`/manage-http-headers`)."
+- "Fix the three critical items in **Browser headers** (`/manage-headers`)."
 - "Run the full live-site scan once the headers are deployed (`/manage-site-scan`)."
-- "Add a rate-limit rule to your sign-in pages (`/manage-web-application-firewall`)."
+- "Add a rate-limit rule to your sign-in pages (`/manage-firewall`)."
 
 The next steps are also stored in the consolidated HTML so the user can refer back to them after the chat session is over.

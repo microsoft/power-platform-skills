@@ -42,9 +42,9 @@ If the tracking script creates or updates site setting YAML files, include those
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
 | manage-code-scan | ManageCodeScan | Site/AI/Skills/ManageCodeScan |
 | manage-site-scan | ManageSiteScan | Site/AI/Skills/ManageSiteScan |
-| manage-http-headers | ManageHttpHeaders | Site/AI/Skills/ManageHttpHeaders |
-| manage-web-application-firewall | ManageWebApplicationFirewall | Site/AI/Skills/ManageWebApplicationFirewall |
-| review-security | ReviewSecurity | Site/AI/Skills/ReviewSecurity |
+| manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
+| manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
+| security-review | SecurityReview | Site/AI/Skills/SecurityReview |
 
 ## YAML Format
 

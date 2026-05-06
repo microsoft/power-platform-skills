@@ -18,7 +18,7 @@ Reads every YAML file under `.powerpages-site/site-settings/` and emits a normal
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-http-headers/scripts/inspect-headers.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/inspect-headers.js" \
   --projectRoot <path> \
   --output <file>
 ```
@@ -87,7 +87,7 @@ Scans the project for external URLs referenced in HTML, CSS, and JavaScript. Pro
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-http-headers/scripts/scan-external-urls.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/scan-external-urls.js" \
   --projectRoot <path> \
   [--exclude <comma-separated directory names>] \
   [--output <file>]

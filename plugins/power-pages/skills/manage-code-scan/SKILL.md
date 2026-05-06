@@ -90,7 +90,7 @@ The script prints a JSON object describing which tools are present. Handle the r
 
 ### 1.3 Detect data-only mode
 
-If `$ARGUMENTS` contains `--data-only <out-dir>`, remember the output directory. In data-only mode the skill writes the findings JSON to that directory and skips the HTML rendering and browser-open steps. This lets the `review-security` skill aggregate findings into one consolidated report.
+If `$ARGUMENTS` contains `--data-only <out-dir>`, remember the output directory. In data-only mode the skill writes the findings JSON to that directory and skips the HTML rendering and browser-open steps. This lets the `security-review` skill aggregate findings into one consolidated report.
 
 ---
 

@@ -255,7 +255,7 @@ Use `AskUserQuestion`:
 
 If the user wants help fixing items, group critical findings, explain the first one in plain language, and propose actions. For findings that map to other skills, suggest:
 
-- Header / cookie issues → `/manage-http-headers`
+- Header / cookie issues → `/manage-headers`
 - Permission issues → `/audit-permissions`
 - Login or external identity issues → `/setup-auth`
 

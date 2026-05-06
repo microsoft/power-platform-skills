@@ -1,5 +1,5 @@
 ---
-name: manage-http-headers
+name: manage-headers
 description: >-
   Inspects and configures the security headers a Power Pages code site sends
   to browsers — Content Security Policy, frame and clickjacking protection,
@@ -102,7 +102,7 @@ If `$ARGUMENTS` contains `--data-only <out-dir>`, remember the output directory 
 Run the inventory script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-http-headers/scripts/inspect-headers.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/inspect-headers.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --output "<TEMP_DIR>/headers-inventory.json"
 ```
@@ -127,7 +127,7 @@ For each finding, write a `reasoning` line in plain language that explains *what
 For any CSP evaluation or change, run the external URL scanner first:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-http-headers/scripts/scan-external-urls.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/scan-external-urls.js" \
   --projectRoot "<PROJECT_ROOT>"
 ```
 
@@ -216,7 +216,7 @@ After all accepted changes are written, run a quick `git diff .powerpages-site/s
 
 ### 6.1 Data-only mode
 
-In **data-only mode**, write a JSON data file to `<DATA_ONLY_DIR>/manage-http-headers.json` with:
+In **data-only mode**, write a JSON data file to `<DATA_ONLY_DIR>/manage-headers.json` with:
 
 - `REPORT_TITLE` — `"Browser Security Headers"`
 - `REPORT_DESC` — short description naming the site
@@ -235,7 +235,7 @@ Present a plain-language summary in the chat: how many headers were checked, wha
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
-> Use `--skillName "ManageHttpHeaders"`.
+> Use `--skillName "ManageHeaders"`.
 
 ### 6.4 Prompt for deploy
 
