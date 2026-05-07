@@ -45,17 +45,18 @@ test('buildMcpArgs passes the generated config path to MCP', () => {
 
 test('writeTempConfig writes JSON to tmpdir and returns its path', () => {
   let written;
+  const fakeTmp = path.join(path.sep, 'tmp', 'fake');
   const file = writeTempConfig(
     { browser: { launchOptions: { args: [] }, contextOptions: { viewport: null } } },
     {
-      tmpdir: '/tmp/fake',
+      tmpdir: fakeTmp,
       writeFn: (p, content) => {
         written = { p, content };
       },
     },
   );
 
-  assert.equal(path.dirname(file), '/tmp/fake');
+  assert.equal(path.dirname(file), fakeTmp);
   assert.match(path.basename(file), /^powerpages-playwright-mcp-\d+-\d+\.json$/);
   assert.equal(written.p, file);
   // Content should be parseable JSON containing the config we passed.
@@ -68,11 +69,12 @@ test('launch wires spawn, screen detection, and config cleanup on exit', () => {
   let unlinkPath;
   const writes = [];
   const child = new EventEmitter();
+  const fakeTmp = path.join(path.sep, 'tmp', 'fake');
 
   launch({
     browser: 'msedge',
     screen: { width: 1366, height: 768 },
-    tmpdir: '/tmp/fake',
+    tmpdir: fakeTmp,
     writeFn: (p, content) => {
       writes.push({ p, content });
     },
@@ -91,7 +93,7 @@ test('launch wires spawn, screen detection, and config cleanup on exit', () => {
   assert.equal(spawnCall.command, 'npx');
   assert.deepEqual(spawnCall.args.slice(0, 3), ['@playwright/mcp@latest', '--browser', 'msedge']);
   assert.equal(spawnCall.args[3], '--config');
-  assert.equal(path.dirname(spawnCall.args[4]), '/tmp/fake');
+  assert.equal(path.dirname(spawnCall.args[4]), fakeTmp);
   assert.deepEqual(spawnCall.options, { stdio: 'inherit', shell: true });
 
   // Config was written before spawning.
@@ -117,7 +119,7 @@ test('launch still calls onExit and attempts cleanup when child exits non-zero',
   launch({
     browser: 'chrome',
     screen: { width: 1440, height: 900 },
-    tmpdir: '/tmp/fake',
+    tmpdir: path.join(path.sep, 'tmp', 'fake'),
     writeFn: () => {},
     unlinkFn: () => {
       unlinkAttempted = true;
