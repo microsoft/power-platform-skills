@@ -8,7 +8,7 @@ Use this reference during `/migrate-edm-to-spa` Phases 3, 6, 7, and 8 to map EDM
 |--------------|----------------|-------|
 | Web page | Route and page component | Preserve route intent, content, title, and access behavior |
 | Page template | Layout component or route-level wrapper | Header/footer/sidebar templates usually become shared components |
-| Web template | Component, layout, content module, or custom logic | Liquid must be classified by intent before rewriting |
+| Web template | Component, layout, content module, or server logic | Liquid must be classified by **what it does**, not by the fact that it runs server-side |
 | Content snippet | Content constant, localization resource, or component prop | Keep frequently reused snippets centralized |
 | Web file | Public asset or imported source asset | Preserve filenames only when routes or CSS require them |
 | Web link set | Navigation model | Map to header/footer/sidebar nav components |
@@ -19,7 +19,7 @@ Use this reference during `/migrate-edm-to-spa` Phases 3, 6, 7, and 8 to map EDM
 | Web role | Role model for UX gating | Pair with `/setup-auth`; real security remains table permissions |
 | Site setting | Granular `site-settings/*.sitesetting.yml`, runtime configuration, or migration note | EDM `sitesetting.yml` must be split into per-setting SPA metadata files when migrated |
 | Custom JavaScript | Framework-specific behavior | Rewrite jQuery and portal globals into component state/effects/validation |
-| Liquid FetchXML | Web API query, server logic, or manual gap | Complex joins/aggregates may need custom backend/server logic |
+| Liquid FetchXML / server-evaluated logic | Server logic via `/add-server-logic`, Web API, or manual gap | See **Liquid Templates** below for the classification rule |
 
 ## Web Pages and Routes
 
@@ -35,20 +35,30 @@ Do not migrate hidden or unpublished pages unless they are reachable at runtime 
 
 ## Liquid Templates
 
-Classify Liquid by intent before rewriting:
+Classify Liquid by **what it does**, not by the fact that it runs server-side. Use the following rule, in order:
 
-| Liquid pattern | Likely SPA mapping |
-|----------------|--------------------|
-| `{% include 'Header' %}` or reusable section includes | Shared component composition |
-| `{{ snippets[...] }}` | Content constants or localization lookup |
-| `{{ settings[...] }}` | Runtime configuration value or migration note |
-| `sitemarkers[...]` | Route alias or navigation helper |
-| `user` or role checks | Auth/role-aware UI via `/setup-auth` |
+1. **Composition / static content** &rarr; component or content. Examples: `{% include 'Header' %}`, `{{ snippets[...] }}` for non-secret static text, simple conditionals over static content.
+2. **Read-only data access that the SPA can reproduce safely with Dataverse Web API and table permissions** &rarr; **Web API**. Example: a `{% fetchxml %}` block that lists records the user is already authorized to read.
+3. **Server-only context, privileged access, or server-evaluated business rules** &rarr; **Server Logic** (handed off to `/add-server-logic`). Examples:
+   - Liquid that reads `user.roles`, `user.contact`, or `request` to decide what data to include.
+   - FetchXML that joins/aggregates across tables or returns fields the SPA cannot reach via Web API + table permissions alone.
+   - Logic that depends on `settings`, `sitemarkers`, or other server-only context to drive responses.
+   - Anything that today runs as part of the portal's trusted server pipeline (authorization filtering, computed fields, signature/secret handling).
+4. **Complex or ambiguous Liquid** &rarr; **Manual Gap**, with the original behavior captured in the gap log so the user can decide.
+
+| Liquid pattern | Likely SPA mapping (apply rule above) |
+|----------------|---------------------------------------|
+| `{% include 'Header' %}` or reusable section includes | Component composition |
+| `{{ snippets[...] }}` (static text) | Content constants or localization lookup |
+| `{{ settings[...] }}` driving content/behavior | Server Logic if the value influences security/business logic; otherwise runtime config |
+| `sitemarkers[...]` | Route alias; use Server Logic when sitemarkers gate access |
+| `user`/`user.roles`/`request` checks driving data or content | Server Logic via `/add-server-logic` |
 | Simple conditionals/loops over static content | Component conditional rendering or array map |
-| FetchXML/entity access | Web API service, backend/server logic, or manual gap |
-| Complex filters or portal runtime objects | Low-confidence custom code until reviewed |
+| `{% fetchxml %}` for plain reads the SPA can do safely | Web API service (with table permissions) |
+| `{% fetchxml %}` with joins/aggregates/privileged fields | Server Logic via `/add-server-logic` |
+| Complex filters or undocumented portal runtime objects | Manual Gap until reviewed |
 
-When Liquid controls security or data access, do not implement only client-side behavior. Mark the server-side implication in the auth/security plan.
+When Liquid controls security or data access, do not implement only client-side behavior. The mapping must include the server-side replacement (Server Logic, table permissions, or both) and that replacement must show up in the migration plan.
 
 ## Entity Lists
 
