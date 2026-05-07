@@ -165,11 +165,9 @@ Plain-language summary: what was changed, what gaps remain, and what is already 
 
 ### 5.3 Record skill usage
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "ManageHeaders" --authoringTool "<your-agent-name>"
-```
-
-Pass your own agent name as `--authoringTool` (e.g., the name of the IDE/CLI invoking this skill). See `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` for details.
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+>
+> Use `--skillName "ManageHeaders"`.
 
 ### 5.4 Offer follow-ups
 
