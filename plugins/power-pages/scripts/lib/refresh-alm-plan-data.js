@@ -96,6 +96,7 @@ function buildHostResolutionFromCheck(check) {
     pipelinesSolutionVersion: check.pipelinesSolutionVersion || null,
     candidatesCount: check.candidates?.existingCustomHosts?.length || 0,
     willEnsureDuringExecution: false,        // post-run: nothing left to ensure
+    willProvisionPlatform: false,
     willProvisionCustom: false,
     willUsePpac: false,
     chosenEnvUrl: null,

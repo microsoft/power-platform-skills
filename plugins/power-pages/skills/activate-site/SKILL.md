@@ -81,7 +81,7 @@ pac auth who
 Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
 
 ```bash
-az account show --allow-no-subscriptions
+az account show
 ```
 
 **If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login --allow-no-subscriptions` (this form works whether or not the user has an Azure subscription — the activation flow only needs an AAD token).
