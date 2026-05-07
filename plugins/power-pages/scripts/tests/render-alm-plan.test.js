@@ -1535,6 +1535,40 @@ test('render-alm-plan: NoHost host card defaults to provision-new when no flags 
   }
 });
 
+test('render-alm-plan: NoHost host card reflects willProvisionPlatform when user picked Platform Host', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      hostResolution: {
+        status: 'NoHost',
+        hostEnvUrl: null,
+        candidatesCount: 0,
+        willEnsureDuringExecution: true,
+        willProvisionPlatform: true,
+        willProvisionCustom: false,
+        willUsePpac: false,
+        chosenEnvUrl: null,
+      },
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    assert.ok(
+      /Will provision the Platform Host via <code>getOrCreate<\/code>/.test(html),
+      'Card should render the Platform Host getOrCreate description when willProvisionPlatform is true'
+    );
+    assert.ok(
+      !/Will provision new Custom Host with <code>D365_ProjectHost<\/code>/.test(html),
+      'Card must not fall through to the Custom Host fallback when willProvisionPlatform is true'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ── Execution checklist step names link to the relevant tab ────────────────
 // The Execution Checklist tab lists steps but, before this change, was a
 // dead-end — the step labels were inert text. Each step now wraps its name in

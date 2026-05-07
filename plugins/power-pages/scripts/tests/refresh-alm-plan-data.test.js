@@ -47,6 +47,7 @@ test('buildHostResolutionFromCheck maps a successful host-check to plan-alm shap
   // Post-run flags must all clear so the renderer's "Will be ensured" branch
   // doesn't fire after the host actually exists.
   assert.equal(next.willEnsureDuringExecution, false);
+  assert.equal(next.willProvisionPlatform, false);
   assert.equal(next.willProvisionCustom, false);
   assert.equal(next.willUsePpac, false);
   assert.equal(next.chosenEnvUrl, null);
@@ -160,6 +161,7 @@ test('refresh setup-pipeline rewrites hostResolution from .last-host-check.json 
   assert.equal(planData.hostResolution.status, 'AvailableUsingCustomHost', 'hostResolution.status should advance from NoHost');
   assert.equal(planData.hostResolution.hostEnvUrl, 'https://newhost.crm.dynamics.com/');
   assert.equal(planData.hostResolution.willEnsureDuringExecution, false, 'post-run "ensure" flag should clear');
+  assert.equal(planData.hostResolution.willProvisionPlatform, false, 'post-run "willProvisionPlatform" flag should clear');
   assert.equal(planData.hostResolution.willProvisionCustom, false, 'post-run "provision" flag should clear');
 
   assert.equal(planData.pipelineMeta.pipelineName, 'TestSite-Pipeline');
