@@ -192,6 +192,7 @@ If a natural follow-up exists based on findings, suggest it. If no meaningful fo
   - For Cross-Origin-Resource-Policy, verify whether the site hosts Azure AD B2C custom login pages, is embedded cross-origin, or has integrations that load its resources. Leave absent or use `cross-origin` when unsure.
 - **Preview is for change review only** — include `preview` only on options that modify a setting value. Do not add to informational choices.
 - **Recommendations MUST NOT break the site** — before recommending a value, consider whether it would block resources the site actually uses. For CSP, always verify that runtime sources and project external URLs are included. For CORS, verify the site's actual cross-origin needs. When unsure, recommend report-only mode first.
+- **NEVER recommend broadening an existing policy** — if the user already has a tight CSP, CORS scope, or restrictive header value, do not suggest making it less restrictive. A working tight policy is better than a broad one. Never recommend `https:` wildcards in CSP directives — list specific hosts instead.
 - **Deploy after changes** — header changes only take effect after deploying. Always offer `/deploy-site` after applying changes.
 
 ## References

@@ -184,25 +184,27 @@ Also required on `script-src`:
 
 **Required on `style-src`**:
 - `'unsafe-inline'` (runtime platform limitation for certain out-of-the-box styles)
-- `https:` (broad but matches the default)
 
-**Required on `font-src` / `img-src` / `connect-src`**: depends on the site's own content. Scan the project's source files for external URLs to determine which hosts to allow.
+**All other directives** (`style-src` hosts, `font-src`, `img-src`, `connect-src`, etc.): depends on the site's own content. Scan the project's source files, templates, scripts, etc. and add only the specific hosts the site actually uses. Do NOT use `https:` wildcards — they defeat the purpose of the CSP.
 
 ### Starter directive template
 
-If the user is starting a CSP from scratch, a reasonable starting directive (with `<cloud-host>` replaced by the cloud-specific host from the table above) is:
+If the user is starting a CSP from scratch (with `<cloud-host>` replaced by the cloud-specific host from the table above):
 
 ```
 default-src 'self';
 script-src 'self' 'nonce' <cloud-host>;
-style-src 'self' 'unsafe-inline' https:;
-img-src 'self' data: https:;
-font-src 'self' https: data:;
-connect-src 'self' https:;
+style-src 'self' 'unsafe-inline';
+img-src 'self' data:;
+font-src 'self';
+connect-src 'self';
 frame-ancestors 'self';
+base-uri 'self';
+form-action 'self';
+object-src 'none';
 ```
 
-Scan the project's source files for external URLs to tighten the `https:` wildcards into specific hosts before promoting to enforcement.
+Add specific external hosts to each directive based on the source file scan. Never use `https:` wildcards — list each host explicitly.
 
 ---
 
