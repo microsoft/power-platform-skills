@@ -94,13 +94,16 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /**
  * Gets an Azure CLI access token for the given resource URL.
- * `--allow-no-subscriptions` lets accounts without an Azure subscription mint AAD-scoped Dataverse/PP tokens.
+ * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
+ * subcommands reject it as an unrecognized argument), so it must not be passed
+ * here. Accounts without a subscription can still mint AAD-scoped tokens after
+ * signing in via `az login --allow-no-subscriptions`.
  * @returns {string|null} Access token, or null if unavailable
  */
 function getAuthToken(resourceUrl) {
   try {
     return execSync(
-      `az account get-access-token --resource "${resourceUrl}" --allow-no-subscriptions --query accessToken -o tsv`,
+      `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
       { encoding: 'utf8', timeout: 15000 }
     ).trim();
   } catch {

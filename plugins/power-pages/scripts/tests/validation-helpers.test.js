@@ -5,7 +5,7 @@ const childProcess = require('child_process');
 
 const helpersPath = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 
-test('getAuthToken passes --allow-no-subscriptions to az', (t) => {
+test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', (t) => {
   const originalExecSync = childProcess.execSync;
   let capturedCommand = null;
 
@@ -26,6 +26,6 @@ test('getAuthToken passes --allow-no-subscriptions to az', (t) => {
 
   assert.equal(token, 'fake-token-value');
   assert.match(capturedCommand, /^az account get-access-token /);
-  assert.match(capturedCommand, /--allow-no-subscriptions/);
+  assert.doesNotMatch(capturedCommand, /--allow-no-subscriptions/);
   assert.match(capturedCommand, /--resource "https:\/\/example\.crm\.dynamics\.com"/);
 });
