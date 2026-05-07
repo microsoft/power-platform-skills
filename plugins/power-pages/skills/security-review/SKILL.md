@@ -1,7 +1,7 @@
 ---
 name: security-review
 description: >-
-  Runs a guided, end-to-end security review of a Power Pages code site by
+  Runs a guided, end-to-end security review of a Power Pages site by
   delegating to the focused security skills (code and dependencies, live
   site scan, browser headers, web application firewall, authentication,
   and table permissions) and consolidating every finding into one
@@ -21,7 +21,7 @@ model: opus
 
 # Review Security
 
-Guide the user through a full security review of their Power Pages code site. The skill asks one short question to capture the goal, then — for code-and-config — a follow-up to set depth. Release readiness skips the follow-up and runs every check at advanced depth by default. The skill then runs the matching focused skills and assembles every finding into a single HTML report with a built-in glossary so the user never has to switch tabs.
+Guide the user through a full security review of their Power Pages site. The skill asks one short question to capture the goal, then — for code-and-config — a follow-up to set depth. Release readiness skips the follow-up and runs every check at advanced depth by default. The skill then runs the matching focused skills and assembles every finding into a single HTML report with a built-in glossary so the user never has to switch tabs.
 
 The skill never asks the user technical questions. The conversation stays in plain language; technical names appear in the final report and the glossary explains them.
 
@@ -29,7 +29,7 @@ The skill never asks the user technical questions. The conversation stays in pla
 
 ## High-level flow (the seven steps)
 
-The conversation always follows the same seven steps. Each step maps to a phase below.
+The conversation always follows the same seven steps. Each step maps to a row in the workflow table below.
 
 1. **Ask the goal** — one question, three answers, plain language
 2. **Choose scope and depth** — one follow-up for code-and-config; release defaults to all checks at advanced depth; monitor skips this step
@@ -41,36 +41,36 @@ The conversation always follows the same seven steps. Each step maps to a phase 
 
 ## Workflow
 
-| Phase | What happens | Maps to |
-|-------|--------------|---------|
-| Phase 1 | Prerequisites and working folders | (setup) |
-| Phase 2 | Capture goal and scope | Steps 1 and 2 |
-| Phase 3 | Confirm the plan | Step 3 |
-| Phase 4 | Run the matching sub-skills | Step 4 |
-| Phase 5 | Build the consolidated report | Steps 5 and 6 |
-| Phase 6 | Present and offer follow-ups | Step 7 |
-| Phase 7 | Clean up temporary files | (closing) |
+| Step | What happens | Maps to |
+|------|--------------|---------|
+| 1 — Prerequisites | Prerequisites and working folders | (setup) |
+| 2 — Scope | Capture goal and scope | Steps 1 and 2 |
+| 3 — Confirm | Confirm the plan | Step 3 |
+| 4 — Sub-skills | Run the matching sub-skills | Step 4 |
+| 5 — Report | Build the consolidated report | Steps 5 and 6 |
+| 6 — Present | Present and offer follow-ups | Step 7 |
+| 7 — Cleanup | Clean up temporary files | (closing) |
 
 ## Task Tracking
 
-Create tasks in three batches. Mark each `in_progress` when you start and `completed` when you are done.
+Create tasks in three groups. Mark each `in_progress` when you start and `completed` when you are done.
 
-**Batch 1 — create at the start of Phase 1:**
+**Group 1 — create at the start of prerequisites:**
 
 | Task subject | activeForm |
 |--------------|------------|
 | Check prerequisites | Checking prerequisites |
 
-Only this one task. Do not create any other tasks until Phase 1 completes.
+Only this one task. Do not create any other tasks until prerequisites complete.
 
-**Batch 2 — create after Phase 1 completes:**
+**Group 2 — create after prerequisites complete:**
 
 | Task subject | activeForm |
 |--------------|------------|
 | Capture goal and scope | Capturing goal and scope |
 | Confirm the plan | Confirming the plan |
 
-**Batch 3 — create after Phase 3 completes** (user confirmed the plan):
+**Group 3 — create after the user confirms the plan:**
 
 | Task subject | activeForm |
 |--------------|------------|
@@ -81,7 +81,7 @@ Only this one task. Do not create any other tasks until Phase 1 completes.
 
 ---
 
-## Phase 1: Prerequisites
+## 1. Prerequisites
 
 ### 1.1 Locate the project
 
@@ -93,7 +93,7 @@ For the `code-config` goal, the deploy check is not required: code and package s
 
 ### 1.2 Prepare a temporary working folder
 
-Create a fresh working directory: `<PROJECT_ROOT>/.security-review-tmp/`. The folder holds JSON data files emitted by each sub-skill in **data-only mode**. The folder is removed in Phase 7.
+Create a fresh working directory: `<PROJECT_ROOT>/.security-review-tmp/`. The folder holds JSON data files emitted by each sub-skill in **review mode**. The folder is removed in the cleanup step.
 
 If the folder already exists from a previous interrupted run, delete its contents (not the folder itself) before continuing.
 
@@ -103,7 +103,7 @@ The final HTML lives at `<PROJECT_ROOT>/docs/security-review.html`. If that file
 
 ---
 
-## Phase 2: Capture goal and scope
+## 2. Capture goal and scope
 
 **IMPORTANT:** Each question below is a **separate** `AskUserQuestion` call. Do NOT combine them into one multi-step form. Wait for the user's answer to one question before deciding whether to ask the next.
 
@@ -142,7 +142,7 @@ Call `AskUserQuestion` using the structured `questions` array. Keep `label` to *
 
 Map the answer to a goal id:
 
-| Option | Goal id | Sub-skills involved (Phase 4) |
+| Option | Goal id | Sub-skills involved |
 |--------|---------|-------------------------------|
 | Code and config | `code-config` | scan-code, audit-permissions (and read-only check of setup-auth state) |
 | Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions (and read-only check of setup-auth state) |
@@ -184,11 +184,11 @@ Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same st
 
 ### 2.3 Capture the chosen sub-skill set
 
-Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the sub-skill itself — see Phase 4.4 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the sub-skill itself — see 4.4 below). This is the **Access & Data Security Validation** component.
 
 ---
 
-## Phase 3: Confirm the plan
+## 3. Confirm the plan
 
 Tell the user, in plain language, what will run and the rough time it will take. Use `AskUserQuestion`:
 
@@ -200,9 +200,9 @@ When the user confirms, mark the **Run sub-skills** task `in_progress` and conti
 
 ---
 
-## Phase 4: Run the matching sub-skills
+## 4. Run the matching sub-skills
 
-Spawn each selected sub-skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. Each sub-skill handles its own authentication, error reporting, and progress.
+Spawn each selected sub-skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--review <PROJECT_ROOT>/.security-review-tmp/`. Each sub-skill handles its own authentication, error reporting, and progress.
 
 ### 4.1 Sub-skill invocation via subagents
 
@@ -220,24 +220,24 @@ Spawn background subagents for the remaining selected skills (`manage-headers`, 
 
 **Inline checks (run while subagents work):**
 
-While subagents run, perform the read-only check for `setup-auth` inline (see Phase 4.4).
+While subagents run, perform the read-only check for `setup-auth` inline (see 4.4).
 
-Wait for all subagents to complete before proceeding to Phase 5.
+Wait for all subagents to complete before proceeding to the report-building step.
 
 ### 4.1.1 Subagent prompt pattern
 
 Each subagent receives a self-contained prompt that includes:
 
-1. The skill to invoke and the `--data-only` argument with the temp directory path
+1. The skill to invoke and the `--review` argument with the temp directory path
 2. The project root path so the skill can locate site files
-3. Any scope/depth parameters captured in Phase 2
+3. Any scope/depth parameters captured in the scope capture step
 
 Example subagent call:
 
 ```
 Agent({
   description: "Run scan-code",
-  prompt: "Invoke the skill `scan-code` with argument `--data-only <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  prompt: "Invoke the skill `scan-code` with argument `--review <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
   run_in_background: true
 })
 ```
@@ -255,11 +255,11 @@ After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-rev
 └── audit-permissions.json   (when invoked)
 ```
 
-If a sub-skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so Phase 5 can render it as a single `info` finding for that section.
+If a sub-skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
 
-### 4.2 Sub-skills that lack a data-only mode
+### 4.2 Sub-skills that lack a review mode
 
-`audit-permissions` and `setup-auth` do not currently run in data-only mode by themselves. Treat them as follows:
+`audit-permissions` and `setup-auth` do not currently run in review mode by themselves. Treat them as follows:
 
 - **audit-permissions** — invoke via `Skill` and capture its findings JSON manually. The skill writes its data to `<PROJECT_ROOT>/docs/<file>.html`; in this orchestration, **read its findings JSON shape from the inventory you collected during the run** and write it to `.security-review-tmp/audit-permissions.json` matching the shared section format documented in `references/section-data-format.md`.
 - **setup-auth** — do not invoke. Instead, read existing `.powerpages-site/site-settings/` files for authentication and cookie settings and produce a small finding list:
@@ -271,11 +271,11 @@ Write the resulting findings to `.security-review-tmp/setup-auth.json` in the [s
 
 ### 4.3 Status updates
 
-Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate sub-skill internal phases. Once all subagents have finished, confirm that all checks are complete before moving to Phase 5.
+Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate sub-skill internal steps. Once all subagents have finished, confirm that all checks are complete before moving to the report-building step.
 
 ---
 
-## Phase 5: Build the consolidated report
+## 5. Build the consolidated report
 
 ### 5.1 Read all section data
 
@@ -367,7 +367,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/security-review/scripts/render-review.js" \
 
 ---
 
-## Phase 6: Present and follow-ups
+## 6. Present and follow-ups
 
 ### 6.1 Open in browser
 
@@ -393,7 +393,7 @@ If the user picks "re-run", invoke this skill again with the same goal and scope
 
 ---
 
-## Phase 7: Clean up
+## 7. Clean up
 
 Delete the entire `.security-review-tmp/` folder. The final HTML, located in `docs/`, must remain. Confirm to the user that temporary files have been removed.
 
@@ -405,11 +405,11 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 - **Plain language with users** — never lead with technical terms. The glossary in the final report covers them.
 - **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `scan-code` and `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
-- **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--data-only` mode.
+- **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--review` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Glossary always present** — every report includes a Glossary section with at least the terms that appeared in the findings.
-- **Cleanup is mandatory** — Phase 7 is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
-- **Never run destructive sub-actions automatically** — sub-skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--data-only` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
+- **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
+- **Never run destructive sub-actions automatically** — sub-skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--review` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
 
 ## References
 

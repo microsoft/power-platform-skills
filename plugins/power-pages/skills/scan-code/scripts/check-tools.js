@@ -25,7 +25,8 @@ Output (stdout, JSON):
 
 function probe(cmd, parseVersion) {
   try {
-    const out = execSync(cmd, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    // 60s timeout — first invocation can be slow (cold start, antivirus scan, etc.)
+    const out = execSync(cmd, { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] });
     return { available: true, version: parseVersion(out), error: null };
   } catch (err) {
     return { available: false, version: null, error: (err.stderr || err.message || '').toString().trim() };

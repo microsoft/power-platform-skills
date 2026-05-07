@@ -1,30 +1,33 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 const { spawnSync, execSync } = require('child_process');
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`run-trivy.js — Runs trivy against the project and writes normalized findings.
+  process.stdout.write(`run-trivy.js — Runs trivy against the project and outputs normalized findings.
 
 Scans for vulnerabilities in dependencies, hard-coded secrets in source
 files, and license compliance issues in packages.
 
 Usage:
-  node run-trivy.js --projectRoot <path> --severity <list> --output <file> [--scanners <list>]
+  node run-trivy.js --projectRoot <path> [--severity <list>] [--scanners <list>] [--policyPaths <comma-separated>]
 
 Flags:
   --projectRoot   Directory to scan (required)
   --severity      Comma-separated severity floor (default: HIGH,CRITICAL)
-                  Valid values: LOW, MEDIUM, HIGH, CRITICAL, UNKNOWN
   --scanners      Comma-separated scanner list (default: vuln,secret,license)
-                  Valid values: vuln, secret, license
-  --output        Path for the normalized findings JSON (required)
+  --policyPaths   Comma-separated paths to custom policy/rule files or directories
   --help          Show this help message
 
 Exit codes:
-  0  Success (file written, even if findings is empty)
+  0  Success (JSON on stdout, even if findings is empty)
   1  Invocation error
+
+Example:
+  node run-trivy.js --projectRoot /path/to/site
+  node run-trivy.js --projectRoot /path/to/site --severity LOW,MEDIUM,HIGH,CRITICAL
+  node run-trivy.js --projectRoot /path/to/site --policyPaths /custom/policies,/more/rules
 `);
   process.exit(0);
 }
@@ -37,10 +40,10 @@ function getArg(name, fallback = null) {
 const projectRoot = getArg('projectRoot');
 const severity = getArg('severity', 'HIGH,CRITICAL');
 const scanners = getArg('scanners', 'vuln,secret,license');
-const output = getArg('output');
+const policyPaths = getArg('policyPaths');
 
-if (!projectRoot || !output) {
-  process.stderr.write('Usage: node run-trivy.js --projectRoot <path> --severity <list> --output <file>\n');
+if (!projectRoot) {
+  process.stderr.write('Usage: node run-trivy.js --projectRoot <path> [--severity <list>]\n');
   process.exit(1);
 }
 
@@ -51,7 +54,8 @@ if (!fs.existsSync(projectRoot)) {
 
 let version = null;
 try {
-  version = execSync('trivy --version', { encoding: 'utf8', timeout: 10000 }).match(/Version:\s*([\d.]+)/i)?.[1] || null;
+  // 60s timeout — first invocation can be slow
+  version = execSync('trivy --version', { encoding: 'utf8', timeout: 60000 }).match(/Version:\s*([\d.]+)/i)?.[1] || null;
 } catch {
   process.stderr.write('trivy is not installed or not on PATH.\n');
   process.exit(1);
@@ -64,9 +68,17 @@ const args = [
   '--format', 'json',
   '--quiet',
   '--exit-code', '0',
-  projectRoot,
 ];
 
+if (policyPaths) {
+  for (const p of policyPaths.split(',').map(s => s.trim()).filter(Boolean)) {
+    args.push('--policy', p);
+  }
+}
+
+args.push(projectRoot);
+
+// 64MB buffer — trivy output can be large for projects with many dependencies
 const proc = spawnSync('trivy', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 if (proc.error) {
@@ -131,9 +143,11 @@ for (const target of parsed.Results || []) {
   }
 }
 
-const result = { tool: 'trivy', version, scanners, severity, findings };
-
-const outDir = path.dirname(output);
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(output, JSON.stringify(result, null, 2));
-process.stdout.write(JSON.stringify({ status: 'ok', findings: findings.length, output }) + '\n');
+process.stdout.write(JSON.stringify({
+  status: 'ok',
+  tool: 'trivy',
+  version,
+  scanners,
+  severity,
+  findings,
+}) + '\n');
