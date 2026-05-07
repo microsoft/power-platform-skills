@@ -176,7 +176,7 @@ See `rule-reference.md` for the full field-level schema: custom rules, match con
 | `400 / B023`    | Trial site |
 | `400 / A010`    | Invalid rule shape — service rejects payload |
 | `404 / A001`    | Site not found |
-| `409 / Conflict`| Another operation is in progress — wait and retry after the in-flight operation completes |
+| `409 / B003`    | Another operation is in progress — wait and retry after the in-flight operation completes |
 | `0` (no response) | Request timed out — retry after a delay |
 
 ---

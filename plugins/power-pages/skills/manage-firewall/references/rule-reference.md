@@ -188,13 +188,13 @@ Use `RuleGroupOverrides` to change the action for individual bot categories.
 
 Lower number = higher priority. Valid range: **11–65000**. Use these bands so rules layer predictably:
 
-| Range        | Purpose                                  |
-|--------------|------------------------------------------|
-| `11`–`499`   | Allow rules for trusted traffic          |
-| `500`–`999`  | Reserved for future platform use         |
-| `1000`–`1999`| IP and country block rules               |
-| `2000`–`2999`| Path / URI pattern rules                 |
-| `3000`–`3999`| Rate-limit rules                         |
+| Range        | Purpose                                               |
+|--------------|-------------------------------------------------------|
+| `11`–`499`   | Allow rules for trusted traffic                       |
+| `500`–`999`  | Keep empty — reserved by this skill's band allocation |
+| `1000`–`1999`| IP and country block rules                            |
+| `2000`–`2999`| Path / URI pattern rules                              |
+| `3000`–`3999`| Rate-limit rules                                      |
 
 When inserting a new rule, check existing rules and pick the next free slot in the matching band.
 

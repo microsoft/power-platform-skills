@@ -207,7 +207,7 @@ See `scan-reference.md` for the full field-level schema of the report body.
 
 | Status / `code`     | Meaning |
 |---------------------|---------|
-| `204` (with `Z003`) | No completed scan exists yet — a scan may be running. Returns `{ "status": "empty" }` (exit 0). |
+| `204`               | No completed scan exists yet — a scan may be running. Returns `{ "status": "empty" }` (exit 0). |
 | `400 / A001`        | Site not found. |
 | `400 / A010`        | Invalid input. |
 | `500 / A009`        | Service-side failure. |
@@ -232,6 +232,6 @@ When `website.js --websiteId` returns `null`, the skill stops with a local error
 
 ## Operating notes
 
-- The scan is rate-limited per site. Running two starts in quick succession returns `Z003`; treat that as a normal "already running" outcome.
+- Only one scan per site at a time. Running two starts in quick succession returns `Z003`; treat that as a normal "already running" outcome.
 - When the scan finishes, the service sends an email notification to the admin. The report summary is also available in the Security workspace and can be downloaded as a PDF. Report summaries are supported in English (US) only.
 - Resolution is a single Power Platform API call during prerequisites. The rest of the workflow uses the cached portalId.

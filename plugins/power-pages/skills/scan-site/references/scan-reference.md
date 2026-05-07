@@ -120,20 +120,20 @@ There is no `Critical` value — `3` (High) is the maximum severity returned.
 
 ## Severity mapping
 
-When normalizing alerts into the unified report format, map each alert `Risk` to a unified severity:
+When normalizing alerts into the unified report format, map each alert `Risk` to a unified severity that matches the API values:
 
 | Risk value | Unified severity |
 |------------|------------------|
-| `3` (High) | `critical` |
-| `2` (Medium) | `warning` |
-| `1` (Low) | `info` |
+| `3` (High) | `high` |
+| `2` (Medium) | `medium` |
+| `1` (Low) | `low` |
 | `0` (Informational) | `info` |
 
 For rules with `RuleStatus: "RulePassed"` and no alerts, treat as `pass`. Treat `RuleNotRun` and `RuleTimedOut` as `info` and note the status in the finding text.
 
 ## Scan progress
 
-The `isongoing` endpoint (used by `poll-deep-scan.js`) returns:
+The scan-status check (used by `poll-deep-scan.js`) returns:
 
 ```json
 { "status": <true|false> }

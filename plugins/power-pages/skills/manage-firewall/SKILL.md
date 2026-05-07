@@ -33,7 +33,7 @@ Configure the firewall for a Power Pages production site. The firewall is only a
 - **Concurrent-operation guard.** `B003` means another enable/disable is in flight. Poll status until it settles, then retry.
 - **False-positive managed rule:** disable via a rule override (`EnabledState: "Disabled"` inside `RuleGroupOverrides` — managed rule fields use PascalCase).
 - **First-match-wins.** Rules evaluate in priority order. A geo-allow-then-default-deny pattern requires an explicit default-deny rule AFTER the allow.
-- **Custom rule priority range: 11–65000.** Values 1–10 are reserved for platform-managed rules. Priorities 500–999 are reserved for future platform use.
+- **Custom rule priority range: 11–65000.** Values 1–10 are reserved for platform-managed rules.
 - **`set-rules.js` is additive / update-only.** Send only rules being created or modified. The service merges them; existing rules not in the payload are untouched.
 - **Use `delete-rules.js` to remove rules.** `set-rules.js` cannot remove. Always use `delete-rules.js --names`.
 

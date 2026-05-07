@@ -33,7 +33,7 @@ This skill scans the live deployed site, not local source code. Pair with `/scan
 - **`null` from the resolver** means the site is not deployed, or the authenticated profile points at a different environment.
 - **Scans are long-running.** Duration depends on site size — small sites finish in minutes, large sites can take hours. Poll in the background and increase `--timeoutMinutes` for large sites.
 - **Only one scan per site at a time.** A start while a scan is running returns `Z003` — `start-deep-scan.js` reports it as `{ "status": "already-running" }` (exit 0).
-- **Rate limits apply.** Daily and weekly caps per site. When exceeded, wait and retry later.
+- **Rate limits may apply.** The service may throttle repeated scans on the same site. When throttled, wait and retry later.
 - **No completed scan yet.** A fresh site or a site mid-scan has no completed report — `get-latest-report.js` returns `{ "status": "empty" }`.
 
 ## Workflow
@@ -130,7 +130,7 @@ When presenting options via `AskUserQuestion`:
 
 Before starting a new scan, warn the user:
 - Scan duration depends on site size — small sites finish in minutes, large sites can take hours.
-- Daily and weekly per-site rate limits apply.
+- The service may throttle repeated scans on the same site.
 - The service will email a notification when the scan completes.
 
 ---
