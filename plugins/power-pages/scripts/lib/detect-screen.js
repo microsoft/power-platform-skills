@@ -71,7 +71,9 @@ function detectLinux() {
 
 function detectWindows() {
   // PowerShell is universally available on supported Windows; one-liner reads primary screen.
-  const ps = tryExec('powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; Write-Output (\\"$($b.Width)x$($b.Height)\\")"');
+  // Use single-quoted 'x' as the separator so we don't need backslash-escaped double quotes
+  // inside the cmd.exe -> PowerShell argument (PowerShell does not honor \" as quote escape).
+  const ps = tryExec('powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $b.Width.ToString() + \'x\' + $b.Height.ToString()"');
   const parsed = parseFirstWxH(ps);
   if (parsed) return parsed;
 

@@ -21,7 +21,10 @@ const { detectScreenSize } = require('./lib/detect-screen');
 const CHROME_VERTICAL_OFFSET = 120;
 
 function buildConfig({ width, height }) {
-  const viewportHeight = Math.max(600, height - CHROME_VERTICAL_OFFSET);
+  // Cap the viewport at the available page area (window height minus Chrome's
+  // chrome) so the rendered viewport never exceeds what the user can see.
+  // A tiny minimum keeps the value strictly positive on degenerate inputs.
+  const viewportHeight = Math.max(1, height - CHROME_VERTICAL_OFFSET);
   return {
     browser: {
       launchOptions: {
@@ -74,13 +77,25 @@ function launch({
     shell: true,
   });
 
-  child.on('exit', (code) => {
+  let finished = false;
+  const finishOnce = (code) => {
+    if (finished) return;
+    finished = true;
     try {
       unlinkFn(configPath);
     } catch {
       // best-effort cleanup; OS will clear tmp eventually
     }
     onExit(code);
+  };
+
+  child.on('exit', (code) => finishOnce(code));
+  // If spawn itself fails (e.g., npx not found) the child emits 'error' and
+  // may never emit 'exit'. Attempt cleanup and surface a non-zero exit so the
+  // temp config doesn't leak.
+  child.on('error', (err) => {
+    console.error(`Failed to launch Playwright MCP: ${err && err.message ? err.message : err}`);
+    finishOnce(1);
   });
 
   return child;

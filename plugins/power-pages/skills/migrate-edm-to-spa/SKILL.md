@@ -584,7 +584,7 @@ Use `AskUserQuestion` to get approval:
 
 If the user requests revisions:
 1. Update the model and data artifacts
-2. Regenerate the HTML plan (the render script will complain if the output file exists; ask the user whether to overwrite)
+2. Regenerate the HTML plan. The render script never overwrites an existing file, so either delete the previous plan first or render to a new filename (e.g., `edm-migration-plan-revised.html`). Confirm the chosen approach with the user before re-running the renderer.
 3. Open the updated plan in the browser
 4. Ask for approval again
 

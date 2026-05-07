@@ -155,7 +155,7 @@ Array of Dataverse tables and operations required by the SPA. Optional `fields[]
   "followUpSkill": "<skill-name-or-empty>",
   "fields": [<array-of-strings-or-objects>],
   "relationships": [
-    { "type": "<lookup|onetomany|manytomany|onetoone>", "target": "<table-logical-name>", "field": "<field-name>", "label": "<human-readable-label>" }
+    { "type": "<lookup|manytoone|onetomany|manytomany|onetoone>", "target": "<table-logical-name>", "field": "<field-name>", "label": "<human-readable-label>" }
   ]
 }
 ```
@@ -168,7 +168,7 @@ Array of Dataverse tables and operations required by the SPA. Optional `fields[]
     "source": "Entity list on List of Incidents page",
     "operations": ["Read", "Create", "Update"],
     "siteSettings": ["webapi/incident/fields", "webapi/incident/iscreateenabled"],
-    "followUpSkill": "/setup-webapi or /create-webroles",
+    "followUpSkill": "/integrate-webapi or /create-webroles",
     "fields": ["incidentid", "title", "customerid", "createdon"],
     "relationships": [
       { "type": "lookup", "target": "contact", "field": "customerid", "label": "reported by" }
@@ -192,9 +192,9 @@ Array of Dataverse tables and operations required by the SPA. Optional `fields[]
 - `source`: Human description of where this table appears in the EDM (e.g., "Entity list on Home page", "Lookup field in Incident form").
 - `operations`: List of operations the SPA will perform: `"Read"`, `"Create"`, `"Update"`, `"Delete"`.
 - `siteSettings`: Array of site setting keys required for Web API access (e.g., `"webapi/incident/fields"`, `"webapi/incident/iscreateenabled"`).
-- `followUpSkill`: Name of a Power Pages skill that will set up table permissions/Web API settings (e.g., `"/setup-webapi"`, `"/create-webroles"`); leave empty if no follow-up is needed.
+- `followUpSkill`: Name of a Power Pages skill that will set up table permissions/Web API settings (e.g., `"/integrate-webapi"`, `"/create-webroles"`); leave empty if no follow-up is needed.
 - `fields` (optional, recommended): list of field names captured from the EDM analysis. Strings or `{ name, type }` objects. Cap at the most important columns; the ER diagram limits the rendered list to keep the diagram readable.
-- `relationships` (optional, recommended): each item is `{ type, target, field, label }`. `type` is one of `lookup`, `manytoone`, `onetomany`, `manytomany`, `onetoone`. `target` is the related table's logical name (must match a `name` in `DATAVERSE_DATA` to draw a connection). `field` is the source column. `label` shows on the relationship line.
+- `relationships` (optional, recommended): each item is `{ type, target, field, label }`. `type` is one of `lookup`, `manytoone`, `onetomany`, `manytomany`, `onetoone` (the renderer also accepts the dashed forms `many-to-one`, `one-to-many`, `many-to-many`, `one-to-one`). `target` is the related table's logical name (must match a `name` in `DATAVERSE_DATA` to draw a connection). `field` is the source column. `label` shows on the relationship line.
 
 ---
 
@@ -468,7 +468,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
       "source": "Entity list on List of Incidents page",
       "operations": ["Read", "Create", "Update"],
       "siteSettings": ["webapi/incident/fields", "webapi/incident/iscreateenabled"],
-      "followUpSkill": "/setup-webapi",
+      "followUpSkill": "/integrate-webapi",
       "fields": ["incidentid", "title", "customerid", "createdon"],
       "relationships": [
         { "type": "lookup", "target": "contact", "field": "customerid", "label": "reported by" }
@@ -564,15 +564,15 @@ The render script will exit with an error if:
 
 **If the output file exists**, the skill should:
 1. Detect the conflict
-2. Ask the user whether to overwrite or choose a new filename
-3. Pass the chosen path to the render script
+2. Ask the user how to proceed: render to a new filename, or delete the existing plan first and re-render. The render script never overwrites in place — there is no `--force` flag — so the skill must either pass a different `--output` path or remove the old file before re-running.
+3. Apply the user's choice (delete or rename) and re-invoke the renderer
 
 Example:
 ```markdown
 I found an existing migration plan at `docs/edm-migration-plan.html`.
-Should I overwrite it or create a new file?
+The render script won't overwrite it. How should I proceed?
 
 Options:
-- Overwrite existing plan
-- Create new file (e.g., `edm-migration-plan-revised.html`)
+- Create a new file (e.g., `edm-migration-plan-revised.html`)
+- Delete the existing plan and regenerate it under the same name
 ```

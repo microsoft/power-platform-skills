@@ -88,7 +88,7 @@ const SAMPLE_DATA = {
       source: 'Entity list on List of Incidents page',
       operations: ['Read', 'Create', 'Update'],
       siteSettings: ['webapi/incident/fields'],
-      followUpSkill: '/setup-webapi',
+      followUpSkill: '/integrate-webapi',
       fields: ['incidentid', 'title', 'customerid', 'createdon'],
       relationships: [
         { type: 'lookup', target: 'contact', field: 'customerid', label: 'reported by' },

@@ -26,10 +26,15 @@ test('buildConfig sizes window and viewport from detected screen', () => {
   assert.equal(config.browser.contextOptions.colorScheme, 'light');
 });
 
-test('buildConfig keeps a minimum viewport height for tiny screens', () => {
+test('buildConfig caps the viewport at the available page area on tiny screens', () => {
   const config = buildConfig({ width: 800, height: 600 });
-  // 600 - 120 = 480, but we floor at 600 to avoid degenerate viewports
-  assert.equal(config.browser.contextOptions.viewport.height >= 600, true);
+  // Viewport height must never exceed window height minus Chrome chrome,
+  // otherwise the rendered page overflows and produces scrollbars.
+  assert.equal(
+    config.browser.contextOptions.viewport.height,
+    600 - CHROME_VERTICAL_OFFSET,
+  );
+  assert.equal(config.browser.contextOptions.viewport.width, 800);
 });
 
 test('buildMcpArgs passes the generated config path to MCP', () => {
@@ -134,5 +139,46 @@ test('launch still calls onExit and attempts cleanup when child exits non-zero',
   child.emit('exit', 7);
   assert.equal(unlinkAttempted, true);
   assert.equal(exitCode, 7);
+});
+
+test('launch cleans up and exits non-zero when child emits error before exit', () => {
+  let unlinkPath;
+  const child = new EventEmitter();
+  let onExitCalls = 0;
+  let lastExitCode;
+  const fakeTmp = path.join(path.sep, 'tmp', 'fake');
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    launch({
+      browser: 'chrome',
+      screen: { width: 1440, height: 900 },
+      tmpdir: fakeTmp,
+      writeFn: () => {},
+      unlinkFn: (p) => {
+        unlinkPath = p;
+      },
+      spawnFn: () => child,
+      onExit: (code) => {
+        onExitCalls += 1;
+        lastExitCode = code;
+      },
+    });
+
+    child.emit('error', new Error('npx not found'));
+
+    assert.equal(typeof unlinkPath, 'string');
+    assert.equal(path.dirname(unlinkPath), fakeTmp);
+    assert.equal(onExitCalls, 1);
+    assert.equal(lastExitCode, 1);
+
+    // A subsequent 'exit' (which Node may still emit after 'error') must not
+    // invoke onExit a second time, otherwise the caller would see a double exit.
+    child.emit('exit', 0);
+    assert.equal(onExitCalls, 1);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
