@@ -126,10 +126,10 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /**
  * Gets an Azure CLI access token for the given resource URL.
- * Works for AAD-only accounts without an Azure subscription — `az account get-access-token`
- * operates on AAD scope and does not require subscription enumeration. (Do NOT pass
- * `--allow-no-subscriptions` here — recent az CLI versions reject it as an unrecognized
- * argument on this subcommand. The flag is valid on `az login` and `az account show` only.)
+ * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
+ * subcommands reject it as an unrecognized argument), so it must not be passed
+ * here. Accounts without a subscription can still mint AAD-scoped tokens after
+ * signing in via `az login --allow-no-subscriptions`.
  * @returns {string|null} Access token, or null if unavailable
  */
 function getAuthToken(resourceUrl) {

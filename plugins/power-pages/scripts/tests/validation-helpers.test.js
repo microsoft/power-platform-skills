@@ -5,7 +5,7 @@ const childProcess = require('child_process');
 
 const helpersPath = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 
-test('getAuthToken does NOT pass --allow-no-subscriptions to az (subcommand rejects it)', (t) => {
+test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', (t) => {
   const originalExecSync = childProcess.execSync;
   let capturedCommand = null;
 
