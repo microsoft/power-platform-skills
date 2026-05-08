@@ -101,33 +101,31 @@ Steps:
    Authorization: Bearer {DEV_TOKEN}
    ```
 
-   Classify each returned setting using this three-tier logic:
+   Classify the returned settings using `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
 
-   **Tier 1 — Credential-style (needs per-credential decision in setup-solution):**
-   Name matches `/ConsumerKey|ConsumerSecret|ClientId|ClientSecret|AppSecret|AppKey|ApiKey|Password/i`
-   These are OAuth/identity credential fields. Setup-solution will ask, per credential, whether to: (a) promote to a Secret-typed environment variable (Key Vault-backed, value set per stage), (b) promote to a String-typed environment variable (plain text per stage — for values that vary per environment but aren't secret-grade), or (c) skip (don't add to solution; user manages out-of-band).
-   → **`credentialNeedsDecision`**: capture the name + dev value so setup-solution can present the per-credential choice.
+   ```bash
+   echo '<JSON array of {name,value}>' \
+     | node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
+   ```
 
-   **Tier 2 — Auth config (per-environment auth settings):**
-   Name matches `Authentication/` or `AzureAD/` (but NOT in Tier 1).
-   These are authentication feature flags and configuration that may differ per environment.
-   - If `mspp_value` is non-empty → **`promoteToEnvVar`**: recommend promoting to an environment variable during `setup-solution` so staging/production can use different values
-   - If `mspp_value` is null or empty → **`authNoValue`**: include in solution as-is (no secret to protect), but show a note that this is an auth setting with no dev value and the user should verify the correct value is set in each target environment after deployment
+   Output (the four-bucket shape that downstream phases + `setup-solution` consume directly):
 
-   **Tier 3 — Regular settings (all others):**
-   Everything else — Search, Bootstrap, WebApi field lists, feature flags, site tracking, etc.
-   → **`keepAsIs`**: include in solution as-is regardless of whether a value is set. These settings do not need per-environment variation and no special treatment is required.
-
-   Store as:
    ```js
    SITE_SETTINGS_DATA = {
-     keepAsIs: [{name}],                          // regular settings (Tier 3)
-     authNoValue: [{name}],                       // auth config with no dev value (Tier 2, no value)
-     promoteToEnvVar: [{name, value}],            // auth config with dev value (Tier 2, has value)
-     credentialNeedsDecision: [{name, value}]     // credential-style — setup-solution prompts per credential (Tier 1)
+     keepAsIs: [{name}],                          // regular settings (Tier 3 — Search/Bootstrap/WebApi/feature flags)
+     authNoValue: [{name}],                       // Authentication/* or AzureAD/* with empty value (Tier 2b — added as-is, set in target env)
+     promoteToEnvVar: [{name, value}],            // Authentication/* or AzureAD/* with value (Tier 2a — setup-solution offers env-var promotion)
+     credentialNeedsDecision: [{name, value}]     // ConsumerKey/ConsumerSecret/ClientId/ClientSecret/AppSecret/AppKey/ApiKey/Password (Tier 1 — bulk-with-override prompt in setup-solution Phase 5.4.C)
    }
    ```
-   If the query fails, set `SITE_SETTINGS_DATA = null` and continue.
+
+   Tier semantics in plain English (so reviewers reading the plan know what each bucket implies):
+   - **Tier 1 (`credentialNeedsDecision`)** — credential-style names. Setup-solution Phase 5.4.C runs a single bulk prompt: auto-classify by name (Secret-typed env var for `*Secret`/`*Password`/`*ApiKey`/`*AppKey`; String-typed for `*Id`/`*ConsumerKey`), all-as-Secret, all-as-String, skip-all, or pick-per-credential.
+   - **Tier 2a (`promoteToEnvVar`)** — auth config with a dev value. Setup-solution Phase 5.4.A asks which to back with env vars so each stage can use different values.
+   - **Tier 2b (`authNoValue`)** — auth config with no dev value yet. Added to the solution as-is; user sets the value in each target env after deployment.
+   - **Tier 3 (`keepAsIs`)** — everything else. Added unchanged.
+
+   If the OData query fails or the helper errors out, set `SITE_SETTINGS_DATA = null` and continue — the plan still renders, it just can't break down site settings by tier.
 
 8. Build `SOLUTION_CONTENTS_DATA`:
    ```js
