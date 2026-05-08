@@ -680,6 +680,18 @@ EOF
 ```
 or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `.last-test-site.json` in the project root (sibling to `.last-deploy.json` and `.last-pipeline.json`).
 
+#### 6.7b Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase test-site \
+  --stageName "{stageName}" \
+  --render
+```
+
+Where `{stageName}` is the stage label this run tested (e.g. `Staging`, `Production`) — usually derivable from the URL hostname or from the upstream invocation context. The helper reads `.last-test-site.json`, populates `planData.validationRuns[stageName]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation) or `--stageName` is omitted, the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 #### 6.8 Suggest Next Steps
 
 Based on the test results, suggest relevant skills:

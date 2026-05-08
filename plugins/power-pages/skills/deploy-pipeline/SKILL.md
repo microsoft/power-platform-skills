@@ -612,6 +612,19 @@ If git is not initialized in the project root (i.e., `git rev-parse --git-dir` f
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeployPipeline"`.
 
+**7.5b Refresh the ALM plan (if one exists):**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase deploy-pipeline \
+  --render
+```
+
+The helper reads the `.last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+This step is what makes the rendered plan stay current after a direct `/power-pages:deploy-pipeline` invocation. plan-alm Phase 7 also runs the same refresh as belt-and-suspenders; running it twice is idempotent (same input → same output).
+
 **7.6 Present summary:**
 
 If **Succeeded**:

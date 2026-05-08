@@ -785,6 +785,17 @@ If the user selects **option 3**, show:
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupSolution"`.
 
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase setup-solution \
+  --render
+```
+
+The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed

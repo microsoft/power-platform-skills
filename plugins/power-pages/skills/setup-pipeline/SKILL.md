@@ -432,6 +432,17 @@ git commit -m "Add Power Platform Pipeline configuration for {siteName}"
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupPipeline"`.
 
+**7.5b Refresh the ALM plan (if one exists):**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase setup-pipeline \
+  --render
+```
+
+The helper reads `.last-host-check.json` + `.last-pipeline.json`, refreshes `planData.hostResolution` and `planData.pipelineMeta`, drops pre-setup "no host detected" risks, and re-renders `docs/alm-plan.html`. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 **7.6 Present summary:**
 
 | Resource | ID / URL |
