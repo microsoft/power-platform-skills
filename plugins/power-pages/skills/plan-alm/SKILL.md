@@ -924,6 +924,17 @@ Invoke the skill:
 
 After completion: mark task as `completed`. Update HTML checklist step to `status-completed`.
 
+**Refresh the plan after export.** Run the helper (export-solution self-refreshes too — this is belt-and-suspenders):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase export-solution \
+  --render
+```
+
+The helper re-renders `docs/alm-plan.html` so the Export-step status update is visible to reviewers immediately.
+
 **If `MANUAL_CHECKPOINT = true`:** Ask via `AskUserQuestion`:
 > "Export complete. Review the solution zip at `{zipPath}` before importing. Ready to proceed with import?"
 
@@ -1039,7 +1050,18 @@ For each entry in `MANUAL_TARGETS`:
 
 4. After completion: mark the task as `completed`. Update the HTML checklist step to `status-completed`.
 
-5. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+5. **Refresh the plan after the import.** Run the helper (import-solution self-refreshes too — this is belt-and-suspenders):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+     --projectRoot "." \
+     --phase import-solution \
+     --render
+   ```
+
+   Re-renders `docs/alm-plan.html` so the per-target import-step status update is visible to reviewers immediately.
+
+6. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
 
    PAC CLI is already pointing to the target environment from step 2. Run the activation check:
    ```bash
@@ -1049,6 +1071,15 @@ For each entry in `MANUAL_TARGETS`:
    - **`activated: true`**: Site is already live. Mark task as `completed`. Update checklist step to `status-completed`.
    - **`activated: false`**: Invoke `/power-pages:activate-site`. After completion, mark task as `completed`. Update checklist step to `status-completed`.
    - **`error`**: Mark task as `skipped`. Note error in summary.
+
+7. **Refresh the plan after activation.** Run the helper (activate-site self-refreshes too — this is belt-and-suspenders):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+     --projectRoot "." \
+     --phase activate-site \
+     --render
+   ```
 
 After all imports: switch PAC CLI back to the dev environment:
 ```bash

@@ -275,3 +275,86 @@ test('refresh setup-pipeline preserves prior pipelineMeta.reusedByWiring annotat
     requestedName: 'NewName',
   }, 'reusedByWiring annotation should survive the post-run refresh');
 });
+
+// ── Manual-path phases (export-solution / import-solution / activate-site) ────
+//
+// These phases are passthroughs in refresh-alm-plan-data — they don't ingest a
+// marker file (no canonical schema today) but they ARE valid --phase values
+// and the helper should re-render the plan when invoked. The agent updates
+// planData.steps[i].status before calling these phases, so the test verifies
+// that the helper accepts the phase, runs the (no-op) handler, and writes the
+// planData back to disk without corruption.
+
+test('refresh export-solution accepts the phase and returns ok:true', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Export solution', status: 'in_progress' },
+    ],
+  });
+
+  const result = refresh({ projectRoot: root, phase: 'export-solution', render: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.phase, 'export-solution');
+  // Passthrough handler — planData should round-trip unchanged.
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.STRATEGY, 'manual');
+  assert.equal(planData.steps[1].status, 'in_progress',
+    'agent-set step status must round-trip through the passthrough handler');
+});
+
+test('refresh import-solution accepts the phase and round-trips planData', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [
+      { name: 'Import to Staging', status: 'completed' },
+      { name: 'Import to Production', status: 'in_progress' },
+    ],
+  });
+
+  const result = refresh({ projectRoot: root, phase: 'import-solution', render: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.phase, 'import-solution');
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'in_progress');
+});
+
+test('refresh activate-site accepts the phase and round-trips planData', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [
+      { name: 'Activate site in Staging', status: 'completed' },
+    ],
+  });
+
+  const result = refresh({ projectRoot: root, phase: 'activate-site', render: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.phase, 'activate-site');
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+});
+
+test('refresh export-solution + import-solution + activate-site phases are listed in the validation error', (t) => {
+  // Negative path: the validation-error message must reference the new phases
+  // so users invoking the helper with a typo see an accurate enumeration.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'Test' });
+  assert.throws(
+    () => refresh({ projectRoot: root, phase: 'bogus-phase', render: false }),
+    (err) => {
+      assert.match(err.message, /--phase must be one of/);
+      assert.match(err.message, /export-solution/);
+      assert.match(err.message, /import-solution/);
+      assert.match(err.message, /activate-site/);
+      return true;
+    },
+  );
+});

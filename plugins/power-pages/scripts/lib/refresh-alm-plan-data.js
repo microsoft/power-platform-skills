@@ -16,7 +16,7 @@
 // Usage:
 //   node refresh-alm-plan-data.js
 //     --projectRoot <path>
-//     --phase <setup-solution|setup-pipeline|deploy-pipeline|test-site|finalize>
+//     --phase <setup-solution|setup-pipeline|deploy-pipeline|export-solution|import-solution|activate-site|test-site|finalize>
 //     [--render]                  also invoke render-alm-plan.js after writing
 //     [--rendererPath <path>]     defaults to skills/plan-alm/scripts/render-alm-plan.js
 //                                 relative to plugin root
@@ -49,6 +49,17 @@ const PHASES = new Set([
   'setup-solution',
   'setup-pipeline',
   'deploy-pipeline',
+  // Manual-path phases (export/import/activate). For PP Pipelines path the
+  // deploy is a single 'deploy-pipeline' phase that covers import + activate
+  // implicitly; for Manual path each step is a separate phase. Each handler
+  // is intentionally minimal — the main work the refresh-and-render does for
+  // Manual path is re-rendering the HTML so the agent's step-status updates
+  // (planData.steps[i].status) flow through. Per-stage data ingestion (e.g.
+  // last-import.json with import outcomes per target) can be added later
+  // without changing the phase set.
+  'export-solution',
+  'import-solution',
+  'activate-site',
   'test-site',
   'finalize',
 ]);
@@ -218,11 +229,51 @@ function refreshSetupSolution(planData) {
   return planData;
 }
 
+// Manual-path passthrough refreshes. The agent updates planData.steps[i].status
+// before calling these phases, so the main work each handler does is trigger
+// the re-render. Each may grow to ingest a per-stage marker file (e.g.
+// .last-import.json keyed by target stage) in a future iteration.
+
+function refreshExportSolution(planData) {
+  // export-solution writes the solution zip to disk + a .solution-manifest.json
+  // version bump. No structured marker file today — re-rendering picks up
+  // the agent's step.status updates. If a future commit introduces
+  // .last-export.json (zipPath / exportedAt / version / managed flag), expand
+  // this handler to populate planData.manualMeta.lastExport from it.
+  return planData;
+}
+
+function refreshImportSolution(planData, projectRoot) {
+  // import-solution writes .last-import.json with { solutionName,
+  // targetEnvironment, importedAt, status, componentResults }. For Manual
+  // path with multiple targets, .last-import.json reflects the MOST RECENT
+  // import — not a per-stage history. Today we just trigger re-render so the
+  // agent's per-step status updates flow through. Per-target history is a
+  // separate future enhancement (would key off planData.manualImports[stage]
+  // with the same shape as validationRuns[stage]).
+  void projectRoot; // reserved for future per-stage ingestion
+  return planData;
+}
+
+function refreshActivateSite(planData) {
+  // activate-site writes nothing today (or a transient confirmation only —
+  // no canonical marker file). The PP Pipelines path tracks activation
+  // status in .last-deploy.json (refreshDeployPipeline reads it). For
+  // Manual path the agent updates step.status before calling this refresh,
+  // so re-rendering surfaces the status change. Future enhancement: write
+  // a .last-activate.json marker per stage and ingest per-stage activation
+  // outcome here, parallel to validationRuns.
+  return planData;
+}
+
 function applyRefresh(planData, phase, projectRoot, stageName) {
   switch (phase) {
     case 'setup-solution':  return refreshSetupSolution(planData);
     case 'setup-pipeline':  return refreshSetupPipeline(planData, projectRoot);
     case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
+    case 'export-solution': return refreshExportSolution(planData);
+    case 'import-solution': return refreshImportSolution(planData, projectRoot);
+    case 'activate-site':   return refreshActivateSite(planData);
     case 'test-site':       return refreshTestSite(planData, projectRoot, stageName);
     case 'finalize':        return refreshFinalize(planData);
     default: throw new Error('Unknown phase: ' + phase);

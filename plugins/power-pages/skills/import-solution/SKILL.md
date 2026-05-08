@@ -414,6 +414,17 @@ Display a summary table:
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ImportSolution"`.
 
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase import-solution \
+  --render
+```
+
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Import to {targetLabel}` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 1**: Confirm target environment — import is not easily undoable for managed solutions

@@ -244,6 +244,17 @@ Display a summary:
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ExportSolution"`.
 
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase export-solution \
+  --render
+```
+
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Solution identification — confirm before triggering export

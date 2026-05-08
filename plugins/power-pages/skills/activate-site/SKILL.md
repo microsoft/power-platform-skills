@@ -263,6 +263,17 @@ The script already resolves the correct cloud-specific site URL domain, so use t
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ActivateSite"`.
 
+#### 5.2b Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase activate-site \
+  --render
+```
+
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Activate site in {targetLabel}` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 #### 5.3 Suggest Next Steps
 
 After the summary, suggest:
