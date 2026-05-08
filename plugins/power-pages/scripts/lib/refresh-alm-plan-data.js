@@ -194,11 +194,25 @@ function refreshDeployPipeline(planData, projectRoot) {
 }
 
 function refreshTestSite(planData, projectRoot, stageName) {
-  if (!stageName) return planData;
+  // Stage resolution: explicit --stageName arg wins; falls back to the
+  // marker's stageName field (test-site writes it when known, e.g. when
+  // plan-alm orchestrates the call); finally falls back to the FIRST target
+  // stage in planData.stages when planData has only one target. Standalone
+  // single-stage test-site invocations work without --stageName via the
+  // last fallback; multi-stage standalone runs need the explicit arg.
   const tsMarker = readJson(path.join(projectRoot, '.last-test-site.json'));
   if (!tsMarker) return planData;
+
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && tsMarker.stageName) resolvedStage = tsMarker.stageName;
+  if (!resolvedStage && Array.isArray(planData.stages)) {
+    const targets = planData.stages.filter((s) => s && s.type === 'target');
+    if (targets.length === 1 && targets[0].label) resolvedStage = targets[0].label;
+  }
+  if (!resolvedStage) return planData;
+
   planData.validationRuns = planData.validationRuns || {};
-  planData.validationRuns[stageName] = {
+  planData.validationRuns[resolvedStage] = {
     url: tsMarker.url || null,
     runAt: tsMarker.runAt || null,
     durationSec: tsMarker.durationSec != null ? tsMarker.durationSec : null,
@@ -305,14 +319,46 @@ function refreshImportSolution(planData, projectRoot, stageName) {
   return planData;
 }
 
-function refreshActivateSite(planData) {
-  // activate-site writes nothing today (or a transient confirmation only —
-  // no canonical marker file). The PP Pipelines path tracks activation
-  // status in .last-deploy.json (refreshDeployPipeline reads it). For
-  // Manual path the agent updates step.status before calling this refresh,
-  // so re-rendering surfaces the status change. Future enhancement: write
-  // a .last-activate.json marker per stage and ingest per-stage activation
-  // outcome here, parallel to validationRuns.
+function refreshActivateSite(planData, projectRoot, stageName) {
+  // activate-site Phase 5.1b writes .last-activate.json with the post-activation
+  // state (siteUrl, websiteRecordId, environmentUrl, activatedAt, status). We
+  // ingest it into planData.activations[stageName] (parallel to validationRuns
+  // and manualImports) so the Manual-path "Activate site in {stage}" checklist
+  // step can render an ACTIVATED badge with the live site URL inline.
+  //
+  // Stage resolution: explicit --stageName wins; falls back to URL matching
+  // .last-activate.json's environmentUrl against planData.stages[].envUrl when
+  // omitted. PP Pipelines path tracks activation in .last-deploy.json instead
+  // (refreshDeployPipeline ingests it); the Manual-path standalone case is
+  // what this handler covers.
+  const marker = projectRoot ? readJson(path.join(projectRoot, '.last-activate.json')) : null;
+  if (!marker) return planData;
+
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && marker.stageName) resolvedStage = marker.stageName;
+  if (!resolvedStage && marker.environmentUrl && Array.isArray(planData.stages)) {
+    const matchOrigin = (u) => {
+      try { return new URL(u).origin.toLowerCase(); } catch { return null; }
+    };
+    const targetOrigin = matchOrigin(marker.environmentUrl);
+    if (targetOrigin) {
+      const hit = planData.stages.find((s) => matchOrigin(s.envUrl) === targetOrigin);
+      if (hit && hit.label) resolvedStage = hit.label;
+    }
+  }
+  if (!resolvedStage) {
+    resolvedStage = `unresolved-${marker.environmentUrl || 'unknown'}`;
+  }
+
+  planData.activations = planData.activations || {};
+  planData.activations[resolvedStage] = {
+    siteName: marker.siteName || null,
+    siteUrl: marker.siteUrl || null,
+    websiteRecordId: marker.websiteRecordId || null,
+    environmentUrl: marker.environmentUrl || null,
+    activatedAt: marker.activatedAt || null,
+    status: marker.status || null,
+  };
   return planData;
 }
 
@@ -323,7 +369,7 @@ function applyRefresh(planData, phase, projectRoot, stageName) {
     case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
     case 'export-solution': return refreshExportSolution(planData);
     case 'import-solution': return refreshImportSolution(planData, projectRoot, stageName);
-    case 'activate-site':   return refreshActivateSite(planData);
+    case 'activate-site':   return refreshActivateSite(planData, projectRoot, stageName);
     case 'test-site':       return refreshTestSite(planData, projectRoot, stageName);
     case 'finalize':        return refreshFinalize(planData);
     default: throw new Error('Unknown phase: ' + phase);

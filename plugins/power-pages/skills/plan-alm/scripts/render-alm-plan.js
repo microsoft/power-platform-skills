@@ -1031,6 +1031,10 @@ function buildChecklistHtml() {
   // validationRuns; surfaced as a substep on the matching "Import to {stage}"
   // checklist step.
   const imports = (data.manualImports && typeof data.manualImports === 'object') ? data.manualImports : {};
+  // Manual-path activation outcomes — keyed by target stage label, populated
+  // by refresh-alm-plan-data's activate-site phase. Surfaced as an ACTIVATED
+  // substep on the matching "Activate site in {stage}" checklist step.
+  const activations = (data.activations && typeof data.activations === 'object') ? data.activations : {};
 
   // Match "Test site in {stageName}" entries to their captured validationRun.
   // Also enrich every "<verb> in {stageName}" step with a stage-env subline so
@@ -1087,6 +1091,36 @@ function buildChecklistHtml() {
         validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
   <li class="checklist-substep" style="font-size:11px;">No test-site run captured for <strong>${escapeHtml(stageName)}</strong> yet.</li>
 </div>`;
+      }
+    }
+
+    // Activate-step substep: surface per-target activation outcome when
+    // planData.activations[stageName] is populated. Same visual idiom as the
+    // test-site validation substep + import substep below. Detection: step
+    // name starts with "Activate site in " (plan-alm Phase 3 schema). Works
+    // for both PP and Manual paths — PP path's activation flows through
+    // .last-deploy.json and refreshDeployPipeline, but the Manual-path
+    // standalone activate-site invocation is what surfaces here.
+    const isActivateStep = /^activate\s+site\s+in\s+/i.test(name);
+    let activateLine = '';
+    if (isActivateStep && stageName) {
+      const act = activations[stageName] || null;
+      if (act && typeof act === 'object') {
+        const status = String(act.status || '').toLowerCase();
+        const failed = /fail/i.test(status);
+        const alreadyActivated = status === 'alreadyactivated' || status === 'already-activated';
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : (alreadyActivated ? 'ALREADY LIVE' : 'ACTIVATED');
+        const urlMarkup = act.siteUrl
+          ? `<a href="${escapeHtml(act.siteUrl)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;"><code>${escapeHtml(act.siteUrl)}</code></a>`
+          : '&mdash;';
+        activateLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${urlMarkup}</span>
+  </li>
+</div>`;
+        if (s === 'completed' && failed) s = 'warning';
       }
     }
 
@@ -1147,7 +1181,7 @@ function buildChecklistHtml() {
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
   <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
-</div>${envLine}${importLine}${validationLine}`;
+</div>${envLine}${activateLine}${importLine}${validationLine}`;
   }).join('\n');
 }
 

@@ -607,3 +607,191 @@ test('refresh setup-solution accepts an empty envVars[] sidecar (skip-all path)'
   assert.deepEqual(planData.envVars, [],
     'empty sidecar (user skipped all) should leave planData.envVars empty');
 });
+
+// ── activate-site: ingest .last-activate.json into planData.activations ──────
+
+test('refresh activate-site captures siteUrl + status into planData.activations[stageName]', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
+    ],
+  });
+  writeJson(path.join(root, '.last-activate.json'), {
+    stageName: 'Staging',
+    siteName: 'TestSite',
+    siteUrl: 'https://teststaging.powerappsportals.com',
+    websiteRecordId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    environmentUrl: 'https://staging.crm.dynamics.com',
+    activatedAt: '2026-05-08T20:00:00.000Z',
+    status: 'Activated',
+  });
+
+  refresh({ projectRoot: root, phase: 'activate-site', stageName: 'Staging', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.activations && planData.activations.Staging,
+    'planData.activations.Staging should be populated');
+  assert.equal(planData.activations.Staging.siteUrl, 'https://teststaging.powerappsportals.com');
+  assert.equal(planData.activations.Staging.status, 'Activated');
+  assert.equal(planData.activations.Staging.activatedAt, '2026-05-08T20:00:00.000Z');
+});
+
+test('refresh activate-site falls back to environmentUrl match when stageName absent', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+  });
+  writeJson(path.join(root, '.last-activate.json'), {
+    siteName: 'TestSite',
+    siteUrl: 'https://testprod.powerappsportals.com',
+    environmentUrl: 'https://prod.crm.dynamics.com',
+    activatedAt: '2026-05-08T21:00:00.000Z',
+    status: 'Activated',
+    // intentionally NO stageName field
+  });
+
+  refresh({ projectRoot: root, phase: 'activate-site', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.activations && planData.activations.Production,
+    'environmentUrl match should resolve to the Production stage');
+  assert.equal(planData.activations.Production.siteUrl, 'https://testprod.powerappsportals.com');
+});
+
+test('refresh activate-site preserves prior-stage entries across calls', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com' },
+    ],
+  });
+
+  // Activate Staging.
+  writeJson(path.join(root, '.last-activate.json'), {
+    stageName: 'Staging',
+    siteUrl: 'https://teststaging.powerappsportals.com',
+    environmentUrl: 'https://staging.crm.dynamics.com',
+    status: 'Activated',
+    activatedAt: '2026-05-08T20:00:00.000Z',
+  });
+  refresh({ projectRoot: root, phase: 'activate-site', stageName: 'Staging', render: false });
+
+  // Activate Production. .last-activate.json gets overwritten by the second activate-site run.
+  writeJson(path.join(root, '.last-activate.json'), {
+    stageName: 'Production',
+    siteUrl: 'https://testprod.powerappsportals.com',
+    environmentUrl: 'https://prod.crm.dynamics.com',
+    status: 'Activated',
+    activatedAt: '2026-05-08T21:30:00.000Z',
+  });
+  refresh({ projectRoot: root, phase: 'activate-site', stageName: 'Production', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.activations.Staging, 'Staging entry should survive the Production activation');
+  assert.equal(planData.activations.Staging.siteUrl, 'https://teststaging.powerappsportals.com');
+  assert.equal(planData.activations.Production.siteUrl, 'https://testprod.powerappsportals.com');
+});
+
+test('refresh activate-site recognizes AlreadyActivated status', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, '.last-activate.json'), {
+    stageName: 'Staging',
+    siteUrl: 'https://teststaging.powerappsportals.com',
+    environmentUrl: 'https://staging.crm.dynamics.com',
+    status: 'AlreadyActivated',
+    activatedAt: '2026-05-08T20:00:00.000Z',
+  });
+
+  refresh({ projectRoot: root, phase: 'activate-site', stageName: 'Staging', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.activations.Staging.status, 'AlreadyActivated',
+    'AlreadyActivated status round-trips so the renderer can show ALREADY LIVE badge');
+});
+
+// ── test-site stageName fallback (no --stageName arg, derive via marker / single-target) ──
+
+test('refresh test-site falls back to marker.stageName when --stageName arg absent', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+  });
+  writeJson(path.join(root, '.last-test-site.json'), {
+    url: 'https://teststaging.powerappsportals.com',
+    stageName: 'Staging',
+    runAt: '2026-05-08T22:00:00.000Z',
+    durationSec: 90,
+    runOutcome: 'passed',
+    summary: { passed: 5, failed: 0, skipped: 0, total: 5 },
+  });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.validationRuns && planData.validationRuns.Staging,
+    'marker stageName field should resolve to Staging');
+  assert.equal(planData.validationRuns.Staging.runOutcome, 'passed');
+});
+
+test('refresh test-site falls back to single target stage when no stageName signal', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Dev', envUrl: 'https://dev.crm.dynamics.com', type: 'source' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+  });
+  writeJson(path.join(root, '.last-test-site.json'), {
+    url: 'https://testprod.powerappsportals.com',
+    runAt: '2026-05-08T23:00:00.000Z',
+    runOutcome: 'passed',
+    // no stageName in marker, no --stageName arg, but only ONE target stage exists
+  });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.validationRuns && planData.validationRuns.Production,
+    'single-target fallback should map to Production');
+});
+
+test('refresh test-site no-ops when no stageName signal and multiple targets', (t) => {
+  // Multi-target, no stageName in marker, no --stageName arg → cannot resolve.
+  // Helper should not corrupt validationRuns by guessing.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+    validationRuns: {},
+  });
+  writeJson(path.join(root, '.last-test-site.json'), {
+    url: 'https://test.powerappsportals.com',
+    runOutcome: 'passed',
+  });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.validationRuns, {},
+    'multi-target ambiguous case must not silently pick a stage');
+});
