@@ -243,15 +243,54 @@ function refreshExportSolution(planData) {
   return planData;
 }
 
-function refreshImportSolution(planData, projectRoot) {
+function refreshImportSolution(planData, projectRoot, stageName) {
   // import-solution writes .last-import.json with { solutionName,
   // targetEnvironment, importedAt, status, componentResults }. For Manual
-  // path with multiple targets, .last-import.json reflects the MOST RECENT
-  // import — not a per-stage history. Today we just trigger re-render so the
-  // agent's per-step status updates flow through. Per-target history is a
-  // separate future enhancement (would key off planData.manualImports[stage]
-  // with the same shape as validationRuns[stage]).
-  void projectRoot; // reserved for future per-stage ingestion
+  // path with multiple targets, the file reflects the MOST RECENT import —
+  // not a per-stage history. We resolve the stage label from --stageName
+  // (passed by plan-alm Phase 7's per-target loop) or by matching
+  // .last-import.json's targetEnvironment URL against planData.stages[].envUrl.
+  // The result writes into planData.manualImports[stageName] (parallel to
+  // validationRuns[stageName]) so reviewers see per-target outcome on the
+  // rendered plan, not just the most recent.
+  const importMarker = readJson(path.join(projectRoot, '.last-import.json'));
+  if (!importMarker) return planData;
+
+  // Resolve the target stage label: explicit --stageName wins; fall back to
+  // matching the marker's targetEnvironment URL origin against the plan's
+  // stages array. If neither resolves, log a soft note via stderr but still
+  // capture the data under a synthetic key so the import isn't silently lost.
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && importMarker.targetEnvironment && Array.isArray(planData.stages)) {
+    const matchOrigin = (u) => {
+      try { return new URL(u).origin.toLowerCase(); } catch { return null; }
+    };
+    const targetOrigin = matchOrigin(importMarker.targetEnvironment);
+    if (targetOrigin) {
+      const hit = planData.stages.find((s) => matchOrigin(s.envUrl) === targetOrigin);
+      if (hit && hit.label) resolvedStage = hit.label;
+    }
+  }
+  if (!resolvedStage) {
+    // Defensive — write to a synthetic key so subsequent imports for resolvable
+    // stages don't clobber it. Caller should pass --stageName explicitly.
+    resolvedStage = `unresolved-${importMarker.targetEnvironment || 'unknown'}`;
+  }
+
+  planData.manualImports = planData.manualImports || {};
+  planData.manualImports[resolvedStage] = {
+    solutionName: importMarker.solutionName || null,
+    targetEnvironment: importMarker.targetEnvironment || null,
+    importedAt: importMarker.importedAt || null,
+    status: importMarker.status || null,
+    artifactVersion: importMarker.artifactVersion || importMarker.version || null,
+    componentCount: importMarker.componentCount != null ? importMarker.componentCount
+      : (Array.isArray(importMarker.componentResults) ? importMarker.componentResults.length : null),
+    componentFailureCount: Array.isArray(importMarker.componentResults)
+      ? importMarker.componentResults.filter((c) => c && c.status && /fail/i.test(c.status)).length
+      : null,
+    importJobId: importMarker.importJobId || null,
+  };
   return planData;
 }
 
@@ -272,7 +311,7 @@ function applyRefresh(planData, phase, projectRoot, stageName) {
     case 'setup-pipeline':  return refreshSetupPipeline(planData, projectRoot);
     case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
     case 'export-solution': return refreshExportSolution(planData);
-    case 'import-solution': return refreshImportSolution(planData, projectRoot);
+    case 'import-solution': return refreshImportSolution(planData, projectRoot, stageName);
     case 'activate-site':   return refreshActivateSite(planData);
     case 'test-site':       return refreshTestSite(planData, projectRoot, stageName);
     case 'finalize':        return refreshFinalize(planData);

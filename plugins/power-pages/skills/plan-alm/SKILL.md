@@ -1056,10 +1056,11 @@ For each entry in `MANUAL_TARGETS`:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
      --projectRoot "." \
      --phase import-solution \
+     --stageName "{targetLabel}" \
      --render
    ```
 
-   Re-renders `docs/alm-plan.html` so the per-target import-step status update is visible to reviewers immediately.
+   `{targetLabel}` is the current iteration's target (e.g. `Staging`, `Production`). The helper reads `.last-import.json`, writes a per-target entry into `planData.manualImports[targetLabel]` (status, version, component count, failures), and re-renders `docs/alm-plan.html`. The matching `Import to {targetLabel}` checklist step picks up an `IMPORTED` (or `FAILED`) badge with import details inline — same idiom as the test-site validation substep on PP-path Test steps. Always pass `--stageName` from the per-target loop so the helper doesn't have to fall back to URL matching.
 
 6. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
 

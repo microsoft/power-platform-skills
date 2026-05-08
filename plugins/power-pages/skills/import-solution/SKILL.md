@@ -420,10 +420,13 @@ Follow the skill tracking instructions in the reference to record this skill's u
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase import-solution \
+  --stageName "{targetLabel}" \
   --render
 ```
 
-Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Import to {targetLabel}` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+`{targetLabel}` is the Manual-path target stage (e.g. `Staging`, `Production`) the just-completed import was for — usually carried in by the orchestrator (plan-alm Phase 7) or derivable from the target env URL. The helper reads `.last-import.json`, captures the import outcome (status, version, component count, component failures) into `planData.manualImports[targetLabel]`, and re-renders `docs/alm-plan.html` so the matching `Import to {targetLabel}` checklist step shows an `IMPORTED` / `FAILED` badge with version + component count inline. Subsequent imports to OTHER targets each get their own entry — the renderer surfaces a per-target history rather than overwriting on each call.
+
+If `--stageName` is omitted the helper falls back to matching `.last-import.json`'s `targetEnvironment` URL against `planData.stages[].envUrl`. When the match fails (rare — usually a stage-label/env-URL mismatch in planData), the import is captured under a synthetic key so it isn't silently lost; pass `--stageName` explicitly to keep the rendered plan clean. When `docs/.alm-plan-data.json` is absent, the helper returns `ok:false` as a soft no-op.
 
 ## Key Decision Points (Wait for User)
 

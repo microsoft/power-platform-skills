@@ -1026,6 +1026,11 @@ function buildChecklistHtml() {
   const steps = Array.isArray(data.steps) ? data.steps : [];
   if (steps.length === 0) return '<div class="note-box neutral">Execution steps will be populated after approval.</div>';
   const runs = (data.validationRuns && typeof data.validationRuns === 'object') ? data.validationRuns : {};
+  // Manual-path per-target import outcomes — keyed by target stage label,
+  // populated by refresh-alm-plan-data's import-solution phase. Parallel to
+  // validationRuns; surfaced as a substep on the matching "Import to {stage}"
+  // checklist step.
+  const imports = (data.manualImports && typeof data.manualImports === 'object') ? data.manualImports : {};
 
   // Match "Test site in {stageName}" entries to their captured validationRun.
   // Also enrich every "<verb> in {stageName}" step with a stage-env subline so
@@ -1085,7 +1090,39 @@ function buildChecklistHtml() {
       }
     }
 
-    // Env-name subline: for any stage-bound step (Deploy / Activate / Test),
+    // Manual-path Import-step substep: surface per-target import outcome
+    // when planData.manualImports[stageName] is populated. Same visual idiom
+    // as the test-site validation substep above. Detection mirrors the
+    // plan-alm Phase 3 step name "Import to {stageName}".
+    const isImportStep = /^import\s+to\s+/i.test(name);
+    let importLine = '';
+    if (isImportStep && stageName) {
+      const imp = imports[stageName] || null;
+      if (imp && typeof imp === 'object') {
+        const status = String(imp.status || '').toLowerCase();
+        const failed = (imp.componentFailureCount && imp.componentFailureCount > 0) || /fail/i.test(status);
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : 'IMPORTED';
+        const versionStr = imp.artifactVersion ? `v${escapeHtml(imp.artifactVersion)}` : '';
+        const componentsStr = imp.componentCount != null
+          ? `${Number(imp.componentCount).toLocaleString()} components`
+          : '';
+        const failedStr = (imp.componentFailureCount && imp.componentFailureCount > 0)
+          ? ` &middot; <span style="color:var(--critical);">${Number(imp.componentFailureCount)} failed</span>`
+          : '';
+        const detailParts = [versionStr, componentsStr].filter(Boolean).join(' &middot; ') + failedStr;
+        importLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${detailParts || '&mdash;'}</span>
+  </li>
+</div>`;
+        // Promote completed → warning when import had component failures.
+        if (s === 'completed' && failed) s = 'warning';
+      }
+    }
+
+    // Env-name subline: for any stage-bound step (Deploy / Import / Activate / Test),
     // show the target env URL beneath the step name. Plays well with the
     // existing checklist-substep-list styling.
     let envLine = '';
@@ -1110,7 +1147,7 @@ function buildChecklistHtml() {
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
   <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
-</div>${envLine}${validationLine}`;
+</div>${envLine}${importLine}${validationLine}`;
   }).join('\n');
 }
 

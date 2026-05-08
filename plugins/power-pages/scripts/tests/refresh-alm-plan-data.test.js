@@ -358,3 +358,185 @@ test('refresh export-solution + import-solution + activate-site phases are liste
     },
   );
 });
+
+// ── Per-target import history ─────────────────────────────────────────────────
+//
+// import-solution writes .last-import.json with the most recent import only;
+// for Manual path with N targets we want a per-target record so the rendered
+// plan can show "Import to Staging: IMPORTED v1.0.4 (288 components)" while
+// "Import to Production" stays in_progress. refreshImportSolution captures
+// the marker into planData.manualImports[stageName] keyed by the explicit
+// --stageName arg (preferred) or derived from a URL match against
+// planData.stages.
+
+test('refresh import-solution captures per-target import outcome with stageName', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+    steps: [
+      { name: 'Import to Staging', status: 'completed' },
+      { name: 'Import to Production', status: 'pending' },
+    ],
+  });
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://staging.crm.dynamics.com',
+    importedAt: '2026-05-08T16:00:00.000Z',
+    status: 'Succeeded',
+    artifactVersion: '1.0.4',
+    componentCount: 288,
+    componentResults: [
+      { name: 'comp1', status: 'Succeeded' },
+      { name: 'comp2', status: 'Succeeded' },
+    ],
+    importJobId: 'job-123',
+  });
+
+  const result = refresh({
+    projectRoot: root,
+    phase: 'import-solution',
+    stageName: 'Staging',
+    render: false,
+  });
+  assert.equal(result.ok, true);
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  const staging = planData.manualImports && planData.manualImports.Staging;
+  assert.ok(staging, 'planData.manualImports.Staging should be populated');
+  assert.equal(staging.solutionName, 'cr_TestSolution');
+  assert.equal(staging.targetEnvironment, 'https://staging.crm.dynamics.com');
+  assert.equal(staging.status, 'Succeeded');
+  assert.equal(staging.artifactVersion, '1.0.4');
+  assert.equal(staging.componentCount, 288);
+  assert.equal(staging.componentFailureCount, 0,
+    'all componentResults Succeeded so failure count is 0');
+  assert.equal(staging.importJobId, 'job-123');
+
+  assert.equal(planData.manualImports && planData.manualImports.Production, undefined);
+});
+
+test('refresh import-solution falls back to URL match when stageName absent', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com/', type: 'target' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
+    ],
+  });
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://prod.crm.dynamics.com/some/path',
+    importedAt: '2026-05-08T17:00:00.000Z',
+    status: 'Succeeded',
+  });
+
+  refresh({
+    projectRoot: root,
+    phase: 'import-solution',
+    render: false,
+  });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.manualImports && planData.manualImports.Production,
+    'URL match against stages[].envUrl should resolve targetEnvironment to the Production stage');
+  assert.equal(planData.manualImports.Production.status, 'Succeeded');
+});
+
+test('refresh import-solution captures component failures into componentFailureCount', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://staging.crm.dynamics.com',
+    importedAt: '2026-05-08T16:00:00.000Z',
+    status: 'Failed',
+    componentResults: [
+      { name: 'comp1', status: 'Succeeded' },
+      { name: 'comp2', status: 'Failed' },
+      { name: 'comp3', status: 'Failed' },
+      { name: 'comp4', status: 'Succeeded' },
+    ],
+  });
+
+  refresh({
+    projectRoot: root,
+    phase: 'import-solution',
+    stageName: 'Staging',
+    render: false,
+  });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.manualImports.Staging.componentFailureCount, 2);
+  assert.equal(planData.manualImports.Staging.componentCount, 4,
+    'componentCount falls back to componentResults.length when not explicit');
+});
+
+test('refresh import-solution preserves prior-stage entries across calls', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' },
+      { label: 'Production', envUrl: 'https://prod.crm.dynamics.com' },
+    ],
+  });
+
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://staging.crm.dynamics.com',
+    importedAt: '2026-05-08T16:00:00.000Z',
+    status: 'Succeeded',
+    artifactVersion: '1.0.4',
+  });
+  refresh({ projectRoot: root, phase: 'import-solution', stageName: 'Staging', render: false });
+
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://prod.crm.dynamics.com',
+    importedAt: '2026-05-08T17:30:00.000Z',
+    status: 'Succeeded',
+    artifactVersion: '1.0.4',
+  });
+  refresh({ projectRoot: root, phase: 'import-solution', stageName: 'Production', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.manualImports.Staging, 'Staging entry should survive the Production import');
+  assert.equal(planData.manualImports.Staging.targetEnvironment, 'https://staging.crm.dynamics.com');
+  assert.equal(planData.manualImports.Production.targetEnvironment, 'https://prod.crm.dynamics.com');
+});
+
+test('refresh import-solution writes synthetic key when stage cannot be resolved', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    stages: [
+      { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' },
+    ],
+  });
+  writeJson(path.join(root, '.last-import.json'), {
+    solutionName: 'cr_TestSolution',
+    targetEnvironment: 'https://elsewhere.crm.dynamics.com',
+    importedAt: '2026-05-08T16:00:00.000Z',
+    status: 'Succeeded',
+  });
+
+  refresh({ projectRoot: root, phase: 'import-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  const keys = Object.keys(planData.manualImports || {});
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /^unresolved-/, 'unresolvable stage should land under a synthetic key');
+});
