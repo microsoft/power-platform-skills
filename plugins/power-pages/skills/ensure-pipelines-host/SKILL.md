@@ -701,17 +701,43 @@ When env-create returns a 409 capacity-related error, the user's tenant doesn't 
 
    **Always** discard any env GUID returned in the 409 response body — provisioning failed, so the GUID either doesn't represent a usable env or is an artifact. Path 4.B must use the Phase 2 eligible-env inventory exclusively.
 
-#### 4.B — Guided manual: Install Pipelines app on an existing env
+#### 4.B — Install Pipelines app on an existing env (automated)
 
-1. **If the env was already chosen** (`CHOSEN_ENV_URL` is set, either from Phase 3.C Option 2 → sub-option `a` OR from the upstream skip rule on `hostResolution.chosenEnvUrl`): skip the "which env" sub-prompt entirely — proceed directly to step 2 with the chosen env. Set `ACTION_TAKEN` per the Phase 3.C Step 3 routing table (`"user-installed-app-on-dev"` when `CHOSEN_ENV_URL` origin matches `devEnvUrl`, else `"user-installed-app"`).
+This path was previously a manual click-through to PPAC. As of 2026-05-08 it's fully automated: `install-pipelines-app.js` calls the BAP `applicationPackages/install` endpoint (the same API that backs PPAC's *"Install app"* button) and falls back to `pac application install` when BAP returns 401/403/5xx.
 
-   **Otherwise** (legacy entry path — caller invoked 4.B directly without going through 3.C, or arrived here via the 4.A failure fallback): present the sub-prompt: *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list **from `RESOLUTION.candidates.eligibleForAppInstall[]`** as choices, plus "Other (paste URL)". When arriving from 4.A's 409 trial-license fallback, the eligible list still applies — discard any env GUID surfaced in the 409 response body.
+**Sub-prompt: pick the target env (skipped when env is already chosen):**
 
-> **Sanity check before printing the PPAC URL in step 2.** The env GUID injected into the URL must come from the chosen env's `name` field as enumerated in Phase 2 (or from `pac env list` for a user-pasted URL). Never substitute a GUID from a 4.A failure response, from `.last-host-check.json` of a different run, or from any other state path. If you cannot determine the GUID with confidence, ask the user to confirm via `AskUserQuestion` showing the env display name + URL + GUID before printing the PPAC link.
+1. **If the env was already chosen** (`CHOSEN_ENV_URL` is set, either from Phase 3.C Option 2 → sub-option `a` OR from the upstream skip rule on `hostResolution.chosenEnvUrl`): skip the sub-prompt — proceed directly to the install step with the chosen env. Set `ACTION_TAKEN` per the Phase 3.C Step 3 routing table (`"user-installed-app-on-dev"` when `CHOSEN_ENV_URL` origin matches `devEnvUrl`, else `"user-installed-app"`).
 
-2. Print PPAC URL: `https://admin.powerplatform.microsoft.com/manage/environments/{envId}/dynamics365apps` and instructions: *"Click 'Install app' → 'Power Platform Pipelines' → Next → accept terms → Install. Wait until the app shows 'Installed'."*
-3. Two-option AskUserQuestion: *"Done — proceed"* / *"Cancel"*.
-4. After confirmation, poll `verify-host-readiness.js` (Phase 5) against the chosen env URL. On Pipelines tables present, capture URLs and proceed to Phase 5.
+   **Otherwise** (legacy entry path — caller invoked 4.B directly without going through 3.C, or arrived here via the 4.A failure fallback): present the sub-prompt *"Which env will host Pipelines? (Auto-detected envs from Phase 2 inventory):"* with the eligible-for-app-install list **from `RESOLUTION.candidates.eligibleForAppInstall[]`** as choices, plus "Other (paste URL)". When arriving from 4.A's 409 trial-license fallback, the eligible list still applies — discard any env GUID surfaced in the 409 response body.
+
+> **Env GUID sanity check.** The GUID passed to the install helper must come from the chosen env's `name` field as enumerated in Phase 2 (or from `pac env list` for a user-pasted URL). Never substitute a GUID from a 4.A failure response, from `.last-host-check.json` of a different run, or from any other state path. If you cannot determine the GUID with confidence, ask the user to confirm via `AskUserQuestion` showing the env display name + URL + GUID before invoking the helper.
+
+**Pre-call confirmation gate** (NON-SKIPPABLE — same rationale as Phase 4.0 / 4.A):
+
+> "About to install the **Power Platform Pipelines** application on `{displayName}` (`{instanceApiUrl}`) in tenant **{TENANT_DISPLAY_NAME}** (`{tenantId}`). This is the same install PPAC's *Install app* button performs — the agent calls the BAP API directly so no manual click-through is needed. Takes ~2–5 minutes. Proceed? 1. Yes / 2. Cancel"
+
+**Call the helper:**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
+  --bapToken "{BAP_TOKEN}" \
+  --envId "{envId}" \
+  --instanceApiUrl "{instanceApiUrl}" \
+  --hostToken "{HOST_TOKEN}" \
+  --correlationId "{uuid}"
+```
+
+`HOST_TOKEN` is acquired against the chosen env's origin (`az account get-access-token --resource "{instanceApiUrl origin}"`) and passed through so the helper's post-install verification probe (`solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'`) can run end-to-end without the skill having to chain a separate verification step.
+
+**Response handling** (delegated to the helper, but routing decisions live here):
+
+- `{ status: 'Succeeded', alreadyInstalled: true, installPath: 'cached' }` — the package was already installed on this env (idempotent path; rare in 4.B since Phase 2.5 should have classified the env as a host already, but defensive). Set `ACTION_TAKEN` per the dev-env-match rule above and proceed to Phase 5.
+- `{ status: 'Succeeded', alreadyInstalled: false, installPath: 'bap' }` — the BAP `applicationPackages/install` POST succeeded (200 sync or 202 + Location poll). Set `ACTION_TAKEN` per the dev-env-match rule above and proceed to Phase 5.
+- `{ status: 'Succeeded', alreadyInstalled: false, installPath: 'pac', pacFallbackReason: '...' }` — BAP returned 401/403/5xx (typically token-audience mismatch in tenants where Az → BAP is rejected, same scenario `pac-bap-shim.js` covers for env enumeration); the helper fell through to `pac application install`. Same outcome, log the fallback reason in `.last-host-check.json` telemetry. Proceed to Phase 5.
+- Helper throws — both BAP and PAC failed. Surface the combined error message to the user. **Last-resort fallback** (manual): print the PPAC URL `https://admin.powerplatform.microsoft.com/manage/environments/{envId}/dynamics365apps` and the four manual steps (*Install app → Power Platform Pipelines → Next → accept terms → Install*) with a follow-up *"Done — proceed"* AskUserQuestion. After confirmation, run `verify-host-readiness.js` against the env URL and proceed to Phase 5 only when the Pipelines solution is detected. This branch should be rare; if it fires often, file an issue with the helper's combined error so we can tune the BAP/PAC paths.
+
+**On success:** capture the helper's `pipelinesSolutionVersion` (populated when `instanceApiUrl` + `hostToken` were passed). Set `RESOLUTION.finalHostEnvUrl/Id`. Proceed to Phase 5.
 
 #### 4.C — Guided manual: PPAC `New custom host`
 
@@ -944,6 +970,7 @@ All shipped under `plugins/power-pages/scripts/lib/` (or as noted). Each is sing
 | `verify-host-readiness.js` | `WhoAmI` (proves auth + triggers JIT in PE-detection path) → solutions filter for `msdyn_AppDeploymentAnchor` (one call covers presence + version) | `--hostEnvUrl`, `--hostToken`, `--skipWhoAmI` (opt), `--minPipelinesVersion` (opt) | `{ ready, pipelinesSolutionVersion, checks: { whoami, solutions }, warnings[] }` |
 | `provision-custom-host.js` | POST BAP env-create with `D365_ProjectHost` template + `Production` sku + `CommonDataService` databaseType. Polls lifecycle op via `Location` header at `Retry-After` interval. Handles `properties.provisioningState` / `state` / `status.code` shapes. 5xx-transient retry. 401/403 with explicit guidance. | `--bapToken`, `--displayName`, `--region`, `--correlationId` (opt), `--timeoutSec` (opt, default 900), `--apiVersion` (opt, default 2021-04-01) | `{ status, envId, instanceUrl, instanceApiUrl, displayName, environmentSku, provisioningState, durationSec, correlationId, pollAttempts, locationHeader }` |
 | `provision-platform-host.js` | POST BAP `getOrCreate` with `D365_1stPartyAdminApps` template + `Platform` sku. Returns `alreadyExisted: true` on the 200 idempotent path (existing PE returned) or `alreadyExisted: false` on the 202 + Location-poll path (newly provisioned). Used by Phase 4.0. | `--bapToken`, `--correlationId` (opt), `--timeoutSec` (opt, default 600), `--apiVersion` (opt, default `2021-04-01`), `--bapBase` (opt) | `{ status, alreadyExisted, envId, instanceUrl, instanceApiUrl, displayName, environmentSku, provisioningState, durationSec, correlationId, pollAttempts, locationHeader }` |
+| `install-pipelines-app.js` | Discover + install the Power Platform Pipelines application package on an existing env. Resolution: BAP `applicationPackages` LIST + `/install` POST → 200 sync / 202 + Location poll, with PAC CLI fallback on 401/403/5xx (`pac application install --environment-id ... --application-list msdyn_AppDeploymentAnchor`). 409 on install POST treated as idempotent (already-installed). Optional post-install Dataverse verification probe. Used by Phase 4.B (replaced the manual PPAC click-through on 2026-05-08). | `--bapToken`, `--envId`, `--instanceApiUrl` (opt — for verification), `--hostToken` (opt — for verification), `--no-pac-fallback` (opt; default: PAC fallback enabled), `--correlationId` (opt), `--timeoutSec` (opt, default 600), `--apiVersion` (opt, default `2022-03-01-preview`), `--bapBase` (opt) | `{ status, alreadyInstalled, installPath: 'bap'\|'pac'\|'cached', packageUniqueName, pipelinesSolutionVersion, durationSec, correlationId, pollAttempts, locationHeader, pacFallbackReason }` |
 | `ensure-pipelines-host-detect.js` | Detection-only orchestrator wrapper. Runs Phase 1.0 (cache fast-path) + Phase 2 (resolution order including tenant-wide enumeration) + Phase 5 (verify if host found). Always emits `actionTaken: "none"`. Used by `plan-alm` Phase 1 and `setup-pipeline` Phase 1. **`--source auto` (default) tries BAP first; on 401/403 falls back to PAC CLI shim** — works in tenants where Az CLI tokens are rejected by BAP. | `--envUrl`, `--token`, `--userId`, `--bapToken` (optional with `--source auto` or `pac`), `--source` (`auto`\|`bap`\|`pac`), `--projectRoot`, `--cacheMaxAgeHours` (opt), `--no-cache`, `--includeName`, `--maxEnvsToProbe`, `--skus`, `--minPipelinesVersion` | `.last-host-check.json` schema (with `sourceUsed`, `fallbackReason`) |
 | `validate-ensure-host.js` (skill `scripts/`) | PostToolUse Stop-hook validator. Schema v1+v2 forward-compat. Treats `CannotRedirect` / `OrgSettingStale` / `PermissionDenied` as documented terminal-error states (skill ran successfully even if host isn't usable). | n/a (reads stdin JSON `{cwd}`) | exit 0 (approve) or exit 2 (block) |
 
