@@ -540,3 +540,70 @@ test('refresh import-solution writes synthetic key when stage cannot be resolved
   assert.equal(keys.length, 1);
   assert.match(keys[0], /^unresolved-/, 'unresolvable stage should land under a synthetic key');
 });
+
+// ── setup-solution: ingest .last-env-vars.json sidecar into planData.envVars ─
+
+test('refresh setup-solution ingests .last-env-vars.json into planData.envVars', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    plannedEnvVarCount: 7,
+    envVars: [],  // empty before setup-solution runs
+  });
+  writeJson(path.join(root, '.last-env-vars.json'), {
+    envVars: [
+      { schemaName: 'ids_authentication_registration_localloginenabled', type: 'String', defaultValue: 'true', siteSetting: 'Authentication/Registration/LocalLoginEnabled' },
+      { schemaName: 'ids_authentication_openauth_linkedin_clientsecret', type: 'Secret', defaultValue: null, siteSetting: 'Authentication/OpenAuth/LinkedIn/ClientSecret' },
+    ],
+    count: 2,
+  });
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.plannedEnvVarCount, 0,
+    'plannedEnvVarCount must reset to 0 after setup-solution (planned has been resolved)');
+  assert.equal(planData.envVars.length, 2,
+    'planData.envVars should be populated from the sidecar');
+  assert.equal(planData.envVars[0].schemaName, 'ids_authentication_registration_localloginenabled');
+  assert.equal(planData.envVars[1].type, 'Secret');
+});
+
+test('refresh setup-solution leaves planData.envVars unchanged when sidecar is missing', (t) => {
+  const root = makeProject(t);
+  const originalEnvVars = [
+    { schemaName: 'ids_existing', type: 'String', defaultValue: 'foo', siteSetting: 'Existing/Setting' },
+  ];
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    plannedEnvVarCount: 0,
+    envVars: originalEnvVars,
+  });
+  // No .last-env-vars.json — refresh should soft-no-op on the env vars side.
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars, originalEnvVars,
+    'env vars must round-trip unchanged when sidecar is absent');
+});
+
+test('refresh setup-solution accepts an empty envVars[] sidecar (skip-all path)', (t) => {
+  // Tier 1 "Skip all" + Tier 2 "Keep all as plain site settings" → no env
+  // vars created. The sidecar correctly reports envVars: []. The renderer
+  // should reflect the empty existing state instead of stale planned counts.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    plannedEnvVarCount: 12,
+    envVars: [],
+  });
+  writeJson(path.join(root, '.last-env-vars.json'), { envVars: [], count: 0 });
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.plannedEnvVarCount, 0);
+  assert.deepEqual(planData.envVars, [],
+    'empty sidecar (user skipped all) should leave planData.envVars empty');
+});

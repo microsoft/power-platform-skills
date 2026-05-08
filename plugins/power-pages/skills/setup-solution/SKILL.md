@@ -689,6 +689,21 @@ The script handles token refresh every 20 calls, treats "already in solution" as
 1. Verify components: `GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}'&$select=objectid,componenttype`
 2. Count components by type, confirm the website record (using `websiteComponentType`) is present
 
+2b. **Capture the post-setup env var snapshot for the rendered ALM plan.** Run the discovery helper and write its output to a sidecar marker file (`.last-env-vars.json`) at the project root. The plan-refresh helper (Phase 7's self-refresh) ingests this sidecar into `planData.envVars` so the rendered plan's Env Variables tab shows the definitions setup-solution just created/adopted (without it the tab stays empty even after Phase 5.4 / 5.4.C / 5.4b created definitions):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+     --envUrl "{envUrl}" \
+     --publisherPrefix "{publisherPrefix}" \
+     --websiteRecordId "{websiteRecordId}" \
+     --token "{token}" > .last-env-vars.json.tmp \
+     && mv .last-env-vars.json.tmp .last-env-vars.json
+   ```
+
+   The tmp-file write pattern preserves a prior good `.last-env-vars.json` on a transient discovery failure (parallel to the `.alm-size-estimate.json` pattern in plan-alm Phase 1). If the helper exits non-zero, log the stderr and continue — the existing sidecar (or absence of one) is acceptable; the refresh just won't update env vars this run.
+
+   The sidecar's shape mirrors what `discover-env-var-definitions.js` already returns: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Don't transform — the renderer reads these fields directly.
+
 3. Write `.solution-manifest.json` to project root (alongside `powerpages.config.json`):
    - See manifest format in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
    - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`

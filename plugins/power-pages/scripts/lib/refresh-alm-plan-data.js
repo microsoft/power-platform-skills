@@ -214,17 +214,28 @@ function refreshFinalize(planData) {
   return planData;
 }
 
-function refreshSetupSolution(planData) {
-  // The setup-solution skill writes .solution-manifest.json, which Phase 3
-  // already consumed for solutionContents. After it runs, any "planned" env
-  // vars have either been created (and would be picked up by a future
-  // discover-env-var-definitions run) or explicitly skipped by the user.
-  // Either way, the planned-vs-existing distinction in the renderer is no
-  // longer informative — zero it out so the Env Variables tab + stat card
-  // reflect existing-only state. (For a fully-fresh env-vars list, the user
-  // can re-run /power-pages:plan-alm.)
+function refreshSetupSolution(planData, projectRoot) {
+  // After setup-solution runs, the planned-vs-existing distinction the
+  // renderer surfaces (Overview stat + Size Analysis signal + Env Variables
+  // tab) needs to flip:
+  //   - plannedEnvVarCount → 0 (the planned set was either created or skipped)
+  //   - planData.envVars[]  → the freshly-created/adopted definitions
+  // setup-solution Phase 6 step 2b writes .last-env-vars.json by running
+  // discover-env-var-definitions.js with post-setup state — we ingest that
+  // sidecar here. Without this, the rendered plan's Env Variables tab stays
+  // empty even though setup-solution just created definitions in Dataverse,
+  // and the Overview stat card stays at "0 / +N planned" forever.
   if (typeof planData.plannedEnvVarCount === 'number' && planData.plannedEnvVarCount > 0) {
     planData.plannedEnvVarCount = 0;
+  }
+  const envVarsMarker = projectRoot ? readJson(path.join(projectRoot, '.last-env-vars.json')) : null;
+  if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
+    // Discovery returns the same { schemaName, type, defaultValue, siteSetting }
+    // shape the renderer expects — pass through verbatim. Empty array is a
+    // valid post-state: setup-solution may have skipped all env vars (Tier 1
+    // Skip-all + no Tier 2 promotions), in which case the tab should reflect
+    // the empty existing state instead of carrying stale planned counts.
+    planData.envVars = envVarsMarker.envVars;
   }
   return planData;
 }
@@ -307,7 +318,7 @@ function refreshActivateSite(planData) {
 
 function applyRefresh(planData, phase, projectRoot, stageName) {
   switch (phase) {
-    case 'setup-solution':  return refreshSetupSolution(planData);
+    case 'setup-solution':  return refreshSetupSolution(planData, projectRoot);
     case 'setup-pipeline':  return refreshSetupPipeline(planData, projectRoot);
     case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
     case 'export-solution': return refreshExportSolution(planData);
