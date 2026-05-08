@@ -7,7 +7,7 @@ description: >-
   deployment errors", "fix deployment issues", "show upload logs", "why did my deploy fail",
   or "troubleshoot upload".
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -42,6 +42,17 @@ Steps:
 4. Check Azure CLI: `az account show` (report subscription or "not logged in")
 
 Auth failures are non-blocking — report them as findings, continue collecting other artifacts.
+
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages deployment errors solution import troubleshooting`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on troubleshooting or known import errors) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about common deployment failures and their resolution. Compare against `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md` and flag any new error patterns not yet captured in the catalog.
+4. Use the summary to inform pattern-matching in Phase 5. If a new pattern is documented on Learn that isn't in the catalog, surface it to the user as a candidate addition rather than silently extending the catalog.
 
 ### Phase 2 — Collect Deployment Artifacts
 

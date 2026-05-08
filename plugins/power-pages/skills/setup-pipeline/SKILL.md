@@ -12,7 +12,7 @@ description: >-
   (shows coming-soon guidance for those platforms).
 user-invocable: true
 argument-hint: "Optional: 'power-platform', 'github', or 'ado' to skip platform selection"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -168,6 +168,17 @@ Steps:
 - If **Review**: display the existing `.last-pipeline.json` contents, then ask again with the same 3 options.
 - If **Cancel**: stop the skill and inform the user no changes were made.
 - If **Overwrite**: proceed.
+
+### Phase 1.5 — Ground in current Pipelines documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines setup OData API host environment deploymentenvironments`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup or pipeline creation) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about Pipelines host resolution, `deploymentenvironments` / `deploymentpipelines` / `deploymentstages` schema, and pipeline lifecycle. Compare against `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new fields, deprecated APIs, changed validation status codes).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 5 (Create Deployment Environments).
 
 ### Phase 2 — Select CI/CD Platform
 
@@ -415,13 +426,11 @@ git add .last-pipeline.json docs/pipeline-setup.md
 git commit -m "Add Power Platform Pipeline configuration for {siteName}"
 ```
 
-**7.5 Run skill tracking silently:**
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
-  --projectRoot "." \
-  --skillName "SetupPipeline" \
-  --authoringTool "ClaudeCode"
-```
+**7.5 Record skill usage:**
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupPipeline"`.
 
 **7.6 Present summary:**
 

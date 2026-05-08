@@ -204,11 +204,17 @@ function refreshFinalize(planData) {
 }
 
 function refreshSetupSolution(planData) {
-  // No structural plan changes today. The setup-solution skill writes
-  // .solution-manifest.json, which Phase 3 already consumed for
-  // solutionContents. A re-render here is still useful to pick up any
-  // updated component counts in proposedSolutions, but no field flip
-  // is needed.
+  // The setup-solution skill writes .solution-manifest.json, which Phase 3
+  // already consumed for solutionContents. After it runs, any "planned" env
+  // vars have either been created (and would be picked up by a future
+  // discover-env-var-definitions run) or explicitly skipped by the user.
+  // Either way, the planned-vs-existing distinction in the renderer is no
+  // longer informative — zero it out so the Env Variables tab + stat card
+  // reflect existing-only state. (For a fully-fresh env-vars list, the user
+  // can re-run /power-pages:plan-alm.)
+  if (typeof planData.plannedEnvVarCount === 'number' && planData.plannedEnvVarCount > 0) {
+    planData.plannedEnvVarCount = 0;
+  }
   return planData;
 }
 

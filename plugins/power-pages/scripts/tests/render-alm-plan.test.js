@@ -663,8 +663,10 @@ test('render-alm-plan: hostResolution willEnsureDuringExecution renders host-car
       'Host card element should carry the host-card-pending modifier class');
     assert.ok(html.includes('Will be ensured during setup-pipeline'),
       'Card value should advertise the deferred ensure');
-    assert.ok(html.includes('D365_ProjectHost'),
-      'NoHost note should reference the D365_ProjectHost template');
+    assert.ok(html.includes('Custom Host'),
+      'NoHost note should describe what setup-pipeline will provision');
+    assert.ok(!html.includes('D365_ProjectHost'),
+      'User-facing note must not leak the template name (implementation detail)');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -1527,8 +1529,12 @@ test('render-alm-plan: NoHost host card defaults to provision-new when no flags 
 
     const html = fs.readFileSync(outputPath, 'utf8');
     assert.ok(
-      /Will provision new Custom Host with <code>D365_ProjectHost<\/code> template/.test(html),
-      'Card should fall back to the create-new description when willProvisionCustom is true'
+      /Will provision a new Custom Host/.test(html),
+      'Card should fall back to the Custom Host description when willProvisionCustom is true'
+    );
+    assert.ok(
+      !/D365_ProjectHost/.test(html),
+      'User-facing note must not leak the template name (implementation detail)'
     );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1557,11 +1563,23 @@ test('render-alm-plan: NoHost host card reflects willProvisionPlatform when user
 
     const html = fs.readFileSync(outputPath, 'utf8');
     assert.ok(
-      /Will provision the Platform Host via <code>getOrCreate<\/code>/.test(html),
-      'Card should render the Platform Host getOrCreate description when willProvisionPlatform is true'
+      /Will provision a new Platform Host/.test(html),
+      'Card should describe the Platform Host provisioning when willProvisionPlatform is true'
     );
     assert.ok(
-      !/Will provision new Custom Host with <code>D365_ProjectHost<\/code>/.test(html),
+      /tenant-identity confirmation gate/.test(html),
+      'Card should call out the pre-call confirmation gate'
+    );
+    assert.ok(
+      !/getOrCreate/.test(html),
+      'User-facing note must not leak the BAP API name (implementation detail)'
+    );
+    assert.ok(
+      !/no admin role required/.test(html),
+      'User-facing note must not include admin-role disclaimers (implementation detail)'
+    );
+    assert.ok(
+      !/Will provision a new Custom Host/.test(html),
       'Card must not fall through to the Custom Host fallback when willProvisionPlatform is true'
     );
   } finally {

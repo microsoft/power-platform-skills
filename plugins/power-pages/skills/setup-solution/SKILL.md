@@ -7,7 +7,7 @@ description: >-
   "solutionize my site", or "set up ALM for my site".
 user-invocable: true
 argument-hint: "Optional: solution unique name (e.g., 'ContosoSite')"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -125,6 +125,17 @@ Steps:
      - Phase 5 partitions `AddSolutionComponent` calls per solution based on `proposedSolutions[i].componentTypes` and `tableLogicalNames` (for Strategy 3).
      - Phase 6 writes manifest v2 (see below).
    - If not found or `proposedSolutions.length === 1`, proceed in single-solution mode (existing flow).
+
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages solution publisher creation Dataverse component types ALM`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page if the search surfaces a relevant new tutorial — e.g. multi-solution layering, managed-properties guidance) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about solution components, publisher prefix immutability, managed vs unmanaged choice, and component-type integers. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence (new component types, changed action signatures, deprecated patterns).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (Create Publisher and Solution).
 
 ### Phase 2 — Gather Solution Configuration
 
@@ -325,13 +336,13 @@ If Query G returns no references (the cloud flows don't use connectors, or the p
 
 #### Step 5.3 — Categorize Site Settings
 
-**If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.excluded` directly.
+**If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.credentialNeedsDecision` directly. (Plans generated before 2026-05-08 use the older `excluded` bucket — treat its contents as `credentialNeedsDecision` for backward compatibility.)
 
 **Otherwise**, classify each discovered Site Setting (powerpagecomponenttype=9) using this three-tier logic:
 
 | Tier | Condition | Bucket | Handling |
 |---|---|---|---|
-| 1 — Credential secrets | Name matches `/ConsumerKey\|ConsumerSecret\|ClientId\|ClientSecret\|AppSecret\|AppKey\|ApiKey\|Password/i` | `excluded` | **Never** add to solution |
+| 1 — Credential-style | Name matches `/ConsumerKey\|ConsumerSecret\|ClientId\|ClientSecret\|AppSecret\|AppKey\|ApiKey\|Password/i` | `credentialNeedsDecision` | Per-credential prompt at Step 5.4.C — Secret env var (Key Vault), String env var (plain text), or skip |
 | 2a — Auth config with value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND has a value | `promoteToEnvVar` | Present to user for review — may differ per environment |
 | 2b — Auth config, no value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND value is null/empty | `authNoValue` | Add to solution as-is with a note |
 | 3 — All other settings | Does not match above | `keepAsIs` | Include in solution unchanged |
@@ -381,10 +392,39 @@ Settings the user chose NOT to promote move from `promoteToEnvVar` into `keepAsI
 No user decision required. These are automatically included in the solution as-is. At Step 5.5, display them in a warning box:
 > "The following auth settings have no value set in your dev environment. They will be added to the solution as-is. After deploying to each target environment, verify or set the correct value there."
 
-**C. `excluded` settings (credential secrets):**
+**C. `credentialNeedsDecision` settings (credential-style — per-credential prompt):**
 
-These are never added to the solution. At Step 5.5, display them in a neutral note box:
-> "The following OAuth credential secrets are excluded from the solution and must be configured manually in each target environment after deployment."
+These are credential-style site settings (ConsumerKey / ClientSecret / etc.) that need a per-credential decision. Shipping their values inside the solution zip is a real exposure, so the safe path is to add the site-setting record to the solution and route the value through an environment variable per stage. Some teams prefer plain-text per-stage values (non-secret things like ClientIds that vary per env); others want true secrets that never leave Key Vault. The user picks per credential.
+
+For each setting in `credentialNeedsDecision`, ask via `AskUserQuestion`:
+
+> "How should setup-solution handle the credential setting `{name}` (current dev value: `{maskedValue}`)? PE is tenant-singleton so values shipped in solution zips can leak across environments — pick the option that matches the sensitivity of this credential."
+
+Options:
+1. **Secret env var (Key Vault per stage) — recommended for true secrets.** Creates an `environmentvariabledefinition` with `type: 100000003` (Secret). The site setting is added to the solution and bound to the env var; the value is set per-environment via Key Vault references in `deploymentsettingsjson` at deploy time. The secret never leaves Key Vault and is never shipped in the solution zip.
+2. **String env var (plain text per stage).** Creates an `environmentvariabledefinition` with `type: 100000000` (String). The site setting is added to the solution and bound to the env var; per-stage values are captured in `deploymentsettingsjson` as plain text. Use this for values that vary per environment but aren't secret-grade (e.g. Client IDs, callback URLs, tenant IDs).
+3. **Skip — manage this credential out-of-band.** Don't add to the solution. The user is responsible for configuring the value in each target environment after deployment. Equivalent to the pre-IronItOut "excluded" behavior.
+
+For options 1 and 2 (env-var-backed paths):
+1. Create an `environmentvariabledefinition` using `create-env-var-definition.js`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --schemaName "{prefix}_{sanitizedSettingName}" \
+     --displayName "{friendlyName}" \
+     --type "{100000003 for Secret, 100000000 for String}"
+   ```
+   For Secret env vars (option 1), do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars (option 2), capture the dev value as the default. Schema name: replace `/` with `_`, lowercase, prefix with publisher prefix.
+2. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
+3. Link the site setting to the env var via `link-site-setting-to-env-var.js` (same call as Step 5.4.A above).
+4. The site setting itself is added to the solution alongside the env var definition — both are tracked components.
+
+For option 3 (skip):
+- The setting moves from `credentialNeedsDecision` into a new `userOptedOutOfSolution` bucket. It's not added to the solution. Surface in Step 5.5 review:
+> "The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."
+
+**Backward compatibility**: when reading a `preloadedSettings` plan generated before 2026-05-08, treat any entries in `preloadedSettings.excluded` as `credentialNeedsDecision` and run the per-credential prompt above.
 
 #### Step 5.4b — Adopt Orphaned Env Var Definitions
 
@@ -680,6 +720,10 @@ If the user selects **option 3**, show:
 - Run `/power-pages:export-solution` to export a zip for manual import
 - Run `/power-pages:configure-env-variables` if environment-specific values need to be set per stage
 
+### Tip: Adding Components Later
+
+> **When the live site grows beyond what's in this solution** — server logic from `add-server-logic`, cloud flows from `add-cloud-flow`, env vars from `setup-auth` or `configure-env-variables`, new tables from `setup-datamodel`, or new web roles — **re-run `/power-pages:setup-solution`**. The skill auto-detects sync mode when `.solution-manifest.json` exists in the project root, runs the discovery pass, diffs the live site against the solution, bumps the version, and adds only the missing components. No need for a separate "add to solution" workflow.
+
 ### Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
@@ -691,7 +735,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
 3. **Phase 1, Step 5**: ALM plan context — use pre-loaded site settings classification from plan-alm, or re-discover and reclassify
-4. **Phase 5, Step 5.4**: Auth settings with values — multi-select which to promote to env vars vs keep as plain site settings (excluded credential secrets are never shown)
+4. **Phase 5, Step 5.4**: Auth settings with values — multi-select which to promote to env vars vs keep as plain site settings; **per-credential prompt** for credential-style settings (Secret env var / String env var / skip)
 5. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions, authNoValue warnings) and confirms or adjusts before any components are written
 5. **Phase 7**: Next step — PP Pipelines (recommended) vs export/import manually vs decide later
 

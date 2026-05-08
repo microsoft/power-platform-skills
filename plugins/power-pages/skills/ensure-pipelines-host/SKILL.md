@@ -17,7 +17,7 @@ description: >-
   /power-pages:setup-pipeline when its host discovery step finds nothing.
 user-invocable: true
 argument-hint: "Optional: 'detect-only' to skip provisioning paths and report state; 'auto-platform' to run the Platform-Host getOrCreate fast-path without the path-decision prompt (still gated by tenant pre-call confirmation); 'auto-custom' to run the Custom-Host fast-path without the path-decision prompt (still gated by tenant + admin-role + pre-call-echo prompts)"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -213,6 +213,17 @@ Steps:
    (When `TENANT_DISPLAY_NAME` is null, drop the bold tenant-name segment and lead with the tenant GUID.)
 
    First of the consent gates that guard against wrong-tenant operations.
+
+### Phase 1.5 — Ground in current Pipelines host documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines host environment Platform Host Custom Host`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup, default-custom-host configuration, or admin role requirements) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about Platform vs Custom Host trade-offs, the resolution order (org-db setting → BAP env metadata → tenant default), and admin role requirements. Compare against this skill's own *Resolution order* section and `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md`; flag any divergence (e.g. new Platform-Host SKU, changed default-custom-host setting name, new tenant policy controls).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3 (Confirm action with user).
 
 ### Phase 2 — Run resolution order to find host
 

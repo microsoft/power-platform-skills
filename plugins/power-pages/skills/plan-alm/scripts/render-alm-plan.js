@@ -56,6 +56,7 @@ const tierColor = { green: 'var(--pass)', yellow: 'var(--high)', red: 'var(--cri
 const strategyLabel = data.STRATEGY === 'pp-pipelines' ? 'Power Platform Pipelines' : 'Manual Export / Import';
 const proposedSolutions = Array.isArray(data.proposedSolutions) ? data.proposedSolutions : [];
 const envVars = Array.isArray(data.envVars) ? data.envVars : [];
+const plannedEnvVarCount = Number.isFinite(data.plannedEnvVarCount) ? Math.max(0, Math.trunc(data.plannedEnvVarCount)) : 0;
 const sizeAnalysis = data.sizeAnalysis || null;
 const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
 const breakdown = data.breakdown || {};
@@ -222,9 +223,11 @@ function buildSizeGauge() {
 
 function buildSignalCards() {
   if (!sizeAnalysis) return '<div class="note-box neutral">Size analysis unavailable.</div>';
+  // Thresholds align with alm-thresholds.js DEFAULTS — bumped tighter than the
+  // platform hard caps (95 MB / 6000 components) to reserve growth headroom.
   const signals = [
-    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 95 MB' },
-    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 6,000' },
+    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 75 MB' },
+    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 4,000' },
     { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 15,000' },
     { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 20' },
     { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 40 MB' },
@@ -235,9 +238,18 @@ function buildSignalCards() {
     if (!a) return '';
     const tier = a.tier || 'unknown';
     const color = tierColor[tier];
+    // Env Vars signal shows existing-vs-planned dual count when applicable —
+    // a fresh project (envVarCount.value === 0) with K planned should not
+    // appear empty in the Size Analysis tab.
+    let valueDisplay;
+    if (s.key === 'envVarCount') {
+      valueDisplay = escapeHtml(envVarStatDisplay());
+    } else {
+      valueDisplay = s.fmt(a.value || 0);
+    }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
-  <div class="signal-value" style="color:${color};">${s.fmt(a.value || 0)}</div>
+  <div class="signal-value" style="color:${color};">${valueDisplay}</div>
   <div class="signal-footer">
     <span class="tier tier-${tier}">${tier}</span>
     <span>${s.threshold}</span>
@@ -312,37 +324,74 @@ function envVarSummaryCount() {
   return Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0;
 }
 
+// Existing env var definitions found on the live env (envVars[] populated by
+// discover-env-var-definitions.js, with size-estimator count as fallback).
+function envVarExistingCount() {
+  return envVars.length || envVarSummaryCount();
+}
+
+// "N today / +M planned" or "N today" depending on which counts are populated.
+// The dual-count display is critical for fresh projects — the renderer was
+// previously showing 0 even when the risks list said "K auth settings will be
+// promoted to env vars", which read as a bug. Showing both counts keeps the
+// stat card and the risks list internally consistent.
+function envVarStatDisplay() {
+  const existing = envVarExistingCount();
+  const planned = plannedEnvVarCount;
+  if (existing === 0 && planned > 0) return `0 / +${planned} planned`;
+  if (existing > 0 && planned > 0) return `${existing} / +${planned} planned`;
+  return String(existing);
+}
+
 function buildEnvVarsHtml() {
-  if (envVars.length === 0) {
+  const existing = envVars.length;
+  const planned = plannedEnvVarCount;
+
+  // Empty state: neither existing nor planned env vars.
+  if (existing === 0 && planned === 0) {
     const summaryCount = envVarSummaryCount();
     if (summaryCount > 0) {
-      // Count-only path: the size estimator found env var definitions but the
-      // gathering phase did not enumerate per-variable metadata into envVars[].
-      // Show a count-aware info note so this tab agrees with the Overview
-      // stat, the size analysis signal, and the "(N detected)" warning.
+      // The size estimator found definitions but envVars[] wasn't enumerated
+      // (publisher prefix or token unavailable during plan-alm Step 10b).
       const noun = summaryCount === 1 ? 'definition' : 'definitions';
       return `<div class="note-box info">${summaryCount} environment variable ${noun} detected. Per-variable details (schema name, type, bound site setting) will be reviewed during <code>setup-solution</code> / <code>configure-env-variables</code>, and per-stage values will be collected before <code>deploy-pipeline</code>.</div>`;
     }
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
-  const envNames = Object.keys(envVars[0]?.values || {});
-  const tableHeader = envNames.length > 0
-    ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
-    : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
-  const rows = envVars.map((ev) => {
-    const valueCells = envNames.length > 0
-      ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
-      : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
-    return `<tr>
+
+  // Build optional sections: existing table + planned summary. Both can render
+  // together when the project has some env vars already and more are planned.
+  const sections = [];
+
+  if (existing > 0) {
+    const envNames = Object.keys(envVars[0]?.values || {});
+    const tableHeader = envNames.length > 0
+      ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
+      : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
+    const rows = envVars.map((ev) => {
+      const valueCells = envNames.length > 0
+        ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
+        : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
+      return `<tr>
   <td class="env-name">${escapeHtml(ev.schemaName)}</td>
   <td>${escapeHtml(ev.type || 'String')}</td>
   <td><code>${escapeHtml(ev.siteSetting || '—')}</code></td>
   ${valueCells}
 </tr>`;
-  }).join('\n');
-  return `<div class="card" style="padding:0;overflow-x:auto;">
+    }).join('\n');
+    sections.push(`<h3 style="margin:8px 0 12px 0;font-size:14px;">Existing environment variables (${existing})</h3>
+<div class="card" style="padding:0;overflow-x:auto;">
   <table class="env-table">${tableHeader}<tbody>${rows}</tbody></table>
-</div>`;
+</div>`);
+  }
+
+  if (planned > 0) {
+    const noun = planned === 1 ? 'environment variable' : 'environment variables';
+    sections.push(`<h3 style="margin:${existing > 0 ? '20px' : '8px'} 0 12px 0;font-size:14px;">Planned ${noun} (${planned})</h3>
+<div class="note-box info">setup-solution will offer to create up to ${planned} ${noun} from the auth-related and credential-style site settings detected on the live site. You'll choose per setting whether to back it with a Secret-typed env var (Key Vault per stage), a String-typed env var (plain text per stage), or skip. Per-variable details (schema name, type, bound site setting) become visible here once setup-solution finishes.</div>`);
+  }
+
+  return sections.join('\n');
 }
 
 function buildSolutionsTabTitle() { return proposedSolutions.length > 1 ? `Solutions (${proposedSolutions.length})` : 'Solution'; }
@@ -888,16 +937,19 @@ function buildHostCardHtml(d) {
       // "will provision new", so the rendered plan agrees with what
       // ensure-pipelines-host will actually do at execution time.
       if (hr.willProvisionPlatform === true) {
-        note = 'Will provision the Platform Host via <code>getOrCreate</code> (idempotent, no admin role required, ~3&ndash;5 min).';
+        // Keep the user-facing description free of API names and admin-role disclaimers —
+        // those are implementation details. The pre-call confirmation gate in
+        // ensure-pipelines-host Phase 4.0 echoes the tenant identity before firing.
+        note = 'Will provision a new Platform Host (idempotent, ~3&ndash;5 min). Plan execution will pause for a tenant-identity confirmation gate before the call.';
       } else if (hr.chosenEnvUrl) {
         note = 'Will install Pipelines app on existing env <code>' + escapeHtml(hr.chosenEnvUrl) + '</code>.';
       } else if (hr.willUsePpac === true) {
         note = 'Will create new Custom Host via PPAC manual flow (admin opens <code>https://admin.powerplatform.microsoft.com/deployments</code> &#8594; <em>New custom host</em>).';
       } else if (hr.willProvisionCustom === true) {
-        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
       } else {
         // Fallback for older planData that did not capture the choice.
-        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
       }
     } else {
       note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
@@ -1057,7 +1109,7 @@ const replacements = {
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
-  STAT_ENVVARS: String(envVars.length || envVarSummaryCount() || 0),
+  STAT_ENVVARS: envVarStatDisplay(),
   STAT_SIZE: totalSizeMB.toFixed(1),
   STAT_SIZE_COLOR: sizeColor,
   STAT_SOLUTIONS: String(proposedSolutions.length || 1),
