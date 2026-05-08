@@ -17,6 +17,7 @@
 const path = require('path');
 const fs = require('fs');
 const { parseArgs } = require('../../../scripts/lib/render-template');
+const { DEFAULTS: ALM_THRESHOLDS } = require('../../../scripts/lib/alm-thresholds');
 
 const args = parseArgs(process.argv);
 
@@ -61,7 +62,6 @@ const sizeAnalysis = data.sizeAnalysis || null;
 const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
 const breakdown = data.breakdown || {};
 
-const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 // Three-number semantics when the estimator ran with --solutionId:
 //   componentCountSiteTotal      — RAW Dataverse rows on the site. What the
 //                                  Maker UI would show if the entire site
@@ -71,16 +71,32 @@ const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 //   orphansOnSite                — ppcs on the site that aren't in the solution,
 //                                  excluding stale bundle chunks.
 // For the headline "X components" we prefer inSolution when present (that's
-// what the pipeline ships). Fall back to siteTotal or the legacy
-// sizeAnalysis.componentCount value when the estimator ran without a solution
-// context.
+// what the pipeline ships). Fall back to siteTotal, the legacy
+// sizeAnalysis.componentCount value, and finally the proposedSolutions
+// aggregate when the estimator ran without a solution context — that last
+// fallback prevents the Overview tab from showing 0 components when the
+// Solutions tab already has accurate per-solution counts.
 const fallbackComponentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+const proposedComponentCount = proposedSolutions.reduce((sum, s) => sum + Number(s?.componentCount || 0), 0);
 const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? fallbackComponentCount);
 const componentCountInSolution = (data.componentCountInSolution == null) ? null : Number(data.componentCountInSolution);
 const orphansOnSite = (data.orphansOnSite == null) ? null : Number(data.orphansOnSite);
 const hasSolutionMembershipBreakout = componentCountInSolution !== null;
-const componentCount = hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal;
-const SIZE_LIMIT_MB = 95;
+// Pick the first non-zero source. proposedSolutions is the last-ditch fallback —
+// it holds the SPLIT_PLAN's count which compute-split-plan.js calculates from a
+// different code path than estimate-solution-size.js, so it can be populated
+// even when the estimator's componentCount returned 0.
+const componentCount = (
+  (hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal)
+  || proposedComponentCount
+);
+// Same fallback chain for total size — Overview MB stat is wrong if we trust 0 from
+// sizeAnalysis when proposedSolutions has a non-zero aggregate.
+const proposedTotalSizeMB = proposedSolutions.reduce((sum, s) => sum + Number(s?.sizeMB || 0), 0);
+const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0) || proposedTotalSizeMB;
+// Threshold pulled from the central source so a future bump in alm-thresholds.js
+// flows through here without an additional code edit.
+const SIZE_LIMIT_MB = ALM_THRESHOLDS.maxSolutionSizeMB;
 const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
 const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
 const sizeColor = tierColor[sizeTier];
@@ -151,7 +167,7 @@ function buildRisksHtml() {
 function buildStrategyRationale() {
   const strat = data.splitStrategy || 'single';
   const map = {
-    'single': 'All components packaged in a single managed solution. Estimated size is within the recommended 95 MB cap and component count is within tested bounds. One pipeline, one approval chain.',
+    'single': `All components packaged in a single managed solution. Estimated size is within the ${ALM_THRESHOLDS.maxSolutionSizeMB} MB split-decision threshold (platform hard cap is 95 MB) and component count is within tested bounds. One pipeline, one approval chain.`,
     'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.',
     'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. Each solution has its own pipeline so low-churn layers don\'t re-import when content changes.',
     'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
@@ -226,12 +242,12 @@ function buildSignalCards() {
   // Thresholds align with alm-thresholds.js DEFAULTS — bumped tighter than the
   // platform hard caps (95 MB / 6000 components) to reserve growth headroom.
   const signals = [
-    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 75 MB' },
-    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 4,000' },
-    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 15,000' },
-    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 20' },
-    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 40 MB' },
-    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 500' },
+    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxSolutionSizeMB} MB` },
+    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxComponentCount.toLocaleString()}` },
+    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxSchemaAttrs.toLocaleString()}` },
+    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxTableCount}` },
+    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxAggregateWebFilesMB} MB` },
+    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxEnvVarCount}` },
   ];
   return signals.map((s) => {
     const a = sizeAnalysis[s.key];

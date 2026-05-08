@@ -392,20 +392,49 @@ Settings the user chose NOT to promote move from `promoteToEnvVar` into `keepAsI
 No user decision required. These are automatically included in the solution as-is. At Step 5.5, display them in a warning box:
 > "The following auth settings have no value set in your dev environment. They will be added to the solution as-is. After deploying to each target environment, verify or set the correct value there."
 
-**C. `credentialNeedsDecision` settings (credential-style — per-credential prompt):**
+**C. `credentialNeedsDecision` settings (credential-style — bulk-with-override prompt):**
 
-These are credential-style site settings (ConsumerKey / ClientSecret / etc.) that need a per-credential decision. Shipping their values inside the solution zip is a real exposure, so the safe path is to add the site-setting record to the solution and route the value through an environment variable per stage. Some teams prefer plain-text per-stage values (non-secret things like ClientIds that vary per env); others want true secrets that never leave Key Vault. The user picks per credential.
+These are credential-style site settings (ConsumerKey / ClientSecret / etc.) that need a decision before going into the solution. Shipping raw values inside the solution zip is a real exposure, so the safe path is to add the site-setting record to the solution and route the value through an environment variable per stage. **Asking per credential is too much when N is large** (a typical site has 20+ auth-related credentials across multiple OAuth providers), so this step uses a **bulk-with-override** prompt: one question covers all N credentials, with a per-credential escape hatch for granular control.
 
-For each setting in `credentialNeedsDecision`, ask via `AskUserQuestion`:
+**Step 5.4.C.1 — Auto-classify by name pattern.**
 
-> "How should setup-solution handle the credential setting `{name}` (current dev value: `{maskedValue}`)? PE is tenant-singleton so values shipped in solution zips can leak across environments — pick the option that matches the sensitivity of this credential."
+Before prompting, score each setting in `credentialNeedsDecision` against these regexes:
+
+| Default | Matcher (case-insensitive) | Examples |
+|---|---|---|
+| **Secret env var** (`type: 100000003`) | `/Secret\|Password\|ApiKey\|AppKey/i` | `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey`, `Authentication/.../Secret` |
+| **String env var** (`type: 100000000`) | `/Id\|ConsumerKey/i` (and not matching the Secret pattern above) | `*ClientId`, `*ConsumerKey`, `*TenantId`, `*AppId` |
+| **Secret env var** (fallback) | Anything not matched above | Defensive — credentials are sensitive by default |
+
+Store the auto-classification as `AUTO_CLASSIFY = { secrets: [...], strings: [...] }`. Show the user a one-line summary: *"Auto-classified {N} credential-style settings: {S} as Secret env vars (Key Vault per stage), {T} as String env vars (plain text per stage)."*
+
+**Step 5.4.C.2 — Bulk prompt.**
+
+Ask **one** `AskUserQuestion` covering all N credentials:
+
+> "{N} credential-style site settings detected (`{firstFew.join(', ')}{N>3?', ...':''}`). How should I handle them?
+>
+> Shipping their values inside the solution zip is a real exposure, so the recommended approaches add the site-setting record to the solution and route the value through an environment variable per stage. The actual secret value never ships in the zip — it's set per-environment in `deploymentsettingsjson`."
 
 Options:
-1. **Secret env var (Key Vault per stage) — recommended for true secrets.** Creates an `environmentvariabledefinition` with `type: 100000003` (Secret). The site setting is added to the solution and bound to the env var; the value is set per-environment via Key Vault references in `deploymentsettingsjson` at deploy time. The secret never leaves Key Vault and is never shipped in the solution zip.
-2. **String env var (plain text per stage).** Creates an `environmentvariabledefinition` with `type: 100000000` (String). The site setting is added to the solution and bound to the env var; per-stage values are captured in `deploymentsettingsjson` as plain text. Use this for values that vary per environment but aren't secret-grade (e.g. Client IDs, callback URLs, tenant IDs).
-3. **Skip — manage this credential out-of-band.** Don't add to the solution. The user is responsible for configuring the value in each target environment after deployment. Equivalent to the pre-IronItOut "excluded" behavior.
+1. **Auto-classify by name** *(recommended)* — Apply the auto-classification from Step 5.4.C.1: {S} as Secret env vars, {T} as String env vars. One confirmation, all {N} handled. (Default option.)
+2. **All as Secret env vars** — Treat every credential as a Key-Vault-backed Secret env var. Conservative; works for any credential but adds Key Vault dependency for stage values that don't actually need it.
+3. **All as String env vars** — Treat every credential as a plain-text per-stage env var. Use only when none of the credentials are true secrets (e.g. an internal-only test setup).
+4. **Skip all** — Don't add any to the solution. The user manages all credential values out-of-band per environment. Equivalent to the pre-IronItOut "excluded" behavior.
+5. **Pick per credential** — Run a per-credential prompt for granular control (Secret / String / Skip per setting). Reach for this when you have a mix of true secrets and non-sensitive IDs that don't fit the auto-classification cleanly.
 
-For options 1 and 2 (env-var-backed paths):
+Branching logic:
+
+- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000003`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
+- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000003`.
+- **Option 3 (All String)**: Treat all N as String. Same loop with `--type 100000000`.
+- **Option 4 (Skip all)**: Move all N into a `userOptedOutOfSolution` bucket. Surface in Step 5.5: *"The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."*
+- **Option 5 (Pick per credential)**: For each setting, run a 3-option `AskUserQuestion` (Secret env var / String env var / Skip). The auto-classification informs the per-prompt default but the user can override.
+
+**Step 5.4.C.3 — Env var creation (shared by Options 1, 2, 3, and 5's non-Skip selections).**
+
+For each setting routed to env-var-backed handling:
+
 1. Create an `environmentvariabledefinition` using `create-env-var-definition.js`:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
@@ -415,16 +444,14 @@ For options 1 and 2 (env-var-backed paths):
      --displayName "{friendlyName}" \
      --type "{100000003 for Secret, 100000000 for String}"
    ```
-   For Secret env vars (option 1), do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars (option 2), capture the dev value as the default. Schema name: replace `/` with `_`, lowercase, prefix with publisher prefix.
+   For Secret env vars, do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars, capture the dev value as the default. Schema name: replace `/` with `_`, lowercase, prefix with publisher prefix.
 2. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
 3. Link the site setting to the env var via `link-site-setting-to-env-var.js` (same call as Step 5.4.A above).
 4. The site setting itself is added to the solution alongside the env var definition — both are tracked components.
 
-For option 3 (skip):
-- The setting moves from `credentialNeedsDecision` into a new `userOptedOutOfSolution` bucket. It's not added to the solution. Surface in Step 5.5 review:
-> "The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."
+If any single env-var creation fails (token expired mid-loop, schema-name collision, etc.), surface the failure with the setting name + reason and ask the user whether to retry, skip just that setting, or abort the whole bulk operation. Do not silently drop credentials.
 
-**Backward compatibility**: when reading a `preloadedSettings` plan generated before 2026-05-08, treat any entries in `preloadedSettings.excluded` as `credentialNeedsDecision` and run the per-credential prompt above.
+**Backward compatibility**: when reading a `preloadedSettings` plan generated before 2026-05-08, treat any entries in `preloadedSettings.excluded` as `credentialNeedsDecision` and run the bulk-with-override prompt above.
 
 #### Step 5.4b — Adopt Orphaned Env Var Definitions
 
