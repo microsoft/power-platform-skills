@@ -311,7 +311,7 @@ function buildAdvisoryHtml() {
   }
   const candidates = assetAdvisory.candidates || [];
   if (candidates.length === 0) {
-    return '<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (2 MB) or excluded by patterns.</div></div>';
+    return `<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (${ALM_THRESHOLDS.maxSingleFileMB} MB) or excluded by patterns.</div></div>`;
   }
   let html = '';
   if (assetAdvisory.recommendation === 'externalize-media') {

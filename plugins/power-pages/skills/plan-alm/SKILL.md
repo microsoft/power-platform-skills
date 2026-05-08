@@ -215,7 +215,7 @@ Steps:
       > "Your solution is **missing {N} component(s)** that exist on the site:
       >
       > - **{X}** site components (e.g. {first 3 names})
-      > - **{L}** site languages (componenttype 10428 — required; without these the target site silently fails to render post-auth)
+      > - **{L}** site languages (powerpagesitelanguage — required; without these the target site silently fails to render post-auth)
       > - **{Y}** cloud flows
       > - **{Z}** environment variable definitions
       > - **{W}** custom tables

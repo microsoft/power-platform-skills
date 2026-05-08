@@ -16,7 +16,7 @@ description: >-
   "provision custom host". Also invoked transparently by
   /power-pages:setup-pipeline when its host discovery step finds nothing.
 user-invocable: true
-argument-hint: "Optional: 'detect-only' to skip provisioning paths and report state; 'auto-platform' to run the Platform-Host getOrCreate fast-path without the path-decision prompt (still gated by tenant pre-call confirmation); 'auto-custom' to run the Custom-Host fast-path without the path-decision prompt (still gated by tenant + admin-role + pre-call-echo prompts)"
+argument-hint: "Optional: 'detect-only' to skip provisioning paths and report state; 'auto-platform' to run the Platform-Host fast-path (idempotent, ~3–5 min) without the path-decision prompt (still gated by tenant pre-call confirmation); 'auto-custom' to run the Custom-Host fast-path without the path-decision prompt (still gated by tenant + admin-role + pre-call-echo prompts)"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
@@ -25,7 +25,7 @@ model: opus
 
 # ensure-pipelines-host
 
-> **Scope:** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — offers three provisioning paths: a new **Platform Host** via the idempotent BAP `getOrCreate` endpoint (recommended; no admin role, ~3–5 min); a new **Custom Host** via the BAP env-create API with the `D365_ProjectHost` template (admin-only); or PPAC manual provisioning (fallback).
+> **Scope:** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — offers three provisioning paths: a new **Platform Host** (recommended; idempotent, ~3–5 min); a new **Custom Host** (admin-only, ~5–10 min); or PPAC manual provisioning (fallback). Implementation details — endpoint names, template names, BAP audience — live in Phase 4.0 / 4.A / 4.C below; user-facing prose stays focused on outcomes.
 
 Power Platform Pipelines need a **host environment** — a Dataverse environment with the *Power Platform Pipelines* managed solution installed, where pipelines, stages, run history, and artifacts live. The existing `setup-pipeline` and `deploy-pipeline` skills assume a host is already configured. This skill closes that gap.
 
