@@ -101,32 +101,31 @@ Steps:
    Authorization: Bearer {DEV_TOKEN}
    ```
 
-   Classify each returned setting using this three-tier logic:
+   Classify the returned settings using `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
 
-   **Tier 1 — Excluded (true credentials, never add to solution):**
-   Name matches `/ConsumerKey|ConsumerSecret|ClientId|ClientSecret|AppSecret|AppKey|ApiKey|Password/i`
-   These are OAuth/identity credential fields — adding them to a solution would expose secrets.
+   ```bash
+   echo '<JSON array of {name,value}>' \
+     | node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
+   ```
 
-   **Tier 2 — Auth config (per-environment auth settings):**
-   Name matches `Authentication/` or `AzureAD/` (but NOT in Tier 1).
-   These are authentication feature flags and configuration that may differ per environment.
-   - If `mspp_value` is non-empty → **`promoteToEnvVar`**: recommend promoting to an environment variable during `setup-solution` so staging/production can use different values
-   - If `mspp_value` is null or empty → **`authNoValue`**: include in solution as-is (no secret to protect), but show a note that this is an auth setting with no dev value and the user should verify the correct value is set in each target environment after deployment
+   Output (the four-bucket shape that downstream phases + `setup-solution` consume directly):
 
-   **Tier 3 — Regular settings (all others):**
-   Everything else — Search, Bootstrap, WebApi field lists, feature flags, site tracking, etc.
-   → **`keepAsIs`**: include in solution as-is regardless of whether a value is set. These settings do not need per-environment variation and no special treatment is required.
-
-   Store as:
    ```js
    SITE_SETTINGS_DATA = {
-     keepAsIs: [{name}],                    // regular settings (Tier 3)
-     authNoValue: [{name}],                 // auth config with no dev value (Tier 2, no value)
-     promoteToEnvVar: [{name, value}],      // auth config with dev value (Tier 2, has value)
-     excluded: [{name}]                     // true credentials (Tier 1)
+     keepAsIs: [{name}],                          // regular settings (Tier 3 — Search/Bootstrap/WebApi/feature flags)
+     authNoValue: [{name}],                       // Authentication/* or AzureAD/* with empty value (Tier 2b — added as-is, set in target env)
+     promoteToEnvVar: [{name, value}],            // Authentication/* or AzureAD/* with value (Tier 2a — setup-solution offers env-var promotion)
+     credentialNeedsDecision: [{name, value}]     // ConsumerKey/ConsumerSecret/ClientId/ClientSecret/AppSecret/AppKey/ApiKey/Password (Tier 1 — bulk-with-override prompt in setup-solution Phase 5.4.C)
    }
    ```
-   If the query fails, set `SITE_SETTINGS_DATA = null` and continue.
+
+   Tier semantics in plain English (so reviewers reading the plan know what each bucket implies):
+   - **Tier 1 (`credentialNeedsDecision`)** — credential-style names. Setup-solution Phase 5.4.C runs a single bulk prompt: auto-classify by name (Secret-typed env var for `*Secret`/`*Password`/`*ApiKey`/`*AppKey`; String-typed for `*Id`/`*ConsumerKey`), all-as-Secret, all-as-String, skip-all, or pick-per-credential.
+   - **Tier 2a (`promoteToEnvVar`)** — auth config with a dev value. Setup-solution Phase 5.4.A asks which to back with env vars so each stage can use different values.
+   - **Tier 2b (`authNoValue`)** — auth config with no dev value yet. Added to the solution as-is; user sets the value in each target env after deployment.
+   - **Tier 3 (`keepAsIs`)** — everything else. Added unchanged.
+
+   If the OData query fails or the helper errors out, set `SITE_SETTINGS_DATA = null` and continue — the plan still renders, it just can't break down site settings by tier.
 
 8. Build `SOLUTION_CONTENTS_DATA`:
    ```js
@@ -143,7 +142,7 @@ Steps:
    Found: **{siteName}** on `{devEnvUrl}`.
    Solution: {✓ already set up ({solutionUniqueName}) / ✗ not yet}.
    Pipeline: {✓ already set up ({pipelineName}) / ✗ not yet}.
-   Site settings: {N total — K regular (keep as-is), P auth settings to review for env var, A auth settings (no dev value), E credential secrets excluded / unable to query}.
+   Site settings: {N total — K regular (keep as-is), P auth settings to review for env var, A auth settings (no dev value), C credential-style settings (setup-solution will prompt per credential) / unable to query}.
    ```
 
 10. **Estimate solution size and evaluate the split decision tree.** Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count. Use the tmp-file write pattern — if the estimator fails, a prior good `.alm-size-estimate.json` is preserved instead of being overwritten with an empty/partial file:
@@ -214,7 +213,7 @@ Steps:
       > "Your solution is **missing {N} component(s)** that exist on the site:
       >
       > - **{X}** site components (e.g. {first 3 names})
-      > - **{L}** site languages (componenttype 10428 — required; without these the target site silently fails to render post-auth)
+      > - **{L}** site languages (powerpagesitelanguage — required; without these the target site silently fails to render post-auth)
       > - **{Y}** cloud flows
       > - **{Z}** environment variable definitions
       > - **{W}** custom tables
@@ -570,7 +569,7 @@ Build a `planData` object with all gathered strategy inputs:
     "siteSettings": {
       "keepAsIs": [{ "name": "..." }],
       "promoteToEnvVar": [{ "name": "...", "value": "..." }],
-      "excluded": [{ "name": "..." }]
+      "credentialNeedsDecision": [{ "name": "..." }]
     }
   },
 
@@ -582,6 +581,7 @@ Build a `planData` object with all gathered strategy inputs:
   "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions — ALWAYS at least 1 entry */ ],
   "recommendations": [ /* from SPLIT_PLAN.recommendations */ ],
   "envVars": [ /* from ENV_VARS_DETAILS (Phase 1 Step 10b) — { schemaName, type, defaultValue, siteSetting } per definition; empty array when DEV_TOKEN unavailable */ ],
+  "plannedEnvVarCount": 0,                // sum of SITE_SETTINGS_DATA.promoteToEnvVar.length + credentialNeedsDecision.length — env vars setup-solution will offer to create. Renderer shows this as "N planned" alongside the existing-count stat so a fresh project (envVars: []) doesn't look like nothing is happening when the risks list says auth settings will be promoted. Reset to 0 by refresh-alm-plan-data setup-solution phase.
   "breakdown": { /* bytes-per-category from the estimate */ },
   "estimationMethod": "metadata-based",
   "estimationAccuracyPct": 15,
@@ -605,6 +605,8 @@ Build a `planData` object with all gathered strategy inputs:
 ```
 
 `solutionContents` is populated from `SOLUTION_CONTENTS_DATA` built in Phase 1. If discovery was unavailable, pass `null` — the renderer will show a fallback note.
+
+`plannedEnvVarCount` is computed from `SITE_SETTINGS_DATA` (Phase 1 Step 7): `(SITE_SETTINGS_DATA.promoteToEnvVar?.length || 0) + (SITE_SETTINGS_DATA.credentialNeedsDecision?.length || 0)`. When `SITE_SETTINGS_DATA` is null (Step 7 query failed), set `plannedEnvVarCount = 0`. The renderer reads this alongside `envVars.length` (existing) and `sizeAnalysis.envVarCount.value` (size-estimator's count) to produce a "N today / +M planned" display in the Overview stat card and Size Analysis signal.
 
 **`validationRuns` block** (PP Pipelines path only — initialize one entry per target stage with value `null`; populated during Phase 7 Step C by ingesting `.last-test-site.json` after each stage's test run). The full categorized test report drives the new **Validation** tab in the rendered HTML. Shape per stage:
 
@@ -720,16 +722,19 @@ Embed the result as `planData.pipelineMeta`.
 
 Populate `risks` based on gathered data:
 - If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables ({N} detected) — you will be prompted for per-stage values during deployment." }`. Substitute `{N}` from `ENV_VARS_DETAILS.length` if it's > 0, otherwise from `SPLIT_PLAN.sizeAnalysis.envVarCount.value` (the count the size estimator reported). When neither source has a positive count, drop the parenthetical (`"This solution has environment variables — you will be prompted..."`).
+- If `SITE_SETTINGS_DATA.promoteToEnvVar.length > 0`: `{ type: "info", message: "{N} auth-related site settings (Authentication/* and AzureAD/*) detected with values. setup-solution will ask which to back with environment variables so each stage can use different values (e.g., different OAuth callback URLs). Skip any you don't need to vary per stage." }`. Substitute `{N}` from `SITE_SETTINGS_DATA.promoteToEnvVar.length`. (Replaces older "will be promoted" wording — that implied automatic action; in reality the user picks per setting.)
+- If `SITE_SETTINGS_DATA.credentialNeedsDecision.length > 0`: `{ type: "info", message: "{N} credential-style site settings (ConsumerKey / ClientId / ClientSecret / etc.) detected. setup-solution will run a single bulk prompt to handle all of them — auto-classify by name (recommended; *Secret/Password/ApiKey/AppKey become Secret env vars, *Id/ConsumerKey become String env vars), all-as-Secret, all-as-String, skip-all, or fall through to a per-credential picker for granular control." }`. Substitute `{N}` from `SITE_SETTINGS_DATA.credentialNeedsDecision.length`. Do NOT emit any "excluded from solution / configure manually" wording — that was the pre-IronItOut behavior and it's gone.
 - If `GIT_STATUS = "no"`: `{ type: "info", message: "Consider enabling source control to track changes before deploying to production." }`
 - If `EXPORT_TYPE = "unmanaged"` and strategy includes a production target: `{ type: "warning", message: "Unmanaged solutions can be edited in the target environment — consider using Managed for production." }`
 - If `SOLUTION_DONE = false`: `{ type: "info", message: "A Dataverse solution will be created first — publisher prefix is irreversible once chosen." }`
+- **Always** (when planning a PP Pipelines path with `SOLUTION_DONE` becoming true after Phase 4): `{ type: "info", message: "When you add new components later (server logic, cloud flows, env vars, custom tables), re-run /power-pages:setup-solution in sync mode to bring them into this solution. The completeness check in this skill (Phase 1 Step 11) will flag any drift between the live site and the solution before the next plan-alm run." }`. Skip when `SOLUTION_DONE` is already true at plan-alm start (sync mode is already self-evident at that point).
 - If `KNOWN_GAPS` is set (the pre-plan completeness check in Phase 1 Step 11 found gaps and the user chose to continue): `{ type: "warning", message: "{X} site components, {Y} cloud flows, {Z} env vars, and {W} custom tables exist on the site but are not in the current solution. This plan will not promote them — run /power-pages:setup-solution sync mode before deploying, or re-run plan-alm after syncing." }`. Substitute the counts from `KNOWN_GAPS.missing.*.length`.
-- If `HOST_RESOLUTION.status === "NoHost"` AND `WILL_PROVISION_PLATFORM === true`: `{ type: "info", message: "No Pipelines host detected. setup-pipeline will provision a new Platform Host (idempotent, no admin role required, ~3–5 min). Plan execution will pause for a tenant-identity confirmation gate before the call." }`
-- If `HOST_RESOLUTION.status === "NoHost"` AND `WILL_PROVISION_CUSTOM === true`: `{ type: "info", message: "No Pipelines host detected. setup-pipeline will create a new Custom Host (D365_ProjectHost template, requires Power Platform admin). Plan execution will pause for admin-role attestation and a pre-call confirmation." }`
+- If `HOST_RESOLUTION.status === "NoHost"` AND `WILL_PROVISION_PLATFORM === true`: `{ type: "info", message: "No Pipelines host detected. setup-pipeline will provision a new Platform Host (idempotent, ~3–5 min). Plan execution will pause for a tenant-identity confirmation gate before the call." }`. Do NOT include any wording about admin-role requirements or API names — those are implementation details.
+- If `HOST_RESOLUTION.status === "NoHost"` AND `WILL_PROVISION_CUSTOM === true`: `{ type: "info", message: "No Pipelines host detected. setup-pipeline will create a new Custom Host. Plan execution will pause for admin-role attestation and a pre-call confirmation." }`
 - If `HOST_RESOLUTION.status === "NoHost"` AND none of the provisioning flags are set (user picked an existing env via Option 2 → sub-option `a`, or chose PPAC manual, or deferred): emit a status-appropriate info entry derived from `CHOSEN_ENV_URL` / `WILL_USE_PPAC`.
 - If `HOST_RESOLUTION.status === "AvailableUnboundCustomHost"`: `{ type: "info", message: "An existing Custom Host (" + HOST_RESOLUTION.finalHostEnvUrl + ") will be reused. Source env will be bound to it automatically." }`
 - If `HOST_RESOLUTION.status === "MultipleUnboundCustomHosts"`: `{ type: "info", message: HOST_RESOLUTION.candidates.existingCustomHosts.length + " existing Custom Hosts found in tenant. setup-pipeline will prompt for selection." }`
-- If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it requires no admin role; creating a Custom Host instead provides better governance." }`
+- If `HOST_RESOLUTION.status === "PlatformHostExistsUnbound"`: `{ type: "info", message: "Tenant has a Platform Host. Reusing it is the lowest-friction option; creating a Custom Host instead provides better governance for separate-tenant or governed scenarios." }`
 - If `HOST_RESOLUTION.status === "CannotRedirect"`: `{ type: "warning", message: "CannotRedirect: source env ProjectHostEnvironmentId points at PE but tenant default custom host is set elsewhere. Resolution requires Power Platform admin." }` (Note: Phase 2 Q4 normally blocks plan generation in this state; this is a defensive entry in case the plan is somehow generated.)
 
 Write `planData` to `docs/.alm-plan-data.json` (create `docs/` if it doesn't exist).
@@ -919,6 +924,17 @@ Invoke the skill:
 
 After completion: mark task as `completed`. Update HTML checklist step to `status-completed`.
 
+**Refresh the plan after export.** Run the helper (export-solution self-refreshes too — this is belt-and-suspenders):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase export-solution \
+  --render
+```
+
+The helper re-renders `docs/alm-plan.html` so the Export-step status update is visible to reviewers immediately.
+
 **If `MANUAL_CHECKPOINT = true`:** Ask via `AskUserQuestion`:
 > "Export complete. Review the solution zip at `{zipPath}` before importing. Ready to proceed with import?"
 
@@ -1034,7 +1050,19 @@ For each entry in `MANUAL_TARGETS`:
 
 4. After completion: mark the task as `completed`. Update the HTML checklist step to `status-completed`.
 
-5. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
+5. **Refresh the plan after the import.** Run the helper (import-solution self-refreshes too — this is belt-and-suspenders):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+     --projectRoot "." \
+     --phase import-solution \
+     --stageName "{targetLabel}" \
+     --render
+   ```
+
+   `{targetLabel}` is the current iteration's target (e.g. `Staging`, `Production`). The helper reads `.last-import.json`, writes a per-target entry into `planData.manualImports[targetLabel]` (status, version, component count, failures), and re-renders `docs/alm-plan.html`. The matching `Import to {targetLabel}` checklist step picks up an `IMPORTED` (or `FAILED`) badge with import details inline — same idiom as the test-site validation substep on PP-path Test steps. Always pass `--stageName` from the per-target loop so the helper doesn't have to fall back to URL matching.
+
+6. **Activate site in {targetLabel}** (optional) — mark the "Activate site in {targetLabel}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
 
    PAC CLI is already pointing to the target environment from step 2. Run the activation check:
    ```bash
@@ -1044,6 +1072,15 @@ For each entry in `MANUAL_TARGETS`:
    - **`activated: true`**: Site is already live. Mark task as `completed`. Update checklist step to `status-completed`.
    - **`activated: false`**: Invoke `/power-pages:activate-site`. After completion, mark task as `completed`. Update checklist step to `status-completed`.
    - **`error`**: Mark task as `skipped`. Note error in summary.
+
+7. **Refresh the plan after activation.** Run the helper (activate-site self-refreshes too — this is belt-and-suspenders):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+     --projectRoot "." \
+     --phase activate-site \
+     --render
+   ```
 
 After all imports: switch PAC CLI back to the dev environment:
 ```bash

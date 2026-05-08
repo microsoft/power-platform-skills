@@ -25,6 +25,18 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
 
 ## Skills
 
+### `/canvas-app`
+
+Create or edit a Canvas App. Automatically detects whether to generate a new app from scratch
+or edit an existing one based on the current app state.
+
+**Usage:** Invoke directly with `/canvas-app`, or use natural language to trigger it:
+
+- `Create a Canvas App for managing inventory`
+- `I need a Canvas App for tracking employee time off`
+- `Modify the form in my existing Canvas App to include validation`
+- `Edit my Canvas App to add a new screen for reports`
+
 ### `/configure-canvas-mcp`
 
 Register the Canvas Authoring MCP server with Claude Code or GitHub Copilot.
@@ -34,24 +46,6 @@ Register the Canvas Authoring MCP server with Claude Code or GitHub Copilot.
 - `Configure MCP for Canvas Apps`
 - `Set up the Canvas Authoring MCP server`
 - `Connect Canvas Apps MCP`
-
-### `/generate-canvas-app`
-
-Generate a complete Canvas App from a natural language description.
-
-**Usage:** Invoke directly with `/generate-canvas-app`, or use any of the keywords below to trigger the skill automatically:
-
-- `Create a Canvas App for managing inventory`
-- `I need a Canvas App for tracking employee time off`
-
-### `/edit-canvas-app`
-
-Edit an existing Canvas App from a natural language description of changes.
-
-**Usage:** Invoke directly with `/edit-canvas-app`, or use any of the keywords below to trigger the skill automatically:
-
-- `Modify the form in my existing Canvas App to include validation`
-- `Edit my Canvas App to add a new screen for reports`
 
 ## MCP Tools
 

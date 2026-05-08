@@ -597,6 +597,7 @@ Always write a structured JSON report to the project root so other skills (notab
 ```json
 {
   "url": "https://contoso.powerappsportals.com",
+  "stageName": "Staging",
   "runAt": "2026-04-29T08:50:00.000Z",
   "durationSec": 95,
   "runOutcome": "passed | passed-with-warnings | failed",
@@ -679,6 +680,22 @@ EOF
 )"
 ```
 or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `.last-test-site.json` in the project root (sibling to `.last-deploy.json` and `.last-pipeline.json`).
+
+**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — plan-alm Phase 7's per-target loop, `.last-deploy.json`'s `stageName`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
+
+#### 6.7b Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase test-site \
+  --stageName "{stageName}" \
+  --render
+```
+
+`{stageName}` is the stage label this run tested (e.g. `Staging`, `Production`). Pass an empty string when unknown — `refreshTestSite` falls back to (1) the marker's `stageName` field (set in 6.7a above), then (2) the single target stage in `planData.stages` if there's only one. Multi-stage plans with no explicit stageName + no marker stageName won't be captured (the refresh re-renders without a per-stage validationRun update); always pass it explicitly when you can.
+
+The helper reads `.last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 #### 6.8 Suggest Next Steps
 

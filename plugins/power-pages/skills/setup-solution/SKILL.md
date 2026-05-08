@@ -7,7 +7,7 @@ description: >-
   "solutionize my site", or "set up ALM for my site".
 user-invocable: true
 argument-hint: "Optional: solution unique name (e.g., 'ContosoSite')"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -125,6 +125,17 @@ Steps:
      - Phase 5 partitions `AddSolutionComponent` calls per solution based on `proposedSolutions[i].componentTypes` and `tableLogicalNames` (for Strategy 3).
      - Phase 6 writes manifest v2 (see below).
    - If not found or `proposedSolutions.length === 1`, proceed in single-solution mode (existing flow).
+
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages solution publisher creation Dataverse component types ALM`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page if the search surfaces a relevant new tutorial — e.g. multi-solution layering, managed-properties guidance) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about solution components, publisher prefix immutability, managed vs unmanaged choice, and component-type integers. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence (new component types, changed action signatures, deprecated patterns).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (Create Publisher and Solution).
 
 ### Phase 2 — Gather Solution Configuration
 
@@ -325,16 +336,29 @@ If Query G returns no references (the cloud flows don't use connectors, or the p
 
 #### Step 5.3 — Categorize Site Settings
 
-**If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.excluded` directly.
+**If `preloadedSettings` is available** (user chose "Use pre-loaded choices from plan" in Phase 1 Step 5), skip the classification below — use `preloadedSettings.keepAsIs`, `preloadedSettings.promoteToEnvVar`, `preloadedSettings.authNoValue`, and `preloadedSettings.credentialNeedsDecision` directly. (Plans generated before 2026-05-08 use the older `excluded` bucket — treat its contents as `credentialNeedsDecision` for backward compatibility.)
 
-**Otherwise**, classify each discovered Site Setting (powerpagecomponenttype=9) using this three-tier logic:
+**Otherwise**, run the shared classifier — `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — which is the **single source of truth** for the credential regex + tier mapping shared with `plan-alm` Phase 1 Step 7. Either invoke the CLI (pipe JSON to stdin) or `require()` it inline. The output is the same four-bucket shape `plan-alm` produces:
 
-| Tier | Condition | Bucket | Handling |
+```js
+{
+  keepAsIs: [{name}],                      // Tier 3 — added to the solution unchanged
+  authNoValue: [{name}],                   // Tier 2b — Authentication/AzureAD with empty value; added as-is, user sets per-env
+  promoteToEnvVar: [{name, value}],        // Tier 2a — Authentication/AzureAD with value; reviewed at Step 5.4.A
+  credentialNeedsDecision: [{name, value}] // Tier 1 — credential-style names; bulk-with-override prompt at Step 5.4.C
+}
+```
+
+Tier definitions (mirroring the regex in `classify-site-settings.js`):
+
+| Tier | Bucket | Matcher | Handling |
 |---|---|---|---|
-| 1 — Credential secrets | Name matches `/ConsumerKey\|ConsumerSecret\|ClientId\|ClientSecret\|AppSecret\|AppKey\|ApiKey\|Password/i` | `excluded` | **Never** add to solution |
-| 2a — Auth config with value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND has a value | `promoteToEnvVar` | Present to user for review — may differ per environment |
-| 2b — Auth config, no value | `Authentication/` or `AzureAD/` prefix AND NOT credential AND value is null/empty | `authNoValue` | Add to solution as-is with a note |
-| 3 — All other settings | Does not match above | `keepAsIs` | Include in solution unchanged |
+| 1 — Credential-style | `credentialNeedsDecision` | `CREDENTIAL_REGEX` (`ConsumerKey\|ConsumerSecret\|ClientId\|ClientSecret\|AppSecret\|AppKey\|ApiKey\|Password`, case-insensitive) | Bulk-with-override prompt at Step 5.4.C — auto-classify (Secret/String defaults), all-Secret, all-String, skip-all, or pick-per-credential |
+| 2a — Auth config with value | `promoteToEnvVar` | `AUTH_PREFIX_REGEX` (`Authentication/` or `AzureAD/`) AND NOT credential AND has a value | Multi-select prompt at Step 5.4.A — which to back with env vars |
+| 2b — Auth config, no value | `authNoValue` | Same prefix, no value | Added to solution as-is with a note (user sets value per env) |
+| 3 — All other settings | `keepAsIs` | Anything else | Included in solution unchanged |
+
+**Do NOT inline the regex here** — if it's wrong in this skill but right in `plan-alm`, classifications drift between plan time and execution time. The regex lives in `classify-site-settings.js` exclusively; both skills require it.
 
 **Note on `authNoValue` settings**: These are auth configuration settings where no value has been set in the dev environment. They will be added to the solution as-is. After deploying to each target environment, the correct value should be configured there. Present these in a warning note box during the manifest review (Step 5.5).
 
@@ -352,16 +376,24 @@ Ask via `AskUserQuestion` with `multiSelect: true`, listing each `promoteToEnvVa
 - Plus options: **"Promote all of them to env vars"** and **"Keep all as plain site settings"**
 
 For each setting the user selects to promote:
-1. Create an `environmentvariabledefinition` using `create-env-var-definition.js`:
+1. Generate the canonical schema name with `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` so it matches what `configure-env-variables` and `deploy-pipeline` will expect later:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+     --publisherPrefix "{prefix}" \
+     --settingName "{settingName}"
+   ```
+   Output: `{ schemaName, sanitized }`. The helper is the **single source of truth** for the canonical rule (`{prefix}_{sanitized(settingName)}.toLowerCase()`) — do not inline it. setup-solution and configure-env-variables MUST emit identical schema names for the same logical setting; inlining the rule risks divergent outputs.
+
+2. Create an `environmentvariabledefinition` using the resolved schema name:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
      --envUrl "{envUrl}" \
      --token "{token}" \
-     --schemaName "{prefix}_{sanitizedSettingName}" \
+     --schemaName "{schemaName from step 1}" \
      --displayName "{friendlyName}" \
      --type 100000000
    ```
-   Use type `100000000` (String) for auth config settings (not Secret — these are feature flags, not credentials). Schema name: replace `/` with `_`, lowercase, prefix with publisher prefix (e.g. `ids_authentication_registration_localloginenabled`). Capture output as JSON; extract `.definitionId` and `.schemaName`.
+   Use type `100000000` (String) for auth config settings (not Secret — these are feature flags, not credentials). Capture output as JSON; extract `.definitionId` and `.schemaName`.
 2. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
 3. **Link the site setting to the env var** using `link-site-setting-to-env-var.js`:
    ```bash
@@ -381,10 +413,73 @@ Settings the user chose NOT to promote move from `promoteToEnvVar` into `keepAsI
 No user decision required. These are automatically included in the solution as-is. At Step 5.5, display them in a warning box:
 > "The following auth settings have no value set in your dev environment. They will be added to the solution as-is. After deploying to each target environment, verify or set the correct value there."
 
-**C. `excluded` settings (credential secrets):**
+**C. `credentialNeedsDecision` settings (credential-style — bulk-with-override prompt):**
 
-These are never added to the solution. At Step 5.5, display them in a neutral note box:
-> "The following OAuth credential secrets are excluded from the solution and must be configured manually in each target environment after deployment."
+These are credential-style site settings (ConsumerKey / ClientSecret / etc.) that need a decision before going into the solution. Shipping raw values inside the solution zip is a real exposure, so the safe path is to add the site-setting record to the solution and route the value through an environment variable per stage. **Asking per credential is too much when N is large** (a typical site has 20+ auth-related credentials across multiple OAuth providers), so this step uses a **bulk-with-override** prompt: one question covers all N credentials, with a per-credential escape hatch for granular control.
+
+**Step 5.4.C.1 — Auto-classify by name pattern.**
+
+Call `autoClassifyCredential(name)` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` for each setting. The helper applies these regexes in order (the **single source of truth** — do not duplicate them here):
+
+| Default | Matcher in helper | When it fires |
+|---|---|---|
+| **Secret env var** (`type: 100000003`) | `CREDENTIAL_SECRET_REGEX` (`Secret\|Password\|ApiKey\|AppKey`) | Names with these substrings — `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey` |
+| **String env var** (`type: 100000000`) | `CREDENTIAL_STRING_REGEX` (`Id\|ConsumerKey`) AND not Secret | Names like `*ClientId`, `*ConsumerKey`, `*TenantId`, `*AppId` |
+| **Secret env var** (fallback) | (helper's defensive default when neither matches) | Anything else — defensive: credential names are sensitive by default |
+
+The helper returns `{ default: 'secret' | 'string', reason }` for each setting. Group the results into `AUTO_CLASSIFY = { secrets: [...], strings: [...] }` and show the user a one-line summary: *"Auto-classified {N} credential-style settings: {S} as Secret env vars (Key Vault per stage), {T} as String env vars (plain text per stage)."*
+
+**Step 5.4.C.2 — Bulk prompt.**
+
+Ask **one** `AskUserQuestion` covering all N credentials:
+
+> "{N} credential-style site settings detected (`{firstFew.join(', ')}{N>3?', ...':''}`). How should I handle them?
+>
+> Shipping their values inside the solution zip is a real exposure, so the recommended approaches add the site-setting record to the solution and route the value through an environment variable per stage. The actual secret value never ships in the zip — it's set per-environment in `deploymentsettingsjson`."
+
+Options:
+1. **Auto-classify by name** *(recommended)* — Apply the auto-classification from Step 5.4.C.1: {S} as Secret env vars, {T} as String env vars. One confirmation, all {N} handled. (Default option.)
+2. **All as Secret env vars** — Treat every credential as a Key-Vault-backed Secret env var. Conservative; works for any credential but adds Key Vault dependency for stage values that don't actually need it.
+3. **All as String env vars** — Treat every credential as a plain-text per-stage env var. Use only when none of the credentials are true secrets (e.g. an internal-only test setup).
+4. **Skip all** — Don't add any to the solution. The user manages all credential values out-of-band per environment. Equivalent to the pre-IronItOut "excluded" behavior.
+5. **Pick per credential** — Run a per-credential prompt for granular control (Secret / String / Skip per setting). Reach for this when you have a mix of true secrets and non-sensitive IDs that don't fit the auto-classification cleanly.
+
+Branching logic:
+
+- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000003`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
+- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000003`.
+- **Option 3 (All String)**: Treat all N as String. Same loop with `--type 100000000`.
+- **Option 4 (Skip all)**: Move all N into a `userOptedOutOfSolution` bucket. Surface in Step 5.5: *"The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."*
+- **Option 5 (Pick per credential)**: For each setting, run a 3-option `AskUserQuestion` (Secret env var / String env var / Skip). The auto-classification informs the per-prompt default but the user can override.
+
+**Step 5.4.C.3 — Env var creation (shared by Options 1, 2, 3, and 5's non-Skip selections).**
+
+For each setting routed to env-var-backed handling:
+
+1. Generate the canonical schema name with `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (same helper Step 5.4.A uses — single source of truth so configure-env-variables and deploy-pipeline can reference the same schema names later):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+     --publisherPrefix "{prefix}" \
+     --settingName "{settingName}"
+   ```
+
+2. Create an `environmentvariabledefinition` using the resolved schema name:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --schemaName "{schemaName from step 1}" \
+     --displayName "{friendlyName}" \
+     --type "{100000003 for Secret, 100000000 for String}"
+   ```
+   For Secret env vars, do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars, capture the dev value as the default.
+3. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
+4. Link the site setting to the env var via `link-site-setting-to-env-var.js` (same call as Step 5.4.A above).
+5. The site setting itself is added to the solution alongside the env var definition — both are tracked components.
+
+If any single env-var creation fails (token expired mid-loop, schema-name collision, etc.), surface the failure with the setting name + reason and ask the user whether to retry, skip just that setting, or abort the whole bulk operation. Do not silently drop credentials.
+
+**Backward compatibility**: when reading a `preloadedSettings` plan generated before 2026-05-08, treat any entries in `preloadedSettings.excluded` as `credentialNeedsDecision` and run the bulk-with-override prompt above.
 
 #### Step 5.4b — Adopt Orphaned Env Var Definitions
 
@@ -594,6 +689,21 @@ The script handles token refresh every 20 calls, treats "already in solution" as
 1. Verify components: `GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}'&$select=objectid,componenttype`
 2. Count components by type, confirm the website record (using `websiteComponentType`) is present
 
+2b. **Capture the post-setup env var snapshot for the rendered ALM plan.** Run the discovery helper and write its output to a sidecar marker file (`.last-env-vars.json`) at the project root. The plan-refresh helper (Phase 7's self-refresh) ingests this sidecar into `planData.envVars` so the rendered plan's Env Variables tab shows the definitions setup-solution just created/adopted (without it the tab stays empty even after Phase 5.4 / 5.4.C / 5.4b created definitions):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+     --envUrl "{envUrl}" \
+     --publisherPrefix "{publisherPrefix}" \
+     --websiteRecordId "{websiteRecordId}" \
+     --token "{token}" > .last-env-vars.json.tmp \
+     && mv .last-env-vars.json.tmp .last-env-vars.json
+   ```
+
+   The tmp-file write pattern preserves a prior good `.last-env-vars.json` on a transient discovery failure (parallel to the `.alm-size-estimate.json` pattern in plan-alm Phase 1). If the helper exits non-zero, log the stderr and continue — the existing sidecar (or absence of one) is acceptable; the refresh just won't update env vars this run.
+
+   The sidecar's shape mirrors what `discover-env-var-definitions.js` already returns: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Don't transform — the renderer reads these fields directly.
+
 3. Write `.solution-manifest.json` to project root (alongside `powerpages.config.json`):
    - See manifest format in `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` Section 7
    - If cloud flows were confirmed, include a `cloudFlows` array: `[{ "workflowId": "...", "name": "...", "status": "active|inactive" }]`
@@ -680,18 +790,33 @@ If the user selects **option 3**, show:
 - Run `/power-pages:export-solution` to export a zip for manual import
 - Run `/power-pages:configure-env-variables` if environment-specific values need to be set per stage
 
+### Tip: Adding Components Later
+
+> **When the live site grows beyond what's in this solution** — server logic from `add-server-logic`, cloud flows from `add-cloud-flow`, env vars from `setup-auth` or `configure-env-variables`, new tables from `setup-datamodel`, or new web roles — **re-run `/power-pages:setup-solution`**. The skill auto-detects sync mode when `.solution-manifest.json` exists in the project root, runs the discovery pass, diffs the live site against the solution, bumps the version, and adds only the missing components. No need for a separate "add to solution" workflow.
+
 ### Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "SetupSolution"`.
 
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase setup-solution \
+  --render
+```
+
+The helper resets `planData.plannedEnvVarCount` to 0 (the planned env vars have either been created or skipped at the user's request) and re-renders `docs/alm-plan.html` so the Overview stat card and Env Variables tab reflect post-setup state. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Publisher prefix confirmation — permanent, cannot be changed
 2. **Phase 3**: Reuse vs create confirmation — before any writes
 3. **Phase 1, Step 5**: ALM plan context — use pre-loaded site settings classification from plan-alm, or re-discover and reclassify
-4. **Phase 5, Step 5.4**: Auth settings with values — multi-select which to promote to env vars vs keep as plain site settings (excluded credential secrets are never shown)
+4. **Phase 5, Step 5.4**: Auth settings with values — multi-select which to promote to env vars vs keep as plain site settings; **per-credential prompt** for credential-style settings (Secret env var / String env var / skip)
 5. **Phase 5, Step 5.5**: Full manifest review — user sees everything (website, site language, all component categories, tables, env var definitions, authNoValue warnings) and confirms or adjusts before any components are written
 5. **Phase 7**: Next step — PP Pipelines (recommended) vs export/import manually vs decide later
 

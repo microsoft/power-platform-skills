@@ -7,7 +7,7 @@ description: >-
   "create solution zip", "export site package", or "build deployment artifact".
 user-invocable: true
 argument-hint: "Optional: 'managed' or 'unmanaged' (default: asks)"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -101,6 +101,17 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
    Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages solution export managed unmanaged ExportSolutionAsync ALM`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on managed vs unmanaged or solution layering) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about export semantics, managed vs unmanaged implications, and async export polling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ExportSolutionAsync` / `DownloadSolutionExportData` signatures.
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3.
 
 ### Phase 2 — Identify Solution
 
@@ -232,6 +243,17 @@ Display a summary:
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ExportSolution"`.
+
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase export-solution \
+  --render
+```
+
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 ## Key Decision Points (Wait for User)
 

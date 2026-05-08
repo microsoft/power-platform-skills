@@ -153,7 +153,12 @@ Ask via `AskUserQuestion`:
 > N. I'll type my own setting names"
 
 For each selected setting, ask for:
-1. **Env var schema name** (suggest `{publisherPrefix}_{CamelCaseName}`, e.g. `ids_LocalLoginEnabled`)
+1. **Env var schema name** — generate via `${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js` (single source of truth shared with `setup-solution`):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/generate-env-var-schema-name.js" \
+     --publisherPrefix "{publisherPrefix}" --settingName "{settingName}"
+   ```
+   Output: `{ schemaName, sanitized }`. The canonical rule is `{prefix}_{settingName.replace(/[^A-Za-z0-9]+/g,'_').toLowerCase()}` — e.g. `Authentication/Registration/LocalLoginEnabled` becomes `ids_authentication_registration_localloginenabled`. Do NOT inline a custom rule here: setup-solution emits schema names from this helper, and configure-env-variables MUST match what setup-solution already created (otherwise the link to the existing site setting fails). The user can override the suggestion if they have a reason, but the default must come from the helper.
 2. **Display name** (human-readable)
 3. **Type**: String (default), Boolean, Number, Secret
 4. **Dev/source value** (default = current `mspp_value` from YAML)
@@ -162,7 +167,7 @@ For each selected setting, ask for:
 Example:
 ```
 Setting: Authentication/Registration/LocalLoginEnabled
-  Schema name: ids_LocalLoginEnabled
+  Schema name: ids_authentication_registration_localloginenabled
   Display name: IdeaSphere Local Login Enabled
   Type: String (site settings always resolve as strings)
   Dev value: true

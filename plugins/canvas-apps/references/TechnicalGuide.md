@@ -98,6 +98,8 @@ This applies anywhere a record literal appears inline: `Default`, `Selected`, `I
 | Horizontal Responsive layout | `GroupContainer` | `AutoLayout` with `LayoutDirection: =LayoutDirection.Horizontal` |
 | Vertical Responsive layout | `GroupContainer` | `AutoLayout` with `LayoutDirection: =LayoutDirection.Vertical` |
 
+**Choosing a layout strategy:** Default to AutoLayout (responsive). Only use ManualLayout if the user explicitly requests pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and cross-device apps MUST use AutoLayout.
+
 ⚠️ **`GroupContainer` has no `OnSelect` — it cannot be clicked.** This is a common dead end when building card UI: the container lays out perfectly but tapping it does nothing.
 
 - **Clickable cards:** Use `ModernCard` instead — it has `OnSelect` and is designed for this.
@@ -441,13 +443,3 @@ If the app you're building requires any references to external data sources, tem
 - **Variables reset unexpectedly:** Variables are screen-scoped - use `OnVisible` to initialize
 - **Layout doesn't look right:** Check if you're mixing ManualLayout and AutoLayout
 - **Validation fails with "Unknown property":** Use describe_control tool to see valid properties
-
-## Implementation Workflow
-
-1. **list_controls** — required before planning layout; know what exists before writing any YAML
-2. **describe_control** — verify property names and variants for each control you plan to use
-3. **Draft screen structure** — sketch the container/control hierarchy before filling in properties
-4. **Write properties and formulas** — positioning, colors, state, event handlers
-5. **Validate with compile_canvas** — catch errors early; don't wait until the end
-6. **Fix errors** — use describe_control to confirm valid property names before guessing
-7. **Iterate** — validate after each meaningful change until the screen compiles clean

@@ -16,7 +16,7 @@
 // Usage:
 //   node refresh-alm-plan-data.js
 //     --projectRoot <path>
-//     --phase <setup-solution|setup-pipeline|deploy-pipeline|test-site|finalize>
+//     --phase <setup-solution|setup-pipeline|deploy-pipeline|export-solution|import-solution|activate-site|test-site|finalize>
 //     [--render]                  also invoke render-alm-plan.js after writing
 //     [--rendererPath <path>]     defaults to skills/plan-alm/scripts/render-alm-plan.js
 //                                 relative to plugin root
@@ -49,6 +49,17 @@ const PHASES = new Set([
   'setup-solution',
   'setup-pipeline',
   'deploy-pipeline',
+  // Manual-path phases (export/import/activate). For PP Pipelines path the
+  // deploy is a single 'deploy-pipeline' phase that covers import + activate
+  // implicitly; for Manual path each step is a separate phase. Each handler
+  // is intentionally minimal — the main work the refresh-and-render does for
+  // Manual path is re-rendering the HTML so the agent's step-status updates
+  // (planData.steps[i].status) flow through. Per-stage data ingestion (e.g.
+  // last-import.json with import outcomes per target) can be added later
+  // without changing the phase set.
+  'export-solution',
+  'import-solution',
+  'activate-site',
   'test-site',
   'finalize',
 ]);
@@ -183,11 +194,25 @@ function refreshDeployPipeline(planData, projectRoot) {
 }
 
 function refreshTestSite(planData, projectRoot, stageName) {
-  if (!stageName) return planData;
+  // Stage resolution: explicit --stageName arg wins; falls back to the
+  // marker's stageName field (test-site writes it when known, e.g. when
+  // plan-alm orchestrates the call); finally falls back to the FIRST target
+  // stage in planData.stages when planData has only one target. Standalone
+  // single-stage test-site invocations work without --stageName via the
+  // last fallback; multi-stage standalone runs need the explicit arg.
   const tsMarker = readJson(path.join(projectRoot, '.last-test-site.json'));
   if (!tsMarker) return planData;
+
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && tsMarker.stageName) resolvedStage = tsMarker.stageName;
+  if (!resolvedStage && Array.isArray(planData.stages)) {
+    const targets = planData.stages.filter((s) => s && s.type === 'target');
+    if (targets.length === 1 && targets[0].label) resolvedStage = targets[0].label;
+  }
+  if (!resolvedStage) return planData;
+
   planData.validationRuns = planData.validationRuns || {};
-  planData.validationRuns[stageName] = {
+  planData.validationRuns[resolvedStage] = {
     url: tsMarker.url || null,
     runAt: tsMarker.runAt || null,
     durationSec: tsMarker.durationSec != null ? tsMarker.durationSec : null,
@@ -203,20 +228,148 @@ function refreshFinalize(planData) {
   return planData;
 }
 
-function refreshSetupSolution(planData) {
-  // No structural plan changes today. The setup-solution skill writes
-  // .solution-manifest.json, which Phase 3 already consumed for
-  // solutionContents. A re-render here is still useful to pick up any
-  // updated component counts in proposedSolutions, but no field flip
-  // is needed.
+function refreshSetupSolution(planData, projectRoot) {
+  // After setup-solution runs, the planned-vs-existing distinction the
+  // renderer surfaces (Overview stat + Size Analysis signal + Env Variables
+  // tab) needs to flip:
+  //   - plannedEnvVarCount → 0 (the planned set was either created or skipped)
+  //   - planData.envVars[]  → the freshly-created/adopted definitions
+  // setup-solution Phase 6 step 2b writes .last-env-vars.json by running
+  // discover-env-var-definitions.js with post-setup state — we ingest that
+  // sidecar here. Without this, the rendered plan's Env Variables tab stays
+  // empty even though setup-solution just created definitions in Dataverse,
+  // and the Overview stat card stays at "0 / +N planned" forever.
+  if (typeof planData.plannedEnvVarCount === 'number' && planData.plannedEnvVarCount > 0) {
+    planData.plannedEnvVarCount = 0;
+  }
+  const envVarsMarker = projectRoot ? readJson(path.join(projectRoot, '.last-env-vars.json')) : null;
+  if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
+    // Discovery returns the same { schemaName, type, defaultValue, siteSetting }
+    // shape the renderer expects — pass through verbatim. Empty array is a
+    // valid post-state: setup-solution may have skipped all env vars (Tier 1
+    // Skip-all + no Tier 2 promotions), in which case the tab should reflect
+    // the empty existing state instead of carrying stale planned counts.
+    planData.envVars = envVarsMarker.envVars;
+  }
+  return planData;
+}
+
+// Manual-path passthrough refreshes. The agent updates planData.steps[i].status
+// before calling these phases, so the main work each handler does is trigger
+// the re-render. Each may grow to ingest a per-stage marker file (e.g.
+// .last-import.json keyed by target stage) in a future iteration.
+
+function refreshExportSolution(planData) {
+  // export-solution writes the solution zip to disk + a .solution-manifest.json
+  // version bump. No structured marker file today — re-rendering picks up
+  // the agent's step.status updates. If a future commit introduces
+  // .last-export.json (zipPath / exportedAt / version / managed flag), expand
+  // this handler to populate planData.manualMeta.lastExport from it.
+  return planData;
+}
+
+function refreshImportSolution(planData, projectRoot, stageName) {
+  // import-solution writes .last-import.json with { solutionName,
+  // targetEnvironment, importedAt, status, componentResults }. For Manual
+  // path with multiple targets, the file reflects the MOST RECENT import —
+  // not a per-stage history. We resolve the stage label from --stageName
+  // (passed by plan-alm Phase 7's per-target loop) or by matching
+  // .last-import.json's targetEnvironment URL against planData.stages[].envUrl.
+  // The result writes into planData.manualImports[stageName] (parallel to
+  // validationRuns[stageName]) so reviewers see per-target outcome on the
+  // rendered plan, not just the most recent.
+  const importMarker = readJson(path.join(projectRoot, '.last-import.json'));
+  if (!importMarker) return planData;
+
+  // Resolve the target stage label: explicit --stageName wins; fall back to
+  // matching the marker's targetEnvironment URL origin against the plan's
+  // stages array. If neither resolves, log a soft note via stderr but still
+  // capture the data under a synthetic key so the import isn't silently lost.
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && importMarker.targetEnvironment && Array.isArray(planData.stages)) {
+    const matchOrigin = (u) => {
+      try { return new URL(u).origin.toLowerCase(); } catch { return null; }
+    };
+    const targetOrigin = matchOrigin(importMarker.targetEnvironment);
+    if (targetOrigin) {
+      const hit = planData.stages.find((s) => matchOrigin(s.envUrl) === targetOrigin);
+      if (hit && hit.label) resolvedStage = hit.label;
+    }
+  }
+  if (!resolvedStage) {
+    // Defensive — write to a synthetic key so subsequent imports for resolvable
+    // stages don't clobber it. Caller should pass --stageName explicitly.
+    resolvedStage = `unresolved-${importMarker.targetEnvironment || 'unknown'}`;
+  }
+
+  planData.manualImports = planData.manualImports || {};
+  planData.manualImports[resolvedStage] = {
+    solutionName: importMarker.solutionName || null,
+    targetEnvironment: importMarker.targetEnvironment || null,
+    importedAt: importMarker.importedAt || null,
+    status: importMarker.status || null,
+    artifactVersion: importMarker.artifactVersion || importMarker.version || null,
+    componentCount: importMarker.componentCount != null ? importMarker.componentCount
+      : (Array.isArray(importMarker.componentResults) ? importMarker.componentResults.length : null),
+    componentFailureCount: Array.isArray(importMarker.componentResults)
+      ? importMarker.componentResults.filter((c) => c && c.status && /fail/i.test(c.status)).length
+      : null,
+    importJobId: importMarker.importJobId || null,
+  };
+  return planData;
+}
+
+function refreshActivateSite(planData, projectRoot, stageName) {
+  // activate-site Phase 5.1b writes .last-activate.json with the post-activation
+  // state (siteUrl, websiteRecordId, environmentUrl, activatedAt, status). We
+  // ingest it into planData.activations[stageName] (parallel to validationRuns
+  // and manualImports) so the Manual-path "Activate site in {stage}" checklist
+  // step can render an ACTIVATED badge with the live site URL inline.
+  //
+  // Stage resolution: explicit --stageName wins; falls back to URL matching
+  // .last-activate.json's environmentUrl against planData.stages[].envUrl when
+  // omitted. PP Pipelines path tracks activation in .last-deploy.json instead
+  // (refreshDeployPipeline ingests it); the Manual-path standalone case is
+  // what this handler covers.
+  const marker = projectRoot ? readJson(path.join(projectRoot, '.last-activate.json')) : null;
+  if (!marker) return planData;
+
+  let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
+  if (!resolvedStage && marker.stageName) resolvedStage = marker.stageName;
+  if (!resolvedStage && marker.environmentUrl && Array.isArray(planData.stages)) {
+    const matchOrigin = (u) => {
+      try { return new URL(u).origin.toLowerCase(); } catch { return null; }
+    };
+    const targetOrigin = matchOrigin(marker.environmentUrl);
+    if (targetOrigin) {
+      const hit = planData.stages.find((s) => matchOrigin(s.envUrl) === targetOrigin);
+      if (hit && hit.label) resolvedStage = hit.label;
+    }
+  }
+  if (!resolvedStage) {
+    resolvedStage = `unresolved-${marker.environmentUrl || 'unknown'}`;
+  }
+
+  planData.activations = planData.activations || {};
+  planData.activations[resolvedStage] = {
+    siteName: marker.siteName || null,
+    siteUrl: marker.siteUrl || null,
+    websiteRecordId: marker.websiteRecordId || null,
+    environmentUrl: marker.environmentUrl || null,
+    activatedAt: marker.activatedAt || null,
+    status: marker.status || null,
+  };
   return planData;
 }
 
 function applyRefresh(planData, phase, projectRoot, stageName) {
   switch (phase) {
-    case 'setup-solution':  return refreshSetupSolution(planData);
+    case 'setup-solution':  return refreshSetupSolution(planData, projectRoot);
     case 'setup-pipeline':  return refreshSetupPipeline(planData, projectRoot);
     case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
+    case 'export-solution': return refreshExportSolution(planData);
+    case 'import-solution': return refreshImportSolution(planData, projectRoot, stageName);
+    case 'activate-site':   return refreshActivateSite(planData, projectRoot, stageName);
     case 'test-site':       return refreshTestSite(planData, projectRoot, stageName);
     case 'finalize':        return refreshFinalize(planData);
     default: throw new Error('Unknown phase: ' + phase);

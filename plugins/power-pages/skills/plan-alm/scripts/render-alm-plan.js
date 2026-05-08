@@ -17,6 +17,7 @@
 const path = require('path');
 const fs = require('fs');
 const { parseArgs } = require('../../../scripts/lib/render-template');
+const { DEFAULTS: ALM_THRESHOLDS } = require('../../../scripts/lib/alm-thresholds');
 
 const args = parseArgs(process.argv);
 
@@ -56,11 +57,11 @@ const tierColor = { green: 'var(--pass)', yellow: 'var(--high)', red: 'var(--cri
 const strategyLabel = data.STRATEGY === 'pp-pipelines' ? 'Power Platform Pipelines' : 'Manual Export / Import';
 const proposedSolutions = Array.isArray(data.proposedSolutions) ? data.proposedSolutions : [];
 const envVars = Array.isArray(data.envVars) ? data.envVars : [];
+const plannedEnvVarCount = Number.isFinite(data.plannedEnvVarCount) ? Math.max(0, Math.trunc(data.plannedEnvVarCount)) : 0;
 const sizeAnalysis = data.sizeAnalysis || null;
 const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
 const breakdown = data.breakdown || {};
 
-const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 // Three-number semantics when the estimator ran with --solutionId:
 //   componentCountSiteTotal      — RAW Dataverse rows on the site. What the
 //                                  Maker UI would show if the entire site
@@ -70,16 +71,32 @@ const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 //   orphansOnSite                — ppcs on the site that aren't in the solution,
 //                                  excluding stale bundle chunks.
 // For the headline "X components" we prefer inSolution when present (that's
-// what the pipeline ships). Fall back to siteTotal or the legacy
-// sizeAnalysis.componentCount value when the estimator ran without a solution
-// context.
+// what the pipeline ships). Fall back to siteTotal, the legacy
+// sizeAnalysis.componentCount value, and finally the proposedSolutions
+// aggregate when the estimator ran without a solution context — that last
+// fallback prevents the Overview tab from showing 0 components when the
+// Solutions tab already has accurate per-solution counts.
 const fallbackComponentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+const proposedComponentCount = proposedSolutions.reduce((sum, s) => sum + Number(s?.componentCount || 0), 0);
 const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? fallbackComponentCount);
 const componentCountInSolution = (data.componentCountInSolution == null) ? null : Number(data.componentCountInSolution);
 const orphansOnSite = (data.orphansOnSite == null) ? null : Number(data.orphansOnSite);
 const hasSolutionMembershipBreakout = componentCountInSolution !== null;
-const componentCount = hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal;
-const SIZE_LIMIT_MB = 95;
+// Pick the first non-zero source. proposedSolutions is the last-ditch fallback —
+// it holds the SPLIT_PLAN's count which compute-split-plan.js calculates from a
+// different code path than estimate-solution-size.js, so it can be populated
+// even when the estimator's componentCount returned 0.
+const componentCount = (
+  (hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal)
+  || proposedComponentCount
+);
+// Same fallback chain for total size — Overview MB stat is wrong if we trust 0 from
+// sizeAnalysis when proposedSolutions has a non-zero aggregate.
+const proposedTotalSizeMB = proposedSolutions.reduce((sum, s) => sum + Number(s?.sizeMB || 0), 0);
+const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0) || proposedTotalSizeMB;
+// Threshold pulled from the central source so a future bump in alm-thresholds.js
+// flows through here without an additional code edit.
+const SIZE_LIMIT_MB = ALM_THRESHOLDS.maxSolutionSizeMB;
 const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
 const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
 const sizeColor = tierColor[sizeTier];
@@ -150,7 +167,7 @@ function buildRisksHtml() {
 function buildStrategyRationale() {
   const strat = data.splitStrategy || 'single';
   const map = {
-    'single': 'All components packaged in a single managed solution. Estimated size is within the recommended 95 MB cap and component count is within tested bounds. One pipeline, one approval chain.',
+    'single': `All components packaged in a single managed solution. Estimated size is within the ${ALM_THRESHOLDS.maxSolutionSizeMB} MB split-decision threshold (platform hard cap is 95 MB) and component count is within tested bounds. One pipeline, one approval chain.`,
     'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.',
     'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. Each solution has its own pipeline so low-churn layers don\'t re-import when content changes.',
     'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
@@ -222,22 +239,33 @@ function buildSizeGauge() {
 
 function buildSignalCards() {
   if (!sizeAnalysis) return '<div class="note-box neutral">Size analysis unavailable.</div>';
+  // Thresholds align with alm-thresholds.js DEFAULTS — bumped tighter than the
+  // platform hard caps (95 MB / 6000 components) to reserve growth headroom.
   const signals = [
-    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 95 MB' },
-    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 6,000' },
-    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 15,000' },
-    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 20' },
-    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 40 MB' },
-    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 500' },
+    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxSolutionSizeMB} MB` },
+    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxComponentCount.toLocaleString()}` },
+    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxSchemaAttrs.toLocaleString()}` },
+    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxTableCount}` },
+    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxAggregateWebFilesMB} MB` },
+    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxEnvVarCount}` },
   ];
   return signals.map((s) => {
     const a = sizeAnalysis[s.key];
     if (!a) return '';
     const tier = a.tier || 'unknown';
     const color = tierColor[tier];
+    // Env Vars signal shows existing-vs-planned dual count when applicable —
+    // a fresh project (envVarCount.value === 0) with K planned should not
+    // appear empty in the Size Analysis tab.
+    let valueDisplay;
+    if (s.key === 'envVarCount') {
+      valueDisplay = escapeHtml(envVarStatDisplay());
+    } else {
+      valueDisplay = s.fmt(a.value || 0);
+    }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
-  <div class="signal-value" style="color:${color};">${s.fmt(a.value || 0)}</div>
+  <div class="signal-value" style="color:${color};">${valueDisplay}</div>
   <div class="signal-footer">
     <span class="tier tier-${tier}">${tier}</span>
     <span>${s.threshold}</span>
@@ -283,7 +311,7 @@ function buildAdvisoryHtml() {
   }
   const candidates = assetAdvisory.candidates || [];
   if (candidates.length === 0) {
-    return '<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (2 MB) or excluded by patterns.</div></div>';
+    return `<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (${ALM_THRESHOLDS.maxSingleFileMB} MB) or excluded by patterns.</div></div>`;
   }
   let html = '';
   if (assetAdvisory.recommendation === 'externalize-media') {
@@ -312,37 +340,74 @@ function envVarSummaryCount() {
   return Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0;
 }
 
+// Existing env var definitions found on the live env (envVars[] populated by
+// discover-env-var-definitions.js, with size-estimator count as fallback).
+function envVarExistingCount() {
+  return envVars.length || envVarSummaryCount();
+}
+
+// "N today / +M planned" or "N today" depending on which counts are populated.
+// The dual-count display is critical for fresh projects — the renderer was
+// previously showing 0 even when the risks list said "K auth settings will be
+// promoted to env vars", which read as a bug. Showing both counts keeps the
+// stat card and the risks list internally consistent.
+function envVarStatDisplay() {
+  const existing = envVarExistingCount();
+  const planned = plannedEnvVarCount;
+  if (existing === 0 && planned > 0) return `0 / +${planned} planned`;
+  if (existing > 0 && planned > 0) return `${existing} / +${planned} planned`;
+  return String(existing);
+}
+
 function buildEnvVarsHtml() {
-  if (envVars.length === 0) {
+  const existing = envVars.length;
+  const planned = plannedEnvVarCount;
+
+  // Empty state: neither existing nor planned env vars.
+  if (existing === 0 && planned === 0) {
     const summaryCount = envVarSummaryCount();
     if (summaryCount > 0) {
-      // Count-only path: the size estimator found env var definitions but the
-      // gathering phase did not enumerate per-variable metadata into envVars[].
-      // Show a count-aware info note so this tab agrees with the Overview
-      // stat, the size analysis signal, and the "(N detected)" warning.
+      // The size estimator found definitions but envVars[] wasn't enumerated
+      // (publisher prefix or token unavailable during plan-alm Step 10b).
       const noun = summaryCount === 1 ? 'definition' : 'definitions';
       return `<div class="note-box info">${summaryCount} environment variable ${noun} detected. Per-variable details (schema name, type, bound site setting) will be reviewed during <code>setup-solution</code> / <code>configure-env-variables</code>, and per-stage values will be collected before <code>deploy-pipeline</code>.</div>`;
     }
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
-  const envNames = Object.keys(envVars[0]?.values || {});
-  const tableHeader = envNames.length > 0
-    ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
-    : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
-  const rows = envVars.map((ev) => {
-    const valueCells = envNames.length > 0
-      ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
-      : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
-    return `<tr>
+
+  // Build optional sections: existing table + planned summary. Both can render
+  // together when the project has some env vars already and more are planned.
+  const sections = [];
+
+  if (existing > 0) {
+    const envNames = Object.keys(envVars[0]?.values || {});
+    const tableHeader = envNames.length > 0
+      ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
+      : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
+    const rows = envVars.map((ev) => {
+      const valueCells = envNames.length > 0
+        ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
+        : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
+      return `<tr>
   <td class="env-name">${escapeHtml(ev.schemaName)}</td>
   <td>${escapeHtml(ev.type || 'String')}</td>
   <td><code>${escapeHtml(ev.siteSetting || '—')}</code></td>
   ${valueCells}
 </tr>`;
-  }).join('\n');
-  return `<div class="card" style="padding:0;overflow-x:auto;">
+    }).join('\n');
+    sections.push(`<h3 style="margin:8px 0 12px 0;font-size:14px;">Existing environment variables (${existing})</h3>
+<div class="card" style="padding:0;overflow-x:auto;">
   <table class="env-table">${tableHeader}<tbody>${rows}</tbody></table>
-</div>`;
+</div>`);
+  }
+
+  if (planned > 0) {
+    const noun = planned === 1 ? 'environment variable' : 'environment variables';
+    sections.push(`<h3 style="margin:${existing > 0 ? '20px' : '8px'} 0 12px 0;font-size:14px;">Planned ${noun} (${planned})</h3>
+<div class="note-box info">setup-solution will offer to create up to ${planned} ${noun} from the auth-related and credential-style site settings detected on the live site. You'll choose per setting whether to back it with a Secret-typed env var (Key Vault per stage), a String-typed env var (plain text per stage), or skip. Per-variable details (schema name, type, bound site setting) become visible here once setup-solution finishes.</div>`);
+  }
+
+  return sections.join('\n');
 }
 
 function buildSolutionsTabTitle() { return proposedSolutions.length > 1 ? `Solutions (${proposedSolutions.length})` : 'Solution'; }
@@ -888,16 +953,19 @@ function buildHostCardHtml(d) {
       // "will provision new", so the rendered plan agrees with what
       // ensure-pipelines-host will actually do at execution time.
       if (hr.willProvisionPlatform === true) {
-        note = 'Will provision the Platform Host via <code>getOrCreate</code> (idempotent, no admin role required, ~3&ndash;5 min).';
+        // Keep the user-facing description free of API names and admin-role disclaimers —
+        // those are implementation details. The pre-call confirmation gate in
+        // ensure-pipelines-host Phase 4.0 echoes the tenant identity before firing.
+        note = 'Will provision a new Platform Host (idempotent, ~3&ndash;5 min). Plan execution will pause for a tenant-identity confirmation gate before the call.';
       } else if (hr.chosenEnvUrl) {
         note = 'Will install Pipelines app on existing env <code>' + escapeHtml(hr.chosenEnvUrl) + '</code>.';
       } else if (hr.willUsePpac === true) {
         note = 'Will create new Custom Host via PPAC manual flow (admin opens <code>https://admin.powerplatform.microsoft.com/deployments</code> &#8594; <em>New custom host</em>).';
       } else if (hr.willProvisionCustom === true) {
-        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
       } else {
         // Fallback for older planData that did not capture the choice.
-        note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
       }
     } else {
       note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
@@ -958,6 +1026,15 @@ function buildChecklistHtml() {
   const steps = Array.isArray(data.steps) ? data.steps : [];
   if (steps.length === 0) return '<div class="note-box neutral">Execution steps will be populated after approval.</div>';
   const runs = (data.validationRuns && typeof data.validationRuns === 'object') ? data.validationRuns : {};
+  // Manual-path per-target import outcomes — keyed by target stage label,
+  // populated by refresh-alm-plan-data's import-solution phase. Parallel to
+  // validationRuns; surfaced as a substep on the matching "Import to {stage}"
+  // checklist step.
+  const imports = (data.manualImports && typeof data.manualImports === 'object') ? data.manualImports : {};
+  // Manual-path activation outcomes — keyed by target stage label, populated
+  // by refresh-alm-plan-data's activate-site phase. Surfaced as an ACTIVATED
+  // substep on the matching "Activate site in {stage}" checklist step.
+  const activations = (data.activations && typeof data.activations === 'object') ? data.activations : {};
 
   // Match "Test site in {stageName}" entries to their captured validationRun.
   // Also enrich every "<verb> in {stageName}" step with a stage-env subline so
@@ -1017,7 +1094,69 @@ function buildChecklistHtml() {
       }
     }
 
-    // Env-name subline: for any stage-bound step (Deploy / Activate / Test),
+    // Activate-step substep: surface per-target activation outcome when
+    // planData.activations[stageName] is populated. Same visual idiom as the
+    // test-site validation substep + import substep below. Detection: step
+    // name starts with "Activate site in " (plan-alm Phase 3 schema). Works
+    // for both PP and Manual paths — PP path's activation flows through
+    // .last-deploy.json and refreshDeployPipeline, but the Manual-path
+    // standalone activate-site invocation is what surfaces here.
+    const isActivateStep = /^activate\s+site\s+in\s+/i.test(name);
+    let activateLine = '';
+    if (isActivateStep && stageName) {
+      const act = activations[stageName] || null;
+      if (act && typeof act === 'object') {
+        const status = String(act.status || '').toLowerCase();
+        const failed = /fail/i.test(status);
+        const alreadyActivated = status === 'alreadyactivated' || status === 'already-activated';
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : (alreadyActivated ? 'ALREADY LIVE' : 'ACTIVATED');
+        const urlMarkup = act.siteUrl
+          ? `<a href="${escapeHtml(act.siteUrl)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;"><code>${escapeHtml(act.siteUrl)}</code></a>`
+          : '&mdash;';
+        activateLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${urlMarkup}</span>
+  </li>
+</div>`;
+        if (s === 'completed' && failed) s = 'warning';
+      }
+    }
+
+    // Manual-path Import-step substep: surface per-target import outcome
+    // when planData.manualImports[stageName] is populated. Same visual idiom
+    // as the test-site validation substep above. Detection mirrors the
+    // plan-alm Phase 3 step name "Import to {stageName}".
+    const isImportStep = /^import\s+to\s+/i.test(name);
+    let importLine = '';
+    if (isImportStep && stageName) {
+      const imp = imports[stageName] || null;
+      if (imp && typeof imp === 'object') {
+        const status = String(imp.status || '').toLowerCase();
+        const failed = (imp.componentFailureCount && imp.componentFailureCount > 0) || /fail/i.test(status);
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : 'IMPORTED';
+        const versionStr = imp.artifactVersion ? `v${escapeHtml(imp.artifactVersion)}` : '';
+        const componentsStr = imp.componentCount != null
+          ? `${Number(imp.componentCount).toLocaleString()} components`
+          : '';
+        const failedStr = (imp.componentFailureCount && imp.componentFailureCount > 0)
+          ? ` &middot; <span style="color:var(--critical);">${Number(imp.componentFailureCount)} failed</span>`
+          : '';
+        const detailParts = [versionStr, componentsStr].filter(Boolean).join(' &middot; ') + failedStr;
+        importLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${detailParts || '&mdash;'}</span>
+  </li>
+</div>`;
+        // Promote completed → warning when import had component failures.
+        if (s === 'completed' && failed) s = 'warning';
+      }
+    }
+
+    // Env-name subline: for any stage-bound step (Deploy / Import / Activate / Test),
     // show the target env URL beneath the step name. Plays well with the
     // existing checklist-substep-list styling.
     let envLine = '';
@@ -1042,7 +1181,7 @@ function buildChecklistHtml() {
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
   <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
-</div>${envLine}${validationLine}`;
+</div>${envLine}${activateLine}${importLine}${validationLine}`;
   }).join('\n');
 }
 
@@ -1057,7 +1196,7 @@ const replacements = {
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
-  STAT_ENVVARS: String(envVars.length || envVarSummaryCount() || 0),
+  STAT_ENVVARS: envVarStatDisplay(),
   STAT_SIZE: totalSizeMB.toFixed(1),
   STAT_SIZE_COLOR: sizeColor,
   STAT_SOLUTIONS: String(proposedSolutions.length || 1),

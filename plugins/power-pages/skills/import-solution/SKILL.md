@@ -7,7 +7,7 @@ description: >-
   "deploy to staging", "deploy to production", or "install site in new environment".
 user-invocable: true
 argument-hint: "Optional: path to solution zip file"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -103,6 +103,17 @@ Steps:
 > **Important**: Confirm the target environment with the user — importing to the wrong environment can be disruptive.
 
 If any check fails, stop (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages solution import staging missing dependencies ImportSolutionAsync ALM`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on staged imports or dependency handling) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about staging vs direct import, dependency resolution, and component-level error handling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ImportSolutionAsync` / `StageSolution` signatures.
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (the actual import).
 
 ### Phase 2 — Locate Solution File
 
@@ -402,6 +413,20 @@ Display a summary table:
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ImportSolution"`.
+
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase import-solution \
+  --stageName "{targetLabel}" \
+  --render
+```
+
+`{targetLabel}` is the Manual-path target stage (e.g. `Staging`, `Production`) the just-completed import was for — usually carried in by the orchestrator (plan-alm Phase 7) or derivable from the target env URL. The helper reads `.last-import.json`, captures the import outcome (status, version, component count, component failures) into `planData.manualImports[targetLabel]`, and re-renders `docs/alm-plan.html` so the matching `Import to {targetLabel}` checklist step shows an `IMPORTED` / `FAILED` badge with version + component count inline. Subsequent imports to OTHER targets each get their own entry — the renderer surfaces a per-target history rather than overwriting on each call.
+
+If `--stageName` is omitted the helper falls back to matching `.last-import.json`'s `targetEnvironment` URL against `planData.stages[].envUrl`. When the match fails (rare — usually a stage-label/env-URL mismatch in planData), the import is captured under a synthetic key so it isn't silently lost; pass `--stageName` explicitly to keep the rendered plan clean. When `docs/.alm-plan-data.json` is absent, the helper returns `ok:false` as a soft no-op.
 
 ## Key Decision Points (Wait for User)
 

@@ -10,7 +10,7 @@ description: >-
   "promote solution", "push to staging", "push to production".
 user-invocable: true
 argument-hint: "Optional: stage name or environment label (e.g. 'staging', 'production') to skip stage selection"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
 ---
 
@@ -139,6 +139,17 @@ Steps:
 5. If `solutionManifest` is available, read `solutionManifest.solution.solutionId` and `solutionManifest.solution.uniqueName` from the detected context. Otherwise, use `solutionName` from `.last-pipeline.json`.
 
 6. Report: "Pipeline: `{pipelineName}`. Solution: `{solutionName}`. Available stages: `{stage names}`."
+
+### Phase 1.5 — Ground in current Pipelines deployment documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines stage run validation ValidatePackageAsync DeployPackageAsync approval`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on stage runs, validation, or approval gates) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about stage-run lifecycle, validation outcomes, approval-gate workflow, and `deploymentsettingsjson` overrides. Compare against `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new status codes, changed `stagerunstatus` terminal values, new approval-gate API).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (Create Stage Run + Validate Package).
 
 ### Phase 2 — Select Target Stage
 
@@ -595,13 +606,24 @@ git commit -m "Deploy {solutionUniqueName} v{artifactVersion} to {stageName} ({s
 
 If git is not initialized in the project root (i.e., `git rev-parse --git-dir` fails), skip the commit silently.
 
-**7.5 Run skill tracking silently:**
+**7.5 Record skill usage:**
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeployPipeline"`.
+
+**7.5b Refresh the ALM plan (if one exists):**
+
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
-  --skillName "DeployPipeline" \
-  --authoringTool "ClaudeCode"
+  --phase deploy-pipeline \
+  --render
 ```
+
+The helper reads the `.last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+This step is what makes the rendered plan stay current after a direct `/power-pages:deploy-pipeline` invocation. plan-alm Phase 7 also runs the same refresh as belt-and-suspenders; running it twice is idempotent (same input → same output).
 
 **7.6 Present summary:**
 

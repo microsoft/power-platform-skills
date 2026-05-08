@@ -6,6 +6,19 @@ const path = require('path');
 
 const { loadConfig, classifyTier, DEFAULTS, deepMerge } = require('../lib/alm-thresholds');
 
+test('DEFAULTS reserve growth headroom under platform hard caps', () => {
+  // Split-decision thresholds are intentionally tighter than the platform
+  // hard caps (95 MB / 6000 components). Recommending a split here leaves
+  // room for solutions to grow before the platform refuses an import.
+  // Bumped down on 2026-05-08 (IronItOut release-readiness pass) to give
+  // ~20 MB / ~2000-component headroom in each split child.
+  assert.equal(DEFAULTS.maxSolutionSizeMB, 75);
+  assert.equal(DEFAULTS.warnComponentCount, 2500);
+  assert.equal(DEFAULTS.maxComponentCount, 4000);
+  // Hard-flag stays at platform cap — anything past this is unrecoverable.
+  assert.equal(DEFAULTS.hardFlagComponentCount, 10000);
+});
+
 test('classifyTier returns green/yellow/red based on bounds', () => {
   assert.equal(classifyTier(10, 20, 50), 'green');
   assert.equal(classifyTier(30, 20, 50), 'yellow');
