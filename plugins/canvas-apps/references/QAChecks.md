@@ -68,7 +68,36 @@ natural size and is centered.
 
 ---
 
-## Check 3 — SCROLL-TRAP (`FillPortions: =1` inside scroll container)
+## Check 3 — FILLPORTIONS-DEFAULT (missing `FillPortions` on AutoLayout child)
+
+**Problem:** Children of an AutoLayout container inherit a PA-chosen default for
+`FillPortions` that varies by control type, so the intent isn't clear.
+
+**Detect:** For every control whose parent has a `LayoutDirection` property
+(i.e., it is an AutoLayout child), check whether `FillPortions` is explicitly
+set in `Properties:`. Flag any that are missing.
+
+**Fix:** Add `FillPortions` explicitly:
+
+- `FillPortions: =0` — the child keeps a constant size (its `Height` or `Width`
+  is set explicitly).
+- `FillPortions: =1` — the child proportionally fills the remaining available
+  space in the container.
+
+```yaml
+# Fixed size child:
+FillPortions: =0
+
+# Proportional fill child:
+FillPortions: =1
+```
+
+**Exception:** None. Always set `FillPortions` on every AutoLayout child so the
+layout intent is explicit.
+
+---
+
+## Check 4 — SCROLL-TRAP (`FillPortions: =1` inside scroll container)
 
 **Problem:** When a container has `LayoutOverflowY: =LayoutOverflow.Scroll` and
 its direct child has `FillPortions: =1`, the child is pinned to the viewport
@@ -89,7 +118,7 @@ FillPortions: =0
 
 ---
 
-## Check 4 — WRAP-MISSING (single-line label without `Wrap: =false`)
+## Check 5 — WRAP-MISSING (single-line label without `Wrap: =false`)
 
 **Problem:** Power Apps defaults `Wrap` to `true` on `Label` controls. A narrow
 nav item, breadcrumb, badge, or KPI value will wrap its text onto two lines and
@@ -119,7 +148,7 @@ comment text. These should keep the default wrapping behavior.
 
 ---
 
-## Check 5 — NO-HEIGHT-TRAP (`FillPortions: =0` without explicit `Height`)
+## Check 6 — NO-HEIGHT-TRAP (`FillPortions: =0` without explicit `Height`)
 
 **Problem:** When an AutoLayout child has `FillPortions: =0` (or `FillPortions`
 is absent, which defaults to 0) and no explicit `Height`, Power Apps defaults
@@ -151,7 +180,7 @@ proportionally and `Height` should be absent.
 
 ---
 
-## Check 6 — TEXT-PADDING (ModernText, Label padding defaults to 5)
+## Check 7 — TEXT-PADDING (ModernText, Label padding defaults to 5)
 
 **Problem:** `ModernText` and `Label` controls default `PaddingTop`, `PaddingBottom`,
 `PaddingLeft`, and `PaddingRight` to `5`. In most UI contexts (labels in a
@@ -182,7 +211,7 @@ PA default of 5 cannot creep in.
 
 ---
 
-## Check 7 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
+## Check 8 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
 `Height: =value` on the same control within a vertical AutoLayout container confuses the layout engine.
@@ -198,7 +227,7 @@ against the parent's available space.
 
 ---
 
-## Check 8 — FILLPORTIONS-WIDTH-CONFLICT (both set on the same control)
+## Check 9 — FILLPORTIONS-WIDTH-CONFLICT (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
 `Width: =value` on the same control within a horizontal AutoLayout container
@@ -215,7 +244,7 @@ against the parent's available space.
 
 ---
 
-## Check 9 — CONTROL-VERSION-SUFFIX (`Control:` value contains `@version`)
+## Check 10 — CONTROL-VERSION-SUFFIX (`Control:` value contains `@version`)
 
 **Detect:** For every `Control:` property, flag any value that contains an `@` character (e.g. `Control: Text@2.0.0`).
 
