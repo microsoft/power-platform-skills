@@ -36,6 +36,65 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
 
+### Additional prerequisites for the Git ALM skills
+
+The three Git inner-loop skills — `/git-connect`, `/git-commit`, `/git-pull` — wrap the
+`pac pages git` sub-noun, which is gated behind a PAC CLI feature flag. They have a few
+prerequisites beyond the table above.
+
+#### 1. PAC CLI with the `verbPAPortalGit` feature flag
+
+The `pac pages git` sub-noun is currently behind the `verbPAPortalGit` feature flag and
+is not yet enabled in publicly released `Microsoft.PowerApps.CLI.Tool` builds. Each Git
+skill runs a Phase 1 probe (`pac pages git --help`) and exits cleanly with a prerequisite
+message if the sub-noun is missing — so it is safe to install the plugin without the flag,
+but those three skills will be inert until PAC CLI ships with the flag on.
+
+To check whether your PAC CLI has it:
+
+```bash
+pac pages git --help
+# If you see 'connect', 'commit', 'pull', 'status', 'disconnect' subcommands → ready.
+# If you see 'Unknown verb' or no 'git' under 'pac pages' → the flag is off.
+```
+
+When the next PAC CLI release ships with `verbPAPortalGit` on by default, this README will
+be updated with a minimum version pin. Until then, contact the Power Pages Pro Dev team
+internally for a build with the flag enabled.
+
+#### 2. `az login` (Azure CLI sign-in)
+
+The skills' OData verification helpers need an Azure CLI access token to call Dataverse.
+
+```bash
+az login
+```
+
+If your account does not have an Azure subscription (common for guest accounts or
+tenant-only Power Platform users), use:
+
+```bash
+az login --allow-no-subscriptions
+```
+
+> **Note:** `--allow-no-subscriptions` is a `login` flag only — do **not** pass it to
+> `az account get-access-token`. The plugin's `getAuthToken()` helper handles the token
+> call correctly; you only need the flag at the `az login` step.
+
+#### 3. Managed Environments on the target Power Pages env
+
+Native Git for Power Pages is a Managed Environments feature. The target env must have
+Managed Environments turned on (Power Platform admin center → Environments → select the
+env → Edit Managed Environment). Without it, `pac pages git connect` returns a clean
+"Managed Environments required" error which the skill surfaces as a prerequisite block.
+
+#### 4. A Git repo + branch + folder
+
+Each skill connects a Power Pages site to a folder inside an existing branch of either an
+Azure DevOps or GitHub repo. The repo, branch, and folder must already exist (or be
+creatable by the connecting account). The folder path is relative to the repo root and
+uses forward slashes — e.g. `/sites/contoso-careers`.
+
 ## Skills
 
 The plugin provides 15 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
