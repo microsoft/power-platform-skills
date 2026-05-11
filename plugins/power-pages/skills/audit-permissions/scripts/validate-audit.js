@@ -6,28 +6,36 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
+const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-runValidation((cwd) => {
-  const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project — not an audit session
+async function main() {
+  return runValidation((cwd) => {
+    const projectRoot = findProjectRoot(cwd);
+    if (!projectRoot) approve(); // Not a Power Pages project — not an audit session
 
-  // Check if audit report was generated in docs/
-  const docsReport = path.join(projectRoot, 'docs', 'permissions-audit.html');
-  if (fs.existsSync(docsReport)) {
-    const content = fs.readFileSync(docsReport, 'utf8');
-    if (content.includes('__FINDINGS_DATA__') || content.includes('__INVENTORY_DATA__')) {
-      block('Audit report has unreplaced placeholders — data was not populated.');
+    // Check if audit report was generated in docs/
+    const docsReport = path.join(projectRoot, 'docs', 'permissions-audit.html');
+    if (fs.existsSync(docsReport)) {
+      const content = fs.readFileSync(docsReport, 'utf8');
+      if (content.includes('__FINDINGS_DATA__') || content.includes('__INVENTORY_DATA__')) {
+        block('Audit report has unreplaced placeholders — data was not populated.');
+      }
+      approve();
     }
-    approve();
-  }
 
-  // Check temp directory as fallback
-  const tempDir = process.env.TEMP || process.env.TMP || '/tmp';
-  const tempReport = path.join(tempDir, 'permissions-audit.html');
-  if (fs.existsSync(tempReport)) {
-    approve();
-  }
+    // Check temp directory as fallback
+    const tempDir = process.env.TEMP || process.env.TMP || '/tmp';
+    const tempReport = path.join(tempDir, 'permissions-audit.html');
+    if (fs.existsSync(tempReport)) {
+      approve();
+    }
 
-  // No report found — this may not be an audit session, so don't block
-  approve();
+    // No report found — this may not be an audit session, so don't block
+    approve();
+  });
+}
+
+runInstrumented('validate-audit-permissions', main).catch((err) => {
+  process.stderr.write(String((err && err.stack) || err) + '\n');
+  process.exit(1);
 });

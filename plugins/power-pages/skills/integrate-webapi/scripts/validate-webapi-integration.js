@@ -7,10 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 const { validatePowerPagesSchema } = require('../../../scripts/lib/powerpages-schema-validator');
+const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-runValidation((cwd) => {
-  const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project, skip
+async function main() {
+  return runValidation((cwd) => {
+    const projectRoot = findProjectRoot(cwd);
+    if (!projectRoot) approve(); // Not a Power Pages project, skip
 
   // Check if any Web API integration files exist — if none, this wasn't an integration session
   const apiClientExists = findApiClient(projectRoot);
@@ -49,11 +51,17 @@ runValidation((cwd) => {
     errors.push('Invalid Power Pages permissions/site-settings schema:\n  - ' + schemaErrors.join('\n  - '));
   }
 
-  if (errors.length > 0) {
-    block('Web API integration validation failed:\n- ' + errors.join('\n- '));
-  }
+    if (errors.length > 0) {
+      block('Web API integration validation failed:\n- ' + errors.join('\n- '));
+    }
 
-  approve();
+    approve();
+  });
+}
+
+runInstrumented('validate-integrate-webapi', main).catch((err) => {
+  process.stderr.write(String((err && err.stack) || err) + '\n');
+  process.exit(1);
 });
 
 function findApiClient(projectRoot) {
@@ -122,3 +130,12 @@ function findTypeFiles(projectRoot) {
 
   return files;
 }
+
+if (require.main === module) {
+  runInstrumented('validate-integrate-webapi', main).catch((err) => {
+    process.stderr.write(String((err && err.stack) || err) + '\n');
+    process.exit(1);
+  });
+}
+
+module.exports = { main };
