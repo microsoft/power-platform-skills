@@ -84,10 +84,15 @@ test('blocks when schemaVersion is unsupported', () => {
   assert.match(result.stderr, /unsupported schemaVersion: 99/);
 });
 
+function withoutField(obj, field) {
+  const copy = { ...obj };
+  delete copy[field];
+  return copy;
+}
+
 test('blocks when hostEnvUrl is missing', () => {
   const dir = makeTempDir();
-  const { hostEnvUrl, ...rest } = VALID_MARKER; // eslint-disable-line no-unused-vars
-  writeMarker(dir, rest);
+  writeMarker(dir, withoutField(VALID_MARKER, 'hostEnvUrl'));
   const result = runValidator(dir);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /hostEnvUrl/);
@@ -95,8 +100,7 @@ test('blocks when hostEnvUrl is missing', () => {
 
 test('blocks when deploymentEnvironmentId is missing', () => {
   const dir = makeTempDir();
-  const { deploymentEnvironmentId, ...rest } = VALID_MARKER; // eslint-disable-line no-unused-vars
-  writeMarker(dir, rest);
+  writeMarker(dir, withoutField(VALID_MARKER, 'deploymentEnvironmentId'));
   const result = runValidator(dir);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /deploymentEnvironmentId/);
@@ -104,8 +108,7 @@ test('blocks when deploymentEnvironmentId is missing', () => {
 
 test('blocks when forcedAt is missing', () => {
   const dir = makeTempDir();
-  const { forcedAt, ...rest } = VALID_MARKER; // eslint-disable-line no-unused-vars
-  writeMarker(dir, rest);
+  writeMarker(dir, withoutField(VALID_MARKER, 'forcedAt'));
   const result = runValidator(dir);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /forcedAt/);

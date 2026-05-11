@@ -142,8 +142,14 @@ async function forceLinkEnvironment({
   // Re-poll validationstatus until Succeeded or Failed. The action itself is
   // synchronous (204 = stamp move accepted) but the record's validation flag
   // re-runs asynchronously after the stamp moves.
+  //
+  // API version note: we use v9.0 here (not v9.1) because the entire Force
+  // Link flow — ManageEnvironmentStamp action + its post-action validation
+  // probe — was HAR-captured against v9.0 in the AppDeploymentConfiguration
+  // UI. Dataverse's OData surface is backwards-compatible across versions so
+  // mixing is functionally fine; we just keep this script aligned with what
+  // production actually ships.
   let validationStatus = null;
-  let lastErrorMessage = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await sleep(intervalMs);
 
@@ -169,7 +175,6 @@ async function forceLinkEnvironment({
     }
 
     validationStatus = pollData.validationstatus;
-    lastErrorMessage = pollData.errormessage || null;
 
     if (validationStatus === VALIDATION_STATUS_SUCCEEDED) {
       return {
@@ -180,8 +185,9 @@ async function forceLinkEnvironment({
       };
     }
     if (validationStatus === VALIDATION_STATUS_FAILED) {
+      const errMsg = pollData.errormessage || '(no error details)';
       throw new Error(
-        `Force Link succeeded (stamp moved) but post-link validation failed: ${lastErrorMessage || '(no error details)'}`,
+        `Force Link succeeded (stamp moved) but post-link validation failed: ${errMsg}`,
       );
     }
   }

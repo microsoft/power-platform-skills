@@ -196,7 +196,12 @@ Write `.last-force-link.json` in the project root:
 }
 ```
 
-`previousHostEnvUrl` is best-effort — populated when known from Phase 3's error message or `.last-host-check.json` history. Leave null if not derivable.
+`previousHostEnvUrl` is best-effort. Derive in this order; leave `null` if none of these yield a value:
+1. **From `.last-host-check.json`** (written by `ensure-pipelines-host`): if `finalHostEnvUrl` is set AND differs from the current `hostEnvUrl`, the discovery flow had already bound this env to that previous host — record it.
+2. **From Phase 3's errormessage**: scan the captured `errormessage` for the pattern `https?://[^\s'"]+\.(crm\d*\.dynamics\.com|dynamics-int\.com|crm\.microsoftdynamics\.us)` and pick the first match that is **not** the current `hostEnvUrl`. Microsoft's error wording on the "already associated" path sometimes includes the prior host's URL, sometimes only its display name; treat the regex as opportunistic, not authoritative.
+3. **Otherwise**: leave `null`. The marker schema permits this — validator does not require the field.
+
+Do NOT prompt the user to fill `previousHostEnvUrl`; it's informational only for the post-run summary.
 
 Present a summary table with:
 - Environment force-linked

@@ -292,10 +292,18 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
   --hostEnvUrl "{HOST_ENV_URL}" \
   --token "{HOST_TOKEN}" \
   --name "{siteName} {label}" \
-  --environmentUrl "{environmentUrl}"
+  --bapEnvId "{BAP_ENV_GUID}" \
+  --environmentType 200000000 \
+  [--environmentUrl "{environmentUrl}"]
 ```
+
+Required args (per `scripts/lib/create-deployment-environment.js`):
+- `--bapEnvId` — the **BAP environment GUID** for the env being added. Resolve via `pac env list` (column `Environment ID`) or `pac env who` for the current source env. NOT the org/Dataverse URL.
+- `--environmentType` — `200000000` for the dev/source env, `200000001` for each target env.
+- `--environmentUrl` is optional and only echoed back into the output marker; it is not posted to Dataverse.
+
 Capture stdout as JSON: `const envResult = JSON.parse(output)`.
-Store `envResult.deploymentEnvironmentId` as `SOURCE_DEPLOYMENT_ENV_ID` (for the dev source env) or append to `TARGET_DEPLOYMENT_ENV_IDs` (for each target).
+Store `envResult.deploymentEnvironmentId` as `SOURCE_DEPLOYMENT_ENV_ID` (for the dev source env) or append to `TARGET_DEPLOYMENT_ENV_IDs` (for each target). Also retain the `bapEnvId` value used for each call — Phase 5a's force-link auto-fix needs it if creation lands in a Failed state.
 
 > **Note**: The script POSTs to `deploymentenvironments` with `msdyn_name`, `msdyn_url`, and `msdyn_type`, extracts the GUID from the `OData-EntityId` header, then polls `msdyn_validationstatus` every 3 seconds (max 20 attempts) until status `192350001` (Succeeded) or `192350002` (Failed). On failure the script writes the error details to stderr and exits 1 — stop and report the error to the user.
 
@@ -303,13 +311,18 @@ On failure: stop with the error — deployment environment creation is mandatory
 
 #### 5a — Detect "already associated with another pipelines host" (Pattern 15)
 
-If the script's stderr contains any of these substrings, the BAP env is currently stamped to a different Pipelines host:
+If the script's stderr (case-insensitively) contains any of these substrings, the BAP env is currently stamped to a different Pipelines host:
 
 - `already associated with another pipelines host`
 - `associated with another pipelines host`
-- `Environment is already linked to a different host`
+- `environment is already linked to a different host`
+- `environment is already bound to`
+- `linked to another host`
+- `claimed by another host`
 
-This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the situation and the documented auto-fix to the user via `AskUserQuestion`:
+Match all of these case-insensitively (`String.prototype.toLowerCase()` before `.includes()`) so backend wording drift between Pipelines package versions doesn't silently break detection. If none match but the script exited with the underlying Dataverse error code `0x80048d18` (or a wrapped `errormessage` containing that hex code), treat it as the same pattern — that's the stable signal even when the message wording shifts.
+
+This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the raw `errormessage` to the user verbatim and offer the documented auto-fix via `AskUserQuestion`:
 
 ```
 question: "<envLabel> is already linked to a different Pipelines host. The /power-pages:force-link-environment skill can take over the association (DESTRUCTIVE to the previous host — makers there lose pipeline access for this env). Run it now?"
@@ -321,7 +334,8 @@ options:
 
 Important guardrails:
 - **Never invoke** `/power-pages:force-link-environment` without explicit user consent through this prompt — the action is reversible only by performing Force Link again from the previous host.
-- If the user picks "Run …", invoke `/power-pages:force-link-environment` with `--host <HOST_ENV_URL>` and `--dev-env <bapEnvId>` so the sub-skill skips its own host/env prompts. When that skill returns success, **re-run Phase 5 from the top for the failing environment** (the create script is idempotent — it will short-circuit via `findExistingByBapId` and resolve immediately).
+- If the user picks "Run …", invoke `/power-pages:force-link-environment` with `--host <HOST_ENV_URL>` and `--dev-env <bapEnvId>` (the BAP env GUID captured for this env in Phase 5 — see the "Also retain the `bapEnvId` value" note above) so the sub-skill skips its own host/env prompts.
+- When that sub-skill returns success, **re-attempt just the failing environment by re-running `create-deployment-environment.js` with the same args** — do NOT restart Phase 5 wholesale. The create script is idempotent: it short-circuits via `findExistingByBapId` for envs already created (they return `reused: true`), and the previously-failing env will now resolve to Succeeded because the host stamp has moved.
 - If the user picks "Cancel", stop the pipeline setup and recommend `/power-pages:ensure-pipelines-host detect-only` to inspect the current host bindings before retrying.
 
 For any other create-deployment-environment failure, fall through to the generic "stop with the error" path above.
