@@ -65,6 +65,16 @@ assume column names exist. Custom entities have unpredictable column names
 
 For **mock data pages:** Skip this step. Generate realistic sample data inline.
 
+## Step 2.5 — Read Verified Icon List (if provided)
+
+If your invocation prompt includes a `Verified icons` path, Read that file now and keep
+the list in context. In Step 5, before finalising any icon import, confirm the name
+appears in this list. If it does not, substitute the closest semantic alternative that
+does appear in the list.
+
+If no path was provided, skip this step and rely on the conservative guidance in
+genpage-rules-reference.md Rule 9.
+
 ## Step 3 — Read References and Samples
 
 Read the code generation rules reference:
@@ -79,8 +89,17 @@ Read the relevant sample file identified in the plan:
 ${CLAUDE_PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
-Use the sample as a structural reference — follow its patterns for component
-organization, DataAPI usage, and styling approach.
+If **Data mode** is `dataverse`, also read the data caching sample — regardless
+of whether it appears in the plan's Relevant Samples table:
+
+```
+${CLAUDE_PLUGIN_ROOT}/samples/9-data-caching.tsx
+```
+
+Use these samples as structural references — follow their patterns for component
+organization, DataAPI usage, and styling approach. For Dataverse pages, the
+caching sample is authoritative for data-fetching patterns (inline IIFE, cache
+guard, batched state).
 
 ## Step 4 — Create a Task
 

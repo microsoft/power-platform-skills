@@ -14,11 +14,13 @@ Comprehensive rules for generating generative page code. Read this file during c
 6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
 7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
-9. **Icons**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`)
+9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. If a `verified-icons.txt` path was provided in your invocation prompt, Read it and cross-check every icon import against that list before writing the final file. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
 11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
+14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render.
+15. **Data fetching — inline IIFE + cache guard (Dataverse pages)**: For all Dataverse pages, use the module-level window cache + inline async IIFE pattern from `9-data-caching.tsx`. Never use `useCallback` for data-fetching functions — when `dataApi` gets a new object reference after the initial render (which the platform does), a `useCallback` depending on `dataApi` recreates, the `useEffect` re-fires, and any `setData(loading: true)` call briefly resets the spinner, causing visible flicker. The cache guard (`if (cache.has(key)) return`) is the fix: if the effect re-fires for any reason and data is already loaded, it exits immediately without touching state. Pattern: `useEffect(() => { if (!dataApi || !recordId) return; if (cache.has(recordId)) return; (async () => { ... cache.set(recordId, data); setData({...data, loading: false}); })(); }, [dataApi, recordId]);`
 
 ---
 
@@ -382,9 +384,6 @@ Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction 
 ```typescript
 const xrm = (window as any).Xrm;
 
-// Entity record
-xrm.Navigation.navigateTo({ pageType: "entityrecord", entityName: "account", entityId: recordId });
-
 // Another generative page with record context (entityName and recordId arrive as props.pageInput)
 xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId });
 
@@ -394,6 +393,42 @@ xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, data: 
 // Combining record context with additional custom data
 xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId, data: { view: "summary" } });
 ```
+
+**CRITICAL — never use `pageType: "entityrecord"` or `pageType: "entitylist"` to navigate to another generative page.** Those open the standard OOB form/list, not the custom page. Always use `pageType: "generative"` with the target page's GUID.
+
+**Passing a record ID between pages:** Always put custom identifiers in `data`, not `recordId`. `recordId` is reserved for standard Dataverse record context (used by OOB forms/views); values placed there may not arrive reliably on the receiving genpage. Use `data: { accountId: selectedId }` and read it as `pageInput?.data?.accountId` on the target page. Never rely on `recordId` as the delivery channel for a custom ID.
+
+**Receiving navigation state:** On any page reachable via `navigateTo` (e.g., a detail page, or an explorer page the user navigates back to), initialize shared UI state — dark mode toggle, active filters, selected view — from `pageInput.data` first. URL params are a valid secondary source (e.g., for bookmarked URLs or direct links), but `pageInput.data` takes priority because `navigateTo` does not populate URL params. Pattern:
+
+```typescript
+// CORRECT — pageInput.data takes priority; URL param is a valid fallback
+const isDark =
+    pageInput?.data?.darkMode === true || pageInput?.data?.darkMode === "true"
+        ? true
+        : pageInput?.data?.darkMode === false || pageInput?.data?.darkMode === "false"
+        ? false
+        : new URLSearchParams(window.location.search).get("darkMode") === "true";
+const [isDarkMode, setIsDarkMode] = useState(isDark);
+```
+
+#### Multi-page builds: use `PAGEREF_` placeholders
+
+In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
+`PAGEREF_<filename-without-tsx>` placeholder as the `pageId` — the skill replaces
+these with real GUIDs in a second pass after all pages are deployed.
+
+```typescript
+// Navigating to a sibling page — use PAGEREF_ placeholder at build time
+xrm.Navigation.navigateTo({
+    pageType: "generative",
+    pageId: "PAGEREF_pet-gallery",    // replaced with real GUID post-deploy
+    entityName: "adopt_pet",
+    recordId: selectedId,
+});
+```
+
+The placeholder format is `PAGEREF_` followed by the sibling page's filename without
+`.tsx` (e.g., `pet-gallery.tsx` → `PAGEREF_pet-gallery`).
 
 ### Dark Mode Toggle
 
@@ -450,6 +485,27 @@ See [9-data-caching.tsx](../../samples/9-data-caching.tsx) for complete list-pag
 - D3 uses `group()` not `nest()`
 - Include tooltips, hover states, click behaviors
 - Smooth transitions (300-500ms)
+- **D3 animation guard (required):** The genpage runtime may re-evaluate modules or remount components, causing D3 transitions in `useEffect` to replay visibly. Any D3 animation (arc tweens, number counters, bar transitions, etc.) must use a `window`-level flag to ensure the animation runs only once. On subsequent effect invocations, draw the final state immediately. Also add an early-return guard if the SVG already contains rendered content. Pattern:
+  ```typescript
+  const ANIM_KEY = "__ppMyChartAnimated";
+  function MyChart(props: { value: number }) {
+      const svgRef = useRef<SVGSVGElement>(null);
+      useEffect(() => {
+          if (!svgRef.current) return;
+          const svg = d3.select(svgRef.current);
+          const w = window as any;
+          // Skip entirely if already drawn
+          if (w[ANIM_KEY] && svg.selectAll("path").size() > 0) return;
+          const shouldAnimate = !w[ANIM_KEY];
+          w[ANIM_KEY] = true;
+          svg.selectAll("*").remove();
+          // ... draw chart ...
+          if (shouldAnimate) { /* .transition().duration(800)... */ }
+          else { /* draw final state directly */ }
+      }, [props.value]);
+  }
+  ```
+  Use a unique `ANIM_KEY` per chart component (e.g., `"__ppScoreGaugeAnimated"`, `"__ppBarChartAnimated"`). Do NOT use `useRef` or module-level variables for the flag — neither survives runtime module re-evaluation.
 
 ### Image Generation
 - You CANNOT generate images or media files
@@ -519,6 +575,26 @@ const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedV
 - Enable column filtering when appropriate for user data exploration
 - Don't connect to Dataverse without explicit table registrations
 - Use mocked data if no data source provided
+- **Column sizing — always required:** Set `columnSizingOptions` with `defaultWidth` and `minWidth` for every column, and add `resizableColumns` to the `DataGrid`. Without explicit widths the browser distributes space unevenly and variable-length content bleeds into adjacent columns.
+- **Text overflow in cells:** For any cell that may contain variable-length text (URLs, email addresses, long names, descriptions), apply truncation to the inner element and `minWidth: 0` on the `TableCellLayout` so the cell can actually shrink. Add a `title` attribute for full-value tooltip on hover:
+
+```typescript
+// CORRECT — truncates long URLs without bleeding into the next column
+<TableCellLayout style={{ overflow: "hidden", minWidth: 0 }}>
+    <a
+        href={normalizedUrl}
+        title={url}          // full value visible on hover
+        style={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+        }}
+    >
+        {url}
+    </a>
+</TableCellLayout>
+```
 
 ---
 

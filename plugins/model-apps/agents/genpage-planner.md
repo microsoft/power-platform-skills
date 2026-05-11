@@ -224,6 +224,10 @@ ${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md
 Read that file before writing the plan. Every required section must be present with
 the exact heading. Page filenames in the `## Pages` table must be unique.
 
+For the `## Relevant Samples` section: any page that uses Dataverse entities must
+include `9-data-caching.tsx` as one of its samples. This is mandatory — do not
+omit it even if another sample is also assigned to the page.
+
 Mark the "Write plan document" task complete when done.
 
 ## Step 7 — Return Summary

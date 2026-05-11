@@ -163,6 +163,27 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
+### Phase 4.5: Build Verified Icon List
+
+Generate a `verified-icons.txt` file so page-builders can verify icon names at code-generation time.
+
+Try to locate the `@fluentui/react-icons` package using node. Try these approaches in order, stopping at the first that succeeds:
+
+**Option A — package already installed locally:**
+```bash
+node -e "const icons = Object.keys(require('@fluentui/react-icons')); require('fs').writeFileSync('<working-dir>/verified-icons.txt', icons.join('\n'));"
+```
+
+**Option B — install into a temp subfolder:**
+```bash
+npm install --prefix <working-dir>/.icon-check @fluentui/react-icons@2.0.292 --no-save --silent
+node -e "const icons = Object.keys(require('<working-dir>/.icon-check/node_modules/@fluentui/react-icons')); require('fs').writeFileSync('<working-dir>/verified-icons.txt', icons.join('\n'));"
+```
+
+If both fail (e.g., no network, no node), skip this phase — page-builders will fall back to conservative icon choices. Log the failure in the workflow log.
+
+Pass the path `<working-dir>/verified-icons.txt` to each page-builder in Phase 5 (only if the file was successfully created).
+
 ### Phase 5: Build Pages (Parallel)
 
 Read `genpage-plan.md` and extract the pages table.
@@ -200,6 +221,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
+> - Verified icons: [absolute path to verified-icons.txt, or omit line if file was not generated]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
@@ -212,6 +234,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
+> - Verified icons: [absolute path to verified-icons.txt, or omit line if file was not generated]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
@@ -254,6 +277,31 @@ pac model genpage upload `
   --model "<current-model-id>" `
   --agent-message "Description of what was built and any relevant details"
 ```
+
+### Phase 6.5: Navigation Fix-Up
+
+Page-builders write `PAGEREF_<filename-without-tsx>` as a placeholder wherever they
+navigate to a sibling generative page — because GUIDs don't exist until after first
+upload. This phase replaces all placeholders with the real GUIDs returned by Phase 6.
+
+**Why a second pass is required:** Pages are built in parallel before any GUIDs exist.
+The placeholders let code generation proceed correctly; this phase resolves them.
+
+1. Build a map of `filename-without-tsx → page-id` from the Phase 6 upload output:
+   ```
+   pet-gallery  → 3643e240-b589-4862-bf37-8347f388044b
+   pet-detail   → 8dab5cd4-c861-40a8-a970-291e4f047eb7
+   ...
+   ```
+
+2. For each `.tsx` file in the working directory, scan for any `"PAGEREF_<name>"` string.
+
+3. For each match, replace with the corresponding real GUID from the map.
+
+4. Re-upload only the files that had at least one replacement, using `--page-id`
+   (update, not create) and omitting `--add-to-sitemap`.
+
+Pages with no `PAGEREF_` strings need no second upload.
 
 ### Phase 7: Verify in Browser (Optional)
 
