@@ -12,17 +12,6 @@ function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-spawn-"));
 }
 
-function mkConsent(tmp, enabled) {
-  fs.writeFileSync(
-    path.join(tmp, "telemetry.json"),
-    JSON.stringify({
-      version: 1,
-      enabled,
-      recorded_at: new Date().toISOString(),
-    })
-  );
-}
-
 const sampleEvent = {
   name: "PowerPagesPluginEvent",
   data: {
@@ -45,7 +34,6 @@ test("fireAndForget returns synchronously (<100 ms)", () => {
 
 test("dispatcher child receives the event and writes the probe", async () => {
   const tmp = mkTmp();
-  mkConsent(tmp, true);
   const probe = path.join(tmp, "probe.json");
   // Bypass the repo kill switch so the dispatcher exercises its emit path.
   const prevBypass = process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH;

@@ -9,19 +9,8 @@ const { spawnSync } = require("node:child_process");
 
 const DISPATCHER = path.resolve(__dirname, "../lib/emit-dispatcher.js");
 
-function mkConsent(enabled) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disp-"));
-  if (enabled !== undefined) {
-    fs.writeFileSync(
-      path.join(tmp, "telemetry.json"),
-      JSON.stringify({
-        version: 1,
-        enabled,
-        recorded_at: new Date().toISOString(),
-      })
-    );
-  }
-  return tmp;
+function mkTmp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disp-"));
 }
 
 function runDispatcher({ event, env }) {
@@ -37,7 +26,7 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       // Bypass the repo-side kill switch by default so existing emission-path
       // tests work regardless of the shared ikey.json's `disabled` flag.
-      // The new "kill switch" test below intentionally omits this.
+      // The "kill switch" test below intentionally omits this.
       POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH:
         env.bypassKillSwitch === false ? "" : "1",
     },
@@ -56,7 +45,7 @@ const fakeEvent = {
 };
 
 test("dispatcher exits 0 when iKey is placeholder", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: { configDir: tmp, iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING", collectorUrl: "https://x" },
@@ -65,7 +54,7 @@ test("dispatcher exits 0 when iKey is placeholder", () => {
 });
 
 test("dispatcher exits 0 when collector URL missing", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "" },
@@ -73,17 +62,8 @@ test("dispatcher exits 0 when collector URL missing", () => {
   assert.equal(status, 0);
 });
 
-test("dispatcher exits 0 when consent disabled", () => {
-  const tmp = mkConsent(false);
-  const { status } = runDispatcher({
-    event: fakeEvent,
-    env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x" },
-  });
-  assert.equal(status, 0);
-});
-
-test("dispatcher proceeds when consent file is absent (default-on)", () => {
-  const tmp = mkConsent(undefined);
+test("dispatcher POSTs by default (no opt-out present)", () => {
+  const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
     event: fakeEvent,
@@ -97,12 +77,12 @@ test("dispatcher proceeds when consent file is absent (default-on)", () => {
   assert.equal(status, 0);
   assert.ok(
     fs.existsSync(probePath),
-    "default-on: dispatcher must POST when consent file is absent"
+    "default-on: dispatcher must POST when no opt-out is set"
   );
 });
 
 test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: { configDir: tmp, iKey: "real-ikey", collectorUrl: "https://x", off: true },
@@ -111,7 +91,7 @@ test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {
 });
 
 test("dispatcher exits 0 on malformed stdin", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const { status } = spawnSync(process.execPath, [DISPATCHER], {
     input: "not json",
     encoding: "utf8",
@@ -120,13 +100,14 @@ test("dispatcher exits 0 on malformed stdin", () => {
       POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp,
       POWER_PLATFORM_SKILLS_IKEY: "real-ikey",
       POWER_PLATFORM_SKILLS_COLLECTOR: "https://x",
+      POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH: "1",
     },
   });
   assert.equal(status, 0);
 });
 
 test("dispatcher writes a probe file when fake-https points to one (happy path)", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
     event: fakeEvent,
@@ -153,7 +134,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
 });
 
 test("dispatcher exits 0 when HTTPS connect is refused", () => {
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: {
@@ -165,8 +146,8 @@ test("dispatcher exits 0 when HTTPS connect is refused", () => {
   assert.equal(status, 0);
 });
 
-test("dispatcher appends to events.jsonl when iKey is placeholder + consent enabled", () => {
-  const tmp = mkConsent(true);
+test("dispatcher appends to events.jsonl when iKey is placeholder", () => {
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: {
@@ -189,7 +170,7 @@ test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => 
   // Default-disabled state shipped with the lib: the shared ikey.json has
   // `disabled: true`. Without the test bypass, the dispatcher must exit
   // before either the HTTPS POST or the local-log path runs.
-  const tmp = mkConsent(true);
+  const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
     event: fakeEvent,
@@ -209,19 +190,20 @@ test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => 
   );
 });
 
-test("dispatcher does NOT write events.jsonl when consent is disabled (placeholder iKey)", () => {
-  const tmp = mkConsent(false);
+test("dispatcher does NOT write events.jsonl when env opt-out is set (placeholder iKey)", () => {
+  const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
     env: {
       configDir: tmp,
       iKey: "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
       collectorUrl: "https://x",
+      off: true,
     },
   });
   assert.equal(status, 0);
   assert.ok(
     !fs.existsSync(path.join(tmp, "events.jsonl")),
-    "consent-disabled run must not write local log"
+    "env opt-out must skip local log"
   );
 });

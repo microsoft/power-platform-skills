@@ -56,10 +56,10 @@ These are choices we landed on for `power-pages`. Each comes with a tradeoff. If
 - **Reasoning.** Allowlists fail safe — a forgotten field doesn't ship. Scrubber regexes can fail open. The allowlist sits in one place (`lib/events.js`) and CI asserts the keyset.
 - **Tradeoff.** Adding a new field means editing the builder *and* updating the privacy reference doc. We've found this friction useful, but we'd love to know if it gets in your way.
 
-### 2.4 Default-on with opt-out, not an interactive prompt
+### 2.4 Default-on with env-var opt-out, no consent flow
 
-- **Reasoning.** An earlier iteration prompted on first run. It cost the very first invocation per machine and added friction users didn't ask for. Given the allowlist already prevents PII, we felt default-on was defensible.
-- **What this means for you.** You wouldn't need to add a Phase-1 consent block to your skills. If your plugin's audience expects an opt-in posture, please flag it — we can talk through it.
+- **Reasoning.** An earlier iteration prompted on first run and persisted a consent file. Given the allowlist already prevents PII, we cut both — the only opt-out today is `POWER_PLATFORM_SKILLS_TELEMETRY=0`.
+- **What this means for you.** You wouldn't need to add a consent block to your skills. If your plugin's audience expects an opt-in posture, please flag it — we can talk through it.
 
 ### 2.5 Sync script instead of git submodule or npm package
 
@@ -74,11 +74,9 @@ These are choices we landed on for `power-pages`. Each comes with a tradeoff. If
 
 | Thing | Where |
 |---|---|
-| Library (13 files) | `shared/telemetry/lib/` |
-| Privacy / opt-out doc | `shared/telemetry/references/telemetry-consent-reference.md` |
+| Library (12 files) | `shared/telemetry/lib/` |
 | Sync tool | `shared/telemetry/sync-to-plugin.js` |
 | Opt-out env var name | `POWER_PLATFORM_SKILLS_TELEMETRY` |
-| Consent file path | `~/.power-platform-skills/telemetry.json` |
 
 ### 3.2 Yours to configure
 
@@ -108,11 +106,9 @@ node shared/telemetry/sync-to-plugin.js --target plugins/<your-plugin>
 You'll get:
 
 ```
-plugins/<your-plugin>/
-├── scripts/lib/telemetry/
-│   ├── ikey.json
-│   └── lib/                       # 13 files
-└── references/telemetry-consent-reference.md
+plugins/<your-plugin>/scripts/lib/telemetry/
+├── ikey.json
+└── lib/                       # 12 files
 ```
 
 Worth noting in your CLAUDE.md / AGENTS.md: the synced copy is generated — edits should go in `shared/`, then a re-sync.
@@ -170,11 +166,9 @@ const { runInstrumented } = require("./lib/telemetry-runner");
 Something like:
 
 ```
-Anonymous telemetry is enabled by default. See
-references/telemetry-consent-reference.md for details and opt-out instructions.
+Anonymous telemetry is enabled by default. Set
+POWER_PLATFORM_SKILLS_TELEMETRY=0 to opt out.
 ```
-
-Linking the synced doc keeps you in sync with future updates without you having to track them.
 
 ---
 
@@ -233,19 +227,14 @@ It shouldn't. In `power-pages`, telemetry was folded around the existing validat
 **What about `--plugin-dir` dev mode?**
 Worth flagging: hooks don't register under `--plugin-dir` (Claude Code limitation). The slash-command path covers user-typed `/plugin:skill` invocations, but auto-invoked skills in dev mode aren't captured. End-to-end verification needs a marketplace install.
 
-**Why one consent file across all plugins, not per-plugin?**
-Our intuition was that users think of this as "Power Platform Skills telemetry" rather than per-plugin telemetry, so a single opt-out covers everything. If your audience would expect per-plugin consent, we'd love to hear that — it's not a hard call to revisit.
-
 ---
 
 ## 7. References
 
 | Doc | What it's for |
 |---|---|
-| `2026-04-20-1ds-telemetry-design.md` | Full internal design spec |
-| `2026-04-27-1ds-telemetry-team-presentation.md` | Engineering critique companion |
+| `2026-05-04-1ds-telemetry-rebuild-design.md` | Current internal design spec |
 | `shared/telemetry/README.md` | Field reference + sync command |
-| `shared/telemetry/references/telemetry-consent-reference.md` | What's sent, what isn't, how to opt out |
 | `plugins/power-pages/hooks/` | Reference impl: all three hooks |
 | `plugins/power-pages/scripts/lib/telemetry-runner.js` | Reference impl: `withTelemetry` shim |
 

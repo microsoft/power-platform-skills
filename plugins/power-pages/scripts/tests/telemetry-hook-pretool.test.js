@@ -12,62 +12,48 @@ const HOOK = path.resolve(
   "../../hooks/run-skill-pretool-telemetry.js"
 );
 
-function mkConfigDir(enabled) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
-  if (enabled !== undefined) {
-    fs.writeFileSync(
-      path.join(tmp, "telemetry.json"),
-      JSON.stringify({
-        version: 1,
-
-        enabled,
-        recorded_at: new Date().toISOString(),
-      })
-    );
-  }
-  return tmp;
+function mkConfigDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
 
-function runHook({ input, configDir }) {
+function runHook({ input, configDir, off }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+      POWER_PLATFORM_SKILLS_TELEMETRY: off ? "0" : "",
     },
   });
 }
 
 test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
-  const tmp = mkConfigDir(true);
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "other-plugin:foo" } }),
-    configDir: tmp,
+    configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
 });
 
-test("exits 0 when consent unset", () => {
-  const tmp = mkConfigDir(undefined);
+test("exits 0 when env opt-out is set", () => {
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir: tmp,
+    configDir: mkConfigDir(),
+    off: true,
   });
   assert.equal(status, 0);
 });
 
 test("exits 0 when malformed stdin", () => {
-  const tmp = mkConfigDir(true);
-  const { status } = runHook({ input: "{not json", configDir: tmp });
+  const { status } = runHook({ input: "{not json", configDir: mkConfigDir() });
   assert.equal(status, 0);
 });
 
-test("exits 0 even when consent enabled and skill tracked (placeholder iKey → no-op emit)", () => {
-  const tmp = mkConfigDir(true);
+test("exits 0 when skill is tracked (placeholder iKey → no-op emit)", () => {
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir: tmp,
+    configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
 });

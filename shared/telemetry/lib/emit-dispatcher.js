@@ -3,6 +3,7 @@
 
 const https = require("node:https");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 function exitSilently() {
@@ -14,29 +15,20 @@ process.on("unhandledRejection", exitSilently);
 process.stdin.on("error", exitSilently);
 
 const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
+const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
 
 const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
-function readConsent() {
-  // Honor the env kill switch even if the consent module fails to load.
-  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") {
-    return { state: "disabled" };
-  }
-  try {
-    const consent = require("./consent");
-    return consent.read({
-      configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || undefined,
-    });
-  } catch {
-    // Default-on: if the consent module itself fails to load, assume enabled.
-    return { state: "enabled" };
-  }
+// Anonymous telemetry is default-on. The single user-facing opt-out is the
+// POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
+function isUserOptedOut() {
+  return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
 }
 
 // Repo-side kill switch: when ikey.json contains "disabled": true, no events
-// are emitted regardless of consent or iKey state. Lets the infrastructure
+// are emitted regardless of opt-out or iKey state. Lets the infrastructure
 // PRs land while the tenant-side annotation + Kusto table are still being
 // provisioned. Flip to false in a single PR when ready.
 //
@@ -78,21 +70,19 @@ function writeProbe(filePath, { headers, body }) {
 function writeLocalLog(event) {
   try {
     const { appendLocal } = require("./local-log");
-    const consentLib = require("./consent");
     const configDir =
-      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR ||
-      consentLib.defaultConfigDir();
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
     appendLocal(event, { configDir });
   } catch {
     // fail closed
   }
 }
 
-// ---- Repo-side kill switch (applies before consent / placeholder logic) ----
+// ---- Repo-side kill switch (applies before placeholder / network logic) ----
 if (isDisabledByConfig()) exitSilently();
 
-// ---- Consent gate (applies to BOTH network POST and local log) -------------
-if (readConsent().state !== "enabled") exitSilently();
+// ---- User env-var opt-out --------------------------------------------------
+if (isUserOptedOut()) exitSilently();
 
 // ---- Read stdin ------------------------------------------------------------
 let raw = "";

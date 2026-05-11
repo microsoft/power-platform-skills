@@ -31,22 +31,12 @@ function copyDir(from, to) {
   }
 }
 
-function safeCopyFile(from, to) {
-  if (fs.existsSync(from)) copyFile(from, to);
-}
-
-// 1. Library + iKey config → <target>/scripts/lib/telemetry/
+// Library + iKey config → <target>/scripts/lib/telemetry/
 const telemetryDst = path.join(target, "scripts", "lib", "telemetry");
 fs.mkdirSync(telemetryDst, { recursive: true });
 
 copyDir(path.join(source, "lib"), path.join(telemetryDst, "lib"));
 copyFile(path.join(source, "ikey.json"), path.join(telemetryDst, "ikey.json"));
-
-// 2. Reference doc → <target>/references/
-safeCopyFile(
-  path.join(source, "references", "telemetry-consent-reference.md"),
-  path.join(target, "references", "telemetry-consent-reference.md")
-);
 
 process.stdout.write(`Synced shared/telemetry → ${telemetryDst}\n`);
 process.exit(0);

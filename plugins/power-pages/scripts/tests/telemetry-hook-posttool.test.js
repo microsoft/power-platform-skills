@@ -12,45 +12,35 @@ const HOOK = path.resolve(
   "../../hooks/run-skill-posttool-validation.js"
 );
 
-function mkConfigDir(enabled) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ho-"));
-  fs.writeFileSync(
-    path.join(tmp, "telemetry.json"),
-    JSON.stringify({
-      version: 1,
-
-      enabled,
-      recorded_at: new Date().toISOString(),
-    })
-  );
-  return tmp;
+function mkConfigDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ho-"));
 }
 
-function runHook({ input, configDir }) {
+function runHook({ input, configDir, off }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+      POWER_PLATFORM_SKILLS_TELEMETRY: off ? "0" : "",
     },
   });
 }
 
 test("posttool hook exits 0 with no tracked skill (preserves existing behavior)", () => {
-  const tmp = mkConfigDir(true);
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "nothing" } }),
-    configDir: tmp,
+    configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
 });
 
-test("posttool hook exits 0 when consent disabled (no emit, validator still runs)", () => {
-  const tmp = mkConfigDir(false);
+test("posttool hook exits 0 when env opt-out is set (no emit, validator still runs)", () => {
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir: tmp,
+    configDir: mkConfigDir(),
+    off: true,
   });
   assert.equal(status, 0);
 });

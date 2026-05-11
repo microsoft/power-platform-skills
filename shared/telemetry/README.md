@@ -23,8 +23,7 @@ File paths, cwd, env vars (except the telemetry off-switch), tenant IDs, site na
 ## Privacy posture
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
-- **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch) or by writing `{"enabled": false}` to `~/.power-platform-skills/telemetry.json` (use `record-consent.js --answer no`).
-- See `references/telemetry-consent-reference.md` for the full opt-out documentation.
+- **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch).
 
 ## Syncing into a plugin
 
@@ -36,4 +35,4 @@ No install step — the library has no npm dependencies.
 
 ## Layout
 
-See `docs/superpowers/specs/2026-04-20-1ds-telemetry-design.md` for the full design spec.
+See `docs/superpowers/specs/2026-05-04-1ds-telemetry-rebuild-design.md` for the full design spec.

@@ -214,4 +214,4 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals with explicit user consent. See `shared/telemetry/README.md` for what is sent and how to opt out.
+Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals. Telemetry is default-on; users opt out via `POWER_PLATFORM_SKILLS_TELEMETRY=0`. See `shared/telemetry/README.md` for what is sent.

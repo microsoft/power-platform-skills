@@ -51,7 +51,7 @@ The shared library is unchanged conceptually:
 
 - `lib/emit-dispatcher.js` — detached child that POSTs the envelope and exits. **Unchanged.**
 - `lib/emit-spawn.js` — spawns the dispatcher with restricted env. **Unchanged.**
-- `lib/consent.js`, `lib/local-log.js`, `lib/correlation.js`, `lib/session.js`, `lib/scrubber.js` — **Unchanged.**
+- `lib/local-log.js`, `lib/correlation.js`, `lib/session.js`, `lib/scrubber.js` — **Unchanged.**
 - `lib/events.js` — **rewritten** for the new schema (§4).
 - `lib/pac-auth.js` — **new** (§3).
 
@@ -76,7 +76,7 @@ Each adopting plugin sets its own `event_stream_name` to match the registered an
 
 ### `disabled` — repo-side kill switch
 
-When `disabled` is `true`, the dispatcher exits silently before consent / iKey / placeholder logic — no HTTPS POST, no local JSONL write. This lets the infrastructure code land (so reviewers can audit the wire format, hooks, allowlists, etc.) without emitting any traffic until the tenant-side annotation + Kusto table are provisioned.
+When `disabled` is `true`, the dispatcher exits silently before any iKey / placeholder / network logic — no HTTPS POST, no local JSONL write. This lets the infrastructure code land (so reviewers can audit the wire format, hooks, allowlists, etc.) without emitting any traffic until the tenant-side annotation + Kusto table are provisioned.
 
 Default in committed `ikey.json`: `true`. A single PR flips it to `false` (in either the shared file followed by a re-sync, or directly in a plugin's synced copy) and telemetry resumes. The flag is the very first gate in the dispatcher and overrides every other path.
 
@@ -350,7 +350,7 @@ The hook wrappers themselves keep their existing structure — fail-closed try/c
 | `event_stream_name` missing in `ikey.json` | Builder emits with envelope `name` set to `""`; the dispatcher still POSTs but the event will fail annotation matching at the tenant. Documented as "operator misconfiguration" — visible only via 0-row Kusto results, not user-facing failure. |
 | PAC profile missing/unparseable | `orgId`/`tenantId` absent from event. No error. |
 | HTTPS POST timeout (4 s) | Dispatcher exits 0 silently. |
-| Consent `disabled` or `POWER_PLATFORM_SKILLS_TELEMETRY=0` | Dispatcher exits 0 silently after consent check; no POST. |
+| `POWER_PLATFORM_SKILLS_TELEMETRY=0` | Dispatcher exits 0 silently after the env-var opt-out check; no POST, no local log. |
 | Hook timeout (30 s) | Hook is killed; user prompt is unaffected. |
 
 Telemetry never alters exit codes or blocks the parent process.
@@ -373,7 +373,7 @@ Telemetry never alters exit codes or blocks the parent process.
 |---|---|
 | `events.test.js` (rewritten) | Each builder returns the new shape; per-event allowlist enforced; severity mapping (`Info` for started, `Info` for success-completed, `Error` for failure-completed); `durationMs` clamped to non-negative; envelope `name` flows through from the parameter. |
 | `pac-auth.test.js` (new) | Fixture-driven: profile present (returns `{orgId, tenantId}`), profile missing (returns `null`), profile unparseable (returns `null`), throws-on-read (returns `null`). Never throws. |
-| `emit-dispatcher.test.js` (updated) | Probe body has the expected top-level keys (no nested `eventInfo`); `name` matches the configured envelope name; trailing newline; consent gating unchanged. |
+| `emit-dispatcher.test.js` (updated) | Probe body has the expected top-level keys (no nested `eventInfo`); `name` matches the configured envelope name; trailing newline; env-var opt-out (`POWER_PLATFORM_SKILLS_TELEMETRY=0`) and repo kill switch both gate emission. |
 | `emit-from-prompt.test.js` (updated) | Stubbed emitter captures the full event; assert all common fields populated; `pac-auth` mocked to return both fixed value and `null`. |
 | Plugin integration test (`run-user-prompt-telemetry.test.js`) | Real hook invocation via `FAKE_HTTPS` probe; assert the wire body contains `name: "PowerPagesPluginEvent"` (or whatever the test ikey.json sets), top-level fields, and trailing newline. |
 
