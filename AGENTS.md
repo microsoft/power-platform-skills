@@ -62,6 +62,14 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
 
 This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + reference pointing to the shared workflow, with `{{PLUGIN_NAME}}` substituted) and commit them alongside the shared change.
 
+## Shared Telemetry
+
+1DS telemetry code for all plugins lives at `shared/telemetry/`. The repo-root copy is development-time only — each adopting plugin syncs a copy into `plugins/<plugin>/scripts/lib/telemetry/` via `node shared/telemetry/sync-to-plugin.js --target plugins/<plugin>`. Only the synced copy runs at user time.
+
+Edit `shared/telemetry/` and re-run the sync to propagate changes. Never hand-edit the synced copies.
+
+Current adopters: `power-pages`. Others adopt on demand.
+
 ## Code Conventions
 
 **DRY (Don't Repeat Yourself):** Never duplicate logic across files. Each plugin has shared utilities (e.g., `scripts/lib/`) and shared reference docs (e.g., `references/`). Always check for and reuse existing helpers before writing new code. When adding shared logic, put it in the plugin's shared modules — not in individual skill directories.
