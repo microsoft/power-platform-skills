@@ -57,9 +57,12 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" --projectRoot
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--projectRoot` | Yes | — | Directory to scan. |
-| `--severity` | No | `HIGH,CRITICAL` | Severity floor for vulnerability findings. |
+| `--severity` | No | `LOW,MEDIUM,HIGH,CRITICAL` | Severity floor for vulnerability findings. |
 | `--scanners` | No | `vuln,secret,license` | Comma-separated scanner list. |
-| `--policyPaths` | No | — | Comma-separated paths to custom policy/rule files or directories. |
+| `--secretConfig` | No | Auto-detected | Path to custom secret rules file. Auto-detects `trivy-secret.yaml` in the project root. |
+| `--ignoreFile` | No | Auto-detected | Path to ignore file. Auto-detects `.trivyignore.yaml` or `.trivyignore` in the project root. |
+| `--trivyConfig` | No | Auto-detected | Path to config file. Auto-detects `trivy.yaml` in the project root. |
+| `--no-licenseFull` | No | — | Disable source-level license scanning for faster runs. |
 
 ### Response (stdout)
 

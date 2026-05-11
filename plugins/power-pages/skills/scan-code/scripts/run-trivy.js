@@ -11,14 +11,17 @@ Scans for vulnerabilities in dependencies, hard-coded secrets in source
 files, and license compliance issues in packages.
 
 Usage:
-  node run-trivy.js --projectRoot <path> [--severity <list>] [--scanners <list>] [--policyPaths <comma-separated>]
+  node run-trivy.js --projectRoot <path> [flags]
 
 Flags:
-  --projectRoot   Directory to scan (required)
-  --severity      Comma-separated severity floor (default: HIGH,CRITICAL)
-  --scanners      Comma-separated scanner list (default: vuln,secret,license)
-  --policyPaths   Comma-separated paths to custom policy/rule files or directories
-  --help          Show this help message
+  --projectRoot     Directory to scan (required)
+  --severity        Comma-separated severity floor (default: LOW,MEDIUM,HIGH,CRITICAL)
+  --scanners        Comma-separated scanner list (default: vuln,secret,license)
+  --secretConfig    Path to custom secret rules file (trivy-secret.yaml format)
+  --ignoreFile      Path to .trivyignore or .trivyignore.yaml
+  --trivyConfig     Path to trivy.yaml config file (license classification, etc.)
+  --no-licenseFull  Disable source-level license scanning for faster runs
+  --help            Show this help message
 
 Exit codes:
   0  Success (JSON on stdout, even if findings is empty)
@@ -27,7 +30,8 @@ Exit codes:
 Example:
   node run-trivy.js --projectRoot /path/to/site
   node run-trivy.js --projectRoot /path/to/site --severity LOW,MEDIUM,HIGH,CRITICAL
-  node run-trivy.js --projectRoot /path/to/site --policyPaths /custom/policies,/more/rules
+  node run-trivy.js --projectRoot /path/to/site --secretConfig /path/to/trivy-secret.yaml
+  node run-trivy.js --projectRoot /path/to/site --ignoreFile /path/to/.trivyignore.yaml
 `);
   process.exit(0);
 }
@@ -37,13 +41,29 @@ function getArg(name, fallback = null) {
   return idx !== -1 && idx + 1 < process.argv.length ? process.argv[idx + 1] : fallback;
 }
 
+function hasFlag(name) {
+  return process.argv.includes('--' + name);
+}
+
 const projectRoot = getArg('projectRoot');
-const severity = getArg('severity', 'HIGH,CRITICAL');
+
+function autoDetect(filename) {
+  if (!projectRoot) return null;
+  const p = path.join(projectRoot, filename);
+  return fs.existsSync(p) ? p : null;
+}
+
+const severity = getArg('severity', 'LOW,MEDIUM,HIGH,CRITICAL');
 const scanners = getArg('scanners', 'vuln,secret,license');
-const policyPaths = getArg('policyPaths');
+// Auto-detect config files from project root; CLI flags override.
+const trivyConfig = getArg('trivyConfig') || autoDetect('trivy.yaml');
+const secretConfig = getArg('secretConfig') || autoDetect('trivy-secret.yaml');
+const ignoreFile = getArg('ignoreFile') || autoDetect('.trivyignore.yaml') || autoDetect('.trivyignore');
+// Default true — scan source headers and LICENSE files. Pass --no-licenseFull to disable.
+const licenseFull = !hasFlag('no-licenseFull');
 
 if (!projectRoot) {
-  process.stderr.write('Usage: node run-trivy.js --projectRoot <path> [--severity <list>]\n');
+  process.stderr.write('Usage: node run-trivy.js --projectRoot <path> [flags]\n');
   process.exit(1);
 }
 
@@ -65,16 +85,16 @@ const args = [
   'fs',
   '--scanners', scanners,
   '--severity', severity,
+  '--pkg-types', 'library',
   '--format', 'json',
   '--quiet',
   '--exit-code', '0',
 ];
 
-if (policyPaths) {
-  for (const p of policyPaths.split(',').map(s => s.trim()).filter(Boolean)) {
-    args.push('--policy', p);
-  }
-}
+if (secretConfig) args.push('--secret-config', secretConfig);
+if (ignoreFile) args.push('--ignorefile', ignoreFile);
+if (trivyConfig) args.push('--config', trivyConfig);
+if (licenseFull) args.push('--license-full');
 
 args.push(projectRoot);
 

@@ -64,7 +64,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/check-tools.js"
 If either tool is missing, tell the user which tool is missing. Then offer a manual review as a fallback:
 
 Warn the user that manual review has high token consumption, then detect the git context:
-- **Feature branch** (not `main`, `master`, `develop`, or equivalent): offer to review only the changes in the current branch (`git diff main...HEAD`).
+- **Feature branch** (not `main`, `master`, or equivalent): offer to review only the changes in the current branch (`git diff <main-branch>...HEAD`).
 - **Main/master branch or no git repo**: offer to review the entire project source.
 
 If the user accepts the manual review, use `Glob` + `Read` + `Grep` to scan the relevant files for common security patterns (hardcoded secrets, unsafe API usage, missing input validation, exposed endpoints, etc.) and present findings. Do not attempt to install the tools.
@@ -73,34 +73,35 @@ If the user accepts the manual review, use `Glob` + `Read` + `Grep` to scan the 
 
 ## 2. Choose scope
 
-Skip in **review mode** — run both tools at Basic depth.
+Skip in **review mode** — run both tools at Advanced depth.
 
-### Scan depth (opengrep)
+### Scope selection
 
-| Depth | Rulesets | When to use |
-|-------|---------|-------------|
-| Basic | `p/default,p/owasp-top-ten` | Default. Fast iteration during development. |
-| Advanced | `p/default,p/owasp-top-ten,p/cwe-top-25` | Deeper analysis before release. |
+Ask the following in order. Each is a **separate** `AskUserQuestion` call — do NOT combine. If the user's initial request already answers a question, skip it and move to the next.
 
-Recommend Basic unless the user asks for a thorough or advanced scan.
+**Question 1 — What to check?**
 
-### Custom rulesets (Bring Your Own Rules)
+| Label | Description |
+|-------|-------------|
+| Everything | Check both code and packages. (Recommended) |
+| Code only | Check source files for security problems. |
+| Packages only | Check installed packages for known issues. |
 
-Both tools accept custom rules:
-- **Opengrep**: pass additional rulesets via `--rulesets` (comma-separated). Accepts registry packs and local file paths. Custom rulesets are appended to the depth's default set.
-- **Trivy**: pass custom policy paths via `--policyPaths` (comma-separated). Accepts local directories or files.
+**Question 2 — Only if code checking is included: How thorough?**
 
-If the user provides custom rulesets, append them to the selected depth — do not replace the defaults.
+| Label | Description |
+|-------|-------------|
+| Advanced | Covers common risks and deeper code weaknesses. (Recommended) |
+| Basic | Covers common risks only. Faster. |
 
-### Default approach
+Depth mapping (internal, not shown to user): Advanced = `p/default,p/owasp-top-ten,p/cwe-top-25`. Basic = `p/default,p/owasp-top-ten`.
 
-Recommend a full scan (both opengrep and trivy) at Basic depth unless the user asks for something different. The user can narrow the scope, change depth, or add custom rules.
+### Custom rules
 
-### Option rules
+Both tools accept custom rules. Do not proactively offer — only use when the user provides them.
 
-When presenting options via `AskUserQuestion`:
-- Keep `label` to 1–5 words. Include `description` on every option.
-- Only show options that are actionable.
+- **Opengrep**: `--rulesets` accepts comma-separated registry packs and local file paths. Custom rulesets are appended to the depth's defaults, not replacing them.
+- **Trivy**: `--secretConfig` for custom secret detection patterns, `--ignoreFile` for suppressing known findings, `--trivyConfig` for license classification and other settings, `--no-licenseFull` to skip source-level license scanning for faster runs.
 
 ---
 
@@ -111,9 +112,7 @@ Run the selected tools. Both scripts output normalized JSON to stdout.
 ### Static analysis (opengrep)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --rulesets "<comma-separated-rulesets>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" --projectRoot "<PROJECT_ROOT>" --rulesets "<comma-separated-rulesets>"
 ```
 
 Pass the rulesets for the chosen depth (Basic or Advanced). Append any user-provided custom rulesets. Run with `run_in_background: true` for large projects.
@@ -121,11 +120,10 @@ Pass the rulesets for the chosen depth (Basic or Advanced). Append any user-prov
 ### Dependency / secret / license scanning (trivy)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" \
-  --projectRoot "<PROJECT_ROOT>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-If the user provided custom trivy policies, add `--policyPaths <comma-separated-paths>`. Run with `run_in_background: true` for large projects.
+`--licenseFull` is on by default — source code headers and LICENSE files are scanned alongside package metadata. Run with `run_in_background: true` for large projects.
 
 Parse each tool's stdout JSON. The `findings` array in each result contains normalized objects with `id`, `severity`, `title`, `location`, `tag`, `details`, and optionally `fix` and `category`.
 
@@ -153,9 +151,7 @@ Skip in **review mode**.
 Write the merged data JSON to the system temp directory, render via the shared script, then delete the temp file:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" \
-  --data "<system-temp>/code-scan-data.json" \
-  --output "<PROJECT_ROOT>/docs/code-scan.html"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" --data "<system-temp>/code-scan-data.json" --output "<PROJECT_ROOT>/docs/code-scan.html"
 ```
 
 Delete `<system-temp>/code-scan-data.json` after the render succeeds. Open the rendered HTML in the browser.
@@ -189,7 +185,7 @@ If no meaningful follow-up exists, end the skill.
 
 ## Constraints
 
-- **Plain language** — MUST NOT use technical jargon with the user. Explain findings using everyday language.
+- **Plain language** — MUST NOT use technical jargon with the user. Never use words like opengrep, trivy, OWASP, CWE, static analysis, SAST, or ruleset in user-facing text. Use everyday language like "check your code for security problems", "check your packages for known issues", "thorough check", "quick check". Explain the technical name only when the user asks.
 - **Background long-running calls** — run both tools via `run_in_background: true` for large projects.
 - **Tool output is the source of truth** — use the severity values from the tool output directly. Do not remap or invent severity buckets.
 - **Context-aware interactions** — recommendations MUST reflect the site's actual scan results. Do not present generic advice.
