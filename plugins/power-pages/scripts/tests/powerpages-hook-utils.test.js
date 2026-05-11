@@ -70,6 +70,11 @@ test('detectTrackedSkill recognizes the newly registered ALM skills', () => {
   assert.equal(detectTrackedSkill('/power-pages:deploy-pipeline'), 'deploy-pipeline');
   assert.equal(detectTrackedSkill('/power-pages:configure-env-variables'), 'configure-env-variables');
   assert.equal(detectTrackedSkill('/power-pages:plan-alm'), 'plan-alm');
+  assert.equal(detectTrackedSkill('/power-pages:force-link-environment'), 'force-link-environment');
+});
+
+test('force-link-environment is wired into TRACKED_SKILLS with its validator', () => {
+  assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
 });
 
 test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse only)', () => {

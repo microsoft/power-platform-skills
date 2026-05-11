@@ -353,7 +353,7 @@ Then re-ask Q2 with only options 1–3.
 
 ---
 
-### PP Pipelines Path — Q3 through Q7
+### PP Pipelines Path — Q3 through Q6
 
 **Q3:** Ask via `AskUserQuestion`:
 > "How many deployment stages do you want in this pipeline?"
@@ -419,20 +419,9 @@ Store as `PP_APPROVAL_MODE`.
 
 When `HAS_ENV_VARS = true`, the plan notes that `deploy-pipeline` will prompt for per-stage env var values (see Phase 3 risks population).
 
-**Q7:** Ask via `AskUserQuestion`:
-> "Is this project's code tracked in Git source control?"
-> *(Informational only — this determines whether the plan includes a source control recommendation. No automation is applied.)*
-
-Options:
-1. Yes — we use Git (changes tracked before each deployment)
-2. No — not using source control (plan will recommend enabling it before production)
-3. Not yet set up (plan will include source control guidance)
-
-Store as `GIT_STATUS`.
-
 ---
 
-### Manual Path — Q3 through Q8
+### Manual Path — Q3 through Q6
 
 **Q3:** Ask via `AskUserQuestion`:
 > "How many target environments do you need to deploy to?"
@@ -473,8 +462,6 @@ Options:
 Store as `MANUAL_CHECKPOINT` (`true` or `false`).
 
 **Q6 (auto-detect, no question):** Same as PP Pipelines Q6 — check for env var definitions.
-
-**Q7:** Same as PP Pipelines Q7 — Git source control status.
 
 ---
 
@@ -533,7 +520,6 @@ Build a `planData` object with all gathered strategy inputs:
   "STRATEGY": "pp-pipelines | manual",
   "EXPORT_TYPE": "managed | unmanaged",   // PP Pipelines path: always "managed"
   "APPROVAL_MODE": "{approvalMode description}",
-  "GIT_STATUS": "yes | no | not-yet",
   "HAS_ENV_VARS": true | false,
   "SOLUTION_DONE": true | false,
   "PIPELINE_DONE": true | false,
@@ -724,7 +710,6 @@ Populate `risks` based on gathered data:
 - If `HAS_ENV_VARS = true`: `{ type: "warning", message: "This solution has environment variables ({N} detected) — you will be prompted for per-stage values during deployment." }`. Substitute `{N}` from `ENV_VARS_DETAILS.length` if it's > 0, otherwise from `SPLIT_PLAN.sizeAnalysis.envVarCount.value` (the count the size estimator reported). When neither source has a positive count, drop the parenthetical (`"This solution has environment variables — you will be prompted..."`).
 - If `SITE_SETTINGS_DATA.promoteToEnvVar.length > 0`: `{ type: "info", message: "{N} auth-related site settings (Authentication/* and AzureAD/*) detected with values. setup-solution will ask which to back with environment variables so each stage can use different values (e.g., different OAuth callback URLs). Skip any you don't need to vary per stage." }`. Substitute `{N}` from `SITE_SETTINGS_DATA.promoteToEnvVar.length`. (Replaces older "will be promoted" wording — that implied automatic action; in reality the user picks per setting.)
 - If `SITE_SETTINGS_DATA.credentialNeedsDecision.length > 0`: `{ type: "info", message: "{N} credential-style site settings (ConsumerKey / ClientId / ClientSecret / etc.) detected. setup-solution will run a single bulk prompt to handle all of them — auto-classify by name (recommended; *Secret/Password/ApiKey/AppKey become Secret env vars, *Id/ConsumerKey become String env vars), all-as-Secret, all-as-String, skip-all, or fall through to a per-credential picker for granular control." }`. Substitute `{N}` from `SITE_SETTINGS_DATA.credentialNeedsDecision.length`. Do NOT emit any "excluded from solution / configure manually" wording — that was the pre-IronItOut behavior and it's gone.
-- If `GIT_STATUS = "no"`: `{ type: "info", message: "Consider enabling source control to track changes before deploying to production." }`
 - If `EXPORT_TYPE = "unmanaged"` and strategy includes a production target: `{ type: "warning", message: "Unmanaged solutions can be edited in the target environment — consider using Managed for production." }`
 - If `SOLUTION_DONE = false`: `{ type: "info", message: "A Dataverse solution will be created first — publisher prefix is irreversible once chosen." }`
 - **Always** (when planning a PP Pipelines path with `SOLUTION_DONE` becoming true after Phase 4): `{ type: "info", message: "When you add new components later (server logic, cloud flows, env vars, custom tables), re-run /power-pages:setup-solution in sync mode to bring them into this solution. The completeness check in this skill (Phase 1 Step 11) will flag any drift between the live site and the solution before the next plan-alm run." }`. Skip when `SOLUTION_DONE` is already true at plan-alm start (sync mode is already self-evident at that point).
@@ -1172,8 +1157,8 @@ Mark the "Finalize" task as `completed`.
 
 1. **Phase 2, Q1**: Solution setup — confirm existing or include `setup-solution` in plan
 2. **Phase 2, Q2**: Promotion strategy — PP Pipelines, Manual, or already set up
-3. **Phase 2, Q3–Q7** (PP path): Stage count, host env, approval gates (managed auto-set), Git status
-   **Phase 2, Q3–Q7** (Manual path): Target count, target env URLs, export type, checkpoint pause, Git status
+3. **Phase 2, Q3–Q6** (PP path): Stage count, host env, approval gates (managed auto-set)
+   **Phase 2, Q3–Q6** (Manual path): Target count, target env URLs, export type, checkpoint pause
 4. **Phase 4**: Plan approval — execute, defer, or revise
 5. **Phase 6, Manual**: Checkpoint pause after export (if Q6 = Yes)
 6. **Phase 7 (delegated)**: Each invoked skill has its own approval gates

@@ -301,6 +301,31 @@ Store `envResult.deploymentEnvironmentId` as `SOURCE_DEPLOYMENT_ENV_ID` (for the
 
 On failure: stop with the error — deployment environment creation is mandatory.
 
+#### 5a — Detect "already associated with another pipelines host" (Pattern 15)
+
+If the script's stderr contains any of these substrings, the BAP env is currently stamped to a different Pipelines host:
+
+- `already associated with another pipelines host`
+- `associated with another pipelines host`
+- `Environment is already linked to a different host`
+
+This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the situation and the documented auto-fix to the user via `AskUserQuestion`:
+
+```
+question: "<envLabel> is already linked to a different Pipelines host. The /power-pages:force-link-environment skill can take over the association (DESTRUCTIVE to the previous host — makers there lose pipeline access for this env). Run it now?"
+header: "Force Link?"
+options:
+  - "Run /power-pages:force-link-environment now (Recommended)" — auto-fix per the deployment error catalog
+  - "Cancel setup-pipeline" — investigate the previous host first
+```
+
+Important guardrails:
+- **Never invoke** `/power-pages:force-link-environment` without explicit user consent through this prompt — the action is reversible only by performing Force Link again from the previous host.
+- If the user picks "Run …", invoke `/power-pages:force-link-environment` with `--host <HOST_ENV_URL>` and `--dev-env <bapEnvId>` so the sub-skill skips its own host/env prompts. When that skill returns success, **re-run Phase 5 from the top for the failing environment** (the create script is idempotent — it will short-circuit via `findExistingByBapId` and resolve immediately).
+- If the user picks "Cancel", stop the pipeline setup and recommend `/power-pages:ensure-pipelines-host detect-only` to inspect the current host bindings before retrying.
+
+For any other create-deployment-environment failure, fall through to the generic "stop with the error" path above.
+
 Report progress for each environment as validation completes.
 
 ### Phase 6 — Create Pipeline, Associate Source, Create Stages

@@ -22,7 +22,6 @@ function makeValidData(overrides = {}) {
     STRATEGY: 'pp-pipelines',
     EXPORT_TYPE: 'managed',
     APPROVAL_MODE: 'Required before each deployment',
-    GIT_STATUS: 'yes',
     HAS_ENV_VARS: false,
     PLAN_STATUS: 'Draft',
     APPROVED_BY: '',
