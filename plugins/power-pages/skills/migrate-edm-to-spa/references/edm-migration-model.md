@@ -179,9 +179,9 @@ Every important generated artifact should trace to evidence. Use evidence record
 |-------|----------|--------|
 | High | Static and runtime agree, or deterministic YAML configuration is clear | Implement directly after plan approval |
 | Medium | Only static or runtime evidence exists, but mapping is straightforward | Implement with traceability and mention in plan |
-| Low | Evidence is ambiguous, source relies on complex Liquid/custom JS, or runtime path was inaccessible | Ask user to approve, narrow scope, or mark as manual gap |
+| Low | Evidence is ambiguous, source relies on complex Liquid/custom JS, or runtime path was inaccessible | Surface in the HTML plan for approval, narrow scope, or mark as manual gap |
 
-Low-confidence items must not silently become working-looking SPA behavior. Either implement with explicit user approval or document as manual work.
+Low-confidence items must not silently become working-looking SPA behavior. Include them in the HTML plan as explicit implementation scope or document them as manual work.
 
 ## Migration Mapping Matrix
 

@@ -165,7 +165,7 @@ td.comp-cell{vertical-align:top;}
                 <th>EDM Today</th>
                 <th>Target Replacement</th>
                 <th>Data Needs</th>
-                <th>Confidence</th>
+                <th>Migration Confidence</th>
               </tr>
             </thead>
             <tbody id="routesTableBody">
@@ -427,24 +427,70 @@ function buildMermaidErd(tables) {
 const erContainer = document.getElementById('erContainer');
 const erFallback = document.getElementById('erFallback');
 const erd = buildMermaidErd(DATAVERSE_DATA);
+
+// Lazy Mermaid render state. Rendering happens only when the Data Model tab is
+// visible because Mermaid cannot measure element dimensions inside a
+// display:none container — when it tries, the SVG falls back to a misleading
+// "Syntax error in text" message even though the diagram source is valid.
+const erState = { rendered: false, rendering: false, src: erd ? erd.mermaid : null };
+
 if (!erd) {
   erContainer.innerHTML = '<div class="er-empty">No Dataverse tables found in plan. ER diagram will appear when tables are mapped.</div>';
 } else {
-  // Insert raw Mermaid syntax; the Mermaid script renders it on load
+  // Keep the raw Mermaid source available as a data attribute. Mermaid
+  // overwrites pre.textContent with the rendered SVG, so the data attribute is
+  // our source of truth for re-rendering or showing a raw-syntax fallback.
   const pre = document.createElement('pre');
   pre.className = 'mermaid';
+  pre.setAttribute('data-mermaid-src', erd.mermaid);
   pre.textContent = erd.mermaid;
   erContainer.innerHTML = '';
   erContainer.appendChild(pre);
   if (erd.relCount === 0) {
     erFallback.innerHTML = '<em>No relationships were captured from the EDM source. Diagram shows tables only.</em>';
   }
-  // After ~3.5s, if no SVG appeared, surface a hint about offline rendering
-  setTimeout(() => {
-    if (!erContainer.querySelector('svg')) {
-      erFallback.innerHTML = '<em>Diagram could not be rendered (Mermaid is loaded from a CDN). Showing raw syntax above; reconnect to the internet and refresh to render the diagram.</em>';
+}
+
+function showRawMermaidFallback(message) {
+  if (!erd) return;
+  const safeMsg = esc(message || 'Diagram could not be rendered.');
+  const safeSrc = esc(erState.src || '');
+  erContainer.innerHTML =
+    '<div class="er-empty">' + safeMsg + ' Showing raw <code>erDiagram</code> syntax below.</div>' +
+    '<pre style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--surface2);padding:12px;border-radius:var(--radius-sm);overflow:auto;">' + safeSrc + '</pre>';
+}
+
+async function renderErdOnce() {
+  if (!erd || erState.rendered || erState.rendering) return;
+  if (!window.mermaid || typeof window.mermaid.run !== 'function') {
+    // Mermaid script hasn't loaded yet (likely CDN slow/unreachable). Leave
+    // erState.rendered = false so a later tab activation can retry once the
+    // script finishes loading.
+    return;
+  }
+  erState.rendering = true;
+  const pre = erContainer.querySelector('pre.mermaid');
+  if (!pre) { erState.rendering = false; return; }
+  try {
+    // Validate first. Mermaid.parse throws on syntax errors with an
+    // explanatory message; surfacing the raw source is more useful than the
+    // generic bomb-icon error.
+    if (typeof window.mermaid.parse === 'function') {
+      await window.mermaid.parse(erState.src);
     }
-  }, 3500);
+    // Mermaid.run mutates the pre element in place. Ensure the source is
+    // present in textContent at the moment of render.
+    pre.textContent = erState.src;
+    pre.removeAttribute('data-processed');
+    await window.mermaid.run({ nodes: [pre] });
+    erState.rendered = true;
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    showRawMermaidFallback('Mermaid could not render the ER diagram (' + message + ').');
+    erState.rendered = true;
+  } finally {
+    erState.rendering = false;
+  }
 }
 
 // Populate security section
@@ -501,6 +547,11 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     e.currentTarget.classList.add('active');
     document.getElementById(`tab-${tabName}`).classList.add('active');
+    if (tabName === 'datamodel') {
+      // Render on the next frame so layout has settled (the section just
+      // transitioned from display:none to block).
+      requestAnimationFrame(() => { renderErdOnce(); });
+    }
   });
 });
 </script>
@@ -508,7 +559,20 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
 if (window.mermaid && typeof window.mermaid.initialize === 'function') {
-  window.mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'strict' });
+  // startOnLoad must be false: the ER diagram lives in a display:none tab at
+  // page load. Auto-running mermaid against a hidden element produces a
+  // misleading "Syntax error in text" rendering even when the source is
+  // valid. renderErdOnce() handles the actual render when the tab becomes
+  // visible.
+  window.mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' });
+}
+// If the user is already on the Data Model tab when this script finishes
+// loading (e.g., they navigated via a deep link), render immediately.
+if (typeof renderErdOnce === 'function') {
+  const datamodelSection = document.getElementById('tab-datamodel');
+  if (datamodelSection && datamodelSection.classList.contains('active')) {
+    requestAnimationFrame(() => { renderErdOnce(); });
+  }
 }
 </script>
 

@@ -505,3 +505,59 @@ test('render-edm-migration-plan handles missing relationships and an empty palet
   // Tables without relationships should still produce a valid mermaid block
   assert.match(html, /erDiagram/);
 });
+
+test('render-edm-migration-plan labels the routes confidence column as "Migration Confidence"', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // The routes table header must read "Migration Confidence" so users understand
+  // it scores the mapping confidence, not data confidence.
+  assert.match(html, /<th>Migration Confidence<\/th>/);
+  // And the legacy plain "Confidence" header must not be present.
+  assert.ok(!/<th>Confidence<\/th>/.test(html));
+});
+
+test('render-edm-migration-plan defers Mermaid render until the Data Model tab is opened', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  // Regression guard: mermaid.initialize must use startOnLoad:false. With
+  // startOnLoad:true the ER diagram lives inside a display:none tab at page
+  // load and Mermaid renders a misleading "Syntax error in text" message
+  // because it cannot measure dimensions inside a hidden container.
+  assert.match(html, /startOnLoad:\s*false/);
+  assert.ok(
+    !/startOnLoad:\s*true/.test(html),
+    'startOnLoad:true would re-introduce the hidden-tab Mermaid rendering bug'
+  );
+
+  // The renderer must validate the diagram source via mermaid.parse before
+  // calling mermaid.run, and must expose a lazy renderErdOnce hook plus a
+  // fallback for parse/render failures.
+  assert.match(html, /function renderErdOnce\b/);
+  assert.match(html, /mermaid\.parse\(/);
+  assert.match(html, /mermaid\.run\(/);
+  assert.match(html, /showRawMermaidFallback\b/);
+
+  // The lazy hook must be wired into tab activation so the diagram renders
+  // when the user opens the Data Model tab.
+  assert.match(html, /tabName === 'datamodel'/);
+  assert.match(html, /renderErdOnce\(\)/);
+});

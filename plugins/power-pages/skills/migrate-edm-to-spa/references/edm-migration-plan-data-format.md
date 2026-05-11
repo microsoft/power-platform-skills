@@ -135,7 +135,7 @@ Array of SPA routes mapped from EDM pages and templates. Each route includes a t
 - `sourcePages`: name(s) of EDM pages this route is derived from; can be empty array for new routes.
 - `componentMapping`: list of `{ edm, targetKind, target }` pairs that show what each EDM artifact becomes in the SPA. Use this to make the EDM-to-SPA replacement visible to the user during review. Use the rules in `edm-to-spa-patterns.md` to assign `targetKind` — server-side Liquid that depends on server-only context, privileged access, or server-evaluated business rules must use `serverLogic` so it is handed off to `/add-server-logic` in Phase 7.3.
 - `dataNeeds`: human-readable list of data services, API calls, or site settings this route requires.
-- `confidence`: `high` (supported by static + runtime evidence), `medium` (one source), `low` (inferred/ambiguous).
+- `confidence`: `high` (supported by static + runtime evidence), `medium` (one source), `low` (inferred/ambiguous). The rendered Routes table column header reads **"Migration Confidence"** so users understand the score reflects confidence in the EDM-to-SPA mapping, not data confidence.
   - **High-confidence items** are highlighted in green in the HTML.
   - **Medium-confidence items** are highlighted in yellow/warning color.
   - **Low-confidence items** are highlighted in red/alert color and flagged for user review.

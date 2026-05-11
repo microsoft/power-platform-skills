@@ -15,7 +15,7 @@ model: opus
 
 # Migrate EDM Site to SPA
 
-Migrate a classic Enhanced Data Model (EDM) Power Pages website to a modern static SPA code site. This skill discovers the existing EDM source, observes runtime behavior, builds an explainable migration model, presents an approval-gated plan, re-authors the site into React, Vue, Angular, or Astro, and verifies drift before handoff.
+Migrate a classic Enhanced Data Model (EDM) Power Pages website to a modern static SPA code site. This skill discovers the existing EDM source, observes runtime behavior, builds an explainable migration model, renders manual gaps into an approval-gated HTML plan, re-authors the site into React, Vue, Angular, or Astro, and verifies drift before handoff.
 
 ## Core Principles
 
@@ -173,9 +173,13 @@ Flag each finding with `low`, `medium`, or `high` risk:
 | Hidden runtime behavior | Custom JavaScript, jQuery validators, portal runtime globals, non-obvious redirects |
 | Unsupported or manual work | Forums/blogs/polls, knowledge management search/facets, portal comments, internal portal APIs, custom widgets |
 
-#### 2.4 Present Readiness Summary
+#### 2.4 Capture Readiness Findings
 
-Present:
+Build a concise readiness summary for the migration artifacts, but do **not** present a full gap table or ask the user to approve gaps in the CLI at this stage. Early CLI gap reviews create avoidable friction because the HTML migration plan in Phase 6 is the review surface for manual gaps, risk, impact, and recommended action.
+
+Save the readiness summary in `static-analysis-summary.md` and feed high-risk or unsupported findings into the canonical model's `unsupportedOrManual` collection so they become `GAPS_DATA` in Phase 6. The user should see these findings in the rendered HTML report before approving the overall migration plan.
+
+Use this structure in the saved summary:
 
 | Area | Count / Finding | Risk | Notes |
 |------|-----------------|------|-------|
@@ -186,16 +190,10 @@ Present:
 | Security/auth | `<summary>` | `<risk>` | `<notes>` |
 | Unsupported patterns | `<summary>` | `<risk>` | `<notes>` |
 
-If any high-risk pattern affects core functionality, use `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| I found high-risk EDM patterns that may require manual re-authoring. Continue with migration planning? | Continue and document gaps (Recommended), Narrow the scope, Stop |
-
 ### Output
 
 - Readiness score and risk list.
-- User approval to continue when risk is high.
+- High-risk and unsupported findings captured for `migration-gap-log.md` and the Phase 6 HTML plan.
 
 ---
 
@@ -330,7 +328,7 @@ If the user chooses static-only, mark runtime confidence as limited and continue
 
 Use Playwright:
 
-1. Resize to width `1280`, height `720`.
+1. Resize to width `1440`, height `900` (target a viewport that matches typical desktop browser windows so the captured layout is representative). If the underlying tooling cannot resize that large, fall back to `1280 x 720`.
 2. Navigate to `LIVE_SITE_URL`.
 3. Wait for the page to render.
 4. Capture an accessibility snapshot.
@@ -409,6 +407,10 @@ Build `canonical-site-model.json` with:
 - Evidence ledger and confidence scores.
 
 Use `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-to-spa-patterns.md` to classify Liquid: composition/static content → component or content; safe read-only data access reproducible via Dataverse Web API + table permissions → Web API; server-only context, privileged access, or server-evaluated business rules → **Server Logic** (handed off to `/add-server-logic` in Phase 7.3); complex/ambiguous Liquid → manual gap.
+
+Specific routes have explicit mappings in the same patterns reference and **must not** be defaulted to `manualGap` without applying them first:
+
+- **Profile / user account routes** (typically `/profile` or `/profile/`) — apply the **Profile / User Account** section: identity from `/setup-auth`, contact read/update via Web API + `/integrate-webapi`, with portal-only sub-features (federated linking, password reset, etc.) captured as targeted `manualGap` entries.
 
 #### 5.2 Build the EDM-to-SPA Mapping Matrix
 
@@ -552,11 +554,12 @@ The rendered plan now includes:
 
 - An **Overview** tab with the chosen aesthetic + mood headline and the derived color palette displayed as labeled swatches with hex values.
 - A **Routes** tab where each row shows EDM artifacts today next to their SPA replacement, with badges marking `Server Logic`, `Web API`, and `Manual Gap` mappings.
-- A **Data Model** tab that embeds a Mermaid ER diagram built from `DATAVERSE_DATA[].fields` and `DATAVERSE_DATA[].relationships`. Mermaid is loaded from a CDN; the raw `erDiagram` syntax is also kept on the page so the diagram is still legible if the CDN cannot be reached.
+- A **Data Model** tab that embeds a Mermaid ER diagram built from `DATAVERSE_DATA[].fields` and `DATAVERSE_DATA[].relationships`. The diagram renders lazily when the Data Model tab is first opened (Mermaid cannot lay out diagrams inside `display:none` containers, so eager rendering would produce a misleading "Syntax error in text" message). The renderer also validates the generated `erDiagram` source via `mermaid.parse()` before rendering and falls back to showing the raw `erDiagram` syntax (with the parser's error message) if either parsing or rendering fails. Mermaid is loaded from a CDN; if the CDN is unreachable, the raw syntax is shown instead.
+- A **Gaps & Manual Work** tab populated from `GAPS_DATA`, including high-risk findings from Phase 2, low-confidence mappings from Phase 5, business/user impact, and recommended actions.
 
 #### 6.4 Present CLI Summary
 
-Do **not** repeat the full plan in the CLI. Instead, show a brief summary:
+Do **not** repeat the full plan or manual gap table in the CLI. Instead, show a brief summary that points the user to the HTML report for details:
 
 ```
 ✓ Migration plan rendered to: docs/edm-migration-plan.html
@@ -571,10 +574,10 @@ Quick Summary:
   • Confidence: <N> high-confidence routes, <N> medium, <N> low
   • Design: <aesthetic> + <mood> — <palette name> palette, <layout>, <navigation> nav
 
-Review the plan in the browser, then confirm below.
+Review the plan in the browser, including the Gaps & Manual Work tab, then confirm below.
 ```
 
-#### 6.5 Confirm Scope and Gaps
+#### 6.5 Confirm Plan Scope
 
 Use `AskUserQuestion` to get approval:
 
@@ -594,7 +597,7 @@ If the user chooses **Stop**, clean up temporary artifacts and exit.
 
 - Captured `DESIGN_DATA` (aesthetic, mood, palette, typography, motion, layout, navigation) for Phase 7.1's `/create-site` invocation — the same fields `/create-site` natively asks for.
 - Approved route/component/data/security migration plan.
-- Explicit list of manual gaps accepted by the user.
+- Manual gaps documented in the HTML plan and migration artifacts.
 - HTML plan document saved in `<PROJECT_ROOT>/docs/edm-migration-plan.html` (or user-chosen path) for version control and future reference.
 
 ---
@@ -876,11 +879,10 @@ Recommend only what fits the migration result:
 ## Key Decision Points
 
 1. **Phase 1**: Confirm source mode, target framework, target output location, and whether runtime discovery is available.
-2. **Phase 2**: Continue, narrow, or stop if high-risk EDM patterns are found.
-3. **Phase 4**: Confirm before authenticated browsing or interactions that may create/modify data.
-4. **Phase 6**: Approve the migration plan before writing SPA files.
-5. **Phase 7**: Confirm before invoking follow-up skills, overwriting an existing target project, or stopping before the required first deployment that creates `.powerpages-site`.
-6. **Phase 8**: Confirm whether unexpected drift should be fixed, accepted, or moved to manual gaps.
+2. **Phase 4**: Confirm before authenticated browsing or interactions that may create/modify data.
+3. **Phase 6**: Approve the migration plan before writing SPA files; manual gaps are reviewed in the HTML report, not as a separate CLI approval checkpoint.
+4. **Phase 7**: Confirm before invoking follow-up skills, overwriting an existing target project, or stopping before the required first deployment that creates `.powerpages-site`.
+5. **Phase 8**: Confirm whether unexpected drift should be fixed, accepted, or moved to manual gaps.
 
 ---
 

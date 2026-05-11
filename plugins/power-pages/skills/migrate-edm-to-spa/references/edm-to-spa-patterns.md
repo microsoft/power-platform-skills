@@ -105,7 +105,7 @@ SPA implementation usually needs:
 - Redirect/success behavior.
 - Attachment handling plan, if supported.
 
-If attachments, CAPTCHA, multistep flows, or portal-managed validation are central to the form, mark them as high-risk and require user approval before implementation.
+If attachments, CAPTCHA, multistep flows, or portal-managed validation are central to the form, mark them as high-risk and surface them in the HTML migration plan before implementation.
 
 ## Advanced Forms
 
@@ -128,7 +128,7 @@ SPA implementation options:
 | Single-step, one-table flow | Framework form component plus Web API service |
 | Multistep flow with simple state | Route-level wizard component with persisted state |
 | Authenticated registration or event flow | Auth-aware wizard plus server-side permission plan |
-| Portal-managed session/progress behavior | Manual gap or custom implementation after user approval |
+| Portal-managed session/progress behavior | Manual gap or custom implementation after plan approval |
 
 Do not flatten an advanced form into a one-page SPA form unless the user approves the behavior change.
 
@@ -182,6 +182,26 @@ Use:
 - `/setup-auth` for login/logout and client-side role-aware UX.
 - `/create-webroles` when new roles are needed.
 - `/audit-permissions` when existing permissions are complex or risky.
+
+## Profile / User Account
+
+The classic EDM portal profile page (typically at `/profile` or `/profile/`) is a WebForms-driven editor over the `contact` entity that lets the signed-in user view and update their own profile fields (first/last name, email, phone, organization, marketing opt-ins, language preference, etc.). Do **not** classify this route as a blanket `manualGap`. The default mapping is:
+
+| Profile capability | SPA mapping | `targetKind` |
+|--------------------|-------------|--------------|
+| Identity display (display name, email, signed-in state) | Read from `/setup-auth` identity claims | `component` |
+| Read current contact record (name, phone, org, preferences) | Web API `GET contacts(<contactid>)` via `/integrate-webapi`, scoped to the signed-in contact | `webApi` |
+| Update contact fields the user owns | Web API `PATCH contacts(<contactid>)` via `/integrate-webapi`, scoped to the signed-in contact | `webApi` |
+| Profile route shell + form UI | New SPA `ProfilePage` / `ProfileForm` component | `component` |
+
+Apply the following qualifications before assigning `webApi` to profile read/update:
+
+1. **Self-scoped contact table permissions must be permitted.** The default plan must list a contact table permission scoped to the signed-in contact (`Contact` scope) for read and update, plus narrowed `Webapi/contact/enabled` and `Webapi/contact/fields` site settings covering only the columns the profile editor exposes. Phase 7.3 hands this off to `/integrate-webapi` and `/audit-permissions`.
+2. **Only map the fields the EDM profile actually exposed.** Do not widen the Web API to columns the EDM portal did not already let the user edit. If `Webapi/contact/fields` is `*` in EDM, narrow it for the SPA.
+3. **Keep portal-only behavior as a `manualGap`.** Federated identity linking flows, in-portal password reset, registration code redemption, invitation acceptance, and any portal-managed marketing list synchronization that requires server-only context belong in `GAPS_DATA` even when the rest of the profile route maps cleanly.
+4. **Fallback to read-only when write is not permitted.** If the user or the existing permissions model does not allow self-update via Web API, default the profile route to a read-only component sourced from `/setup-auth` identity claims plus a Web API read of `contact`. Log the missing write capability as a manual gap rather than reclassifying the entire route as `manualGap`.
+
+When the migration plan is generated, profile routes should usually appear with a `componentMapping` containing at least one `component` entry for the page shell and one `webApi` entry per contact read/update operation, optionally accompanied by manual gaps for federated/portal-only sub-features.
 
 ## Site Settings
 
