@@ -24,6 +24,9 @@ const TRACKED_SKILLS = {
   'ensure-pipelines-host': {
     validatorScript: 'skills/ensure-pipelines-host/scripts/validate-ensure-host.js',
   },
+  'force-link-environment': {
+    validatorScript: 'skills/force-link-environment/scripts/validate-force-link.js',
+  },
   'export-solution': {
     validatorScript: 'skills/export-solution/scripts/validate-export.js',
   },

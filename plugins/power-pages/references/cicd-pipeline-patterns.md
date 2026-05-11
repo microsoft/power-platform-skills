@@ -878,6 +878,47 @@ Content-Type: application/json
 Returns 202 with `location` and `retry-after` headers. Poll `location` until `provisioningState` = "Succeeded".
 `DefaultCustomPipelinesHostEnvForTenant` defaults to `''` (empty string) when using platform host — treat any falsy/empty value as "platform host in use."
 
+### Force Link Environment to a New Host (ManageEnvironmentStamp)
+
+Used to take over an environment's pipelines-host association when creating a `deploymentenvironments` record fails with *"this environment is already associated with another pipelines host"*. HAR-verified against the AppDeploymentConfiguration UI on `supplierportalpipelineshostch.crm17` (2026-05-11). Documented at [`alm/custom-host-pipelines#using-force-link…`](https://learn.microsoft.com/en-us/power-platform/alm/custom-host-pipelines#using-force-link-to-associate-an-environment-with-a-new-host).
+
+**Endpoint**:
+```
+POST {hostEnvUrl}/api/data/v9.0/ManageEnvironmentStamp
+Authorization: Bearer <hostToken>
+Content-Type: application/json
+Accept: application/json
+clienthost: Browser
+prefer: odata.include-annotations="*"
+x-ms-app-name: AppDeploymentConfiguration
+
+{ "DeploymentEnvironmentId": "{C44399FE-BF4A-F111-BEC6-7CED8D42BEFA}" }
+```
+
+Note the GUID is wrapped in `{UPPER-CASE-BRACES}` — the only shape observed in production.
+
+**Success**: 204 No Content. The action is synchronous, but the record's `validationstatus` re-evaluates asynchronously. Poll afterward:
+
+```
+GET {hostEnvUrl}/api/data/v9.0/deploymentenvironments({deploymentEnvironmentId})?$select=validationstatus,errormessage,name
+```
+
+until `validationstatus = 200000001` (Succeeded). `200000002` (Failed) means the stamp move was rejected (e.g., previous host has reapply policy); surface `errormessage` verbatim.
+
+**Failure modes**:
+| Status | Cause | Remediation |
+|---|---|---|
+| 403 | Caller lacks Deployment Pipeline Administrator on the target host | Host admin must grant the role |
+| 404 | No `deploymentenvironments` record exists on the target host for this BAP env | Create it first (which will create it in a Failed state with the "already associated" errormessage — that's the trigger for Force Link) |
+| Post-poll `validationstatus = Failed` | Previous host still claims the env | Show `errormessage` to the user; may require admin intervention on the previous host |
+
+**Side effects (documented on Microsoft Learn)**:
+- Previous host's `deploymentenvironments` row for this BAP env is delinked; its `validationstatus` is left stale until refreshed in the previous host's UI.
+- Makers in the previous host lose access to pipelines they ran through this environment.
+- Reversible by performing Force Link again from the previous host.
+
+**Plugin implementation**: `scripts/lib/force-link-environment.js` wraps the POST + post-validation polling. Surface as auto-fix for Pattern 15 in `deployment-error-catalog.md` via the `/power-pages:force-link-environment` skill.
+
 ### pac pipeline deploy CLI (Fallback / Alternative)
 
 When `ValidatePackageAsync` / `DeployPackageAsync` are unavailable (older Pipelines package), or when the deployment environment is configured via Power Platform Admin Center, use the PAC CLI:

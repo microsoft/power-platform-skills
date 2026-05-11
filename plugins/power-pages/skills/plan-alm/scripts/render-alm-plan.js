@@ -359,6 +359,107 @@ function envVarStatDisplay() {
   return String(existing);
 }
 
+// Builds one expandable card per existing env var. Mirrors the mock layout:
+// display name (friendly heading) on the row, schema name + type/bound setting
+// + default value + description inside the body, and a per-environment values
+// table when ev.values is populated. The card class is hooked by the template's
+// click-to-toggle JS (see alm-plan-template.html).
+function buildEnvVarCard(ev) {
+  const displayName = ev.displayName || ev.schemaName || '(unnamed env var)';
+  const type = ev.type || 'String';
+  const schemaName = ev.schemaName || '';
+  const siteSetting = ev.siteSetting || '';
+  const defaultValue = ev.defaultValue == null ? '' : String(ev.defaultValue);
+  const description = ev.description || '';
+  const rationale = ev.rationale || '';
+  const values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
+
+  const fieldBlocks = [
+    `<div><div class="field-label">Schema Name</div><span class="schema">${escapeHtml(schemaName)}</span></div>`,
+    `<div><div class="field-label">Data Type</div><span>${escapeHtml(type)}</span></div>`,
+    `<div class="span2"><div class="field-label">Bound Site Setting</div>${
+      siteSetting
+        ? `<span class="bound">${escapeHtml(siteSetting)}</span>`
+        : '<span class="none">— (not bound to a site setting)</span>'
+    }</div>`,
+    `<div class="span2"><div class="field-label">Default Value</div>${
+      defaultValue
+        ? `<span class="default">${escapeHtml(defaultValue)}</span>`
+        : '<span class="none">— (no default)</span>'
+    }</div>`,
+  ];
+  if (description) {
+    fieldBlocks.push(`<div class="span2"><div class="field-label">Description</div><span class="desc">${escapeHtml(description)}</span></div>`);
+  }
+
+  let rationaleBlock = '';
+  if (rationale) {
+    rationaleBlock = `<div style="margin-top:14px;">
+  <div class="field-label" style="font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Reasoning</div>
+  <div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.7;">${escapeHtml(rationale)}</div>
+</div>`;
+  }
+
+  let perEnvBlock = '';
+  const envNames = Object.keys(values);
+  if (envNames.length > 0) {
+    const rows = envNames.map((e) => `<tr><td class="env-name">${escapeHtml(e)}</td><td class="env-val">${escapeHtml(values[e] || '')}</td></tr>`).join('');
+    perEnvBlock = `<div class="envvar-values">
+  <div class="field-label">Values by Environment</div>
+  <div style="overflow-x:auto;"><table class="env-table"><thead><tr><th>Environment</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table></div>
+</div>`;
+  }
+
+  return `<div class="envvar-card">
+  <div class="envvar-header">
+    <span class="envvar-tag">ENV VAR</span>
+    <span class="envvar-name">${escapeHtml(displayName)}</span>
+    <span class="envvar-type">${escapeHtml(type)}</span>
+    <span class="envvar-chevron">&#9660;</span>
+  </div>
+  <div class="envvar-body">
+    <div class="envvar-fields">${fieldBlocks.join('')}</div>
+    ${rationaleBlock}
+    ${perEnvBlock}
+  </div>
+</div>`;
+}
+
+// Side-by-side matrix: one row per env var, one column per environment.
+// Renders only when at least one env var has a populated values{} map (i.e.
+// after deploy-pipeline has back-filled per-stage values).
+function buildEnvVarValuesMatrix() {
+  const envNamesSet = new Set();
+  for (const ev of envVars) {
+    if (ev.values && typeof ev.values === 'object') {
+      for (const key of Object.keys(ev.values)) envNamesSet.add(key);
+    }
+  }
+  if (envNamesSet.size === 0) return '';
+  const envNames = Array.from(envNamesSet);
+
+  const headerCells = envNames.map((e) => `<th style="min-width:160px;">${escapeHtml(e)}</th>`).join('');
+  const rows = envVars.map((ev) => {
+    const label = escapeHtml(ev.displayName || ev.schemaName || '(unnamed)');
+    const cells = envNames.map((e) => {
+      const v = (ev.values || {})[e];
+      return v == null || v === ''
+        ? '<td class="env-val"><span class="env-placeholder">(not set)</span></td>'
+        : `<td class="env-val">${escapeHtml(v)}</td>`;
+    }).join('');
+    return `<tr><td class="env-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `<h3 style="margin:20px 0 8px 0;font-size:14px;">Values by Environment</h3>
+<p class="section-desc" style="margin-bottom:12px;">Per-stage values for each environment variable. Set the correct value in each target before importing the solution.</p>
+<div class="card" style="padding:0;overflow-x:auto;">
+  <table class="env-table">
+    <thead><tr><th style="min-width:220px;">Environment Variable</th>${headerCells}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+}
+
 function buildEnvVarsHtml() {
   const existing = envVars.length;
   const planned = plannedEnvVarCount;
@@ -375,37 +476,31 @@ function buildEnvVarsHtml() {
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
 
-  // Build optional sections: existing table + planned summary. Both can render
-  // together when the project has some env vars already and more are planned.
+  // Build optional sections: existing cards + planned summary + values matrix.
+  // All can render together when the project has some env vars already and
+  // more are planned.
   const sections = [];
 
   if (existing > 0) {
-    const envNames = Object.keys(envVars[0]?.values || {});
-    const tableHeader = envNames.length > 0
-      ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
-      : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
-    const rows = envVars.map((ev) => {
-      const valueCells = envNames.length > 0
-        ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
-        : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
-      return `<tr>
-  <td class="env-name">${escapeHtml(ev.schemaName)}</td>
-  <td>${escapeHtml(ev.type || 'String')}</td>
-  <td><code>${escapeHtml(ev.siteSetting || '—')}</code></td>
-  ${valueCells}
-</tr>`;
-    }).join('\n');
+    const cards = envVars.map(buildEnvVarCard).join('\n');
     sections.push(`<h3 style="margin:8px 0 12px 0;font-size:14px;">Existing environment variables (${existing})</h3>
-<div class="card" style="padding:0;overflow-x:auto;">
-  <table class="env-table">${tableHeader}<tbody>${rows}</tbody></table>
-</div>`);
+${cards}`);
+
+    // Comparison matrix renders inline below the cards once per-stage values
+    // are known. Empty until deploy-pipeline back-fills via refresh-alm-plan-data.
+    const matrix = buildEnvVarValuesMatrix();
+    if (matrix) sections.push(matrix);
   }
 
   if (planned > 0) {
     const noun = planned === 1 ? 'environment variable' : 'environment variables';
     sections.push(`<h3 style="margin:${existing > 0 ? '20px' : '8px'} 0 12px 0;font-size:14px;">Planned ${noun} (${planned})</h3>
-<div class="note-box info">setup-solution will offer to create up to ${planned} ${noun} from the auth-related and credential-style site settings detected on the live site. You'll choose per setting whether to back it with a Secret-typed env var (Key Vault per stage), a String-typed env var (plain text per stage), or skip. Per-variable details (schema name, type, bound site setting) become visible here once setup-solution finishes.</div>`);
+<div class="note-box info">setup-solution will walk through these ${planned} candidate site setting${planned === 1 ? '' : 's'} (auth-related and credential-style) one at a time. For each, you'll pick whether to back it with a Secret-typed env var (Key Vault per stage), a String-typed env var (plain text per stage), or skip — so the realized env-var count is typically lower than the candidate count. Per-variable details (schema name, type, bound site setting, default value) populate this tab automatically once <code>setup-solution</code> finishes and the plan is refreshed via <code>refresh-alm-plan-data.js</code> (or by re-running <code>/power-pages:plan-alm</code>).</div>`);
   }
+
+  // Always close with a one-line refresh hint when either count is non-zero,
+  // so users know to re-render after each ALM phase completes.
+  sections.push('<div class="note-box neutral" style="margin-top:14px;">This tab back-fills automatically after <code>setup-solution</code> (creates definitions) and <code>deploy-pipeline</code> (records per-stage values). If counts look stale, run the relevant ALM skill again or re-render the plan.</div>');
 
   return sections.join('\n');
 }
