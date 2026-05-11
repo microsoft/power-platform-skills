@@ -31,14 +31,21 @@
 //     "envVars": [
 //       {
 //         "schemaName": "cr5fe_LocalLoginEnabled",
+//         "displayName": "Local Login Enabled",
 //         "type": "Boolean",
 //         "defaultValue": "true",
+//         "description": "Toggles the username/password sign-in form on the…",
 //         "siteSetting": "Authentication/Local/Enabled"
 //       },
 //       ...
 //     ],
 //     "count": 5
 //   }
+//
+// `displayName` and `description` come from environmentvariabledefinition's
+// `displayname` and `description` columns. Both are surfaced unchanged so the
+// renderer can show a friendly heading + the design rationale for each var
+// without re-querying.
 //
 // Exit 0 always — empty envVars[] when nothing matches the prefix or auth
 // fails. Exit 1 on argparse / fatal error so the caller can degrade
@@ -87,7 +94,7 @@ async function fetchAllDefinitions(envUrl, publisherPrefix, token) {
   const base = envUrl.replace(/\/+$/, '');
   const url =
     `${base}/api/data/v9.2/environmentvariabledefinitions` +
-    `?$select=environmentvariabledefinitionid,schemaname,displayname,type,defaultvalue` +
+    `?$select=environmentvariabledefinitionid,schemaname,displayname,description,type,defaultvalue` +
     `&$filter=startswith(schemaname,'${publisherPrefix}_')` +
     `&$top=2000`;
   const res = await helpers.makeRequest({
@@ -166,8 +173,10 @@ async function discoverEnvVarDefinitions({ envUrl, token, publisherPrefix, websi
 
   const envVars = definitions.map((def) => ({
     schemaName: def.schemaname,
+    displayName: def.displayname || def.schemaname,
     type: typeLabel(def.type),
     defaultValue: def.defaultvalue == null ? '' : String(def.defaultvalue),
+    description: def.description || '',
     siteSetting: bindings.get(def.environmentvariabledefinitionid) || '',
   }));
 

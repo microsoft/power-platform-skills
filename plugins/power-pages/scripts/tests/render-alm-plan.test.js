@@ -1329,15 +1329,29 @@ test('render-alm-plan: Env Variables tab still shows neutral note when envVars[]
   }
 });
 
-test('render-alm-plan: Env Variables tab renders the per-variable table when envVars[] is populated (count fallback inactive)', () => {
+test('render-alm-plan: Env Variables tab renders expandable cards (one per var) when envVars[] is populated', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
   const outputPath = path.join(tmpDir, 'alm-plan.html');
 
   try {
     const data = makeValidData({
       envVars: [
-        { schemaName: 'cr_LocalLoginEnabled', type: 'Boolean', siteSetting: 'Authentication/Local/Enabled', defaultValue: 'true' },
-        { schemaName: 'cr_ApiBaseUrl', type: 'String', siteSetting: 'Api/BaseUrl', defaultValue: 'https://dev.api' },
+        {
+          schemaName: 'cr_LocalLoginEnabled',
+          displayName: 'Local Login Enabled',
+          type: 'Boolean',
+          siteSetting: 'Authentication/Local/Enabled',
+          defaultValue: 'true',
+          description: 'Toggles the local sign-in form.',
+        },
+        {
+          schemaName: 'cr_ApiBaseUrl',
+          displayName: 'API Base URL',
+          type: 'String',
+          siteSetting: 'Api/BaseUrl',
+          defaultValue: 'https://dev.api',
+          description: '',
+        },
       ],
       sizeAnalysis: {
         totalSizeMB: { value: 2.7, tier: 'green' },
@@ -1352,16 +1366,115 @@ test('render-alm-plan: Env Variables tab renders the per-variable table when env
     assert.equal(status, 0);
 
     const html = fs.readFileSync(outputPath, 'utf8');
-    // Per-variable table renders, neither neutral nor count-info note appears.
-    assert.ok(html.includes('cr_LocalLoginEnabled'), 'Per-variable schema name should appear in the table');
-    assert.ok(html.includes('cr_ApiBaseUrl'), 'Second per-variable schema name should appear');
-    assert.ok(!html.includes('No environment variable definitions detected'), 'Neutral note must not appear');
-    assert.ok(!/\d+ environment variable definitions detected/.test(html), 'Count-info note must not appear when table renders');
+    const tabStart = html.indexOf('id="tab-envvars"');
+    const tabEnd = html.indexOf('</div>', html.indexOf('<div class="section"', tabStart + 1));
+    const envvarsSection = html.slice(tabStart, tabEnd > 0 ? tabEnd : html.length);
+
+    // Two cards rendered (one per env var)
+    const cardOpens = envvarsSection.match(/<div class="envvar-card">/g);
+    assert.ok(cardOpens && cardOpens.length === 2, `expected 2 .envvar-card blocks, got ${(cardOpens || []).length}`);
+
+    // Display name surfaced in the header, schema name in the body
+    assert.ok(envvarsSection.includes('Local Login Enabled'), 'displayName should appear in the card heading');
+    assert.ok(envvarsSection.includes('API Base URL'), 'second displayName should appear');
+    assert.ok(envvarsSection.includes('cr_LocalLoginEnabled'), 'schema name should appear in the body');
+    assert.ok(envvarsSection.includes('cr_ApiBaseUrl'), 'second schema name should appear');
+
+    // Description renders when present, omitted when absent — first card has it,
+    // second does not.
+    assert.ok(envvarsSection.includes('Toggles the local sign-in form.'), 'description should render when present');
+
+    // The ENV VAR tag, type chip, and chevron control are part of the header
+    assert.ok(envvarsSection.includes('class="envvar-tag"'), 'card header must include the ENV VAR tag');
+    assert.ok(envvarsSection.includes('class="envvar-type"'), 'card header must include the type chip');
+    assert.ok(envvarsSection.includes('class="envvar-chevron"'), 'card header must include the chevron');
+
+    // Neither neutral-empty nor count-info notes should appear when cards render.
+    assert.ok(!envvarsSection.includes('No environment variable definitions detected'), 'Neutral note must not appear');
+    assert.ok(!/\d+ environment variable definitions detected/.test(envvarsSection), 'Count-info note must not appear');
 
     // Overview stat reflects envVars.length, not sizeAnalysis.envVarCount.value
     const statMatch = html.match(/<div class="stat-num"[^>]*>(\d+)<\/div><div class="stat-label">Env Variables<\/div>/);
     assert.ok(statMatch, 'Overview stat card must be present');
     assert.equal(statMatch[1], '2', 'Overview stat should reflect envVars[].length when populated, not sizeAnalysis count');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab renders the per-environment values matrix when values{} populated', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [
+        {
+          schemaName: 'cr_ApiBaseUrl',
+          displayName: 'API Base URL',
+          type: 'String',
+          siteSetting: 'Api/BaseUrl',
+          defaultValue: 'https://dev.api',
+          values: { Development: 'https://dev.api', Test: 'https://test.api', Production: 'https://prod.api' },
+        },
+        {
+          schemaName: 'cr_TenantId',
+          displayName: 'Tenant ID',
+          type: 'String',
+          siteSetting: 'Auth/TenantId',
+          defaultValue: 'dev-tenant',
+          // No values{} — exercises the (not set) placeholder for unknown stages
+          values: { Development: 'dev-tenant' },
+        },
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    const tabStart = html.indexOf('id="tab-envvars"');
+    const tabEnd = html.indexOf('</div>', html.indexOf('<div class="section"', tabStart + 1));
+    const envvarsSection = html.slice(tabStart, tabEnd > 0 ? tabEnd : html.length);
+
+    // Matrix section heading must be present
+    assert.ok(envvarsSection.includes('Values by Environment'), 'matrix section heading missing');
+
+    // All env names from the union of values{} maps appear as column headers
+    assert.ok(envvarsSection.includes('Development'), 'Development column missing');
+    assert.ok(envvarsSection.includes('Test'), 'Test column missing');
+    assert.ok(envvarsSection.includes('Production'), 'Production column missing');
+
+    // Concrete values from each row render in the matrix
+    assert.ok(envvarsSection.includes('https://prod.api'), 'production value should render');
+    assert.ok(envvarsSection.includes('dev-tenant'), 'tenant id value should render');
+
+    // Row with no value for a given stage shows the (not set) placeholder
+    assert.ok(envvarsSection.includes('env-placeholder'), 'placeholder class for missing values must render');
+    assert.ok(envvarsSection.includes('(not set)'), '(not set) literal must appear for missing stages');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('render-alm-plan: Env Variables tab omits the values matrix when no env var has a values{} map', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-alm-out-'));
+  const outputPath = path.join(tmpDir, 'alm-plan.html');
+
+  try {
+    const data = makeValidData({
+      envVars: [
+        { schemaName: 'cr_X', displayName: 'X', type: 'String', defaultValue: 'foo' },
+      ],
+    });
+    const { status } = runScript(data, outputPath);
+    assert.equal(status, 0);
+
+    const html = fs.readFileSync(outputPath, 'utf8');
+    const tabStart = html.indexOf('id="tab-envvars"');
+    const tabEnd = html.indexOf('</div>', html.indexOf('<div class="section"', tabStart + 1));
+    const envvarsSection = html.slice(tabStart, tabEnd > 0 ? tabEnd : html.length);
+
+    assert.ok(!envvarsSection.includes('Values by Environment'), 'matrix section should not render when no values{} maps are populated');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

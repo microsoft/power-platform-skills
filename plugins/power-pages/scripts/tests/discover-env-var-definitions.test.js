@@ -84,9 +84,11 @@ test('discoverEnvVarDefinitions filters definitions by publisher prefix and uses
 
   assert.equal(result.count, 2);
   assert.equal(result.envVars[0].schemaName, 'cr5fe_LocalLoginEnabled');
+  assert.equal(result.envVars[0].displayName, 'Local Login Enabled');
   assert.equal(result.envVars[0].type, 'Boolean');
   assert.equal(result.envVars[0].defaultValue, 'true');
   assert.equal(result.envVars[1].schemaName, 'cr5fe_ApiBaseUrl');
+  assert.equal(result.envVars[1].displayName, 'API Base URL');
   assert.equal(result.envVars[1].type, 'String');
 
   const defCall = calls.find((c) => c.url.includes('environmentvariabledefinitions'));
@@ -96,6 +98,50 @@ test('discoverEnvVarDefinitions filters definitions by publisher prefix and uses
     /startswith\(schemaname,'cr5fe_'\)/.test(defCall.url),
     'filter should match the publisher prefix with trailing underscore'
   );
+  assert.ok(/description/.test(defCall.url), 'should select description column');
+});
+
+test('discoverEnvVarDefinitions surfaces description when present and falls back to schemaName for displayName', async (t) => {
+  withMockedRequests(t, ({ url }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          value: [
+            {
+              environmentvariabledefinitionid: 'def-1',
+              schemaname: 'cr5fe_ApiBaseUrl',
+              displayname: 'API Base URL',
+              description: 'Endpoint used for cross-environment API calls. Varies per stage.',
+              type: 100000000,
+              defaultvalue: 'https://dev.api',
+            },
+            {
+              // No displayname AND no description on this row
+              environmentvariabledefinitionid: 'def-2',
+              schemaname: 'cr5fe_NoMeta',
+              type: 100000000,
+              defaultvalue: '',
+            },
+          ],
+        }),
+      };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'cr5fe',
+    websiteRecordId: 'site-id',
+  });
+
+  assert.equal(result.envVars[0].displayName, 'API Base URL');
+  assert.equal(result.envVars[0].description, 'Endpoint used for cross-environment API calls. Varies per stage.');
+  // Fallback: no displayname → schemaName is used; no description → empty string
+  assert.equal(result.envVars[1].displayName, 'cr5fe_NoMeta');
+  assert.equal(result.envVars[1].description, '');
 });
 
 test('discoverEnvVarDefinitions joins bindings by env var GUID and surfaces site setting names', async (t) => {
