@@ -31,6 +31,9 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - Path to `genpage-plan.md`
 - The working directory
+- The project root — absolute path where the Dataverse Skills plugin's `.env`
+  and `scripts/auth.py` files live (the orchestrator resolves this from the
+  user's current working directory when `/genpage` was invoked)
 
 ---
 
@@ -56,19 +59,14 @@ Determine the **dependency order**:
 ## Step 2 — Check Dataverse Plugin Readiness
 
 Verify the Dataverse Skills plugin has been configured by checking for its
-authentication files in the **project root** (not the working directory):
+authentication files in the **project root** passed in your invocation prompt.
+Substitute the literal path you received — do NOT use `$PROJECT_ROOT` as a shell
+variable, the orchestrator resolved the path already.
 
 ```bash
-test -f "$PROJECT_ROOT/.env" && echo "EXISTS" || echo "MISSING"
+test -f "<project-root>/.env" && echo "EXISTS" || echo "MISSING"
+test -f "<project-root>/scripts/auth.py" && echo "EXISTS" || echo "MISSING"
 ```
-
-```bash
-test -f "$PROJECT_ROOT/scripts/auth.py" && echo "EXISTS" || echo "MISSING"
-```
-
-Where `$PROJECT_ROOT` is the root of the user's project (the parent of the working
-directory, or the current working directory when `/genpage` was invoked). Look for
-`.env` and `scripts/auth.py` by searching upward from the working directory.
 
 If either file is missing, try calling `list_tables` as a connectivity test. If
 `list_tables` succeeds, the Dataverse connection is working regardless of file layout.

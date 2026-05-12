@@ -131,9 +131,15 @@ Before invoking the entity-builder, verify the Dataverse Skills plugin is both
 
 #### 2b. Invoke entity-builder
 
+Resolve the **project root** before invoking — this is the absolute path where
+the user invoked `/genpage` (typically the parent of the working directory, or
+the current directory at invocation time). The Dataverse Skills plugin's `.env`
+and `scripts/auth.py` live here.
+
 Invoke the `genpage-entity-builder` agent via the `Task` tool. Pass:
 - Path to `genpage-plan.md`
-- Working directory
+- Working directory (absolute path)
+- Project root (absolute path, resolved above)
 
 Wait for completion.
 
@@ -184,10 +190,33 @@ Before invoking any builders, verify:
 
 See `${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contract.
 
-#### 5b. Invoke page-builders in parallel
+#### 5b. Single-page fast path (skip Task dispatch when N=1)
 
-For each page, invoke a `genpage-page-builder` agent via the `Task` tool. **Fire all
-invocations in a single message** for parallel execution.
+**If the plan's Pages table contains exactly one row**, do NOT dispatch a Task
+subagent. Inline the page-builder workflow directly in the orchestrator:
+
+1. Read `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt`
+2. Read `${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md`
+3. Read the sample listed in the plan's `## Relevant Samples`
+4. If the plan's Per-Page Specification has `Needs caching: true`, also read
+   `${CLAUDE_PLUGIN_ROOT}/references/data-caching-pattern.md`
+5. If the plan's `## Environment` indicates non-English languages, also read
+   `${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md`
+6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
+   if Data mode is dataverse
+7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+8. Grep your own output for every named import from `@fluentui/react-icons` and
+   verify each appears in `verified-icons.txt`; rewrite if any are missing
+9. Proceed to Phase 6
+
+This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
+duplicated in a subagent context.
+
+#### 5c. Multi-page: invoke page-builders in parallel
+
+**If the plan's Pages table contains 2+ rows**, invoke a `genpage-page-builder`
+agent via the `Task` tool per page. **Fire all invocations in a single message**
+for parallel execution.
 
 For each page, pass a prompt that includes:
 
