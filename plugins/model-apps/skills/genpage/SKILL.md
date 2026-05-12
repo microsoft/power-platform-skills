@@ -437,12 +437,67 @@ Triggered when the `genpage-planner` returns `{ "action": "edit" }` in Phase 1.
 The edit flow delegates planning to `genpage-edit-planner`, then applies the
 edit inline.
 
-### Edit Phase 1: Gather Edit Target
+> **⚠️ CRITICAL — do NOT hallucinate app or page names.** App names and page
+> names are discovered by running `pac model list` and `pac model genpage list
+> --app-id <id>`. Never guess them from the repo, the conversation context,
+> sample app names, or anywhere else. Always run the commands first, then
+> present what the commands returned to the user.
+
+### Edit Phase 1: Discover and Select Target App + Page
 
 The planner has already validated prereqs and confirmed auth.
 
-Ask the user (via `AskUserQuestion`) for the app-id and page-id of the page to edit.
-Accept either the app-id GUID or the app name (resolve via `pac model list`).
+**CRITICAL — never guess or invent app names or page names.** You must discover
+them by running the PAC CLI commands below. Hallucinating page names from context
+(repo names, prior conversation, sample apps) is wrong and confuses the user.
+
+#### 1a. Discover available apps
+
+```powershell
+pac model list
+```
+
+This returns the list of model-driven apps in the active environment. Parse the
+output for **App ID**, **Display Name**, and **Unique Name** fields.
+
+Behavior by app count:
+- **0 apps:** Tell the user "No model-driven apps found in this environment.
+  You can't edit a page that doesn't exist — would you like to create one
+  instead?" and stop the edit flow.
+- **1 app:** Confirm with the user: "Found app **[Display Name]** ([app-id]).
+  Use this one?" via `AskUserQuestion` with Yes / Cancel options.
+- **N apps:** Present a multi-choice question via `AskUserQuestion`. Each option's
+  label is the app's **Display Name** (truncate to <50 chars). The description
+  includes the app-id GUID. Always include an "Other" option for the user to
+  type an app-id or name directly.
+
+Record the selected `<app-id>`.
+
+#### 1b. Discover existing pages in the selected app
+
+```powershell
+pac model genpage list --app-id <app-id>
+```
+
+This returns the list of generative pages already deployed in the selected app,
+including **Page ID** and display name.
+
+Behavior by page count:
+- **0 pages:** Tell the user "This app has no generative pages to edit. Did
+  you mean to create a new page?" and stop the edit flow.
+- **1+ pages:** Present them via `AskUserQuestion`. Each option's label is the
+  page's display name; the description includes the page-id GUID.
+
+Record the selected `<page-id>`.
+
+#### 1c. Confirm selection
+
+Restate the selection to the user before proceeding:
+
+> "Editing **[page display name]** in app **[app display name]**.
+> Continuing to download the existing page code…"
+
+No `AskUserQuestion` here — this is a status update before the next phase.
 
 ### Edit Phase 2: Download Existing Page
 

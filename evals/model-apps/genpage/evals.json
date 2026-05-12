@@ -87,7 +87,12 @@
       },
       "expectations": [
         "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
-        "Edit Phase 1: User is asked for app-id and page-id via AskUserQuestion",
+        "Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names",
+        "Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output",
+        "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
+        "Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output",
+        "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops",
+        "Edit Phase 1c: Selection is restated to the user before proceeding to download",
         "Edit Phase 2: pac model genpage download produces <working-dir>/<page-id>/ with page.tsx, page.js, config.json, prompt.txt",
         "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated",
         "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
