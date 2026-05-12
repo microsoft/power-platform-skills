@@ -180,6 +180,22 @@ export default GeneratedComponent;
 - **No FluentProvider** — already provided at root
 - **No createTheme/mergeThemes/useTheme** — these don't exist in Fluent UI V9
 - **D3.js for charts** — use `group()` not `nest()`
+- **Cross-page navigation** — when navigating to a sibling generative page that is
+  being built in this same run (i.e., another page in the plan's Pages table), you
+  do NOT have its real GUID yet. Use the placeholder `"PAGEREF_<filename-without-tsx>"`
+  exactly as the `pageId` value. Example:
+  ```typescript
+  Xrm.Navigation.navigateTo({
+    pageType: "generative",
+    pageId: "PAGEREF_pet-detail",   // resolved to real GUID after first upload
+    entityName: "cr_pet",
+    recordId: selectedId,
+  });
+  ```
+  Do NOT invent a fake GUID. Do NOT skip the navigation. The orchestrator's Phase 6.5
+  resolves these placeholders by exact-string substitution after Phase 6 returns the
+  real GUIDs. **Always wrap the placeholder in double quotes** — Phase 6.5 looks for
+  `"PAGEREF_<name>"` as a quoted token to avoid partial-string collisions.
 
 ### Localization
 

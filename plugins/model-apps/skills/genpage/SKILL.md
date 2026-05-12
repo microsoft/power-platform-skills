@@ -261,28 +261,59 @@ pac model genpage upload `
   --agent-message "Description of what was built and any relevant details"
 ```
 
-### Phase 6.5: Navigation Fix-Up
+### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
-Page-builders write `PAGEREF_<filename-without-tsx>` as a placeholder wherever they
-navigate to a sibling generative page — because GUIDs don't exist until after first
-upload. This phase replaces all placeholders with the real GUIDs returned by Phase 6.
+**Only runs when the plan has 2+ pages** AND any built `.tsx` contains a `PAGEREF_`
+token. Skip entirely for single-page builds.
+
+Page-builders write `"PAGEREF_<filename-without-tsx>"` as a placeholder wherever they
+navigate to a sibling generative page (see Rule 13 / Generative Page Navigation in
+genpage-rules-reference.md) — because GUIDs don't exist until after first upload.
+This phase replaces all placeholders with the real GUIDs returned by Phase 6.
 
 **Why a second pass is required:** Pages are built in parallel before any GUIDs exist.
 The placeholders let code generation proceed correctly; this phase resolves them.
+
+#### Steps
 
 1. Build a map of `filename-without-tsx → page-id` from the Phase 6 upload output:
    ```
    pet-gallery  → 3643e240-b589-4862-bf37-8347f388044b
    pet-detail   → 8dab5cd4-c861-40a8-a970-291e4f047eb7
-   ...
+   pet          → 12fa8b16-...  (always include — substring of pet-gallery)
    ```
 
-2. For each `.tsx` file in the working directory, scan for any `"PAGEREF_<name>"` string.
+2. **Sort the map keys by length, descending.** This prevents shorter names from
+   matching inside longer names (e.g., `PAGEREF_pet` partially matching
+   `PAGEREF_pet-gallery`).
 
-3. For each match, replace with the corresponding real GUID from the map.
+3. For each `.tsx` file in `<working-dir>/*.tsx` (top level only — do NOT recurse into
+   subfolders), scan for any quoted `"PAGEREF_<name>"` token. **The placeholder
+   MUST be inside double quotes** (page-builders emit `pageId: "PAGEREF_pet"`).
 
-4. Re-upload only the files that had at least one replacement, using `--page-id`
-   (update, not create) and omitting `--add-to-sitemap`.
+4. For each match, perform an exact-string replacement of `"PAGEREF_<name>"` with
+   `"<page-id-guid>"`. Use word-boundary-safe substitution: match the full token
+   `"PAGEREF_<name>"` including surrounding quotes, not a substring of it.
+
+5. If a placeholder is found that does NOT match any key in the map (e.g., a typo),
+   surface this to the user explicitly — do NOT silently leave the literal string
+   in the deployed code. Stop and report which file and which placeholder.
+
+6. Re-upload only the files that had at least one replacement. Use the full update
+   form of `pac model genpage upload` from Phase 6 — include `--app-id`, `--page-id`,
+   `--code-file`, `--data-sources` (if Dataverse), `--prompt`, `--model`,
+   `--agent-message`. Omit `--add-to-sitemap` (the page already exists). Example:
+
+   ```powershell
+   pac model genpage upload `
+     --app-id <app-id> `
+     --page-id <page-id-from-Phase-6> `
+     --code-file <working-dir>/<file>.tsx `
+     --data-sources "entity1,entity2" `
+     --prompt "User's original request summary" `
+     --model "<current-model-id>" `
+     --agent-message "Resolved cross-page navigation placeholders"
+   ```
 
 Pages with no `PAGEREF_` strings need no second upload.
 

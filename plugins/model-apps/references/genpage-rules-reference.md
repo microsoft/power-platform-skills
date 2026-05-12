@@ -430,6 +430,12 @@ xrm.Navigation.navigateTo({
 The placeholder format is `PAGEREF_` followed by the sibling page's filename without
 `.tsx` (e.g., `pet-gallery.tsx` → `PAGEREF_pet-gallery`).
 
+**Must be quoted.** The skill's Phase 6.5 fix-up looks for `"PAGEREF_<name>"` as a
+quoted token to avoid partial-string collisions (e.g., `PAGEREF_pet` inside
+`PAGEREF_pet-gallery`). Always emit the placeholder as a string literal inside
+double quotes — assign it to `pageId` as a string, never construct it via
+concatenation.
+
 ### Dark Mode Toggle
 
 Instead of `<FluentProvider theme={webDarkTheme}>` (which flickers in React 17 — see Rule 11), use a local `themeToVars` helper to apply theme tokens synchronously as CSS custom properties.
