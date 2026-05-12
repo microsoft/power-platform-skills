@@ -224,9 +224,16 @@ ${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md
 Read that file before writing the plan. Every required section must be present with
 the exact heading. Page filenames in the `## Pages` table must be unique.
 
-For the `## Relevant Samples` section: any page that uses Dataverse entities must
-include `9-data-caching.tsx` as one of its samples. This is mandatory — do not
-omit it even if another sample is also assigned to the page.
+For the `## Per-Page Specifications` section, set a `needs_caching` hint per page:
+mark it `true` for list pages, detail pages, or any page where the user is likely
+to navigate away and return; mark it `false` for forms, single-visit dashboards,
+or mock-data pages. The page-builder uses this hint to decide whether to read
+`references/data-caching-pattern.md`.
+
+For the `## Relevant Samples` section: pick the most structurally relevant sample
+from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 8-responsive-cards.tsx for card
+layouts, 2-wizard-multi-step.tsx for wizards). Do NOT list reference docs as
+samples — only files under `samples/`.
 
 Mark the "Write plan document" task complete when done.
 

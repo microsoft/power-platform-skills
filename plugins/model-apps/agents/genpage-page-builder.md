@@ -100,17 +100,21 @@ Read the relevant sample file identified in the plan:
 ${CLAUDE_PLUGIN_ROOT}/samples/[sample-name].tsx
 ```
 
-If **Data mode** is `dataverse`, also read the data caching sample — regardless
-of whether it appears in the plan's Relevant Samples table:
+If **Data mode** is `dataverse` AND the page fits the "list / detail / pages
+the user navigates back to" profile (per the plan's Per-Page Specification),
+also read the data caching reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/samples/9-data-caching.tsx
+${CLAUDE_PLUGIN_ROOT}/references/data-caching-pattern.md
 ```
 
-Use these samples as structural references — follow their patterns for component
-organization, DataAPI usage, and styling approach. For Dataverse pages, the
-caching sample is authoritative for data-fetching patterns (inline IIFE, cache
-guard, batched state).
+Skip the caching reference for forms, single-visit dashboards, mock-data pages,
+or any page where the user is not expected to navigate away and return.
+
+Use the sample as a structural reference — follow its patterns for component
+organization, DataAPI usage, and styling approach. For pages that need caching,
+the data-caching-pattern reference is authoritative for the inline IIFE + cache
+guard + batched state pattern.
 
 ## Step 4 — Create a Task
 
