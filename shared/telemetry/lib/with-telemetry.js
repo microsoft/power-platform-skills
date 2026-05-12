@@ -7,8 +7,6 @@ const { buildScriptStarted, buildScriptCompleted } = require("./events");
 const { fireAndForget } = require("./emit-spawn");
 const { readPacCliVersion, readAiAgent } = require("./agent-info");
 
-const ERROR_DESCRIPTION_MAX_LEN = 500;
-
 function osFriendlyName(platform) {
   if (platform === "win32") return "Windows";
   if (platform === "darwin") return "Mac";
@@ -81,10 +79,10 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
   } catch (err) {
     outcome = "failure";
     errorClass = err && err.constructor ? err.constructor.name : "Error";
-    errorDescription =
-      err && err.message
-        ? String(err.message).slice(0, ERROR_DESCRIPTION_MAX_LEN)
-        : "";
+    // PII-safe: emit only err.code (short, non-PII metadata like "ENOENT"
+    // or "ERR_INVALID_ARG_TYPE"). err.message is never emitted because it
+    // may contain file paths, GUIDs, or other user context.
+    errorDescription = err && err.code ? String(err.code) : "";
     caught = err;
   } finally {
     const durationMs = Date.now() - startTs;

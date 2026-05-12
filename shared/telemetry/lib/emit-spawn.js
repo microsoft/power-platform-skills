@@ -32,9 +32,10 @@ function fireAndForget(event, opts = {}) {
         // check works when set in the parent's env.
         POWER_PLATFORM_SKILLS_TELEMETRY:
           process.env.POWER_PLATFORM_SKILLS_TELEMETRY || "",
-        // Test seam for the repo-side kill switch (see emit-dispatcher.js).
-        POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH:
-          process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH || "",
+        // ikey.json path override (test seam — production reads the
+        // bundled file next to lib/ when this is unset).
+        POWER_PLATFORM_SKILLS_IKEY_JSON:
+          process.env.POWER_PLATFORM_SKILLS_IKEY_JSON || "",
       },
     });
     try {

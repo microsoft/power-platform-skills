@@ -153,4 +153,5 @@ module.exports = {
   buildScriptStarted,
   buildScriptCompleted,
   FIELD_TYPES,
+  pick,
 };

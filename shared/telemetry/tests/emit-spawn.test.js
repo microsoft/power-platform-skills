@@ -35,9 +35,20 @@ test("fireAndForget returns synchronously (<100 ms)", () => {
 test("dispatcher child receives the event and writes the probe", async () => {
   const tmp = mkTmp();
   const probe = path.join(tmp, "probe.json");
-  // Bypass the repo kill switch so the dispatcher exercises its emit path.
-  const prevBypass = process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH;
-  process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH = "1";
+  // Point the dispatcher at a temp ikey.json with disabled:false so emission
+  // proceeds (production ships disabled:true until tenant routing is live).
+  const ikeyJsonPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyJsonPath,
+    JSON.stringify({
+      ikey: "placeholder",
+      collector_url: "https://example.invalid/",
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: false,
+    })
+  );
+  const prevIkeyJson = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = ikeyJsonPath;
   try {
     fireAndForget(sampleEvent, {
       iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
@@ -46,8 +57,8 @@ test("dispatcher child receives the event and writes the probe", async () => {
       fakeProbe: probe,
     });
   } finally {
-    if (prevBypass === undefined) delete process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH;
-    else process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH = prevBypass;
+    if (prevIkeyJson === undefined) delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    else process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = prevIkeyJson;
   }
   // Wait up to 2s for the child to write the probe.
   for (let i = 0; i < 20; i++) {

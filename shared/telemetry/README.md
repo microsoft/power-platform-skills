@@ -25,14 +25,14 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (skill events) or `scriptName` (script events)
-- `outcome` (`success` | `failure`), `durationMs` (int), `errorClass` (Error constructor name only), `errorDescription` (truncated to 500 chars) — on completed events
+- `outcome` (`success` | `failure`), `durationMs` (int), `errorClass` (Error constructor name only), `errorDescription` (`err.code` only — short non-PII metadata like `ENOENT`; `err.message` is never emitted) — on completed events
 - `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload.
 
 ## What is NEVER sent
 
-File paths, cwd, env vars (except the telemetry off-switch), site names, Dataverse URLs, stack traces, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars (except the telemetry off-switch), site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
-Note: `errorClass` is the constructor name only (e.g. `TypeError`). `errorDescription` is the Error message truncated to 500 chars — callers should ensure exceptions don't include sensitive context before they bubble up.
+`errorClass` is the Error constructor name only (e.g. `TypeError`). `errorDescription` is restricted to `err.code` (e.g. `ENOENT`, `ECONNREFUSED`) — the free-form `err.message` is never emitted because it can contain file paths, GUIDs, or other user context. The dispatcher also runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
 
 ## Privacy posture
 

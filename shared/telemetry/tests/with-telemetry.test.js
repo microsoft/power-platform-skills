@@ -64,7 +64,8 @@ test("failure path emits completed with outcome=failure and severity=Error", asy
   assert.equal(rec.events[1].data.outcome, "failure");
   assert.equal(rec.events[1].data.errorClass, "TypeError");
   assert.equal(rec.events[1].data.severity, "Error");
-  assert.equal(rec.events[1].data.errorDescription, "boom");
+  // err.message ("boom") is intentionally NOT emitted — only err.code metadata.
+  assert.equal(rec.events[1].data.errorDescription, "");
 });
 
 test("populates aiAgentName / aiAgentVersion / pacCliVersion from _readAgentInfo", async () => {
@@ -91,14 +92,18 @@ test("populates aiAgentName / aiAgentVersion / pacCliVersion from _readAgentInfo
   }
 });
 
-test("errorDescription truncated to 500 characters on failure", async () => {
+test("errorDescription captures err.code metadata, NEVER err.message", async () => {
   const rec = recorder();
-  const longMessage = "x".repeat(800);
+  // err.message could contain PII (file paths, GUIDs, tokens), so the wrapper
+  // only emits err.code — short non-PII metadata like "ENOENT".
+  const piiMessage = "Failed to read /Users/secret-name/.ssh/id_rsa";
   await assert.rejects(
     withTelemetry(
       "deploy-site",
       async () => {
-        throw new Error(longMessage);
+        const err = new Error(piiMessage);
+        err.code = "ENOENT";
+        throw err;
       },
       {
         emitter: rec.emit,
@@ -110,7 +115,13 @@ test("errorDescription truncated to 500 characters on failure", async () => {
     ),
     Error
   );
-  assert.equal(rec.events[1].data.errorDescription.length, 500);
+  assert.equal(rec.events[1].data.errorDescription, "ENOENT");
+  // The PII-bearing message must not appear anywhere in the emitted payload.
+  const payload = JSON.stringify(rec.events[1]);
+  assert.ok(
+    !payload.includes("secret-name"),
+    "err.message must not be emitted under any field"
+  );
 });
 
 test("errorDescription is empty string on success", async () => {

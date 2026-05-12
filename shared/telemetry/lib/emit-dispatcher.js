@@ -5,6 +5,7 @@ const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { FIELD_TYPES, pick } = require("./events");
 
 function exitSilently() {
   process.exit(0);
@@ -27,26 +28,45 @@ function isUserOptedOut() {
   return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
 }
 
+// Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
+// so tests can point at a temp file with their own disabled / iKey state.
+function ikeyJsonPath() {
+  return (
+    process.env.POWER_PLATFORM_SKILLS_IKEY_JSON ||
+    path.join(__dirname, "..", "ikey.json")
+  );
+}
+
 // Repo-side kill switch: when ikey.json contains "disabled": true, no events
 // are emitted regardless of opt-out or iKey state. Lets the infrastructure
 // PRs land while the tenant-side annotation + Kusto table are still being
 // provisioned. Flip to false in a single PR when ready.
-//
-// Test seam: POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH=1 forces the gate
-// open so existing dispatcher tests can exercise the emission paths
-// without round-tripping through the shared ikey.json.
 function isDisabledByConfig() {
-  if (process.env.POWER_PLATFORM_SKILLS_BYPASS_KILL_SWITCH === "1") {
-    return false;
-  }
   try {
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "..", "ikey.json"), "utf8")
-    );
+    const cfg = JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
     return cfg.disabled === true;
   } catch {
     return false; // ikey.json missing/unreadable → fail open.
   }
+}
+
+// Reserved meta fields that builders always write into event.data. They are
+// not user-facing telemetry columns, so they live outside FIELD_TYPES but
+// must survive sanitization.
+const RESERVED_META_FIELDS = new Set(["eventName", "eventType", "severity"]);
+
+// Defense-in-depth allowlist filter. The builders in events.js are the
+// intended entry point and already enforce FIELD_TYPES, but the dispatcher
+// receives JSON over stdin from a separate process and cannot assume that.
+// Re-run pick() against FIELD_TYPES here so any field that bypasses the
+// builders is dropped before it reaches the wire.
+function sanitizeData(data) {
+  if (!data || typeof data !== "object") return {};
+  const filtered = pick(data, Object.keys(FIELD_TYPES));
+  for (const key of RESERVED_META_FIELDS) {
+    if (typeof data[key] === "string") filtered[key] = data[key];
+  }
+  return filtered;
 }
 
 function buildEnvelope(event) {
@@ -54,8 +74,8 @@ function buildEnvelope(event) {
     ver: "4.0",
     name: event.name,
     time: new Date().toISOString(),
-    iKey: "o:" + IKEY.split("-")[0],
-    data: event.data || {},
+    iKey: "o:" + IKEY,
+    data: sanitizeData(event.data),
   };
 }
 
