@@ -3,7 +3,7 @@ name: genpage
 version: 2.0.0
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
 author: Microsoft Corporation
-argument-hint: "[optional: page description or 'deploy' or 'update']"
+argument-hint: "<page description> | edit"
 user-invocable: true
 model: sonnet
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
@@ -69,13 +69,39 @@ Derive a short folder name from the user's requirements:
 
 ### Phase 1: Plan
 
-Invoke the `genpage-planner` agent using the `Task` tool. The planner asks the user
-whether they want to create new pages or edit an existing one — **do NOT pre-infer
-the intent from the prompt**. The planner is the single source of truth for new/edit
-disambiguation.
+> **⚠️ CRITICAL — you MUST invoke `genpage-planner` via the `Task` tool. You MUST
+> NOT inline the planner's questions yourself with `AskUserQuestion`.**
+>
+> The planner is not optional or skippable. It runs:
+> 1. Prerequisite validation (`node --version`, `pac help` version >= 2.7.0)
+> 2. Auth verification (`pac auth list`, environment selection)
+> 3. The structured "Create new / Edit existing" question (via `AskUserQuestion`
+>    inside the planner subagent, not here)
+> 4. Language detection (`pac model list-languages`) — only on new-page path
+> 5. Entity existence detection (`pac model list-tables --search`)
+> 6. App detection (`pac model list`) with proper selection prompts
+> 7. Plan-mode presentation and approval
+> 8. Writes `genpage-plan.md` to the working directory
+>
+> Reasons to **NEVER** ask "new or edit?" yourself before invoking the planner:
+> - You would skip prereq + auth (the planner is the only thing that runs them)
+> - The structured question gives the user labeled options; an inline free-text
+>   prompt forces them to guess
+> - The planner returns `{ "action": "edit" }` as a contract — your inline
+>   question can't produce that signal cleanly
+>
+> Even if `$ARGUMENTS` looks like it tells you the intent, **still invoke the
+> planner**. Pass the intent in the prompt — the planner uses it to skip its
+> own Question 1 if appropriate, but the prereq/auth/env steps still run.
 
-If the planner returns `{ "action": "edit" }`, skip Phases 2-8 and go directly to
-the **Edit Flow** section below.
+#### Steps
+
+1. Invoke `genpage-planner` via `Task` with the prompt below.
+2. Wait for it to finish (it returns a summary).
+3. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
+4. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+
+#### Invocation prompt
 
 Pass a prompt that includes:
 
@@ -83,24 +109,19 @@ Pass a prompt that includes:
 - The working directory (absolute path from Phase 0)
 - The plugin root path: `${CLAUDE_PLUGIN_ROOT}`
 
-Example prompt:
+Example:
 
 > You are the genpage-planner agent. Plan generative page(s) for the following requirements:
 >
-> [paste $ARGUMENTS here]
+> [paste $ARGUMENTS here verbatim, or "no arguments provided — gather from user"]
 >
 > Working directory: [absolute path from Phase 0]
 > Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
-> Follow the instructions in your agent file. Write genpage-plan.md to the working
-> directory. Return the page list, entity status, and app selection when complete.
-
-**Wait for the planner to finish.** The planner will present the plan to the user via
-plan mode and wait for approval before returning. Do not proceed to Phase 2 until the
-planner task completes successfully.
-
-**If the planner returns `{ "action": "edit" }`:** The user chose to edit an existing
-page. Skip to the **Edit Flow** section below.
+> Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
+> the new/edit question via AskUserQuestion, then proceed accordingly. Write
+> genpage-plan.md to the working directory if creating. Return the page list,
+> entity status, app selection, and any `{ "action": "edit" }` signal when complete.
 
 ### Phase 2: Create Entities (Conditional)
 
