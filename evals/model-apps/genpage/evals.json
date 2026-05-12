@@ -21,10 +21,14 @@
     "Generated .tsx does NOT use React Router or construct raw URLs / manipulate `window.location` for navigation",
     "Generated .tsx uses `Xrm.Navigation.navigateTo` for any in-app navigation",
     "Generated .tsx uses Fluent UI icons in unsized form (e.g., `AddRegular`, not `Add24Regular`)",
+    "Every named import from `@fluentui/react-icons` in the generated .tsx appears in references/verified-icons.txt — no hallucinated icon names",
     "Generated .tsx wraps async `dataApi` calls in try-catch (Dataverse pages only)",
     "Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies",
     "Generated .tsx for lookup display names uses `@OData.Community.Display.V1.FormattedValue` annotations, not lookup-name fields in $select",
-    "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components`"
+    "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components` and configures column sizing (columnSizingOptions or resizableColumns)",
+    "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
+    "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching-pattern.md is used (Rule 15); no useCallback for data-fetching functions",
+    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs"
   ],
   "evals": [
     {
@@ -44,9 +48,11 @@
         "Phase 1 (Planner): Account entity is detected as existing; plan records no entity creation required",
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
-        "Phase 5 (Page Builder): genpage-page-builder is invoked with Data mode: dataverse and RuntimeTypes path",
-        "Phase 5 (Page Builder): A relevant sample file is read (e.g., 8-responsive-cards.tsx for card layout)",
-        "Phase 5 (Page Builder): Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 8-responsive-cards.tsx for card layout)",
+        "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
         "Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources 'account', --prompt, --model, --name, --agent-message, --add-to-sitemap"
       ]
     },
@@ -189,7 +195,8 @@
         "Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)",
         "Phase 1 (Planner): Plan includes entity definitions with columns, types, and a lookup relationship (cr_candidate → cr_jobrequisition)",
         "Phase 2a: Orchestrator probes Dataverse MCP list_tables availability BEFORE invoking entity-builder",
-        "Phase 2b (Entity Builder): Dataverse plugin readiness is verified",
+        "Phase 2b: Orchestrator passes a resolved absolute Project Root path to the entity-builder invocation prompt (not the literal string '$PROJECT_ROOT')",
+        "Phase 2b (Entity Builder): Dataverse plugin readiness is verified using the passed project-root path",
         "Phase 2b (Entity Builder): cr_jobrequisition (independent) is created BEFORE cr_candidate (has lookup)",
         "Phase 2b (Entity Builder): Propagation delay (3-5s) is observed after table creation before adding columns",
         "Phase 2b (Entity Builder): Relationships are created after both tables exist; propagation delay (5-10s) before using @odata.bind",
@@ -282,11 +289,14 @@
         "Phase 1 (Planner): Per-Page Specifications section has an entry for each of the 3 pages",
         "Phase 5a: Orchestrator validates the plan — at least one page, unique filenames, each page has a matching Per-Page Specifications subsection",
         "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
-        "Phase 5b: Three genpage-page-builder agents are invoked in a SINGLE message (parallel execution, not sequential)",
-        "Phase 5b: Each builder receives a distinct target filename — no two builders target the same file",
-        "Phase 5b: Each builder reads the same genpage-plan.md but extracts only its own page specification",
-        "Phase 5b: Each builder reads the same RuntimeTypes.ts for column verification",
+        "Phase 5c (multi-page): Three genpage-page-builder agents are invoked via Task tool in a SINGLE message (parallel execution, not sequential). The single-page fast path (5b) is NOT taken because N>1.",
+        "Phase 5c: Each builder receives a distinct target filename — no two builders target the same file",
+        "Phase 5c: Each builder reads the same genpage-plan.md but extracts only its own page specification",
+        "Phase 5c: Each builder reads the same RuntimeTypes.ts for column verification",
+        "Phase 5c: Cross-page navigation (e.g., candidate list → candidate detail) uses quoted `\"PAGEREF_<filename>\"` placeholders, never invented GUIDs",
         "Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file",
+        "Phase 6.5: If any .tsx contains PAGEREF_ tokens, orchestrator builds a filename→page-id map sorted by length desc, replaces quoted `\"PAGEREF_<name>\"` tokens with the matching GUID (word-boundary safe), and re-uploads only affected files with the full update flag set",
+        "Phase 6.5: Unresolved PAGEREF tokens (typos, missing siblings) cause an explicit error to the user — never silently shipped",
         "Phase 8: Summary table lists all 3 pages with their files, entities, and deployment status"
       ]
     },
