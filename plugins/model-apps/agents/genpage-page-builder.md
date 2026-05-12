@@ -203,13 +203,17 @@ export default GeneratedComponent;
 
 ### Localization
 
-If the plan indicates multiple languages or non-English languages:
-- Include language detection boilerplate using `Xrm.Utility.getGlobalContext()`
-- Create a translations dictionary for all detected languages
-- Use a `translate()` helper for ALL user-visible text
-- Add RTL support if Arabic or Hebrew detected
-- Fetch user formatting settings from `usersettings` via `dataApi`
-- Use formatting helpers for dates, numbers, and currency — never hardcode formats
+If the plan's `## Environment` section indicates **multiple configured languages
+OR any non-English language**, Read the localization reference for the full
+pattern (translation dictionary, RTL support, formatting helpers, usersettings
+fetch):
+
+```
+${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md
+```
+
+For English-only environments, skip this entirely — do not load the reference
+and do not include any translation scaffolding.
 
 ### DataAPI Usage
 
