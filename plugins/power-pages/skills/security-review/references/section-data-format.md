@@ -2,6 +2,14 @@
 
 Every JSON file under `.security-review-tmp/<skill-name>.json` follows the same shape so the master report can render them uniformly.
 
+## Table of contents
+
+- [Top-level shape](#top-level-shape)
+- [Finding object](#finding-object)
+- [Details object](#details-object)
+
+---
+
 ## Top-level shape
 
 ```json
@@ -24,7 +32,7 @@ Every JSON file under `.security-review-tmp/<skill-name>.json` follows the same 
 | `findings` | Yes | Array of finding objects (see below). May be empty. |
 | `details` | No | Optional details block — table, key-value, or raw HTML. |
 
-A sub-skill that fails or is skipped writes:
+A skill that fails or is skipped writes:
 
 ```json
 { "status": "skipped", "reason": "<plain-language reason>" }
@@ -56,7 +64,7 @@ Severity buckets used by the master report:
 | `info`     | Worth knowing — improvements or context. |
 | `pass`     | A check that passed cleanly. Surface a few of these so the report does not look unbalanced. |
 
-Each sub-skill is responsible for translating its native severity values into this bucket set before writing the file.
+Each skill is responsible for translating its native severity values into this bucket set before writing the file.
 
 ## Details block
 

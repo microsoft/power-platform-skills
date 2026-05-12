@@ -5,7 +5,7 @@ description: >-
   delegating to the focused security skills (code and dependencies, live
   site scan, browser headers, web application firewall, authentication,
   and table permissions) and consolidating every finding into one
-  HTML report with a glossary. Use when the user wants a full security
+  HTML report. Use when the user wants a full security
   review, a release-readiness check before publishing, a code scan during
   development, live site monitoring, or asks open-ended questions like
   "review my site security", "is my site safe to ship", "do a security
@@ -21,9 +21,9 @@ model: opus
 
 # Review Security
 
-Guide the user through a full security review of their Power Pages site. The skill asks one short question to capture the goal, then — for code-and-config — a follow-up to set depth. Release readiness skips the follow-up and runs every check at advanced depth by default. The skill then runs the matching focused skills and assembles every finding into a single HTML report with a built-in glossary so the user never has to switch tabs.
+Guide the user through a full security review of their Power Pages site. Runs the matching focused skills and assembles every finding into a single HTML report.
 
-The skill never asks the user technical questions. The conversation stays in plain language; technical names appear in the final report and the glossary explains them.
+The skill never asks the user technical questions. The conversation stays in plain language.
 
 **Initial request:** $ARGUMENTS
 
@@ -34,7 +34,7 @@ The conversation always follows the same seven steps. Each step maps to a row in
 1. **Ask the goal** — one question, three answers, plain language
 2. **Choose scope and depth** — one follow-up for code-and-config; release defaults to all checks at advanced depth; monitor skips this step
 3. **Confirm and start** — show a one-line plan, give the user a chance to back out
-4. **Scan in progress** — run the matching sub-skills, surface progress
+4. **Scan in progress** — run the matching skills, surface progress
 5. **Results summary** — totals, top findings
 6. **Findings and remediation** — group findings by section, offer to fix
 7. **Next steps and guidance** — concrete recommendations, link the next action
@@ -46,14 +46,14 @@ The conversation always follows the same seven steps. Each step maps to a row in
 | 1 — Prerequisites | Prerequisites and working folders | (setup) |
 | 2 — Scope | Capture goal and scope | Steps 1 and 2 |
 | 3 — Confirm | Confirm the plan | Step 3 |
-| 4 — Sub-skills | Run the matching sub-skills | Step 4 |
+| 4 — Skills | Run the matching skills | Step 4 |
 | 5 — Report | Build the consolidated report | Steps 5 and 6 |
 | 6 — Present | Present and offer follow-ups | Step 7 |
 | 7 — Cleanup | Clean up temporary files | (closing) |
 
 ## Task Tracking
 
-Create tasks in three groups. Mark each `in_progress` when you start and `completed` when you are done.
+Create tasks in three groups. Mark each `in_progress` when starting, `completed` when done.
 
 **Group 1 — create at the start of prerequisites:**
 
@@ -74,7 +74,7 @@ Only this one task. Do not create any other tasks until prerequisites complete.
 
 | Task subject | activeForm |
 |--------------|------------|
-| Run sub-skills | Running checks |
+| Run skills | Running checks |
 | Build the report | Building the report |
 | Present findings | Presenting findings |
 | Clean up | Cleaning up |
@@ -93,7 +93,7 @@ For the `code-config` goal, the deploy check is not required: code and package s
 
 ### 1.2 Prepare a temporary working folder
 
-Create a fresh working directory: `<PROJECT_ROOT>/.security-review-tmp/`. The folder holds JSON data files emitted by each sub-skill in **review mode**. The folder is removed in the cleanup step.
+Create a fresh working directory: `<SYSTEM_TEMP>/security-review/`. The folder holds JSON data files emitted by each skill in **review mode**. The folder is removed in the cleanup step.
 
 If the folder already exists from a previous interrupted run, delete its contents (not the folder itself) before continuing.
 
@@ -109,82 +109,40 @@ The final HTML lives at `<PROJECT_ROOT>/docs/security-review.html`. If that file
 
 ### 2.1 Step 1 — Ask the goal
 
-Call `AskUserQuestion` using the structured `questions` array. Keep `label` to **1-5 words**. Put "(Recommended)" in `description`, never in `label`. Every option MUST include `description` and `preview`.
+Ask the following in order. Each is a **separate** `AskUserQuestion` call — do NOT combine. If the user's initial request already answers a question, skip it and move to the next.
 
-```json
-{
-  "questions": [
-    {
-      "question": "What would you like to review?",
-      "header": "Goal",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Code and config",
-          "description": "Check code, configs, dependencies, and access control.",
-          "preview": "Scans code for risky patterns, checks packages, and reviews authentication, roles, and permissions.\n\nWorks entirely on local files. Good for frequent checks during development."
-        },
-        {
-          "label": "Release readiness",
-          "description": "End-to-end review before you publish. (Recommended)",
-          "preview": "Runs every check: code, packages, secrets, headers, firewall, authentication, permissions, and live site scan.\n\nCovers both local files and the deployed site. Best before going live."
-        },
-        {
-          "label": "Deployed site",
-          "description": "Detect issues from real user traffic.",
-          "preview": "Scans your deployed site for runtime vulnerabilities, exposed pages, and missing protections.\n\nFocuses on what is happening on your live site right now. Requires deployment."
-        }
-      ]
-    }
-  ]
-}
-```
+**Question 1 — What to review?**
 
-Map the answer to a goal id:
+| Label | Description |
+|-------|-------------|
+| Code and config | Check code, packages, and access control. Works on local files only. |
+| Release readiness | Full review before publishing — checks everything. (Recommended) |
+| Deployed site | Check the live site for issues. Requires deployment. |
 
-| Option | Goal id | Sub-skills involved |
-|--------|---------|-------------------------------|
-| Code and config | `code-config` | scan-code, audit-permissions (and read-only check of setup-auth state) |
-| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions (and read-only check of setup-auth state) |
+Goal mapping (internal):
+
+| Label | Goal id | Skills |
+|-------|---------|------------|
+| Code and config | `code-config` | scan-code, audit-permissions, setup-auth (read-only) |
+| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
 | Deployed site | `monitor` | scan-site |
 
-### 2.2 Step 2 — Choose scope and depth
+### 2.2 Step 2 — Choose depth
 
-Ask one follow-up `AskUserQuestion` that depends on the goal id. Use the same structured format with short labels, `description`, and `preview`.
+**Only if goal is `code-config`:**
 
-**For `code-config`:**
+| Label | Description |
+|-------|-------------|
+| Advanced | Covers common risks and deeper code weaknesses. (Recommended) |
+| Basic | Covers common risks only. Faster. |
 
-```json
-{
-  "questions": [
-    {
-      "question": "How thorough should the check be?",
-      "header": "Depth",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Basic",
-          "description": "OWASP Top Ten coverage. Good balance. (Recommended)",
-          "preview": "OWASP Top Ten ruleset — covers the most exploited web vulnerability categories.\n\nFlags medium+ severity. Best choice for most projects."
-        },
-        {
-          "label": "Advanced",
-          "description": "Full security audit ruleset. Slowest.",
-          "preview": "Full security audit ruleset — all patterns including low-severity findings.\n\nMay take several minutes on larger projects. Best before a PR."
-        }
-      ]
-    }
-  ]
-}
-```
+**For `monitor`:** skip — the scan runs at default depth.
 
-**For `monitor`:** skip this step — the scan covers public pages automatically.
+**For `release`:** skip — runs all skills at Advanced depth automatically.
 
-**For `release`:** skip this step entirely. Default to running **all** sub-skills at **advanced** depth (full security audit ruleset, all severity levels).
+### 2.3 Capture the chosen skill set
 
-### 2.3 Capture the chosen sub-skill set
-
-Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the sub-skill itself — see 4.4 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see 4.4 below). This is the **Access & Data Security Validation** component.
 
 ---
 
@@ -196,21 +154,21 @@ Tell the user, in plain language, what will run and the rough time it will take.
 |----------|---------|
 | I will <one-line description>. Continue? | Yes, run it (Recommended); Change the plan |
 
-When the user confirms, mark the **Run sub-skills** task `in_progress` and continue.
+When the user confirms, mark the **Run skills** task `in_progress` and continue.
 
 ---
 
-## 4. Run the matching sub-skills
+## 4. Run the matching skills
 
-Spawn each selected sub-skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--review <PROJECT_ROOT>/.security-review-tmp/`. Each sub-skill handles its own authentication, error reporting, and progress.
+Spawn each selected skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--review <SYSTEM_TEMP>/security-review/`. Each skill handles its own authentication, error reporting, and progress.
 
-### 4.1 Sub-skill invocation via subagents
+### 4.1 Skill invocation via subagents
 
-Sub-skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scans first so they get a head start, then launch the remaining checks immediately after.
+Skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scans first so they get a head start, then launch the remaining checks immediately after.
 
 **Wave 1 — long-running scans (launch first):**
 
-Spawn background subagents for `scan-code` and `scan-site` (when selected). These sub-skills take the most time and benefit from an early start.
+Spawn background subagents for `scan-code` and `scan-site` (when selected). These skills take the most time and benefit from an early start.
 
 **Wave 2 — remaining checks (launch immediately after Wave 1):**
 
@@ -237,17 +195,17 @@ Example subagent call:
 ```
 Agent({
   description: "Run scan-code",
-  prompt: "Invoke the skill `scan-code` with argument `--review <PROJECT_ROOT>/.security-review-tmp/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <PROJECT_ROOT>/.security-review-tmp/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  prompt: "Invoke the skill `scan-code` with argument `--review <SYSTEM_TEMP>/security-review/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <SYSTEM_TEMP>/security-review/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
   run_in_background: true
 })
 ```
 
 ### 4.1.2 Expected output
 
-After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-review-tmp/<skill-name>.json` matching the [section data format](references/section-data-format.md):
+After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json` matching the [section data format](references/section-data-format.md):
 
 ```text
-.security-review-tmp/
+<SYSTEM_TEMP>/security-review/
 ├── scan-code.json
 ├── scan-site.json
 ├── manage-headers.json
@@ -255,31 +213,40 @@ After all subagents complete, expect JSON files at `<PROJECT_ROOT>/.security-rev
 └── audit-permissions.json   (when invoked)
 ```
 
-If a sub-skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
+If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
 
-### 4.2 Sub-skills that lack a review mode
+### 4.2 Skills without `--review` mode
 
-`audit-permissions` and `setup-auth` do not currently run in review mode by themselves. Treat them as follows:
+`audit-permissions` and `setup-auth` do not support `--review`. Handle them inline (not as background subagents):
 
-- **audit-permissions** — invoke via `Skill` and capture its findings JSON manually. The skill writes its data to `<PROJECT_ROOT>/docs/<file>.html`; in this orchestration, **read its findings JSON shape from the inventory you collected during the run** and write it to `.security-review-tmp/audit-permissions.json` matching the shared section format documented in `references/section-data-format.md`.
-- **setup-auth** — do not invoke. Instead, read existing `.powerpages-site/site-settings/` files for authentication and cookie settings and produce a small finding list:
-  - identity provider configured? (look for `Authentication/OpenIdConnect/*/Authority`)
+- **audit-permissions** — invoke via the `Skill` tool (not `Agent`). After it completes, read its output and write a translated JSON file to `<SYSTEM_TEMP>/security-review/audit-permissions.json` in the skill review-mode format (`REPORT_TITLE`, `FINDINGS_DATA`, etc.).
+- **setup-auth** — do not invoke as a skill. Instead, read `.powerpages-site/site-settings/` YAML files directly and check for:
+  - identity provider configured? (`Authentication/OpenIdConnect/*/Authority`)
   - profile redirect disabled? (`Authentication/Registration/ProfileRedirectEnabled = false`)
-  - cookie SameSite reasonable? (`HTTP/SameSite/Default`)
+  - cookie SameSite setting? (`HTTP/SameSite/Default`)
 
-Write the resulting findings to `.security-review-tmp/setup-auth.json` in the [section data format](references/section-data-format.md).
+Write the resulting findings to `<SYSTEM_TEMP>/security-review/setup-auth.json` in the same format.
 
 ### 4.3 Status updates
 
-Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate sub-skill internal steps. Once all subagents have finished, confirm that all checks are complete before moving to the report-building step.
+Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate skill internal steps. Once all subagents have finished, confirm that all checks are complete before moving to the report-building step.
 
 ---
 
 ## 5. Build the consolidated report
 
-### 5.1 Read all section data
+### 5.1 Read and translate section data
 
-Load every JSON file in `.security-review-tmp/`. Each file should match the [section data format](references/section-data-format.md). Skip files marked `status: "skipped"` after capturing their reason for the per-section placeholder.
+Load every JSON file in `<SYSTEM_TEMP>/security-review/`. Skills write review-mode JSON with keys `REPORT_TITLE`, `REPORT_DESC`, `SITE_NAME`, `SUMMARY`, `FINDINGS_DATA`, `DETAILS_DATA`. Translate each into the [section data format](references/section-data-format.md):
+
+| Skill key | Section data key |
+|---------------|-----------------|
+| `REPORT_TITLE` | `label` |
+| `REPORT_DESC` | `description` |
+| `FINDINGS_DATA` | `findings` |
+| `DETAILS_DATA` | `details` |
+
+Derive `id` from the filename (e.g., `scan-code.json` → `"code-scan"`). Pick an `icon` per section. Skip files marked `status: "skipped"` after capturing their reason for the per-section placeholder.
 
 ### 5.2 Compute totals
 
@@ -301,7 +268,7 @@ The agent should reason about which next step is most valuable per case rather t
 
 ### 5.5 Build the data file
 
-Write the consolidated data to `.security-review-tmp/security-review-data.json`:
+Write the consolidated data to `<SYSTEM_TEMP>/security-review/security-review-data.json`:
 
 ```json
 {
@@ -326,7 +293,7 @@ Write the consolidated data to `.security-review-tmp/security-review-data.json`:
         "id": "code-scan",
         "icon": "▦",
         "label": "Code & Packages",
-        "description": "Review of source files and installed packages.",
+        "description": "Review of source files and packages.",
         "findings": [
           <findingObj>,
           ...
@@ -344,25 +311,16 @@ Write the consolidated data to `.security-review-tmp/security-review-data.json`:
     "nextSteps": [
       "..."
     ],
-    "glossary": [
-      {
-        "term": "...",
-        "aka": "...",
-        "definition": "..."
-      }
-    ]
   }
 }
 ```
-
-The glossary entries come from `references/glossary.md`. Include only the terms that appear in any of the section findings. Do not include the entire glossary if half of it is not relevant — fewer, more useful entries beat a complete dump.
 
 ### 5.6 Render the master HTML
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/security-review/scripts/render-review.js" \
   --output "<DOCS_PATH>" \
-  --data "<TEMP_DIR>/security-review-data.json"
+  --data "<SYSTEM_TEMP>/security-review/security-review-data.json"
 ```
 
 ---
@@ -385,7 +343,7 @@ Show a short plain-language summary in the chat: counts of critical / warning / 
 
 | Question | Options |
 |----------|---------|
-| What would you like to do next? | Walk me through fixing the critical items now; Re-run the review after I make changes; Stop here, I will read the report myself |
+| What would you like to do next? | Walk me through the fixes; Re-run the review; Done for now |
 
 If the user picks "walk me through", group critical findings by section and offer the matching focused skill for each (`/manage-headers`, `/manage-firewall`, `/audit-permissions`, etc.).
 
@@ -395,7 +353,7 @@ If the user picks "re-run", invoke this skill again with the same goal and scope
 
 ## 7. Clean up
 
-Delete the entire `.security-review-tmp/` folder. The final HTML, located in `docs/`, must remain. Confirm to the user that temporary files have been removed.
+Delete the entire `<SYSTEM_TEMP>/security-review/` folder. The final HTML, located in `docs/`, must remain. Confirm to the user that temporary files have been removed.
 
 If the cleanup fails (file lock, permission), warn the user and continue — the report is already written and the temp folder can be removed manually later.
 
@@ -403,16 +361,14 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 ## Constraints
 
-- **Plain language with users** — never lead with technical terms. The glossary in the final report covers them.
-- **Parallel subagent delegation** — sub-skills run as parallel subagents via the `Agent` tool. Launch `scan-code` and `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
-- **Single consolidated HTML** — never produce per-skill HTML reports during this run. Sub-skills run in `--review` mode.
+- **Plain language with users** — never lead with technical terms.
+- **Parallel subagent delegation** — skills run as parallel subagents via the `Agent` tool. Launch `scan-code` and `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
+- **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
-- **Glossary always present** — every report includes a Glossary section with at least the terms that appeared in the findings.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
-- **Never run destructive sub-actions automatically** — sub-skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--review` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
+- **Never run destructive sub-actions automatically** — skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--review` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
 
 ## References
 
 - `references/section-data-format.md` — the JSON shape every section uses
-- `references/glossary.md` — plain-language explanations of the technical terms
 - `references/flow.md` — the seven-step conversation in detail
