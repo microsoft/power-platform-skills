@@ -25,29 +25,28 @@ CLAUDE.md                      ← Symlink → AGENTS.md
 references/
   TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
+  QAChecks.md                  ← Runtime anti-pattern checks for self-QA
+  PlanTemplates.md             ← CREATE and EDIT plan document structures for canvas-app-planner
 agents/
-  canvas-app-planner.md        ← Plans app design; invoked by generate-canvas-app (sequential)
-  canvas-screen-builder.md     ← Builds one screen; invoked by generate-canvas-app (parallel)
-  canvas-edit-planner.md       ← Plans complex edits; invoked by edit-canvas-app (sequential)
-  canvas-screen-editor.md      ← Applies edits to one screen; invoked by edit-canvas-app (parallel)
+  canvas-app-planner.md        ← Discovers resources and writes plan document; invoked by canvas-app
+  canvas-screen-builder.md     ← Builds or modifies one screen; invoked by canvas-app (parallel)
 skills/
+  canvas-app/
+    SKILL.md                   ← Unified skill: create or edit a Canvas App (auto-detects mode)
   configure-canvas-mcp/
     SKILL.md                   ← Registers the Canvas Authoring MCP server with Claude Code
-  generate-canvas-app/
-    SKILL.md                   ← Orchestrates canvas-app-planner + canvas-screen-builder agents
-  edit-canvas-app/
-    SKILL.md                   ← Edits pa.yaml source files for an existing Canvas App
   add-data-source/
     SKILL.md                   ← Guides user to add a data source or connector in Studio, then verifies
+  generate-canvas-app/
+    SKILL.md                   ← [DEPRECATED] Redirects to canvas-app
 ```
 
 ## Skills
 
 | Skill | Description |
 |-------|-------------|
+| `/canvas-app` | Create or edit a Canvas App — auto-detects whether to generate from scratch or edit existing |
 | `/configure-canvas-mcp` | Register the Canvas Authoring MCP server with Claude Code |
-| `/generate-canvas-app` | Generate a complete Canvas App from a natural language description |
-| `/edit-canvas-app` | Edit an existing Canvas App from a natural language description of changes |
 | `/add-data-source` | Guide the user to add a data source, connection, or API connector in Studio, then verify it is available |
 
 ## Agents
@@ -56,10 +55,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `generate-canvas-app` | Discovers resources, designs the app, presents plan for approval, writes plan document |
-| `canvas-screen-builder` | `generate-canvas-app` | Writes YAML for one screen based on the plan; runs in parallel with other builders; app validation/compilation is performed later by `generate-canvas-app` using `compile_canvas` |
-| `canvas-edit-planner` | `edit-canvas-app` | Reads existing .pa.yaml files, plans complex edits, presents edit plan for approval, writes canvas-edit-plan.md |
-| `canvas-screen-editor` | `edit-canvas-app` | Applies targeted edits to one screen's .pa.yaml; runs in parallel with other editors |
+| `canvas-app-planner` | `canvas-app` | Receives the approved plan from the skill. Discovers available controls, APIs, and data sources; gathers control property definitions (`describe_control`); writes `App.pa.yaml` (CREATE mode) and `canvas-app-plan.md` for downstream screen builders. |
+| `canvas-screen-builder` | `canvas-app` | For Create actions: writes YAML for one new screen based on the plan. For Modify actions: applies targeted edits to one existing screen. Runs in parallel with other builders; validation is performed later by `canvas-app` using `compile_canvas`. |
 
 ## MCP Tools
 

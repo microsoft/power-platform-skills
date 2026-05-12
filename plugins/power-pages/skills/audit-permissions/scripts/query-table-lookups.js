@@ -32,7 +32,7 @@ if (!envUrl || !table) {
 (async () => {
   const token = getAuthToken(envUrl);
   if (!token) {
-    process.stderr.write('Failed to get auth token. Run: az login\n');
+    process.stderr.write('Failed to get auth token. Run: az login --allow-no-subscriptions\n');
     process.exit(1);
   }
 

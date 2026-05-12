@@ -28,7 +28,7 @@ function main() {
   }
 
   if (result.status !== 0) {
-    process.stderr.write('Failed to list Azure Key Vaults. Ensure you are logged in (`az login`).\n');
+    process.stderr.write('Failed to list Azure Key Vaults. Ensure `az login` succeeded AND your account has a subscription with Key Vault access (Key Vaults are subscription-scoped).\n');
     if (result.stderr) process.stderr.write(result.stderr);
     process.exit(1);
   }

@@ -97,7 +97,7 @@ async function apiPost(envUrl, token, entitySet, body) {
 async function main() {
   const token = getAuthToken(envUrl);
   if (!token) {
-    process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
+    process.stderr.write('Failed to get Azure CLI token. Run `az login --allow-no-subscriptions` first.\n');
     process.exit(1);
   }
 

@@ -56,7 +56,7 @@ const siteUrl = `https://${args.subdomain}.${siteDomain}`;
 
 let token = getAuthToken(ppApiBaseUrl);
 if (!token) {
-  output({ error: 'Azure CLI token not available. Run "az login" first.' });
+  output({ error: 'Azure CLI token not available. Run "az login --allow-no-subscriptions" first.' });
 }
 
 // --- Build request body ---

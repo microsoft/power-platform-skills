@@ -53,7 +53,7 @@ const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
 // --- Get Power Platform API token ---
 const token = getAuthToken(ppApiBaseUrl);
 if (!token) {
-  output({ success: false, error: 'Failed to get Azure CLI access token. Ensure you are logged in with: az login' });
+  output({ success: false, error: 'Failed to get Azure CLI access token. Ensure you are logged in with: az login --allow-no-subscriptions' });
 }
 
 // --- Find the website and restart it to clear cache ---

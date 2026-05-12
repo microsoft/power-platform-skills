@@ -60,7 +60,7 @@ const CLOUD_TO_FLOW_RESOURCE = {
   if (!token) {
     process.stderr.write(
       'Error: Unable to obtain access token for the Power Automate service.\n' +
-      'Run `az login` and ensure your account has access to the environment.\n'
+      'Run `az login --allow-no-subscriptions` and ensure your account has access to the environment.\n'
     );
     process.exit(1);
   }

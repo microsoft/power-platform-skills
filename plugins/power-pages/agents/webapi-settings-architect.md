@@ -238,7 +238,7 @@ Store the results as a lookup map for each table:
 If any API calls fail:
 
 - **`pac env who` fails**: Note that PAC CLI auth is required (`pac auth create`)
-- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login`)
+- **`verify-dataverse-access.js` fails**: Note that Azure CLI login is required (`az login --allow-no-subscriptions`)
 - **OData 401/403**: Token expired or insufficient privileges — note in plan
 - **OData 404**: Table doesn't exist — exclude from plan
 
