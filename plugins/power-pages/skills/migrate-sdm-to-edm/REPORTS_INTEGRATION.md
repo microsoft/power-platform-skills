@@ -18,30 +18,25 @@ plugins/power-pages/skills/migrate-sdm-to-edm/
 
 ## Workflow Integration
 
-### Phase 3: Customization Report & Analysis
+### Phase 8: Customization Report & Analysis
 
 **Current flow (SKILL.md):**
+
 1. Download customization report via PAC CLI
 2. Parse and categorize findings
-3. Present findings to user
-
-**Enhanced flow with HTML reports:**
-1. Download customization report via PAC CLI to `<REPORT_PATH>/SiteCustomization.csv`
-2. Parse and categorize findings
-3. **Generate HTML report:** Run the generation script
-4. **Open in browser:** Share the file URL with the user
-5. Present summary to user
+3. Generate HTML report
+4. Present findings to user
 
 **Implementation:**
 
 ```bash
-# After Phase 3.1: Download Customization Report
+# Phase 8 step 1: Download Customization Report
 pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReportPath "./migration-report"
 
-# After Phase 3.2: Parse findings
+# Phase 8 step 2: Parse findings
 # ... parsing logic ...
 
-# NEW: Generate HTML report
+# Phase 8 step 3: Generate HTML report
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
   --customization-report "./migration-report/SiteCustomization.csv" \
   --site-name "<SITE_NAME>" \
@@ -53,33 +48,46 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration
 echo "Customization report: file://$(pwd)/migration-reports/customization-report.html"
 ```
 
-### Phase 8 & 10: Execution Report & Summary
+### Phase 9: Automated Remediation (subset)
+
+For automatable fixes (Data Model Extensions only), the same script is invoked with `--automate` and `--env-url`:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
+  --site-name "<SITE_NAME>" \
+  --website-id "<WEBSITE_ID>" \
+  --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" \
+  --env-url "https://org.crm.dynamics.com" \
+  --automate \
+  --environment-type "<ENV_TYPE>" \
+  --output-dir "./migration-reports"
+```
+
+The script creates missing string attributes via Dataverse Web API and logs results into the execution report. All other customization types (Liquid, FetchXML, plugins, workflows) are flagged as manual.
+
+### Phase 12: Execution Report & Summary
 
 **Current flow (SKILL.md):**
-1. Present remediation checklist
-2. Present final summary
 
-**Enhanced flow with HTML reports:**
-1. Generate comprehensive execution report during migration
-2. **Open in browser:** Share the file URL with the user
-3. Provide remediation guidance from the HTML report
+1. Present validation checklist
+2. Run rollback (if needed)
+3. Generate execution report
 4. Present final summary
 
 **Implementation:**
 
 ```bash
-# During/After Phase 5-7: Execution tracking
+# During Phases 1–11: skill collects timing and results
 # Track all commands, results, and timing
 
-# Before Phase 10: Generate execution report
+# At end of Phase 12: generate execution report
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
   --site-name "<SITE_NAME>" \
   --website-id "<WEBSITE_ID>" \
   --portal-id "<PORTAL_ID>" \
   --template-name "<TEMPLATE_NAME>" \
-  --output-dir "./migration-reports" \
-  --execution-data "phase3,phase5,phase7" \
-  --remediation-needed "true"
+  --execution-data "phase1,phase2,phase3,phase4,phase5,phase6,phase7,phase8,phase9,phase10,phase11,phase12" \
+  --output-dir "./migration-reports"
 
 # Share with user
 echo "Execution report: file://$(pwd)/migration-reports/skill-execution-report.html"
@@ -170,47 +178,51 @@ During skill execution, collect:
 
 ## Integration Points in SKILL.md
 
-### Phase 3: Add HTML Report Generation
+### Phase 8: Customization Report Generation
 
-After step 3.3 (Present Findings), add:
+The skill calls the script after parsing the CSV from PAC CLI:
 
-```markdown
-### 3.3a Generate and Share Customization Report
-
-Generate an interactive HTML report of the customization findings:
-
-\`\`\`powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
-  --customization-report "<REPORT_PATH>" \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --template-name "<TEMPLATE_NAME>" \
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+  --customization-report "<REPORT_PATH>" `
+  --site-name "<SITE_NAME>" `
+  --website-id "<WEBSITE_ID>" `
+  --template-name "<TEMPLATE_NAME>" `
   --output-dir "<OUTPUT_DIR>"
-\`\`\`
-
-Open the generated HTML report in your browser:
-\`file://<OUTPUT_DIR>/customization-report.html\`
 ```
 
-### Phase 10: Add Execution Report
+Open the generated HTML report in your browser: `file://<OUTPUT_DIR>/customization-report.html`
 
-After presenting the final summary, add:
+### Phase 9: Automated Remediation
 
-```markdown
-### Generate Execution Report
+The same script runs with `--automate` to apply safe fixes via Dataverse API (Data Model Extensions only):
 
-Generate a comprehensive HTML report of the entire migration execution:
-
-\`\`\`powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --portal-id "<PORTAL_ID>" \
-  --template-name "<TEMPLATE_NAME>" \
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+  --site-name "<SITE_NAME>" `
+  --website-id "<WEBSITE_ID>" `
+  --siteCustomizationReportPath "<REPORT_PATH>" `
+  --env-url "<ENV_URL>" `
+  --automate `
+  --environment-type "<ENV_TYPE>" `
   --output-dir "<OUTPUT_DIR>"
-\`\`\`
+```
+
+### Phase 12: Final Execution Report
+
+At the end of post-migration validation:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+  --site-name "<SITE_NAME>" `
+  --website-id "<WEBSITE_ID>" `
+  --portal-id "<PORTAL_ID>" `
+  --template-name "<TEMPLATE_NAME>" `
+  --output-dir "<OUTPUT_DIR>"
+```
 
 The execution report includes:
+
 - All PAC commands executed and their results
 - Prerequisite verification status
 - Migration phase details
@@ -219,9 +231,7 @@ The execution report includes:
 - Post-migration validation checklist
 - Next steps
 
-Open the report in your browser:
-\`file://<OUTPUT_DIR>/skill-execution-report.html\`
-```
+Open the report in your browser: `file://<OUTPUT_DIR>/skill-execution-report.html`
 
 ## Using `browser_navigate` to Open Reports
 
@@ -270,13 +280,16 @@ To add a new customization type badge:
 
 ### CSV Parsing
 
-The script uses `csv-parse` (npm package). Ensure it's available:
+The script uses a built-in CSV parser (no npm dependency) — see `parseCSV()` in `generate-migration-reports.js`. It handles quoted values, embedded quotes (`""` → `"`), and `\r\n` line endings.
 
-```bash
-npm install csv-parse
-```
+### Dependencies
 
-Or modify the script to use a different CSV parser if needed.
+The script imports only:
+
+- Node stdlib: `fs`, `path`
+- The plugin-shared validation helpers at `plugins/power-pages/scripts/lib/validation-helpers.js` (provides `getAuthToken`, `makeRequest`, `getEnvironmentUrl`)
+
+No `npm install` is required to run the script.
 
 ## Sample Output
 

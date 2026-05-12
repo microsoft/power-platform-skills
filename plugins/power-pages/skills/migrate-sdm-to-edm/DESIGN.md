@@ -1,6 +1,6 @@
 # Skill Design: Migrate Site from Standard Data Model (SDM) to Enhanced Data Model (EDM)
 
-**Status:** Draft
+**Status:** Implemented (12-phase plan; preview feature, ALM integration deferred)
 **Source Doc:** [Migrate standard data model sites to enhanced data model (preview)](https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model)
 **Plugin:** power-pages
 
@@ -8,35 +8,42 @@
 
 ## Overview
 
-This skill guides the user through migrating an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The migration involves PAC CLI commands, pre-migration analysis, data migration, post-migration customization fixes, and validation.
+This skill guides the user through migrating an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The skill is structured as 12 phases that cover prerequisite checks, in-flight migration detection, customization analysis and remediation (performed **before** migration), migration execution, data-model version switch, and post-migration validation/rollback.
 
-> **Note:** This is a preview feature. EDM migration is not yet recommended for production use without thorough testing on a copy first.
+> **Note:** EDM migration is a preview feature. Behavior may change before GA. Always test on a non-production environment first.
 
 ---
 
 ## Scope
 
 ### In Scope
-- Pre-migration prerequisite checks
-- Customization report download and analysis
-- Data migration execution (config data, transactional data, or both)
-- Post-migration customization remediation (5 customization types)
-- Migration status verification
-- Data model version update
-- Rollback to SDM if needed
-- Production site migration workflow (copy-first strategy)
+
+- PAC CLI version and authentication validation
+- Site discovery via `pac pages list -v` (Portal Id auto-captured from verbose output)
+- **In-flight migration detection** (Phase 4) — handles already-running, completed, failed, and reverted prior migrations
+- Dependency and template-package validation
+- Environment-aware migration mode recommendation (Dev → `all`, Test/UAT/Prod → `configurationData`)
+- Customization report generation (always, for any environment)
+- Pre-migration customization remediation (manual guidance + automated fixes for Data Model Extensions)
+- Migration execution with bounded polling (30-min ceiling + wait/reset/exit escape hatch)
+- Data model version flip via Portal Id (captured from `pac pages list -v` when available; manual `/_services/about` fallback otherwise)
+- Rollback to SDM
+- HTML report generation (customization report + execution report)
 
 ### Out of Scope
-- Creating new EDM sites from scratch (use `create-site` skill)
-- Migrating unsupported templates (Community, Customer Self Service, Employee Self Service, Partner Portal on SDM)
+
+- Creating new EDM sites from scratch (use a `create-site` skill instead)
+- Migrating unsupported templates (D365 portals: Community, Customer Self Service, Employee Self Service, Partner Portal)
+- ALM/solution deployment of migration artifacts (deferred to a future skill version; env type is captured but not acted on)
 - Dataverse schema design changes unrelated to migration
-- Power Platform solution management beyond migration context
+- Environment-copy operations (only available via Power Platform admin center, no PAC CLI API)
 
 ---
 
 ## Supported Templates
 
 Only sites with these templates can be migrated:
+
 - Starter layout 1–5
 - Application processing
 - Blank page
@@ -44,153 +51,70 @@ Only sites with these templates can be migrated:
 - Schedule and manage meetings
 - FAQ
 
-**Not migratable:** Community (D365), Customer Self Service Portal (D365), Employee Self Service Portal (D365), Partner Portal (D365) — these support new EDM creation but can't migrate from SDM.
+**Not migratable:** Community (D365), Customer Self Service Portal (D365), Employee Self Service Portal (D365), Partner Portal (D365) — these support new EDM creation but cannot migrate from SDM.
 
 ---
 
-## Task Breakdown
+## Phase Breakdown
 
-### Phase 1: Pre-Migration Validation
+| # | Phase | Description | Primary PAC Command(s) | Automated? |
+| --- | --- | --- | --- | --- |
+| 1 | **Establish CLI Context** | Verify PAC CLI ≥ 1.31.6, auth profile, environment URL, cloud type | `pac --version`, `pac auth list/who` | Yes |
+| 2 | **Identify Site Context** | Parse local `website.yml` or prompt user for site name/GUID | — | Guided |
+| 3 | **Site Discovery & Validate Data Model** | List sites, locate target, capture WebSiteId / Portal Id / ModelVersion / URL slug; stop if already EDM; confirm template | `pac pages list -v` | Yes |
+| 4 | **Check Existing Migration Status** | Detect in-flight, completed, failed, or reverted prior migrations. Branch accordingly (wait / reset / short-circuit) | `pac pages migrate-datamodel --checkMigrationStatus --verbose` | Yes |
+| 5 | **Validate Required Dependencies** | Verify `MicrosoftCRMPortalBase ≥ 9.3.2307.x` and `PowerPagesCore ≥ 1.0.2309.63` | `pac solution list` | Yes |
+| 6 | **Validate Template & V2 Package** | Confirm EDM-compatible template solution exists; install `PowerPages_Core` if missing | `pac application install` | Guided |
+| 7 | **Determine Env Type & Migration Mode** | Ask Dev/Test-UAT/Prod; recommend mode (Dev → `all`, others → `configurationData`) | — | Guided |
+| 8 | **Generate Customization Report** | Download CSV from PAC, render HTML report via JS script | `pac pages migrate-datamodel --siteCustomizationReportPath`, `node generate-migration-reports.js` | Yes |
+| 9 | **Customization Remediation** | Manual fix guidance per category + automated string-attribute creation for Data Model Extensions via Dataverse API | `node generate-migration-reports.js --automate` | Mixed |
+| 10 | **Migrate Site Data Model** | Run migrate command, poll every 1 min × 30. On timeout: wait/reset/exit | `pac pages migrate-datamodel --mode <…>`, `--checkMigrationStatus` | Yes |
+| 11 | **Update Data Model Version** | Flip SDM → EDM using captured Portal Id (or manual fallback) | `pac pages migrate-datamodel --updateDatamodelVersion --portalId` | Yes |
+| 12 | **Post-Migration Validation & Summary** | Validation checklist, optional rollback, success summary, execution report | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (if rollback) | Guided |
 
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 1.1 | **Check PAC CLI version** | Verify PAC CLI >= 1.31.6 is installed | `pac --version` | Yes |
-| 1.2 | **Check Dataverse package version** | Verify Dataverse base portal package >= 9.3.2307.x | Manual / admin check | Guided |
-| 1.3 | **Check Power Pages Core version** | Verify Power Pages Core package >= 1.0.2309.63 | Manual / admin check | Guided |
-| 1.4 | **Check background operations** | If environment is in admin mode, verify background operations enabled | Manual / admin check | Guided |
-| 1.5 | **Check user roles** | Verify user has System Admin, D365 Admin, or Power Platform Admin role | Manual check | Guided |
+### Why Customization Remediation moved before Migration (Phase 9, was post-migration)
 
-### Phase 2: Authentication & Site Discovery
+The previous design placed remediation after migration. Two issues:
 
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 2.1 | **Authenticate to Dataverse** | Create auth profile for the target environment | `pac auth create -u [Dataverse URL]` | Yes |
-| 2.2 | **List available websites** | Retrieve list of all websites in the org | `pac pages list` | Yes |
-| 2.3 | **Identify target site** | User selects which site to migrate; capture `WebSiteId` GUID | Interactive selection | Guided |
-| 2.4 | **Validate template compatibility** | Check that the site's template is in the supported list | Cross-reference with supported templates | Yes |
+1. Manual fixes (Liquid/FetchXML rewrites in source files, plugin re-targeting) can be done before migration without risk.
+2. Automated fixes (creating missing string attributes on `adx_*` tables) need to land before metadata is migrated, otherwise they'd have to be re-created on the EDM side.
 
-### Phase 3: Customization Report & Analysis
+Moving remediation to Phase 9 means the migration runs against a cleaner customization surface.
 
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 3.1 | **Download customization report** | Generate report of all customizations on the SDM site | `pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath [PATH]` | Yes |
-| 3.2 | **Parse customization report** | Read and categorize all customizations found | File parsing | Yes |
-| 3.3 | **Identify custom columns on adx tables** | Flag any custom columns added to `adx_*` metadata tables | Report analysis | Yes |
-| 3.4 | **Identify custom table relationships** | Flag relationships between custom tables and `adx_*` tables | Report analysis | Yes |
-| 3.5 | **Identify adx references in Liquid code** | Flag Liquid snippets using `entities['adx_*']` patterns | Report analysis + code grep | Yes |
-| 3.6 | **Identify adx references in FetchXML** | Flag FetchXML queries using `adx_*` entity names | Report analysis + code grep | Yes |
-| 3.7 | **Identify custom workflows/plugins** | Flag workflows/plugins registered on `adx_*` tables | Report analysis | Yes |
-| 3.8 | **Generate remediation plan** | Produce a summary of all found issues with fix instructions per type | Aggregation | Yes |
-| 3.9 | **Present findings to user** | Show the user a clear summary and get approval to proceed | Interactive | Guided |
+### Why Phase 4 was added
 
-### Phase 4: Pre-Migration Safety
+The skill needs to be re-entrant. A user may:
 
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 4.1 | **Determine if production site** | Ask user whether this is a production or dev/test site | Interactive | Guided |
-| 4.2 | **Document current site state** | Capture site URL, `/_services/about` portal ID, and key config for rollback reference | Bash + manual | Yes |
+- Trigger a migration outside of this skill, then run the skill later
+- Exit the skill mid-migration and re-invoke after hours
+- Hit the Phase 10 polling timeout and need to choose wait/reset/exit
 
-> **Note:** The Microsoft doc recommends creating a full environment copy before production migration, but this is an admin center operation outside the skill's scope. The skill will surface this as advisory guidance only — not as an automated step.
+A single early status check in Phase 4 detects any of these and routes the flow appropriately — including short-circuiting to Phase 11 if a prior migration completed but the data-model version wasn't flipped.
 
-### Phase 5: Migration Execution
+---
 
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 5.1 | **Check EDM template solutions** | Verify if the required EDM-compatible solutions exist for the site's template. Some templates (Program Registration, Schedule & Manage Meetings) require matching EDM packages. | Manual check | Guided |
-| 5.2 | **Provision EDM solutions if missing** | If EDM solutions are missing, guide the user to create a dummy EDM site for the same template — this installs the required EDM-compatible solutions in the environment. The dummy site can be deleted after migration. | Guide user through site creation | Guided |
-| 5.3 | **Prompt user for migration mode** | Ask user which migration mode to use: `configurationData` (metadata only), `configurationDataReferences` (transactional data only), or `all` (both). Explain the difference and recommend `all` for most cases. | Interactive | Guided |
-| 5.4 | **Execute migration** | Run the migration with the user's chosen mode | `pac pages migrate-datamodel --webSiteId [GUID] --mode [chosen-mode]` | Yes |
+## Customization Remediation Categories
 
-> **Migration modes explained:**
-> - `configurationData` — Migrates site metadata (web pages, web templates, site settings, content snippets, etc. — the virtual tables)
-> - `configurationDataReferences` — Migrates transactional/non-configuration data (nonconfiguration tables)
-> - `all` — Migrates both types in one go (recommended for most scenarios)
+The customization report (Phase 8) categorizes findings into five types. Phase 9 handles each:
 
-> **Note:** The migration command processes records in batches of 5K. Large sites may take longer.
+| Type | Examples | Automated? | Remediation Strategy |
+| --- | --- | --- | --- |
+| **Data Model Extensions** | Custom columns on `adx_*` tables | **Yes** — script creates missing string attributes via Dataverse Web API | New tables in Data workspace for complex types; auto-add string columns where safe |
+| **Liquid contains adx references** | `entities['adx_webpage']`, `website.adx_partialurl` | No (manual) | Replace with `page`, `page.adx_*`, or `powerpagecomponent` + type filter |
+| **FetchXml contains adx references** | `<entity name="adx_webrole">` queries | No (manual) | Replace entity name with `powerpagecomponent`, add `powerpagecomponenttype` filter |
+| **Plugins registered on adx entities** | Custom plugins targeting `adx_webpage`, `adx_contentsnippet`, etc. | No (manual) | Re-target to `powerpagecomponent` logical name; update attribute references; re-register |
+| **Custom workflow** | Workflows operating on `adx_*` records | No (manual) | Refactor to target `powerpagecomponent` |
 
-### Phase 6: Migration Verification
-
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 6.1 | **Check migration status** | Poll migration status until complete | `pac pages migrate-datamodel --webSiteId [GUID] --checkMigrationStatus` | Yes |
-| 6.2 | **Handle long-running migrations** | If migration takes long (large data volumes), advise user and re-check status | Re-run status check | Guided |
-| 6.3 | **Confirm migration success** | Verify status returns success before proceeding | Status check | Yes |
-
-### Phase 7: Update Data Model Version
-
-| # | Task | Description | PAC CLI Command | Automated? |
-|---|------|-------------|-----------------|------------|
-| 7.1 | **Retrieve Portal ID** | Get Portal GUID from `/_services/about` endpoint (requires web role with website access permissions) | `browser_navigate` or manual | Guided |
-| 7.2 | **Update data model version** | Switch the site to use EDM | `pac pages migrate-datamodel --webSiteId [GUID] --updateDatamodelVersion --portalId [Portal-GUID]` | Yes |
-| 7.3 | **Confirm version update** | Verify the SDM website record is deactivated and EDM record is active | Status check + site browse | Yes |
-
-### Phase 8: Post-Migration Customization Remediation (Manual — Guided Instructions)
-
-All customization fixes happen AFTER migration to EDM. The skill will present the user with a checklist of what to fix based on the customization report from Phase 3, along with step-by-step instructions. The user performs these fixes manually via the Data workspace / Power Platform UI.
-
-#### 8A: Custom Columns on adx Metadata Tables
-
-For each custom column found on an `adx_*` table, instruct the user to:
-1. Create a new custom table (e.g., `contoso_webpage`) in the Data workspace
-2. Add the custom column (e.g., `contoso_pagetype`) to the new table
-3. Add a lookup column associated with `powerpagescomponent`
-4. Migrate data from the old custom column to the new table
-
-#### 8B: Relationships Between Custom Tables and adx Tables
-
-For each relationship found between custom tables and `adx_*` tables, instruct the user to:
-1. Create a new relationship replacing the `adx_*` side with `powerpagecomponent` (e.g., `powerpagecomponent_contoso_pagelogs`)
-2. Verify the new relationship works and data is accessible
-
-#### 8C: adx Table References in Liquid Code
-
-For each Liquid reference found, instruct the user to:
-1. Replace `entities['adx_*']` with the corresponding Liquid object (e.g., `entities['adx_weblinks']` → `weblinks`)
-2. Where no direct Liquid object exists, use `powerpagecomponent` table with `powerpagecomponenttype` filter
-3. Test affected pages to confirm rendering
-
-#### 8D: adx Table References in FetchXML
-
-For each FetchXML reference found, instruct the user to:
-1. Replace `adx_*` entity name with `powerpagecomponent`
-2. Add a filter on `powerpagecomponenttype` using the component type reference table
-3. Test that rewritten queries return correct data
-
-#### 8E: Custom Workflows and Plugins on adx Tables
-
-For each workflow/plugin found, instruct the user to:
-1. Refactor the code to target `powerpagecomponent` instead of the `adx_*` table
-2. Update attribute references accordingly
-3. Re-register and test the workflow/plugin
-
-### Phase 9: Post-Migration Validation (Manual — Guided Checklist)
-
-The skill will present the user with a validation checklist to work through manually:
-
-- [ ] Browse all site pages — check for rendering issues
-- [ ] Test forms and data operations (basic forms, advanced forms, lists)
-- [ ] Test web API calls (if applicable)
-- [ ] Test authentication flows (login, registration, role assignment)
-- [ ] Check web roles and table permissions
-- [ ] Validate pages that had Liquid/FetchXML customization fixes
-- [ ] Run functional smoke tests on critical user journeys
-
-### Phase 10: Rollback (If Needed)
-
-| # | Task | Description | PAC CLI Command |
-|---|------|-------------|-----------------|
-| 10.1 | **Decide to rollback** | If validation fails and issues are blocking, decide to revert | Interactive |
-| 10.2 | **Revert to SDM** | Switch site back to standard data model | `pac pages migrate-datamodel --webSiteId [GUID] --revertToStandardDataModel --portalId [Portal-GUID]` |
-| 10.3 | **Verify rollback** | Confirm EDM website record is deactivated and SDM record is reactivated | Status check |
+See `assets/skill-execution-report.html` for the rendered remediation guidance shown to users.
 
 ---
 
 ## Component Type Reference Table
 
-For FetchXML and Liquid remediations, use this mapping from `adx_*` entity → `powerpagecomponenttype` value:
+For FetchXML and Liquid rewrites, map `adx_*` entity → `powerpagecomponenttype` value:
 
 | Component | Type Value |
-|-----------|------------|
+| --- | --- |
 | Publishing State | 1 |
 | Web Page | 2 |
 | Web File | 3 |
@@ -224,67 +148,85 @@ For FetchXML and Liquid remediations, use this mapping from `adx_*` entity → `
 
 ---
 
-## Key PAC CLI Commands Summary
+## Key PAC CLI Commands
 
-```bash
-# Auth
-pac auth create -u [Dataverse URL]
+```powershell
+# Auth & discovery
+pac auth create -u <Dataverse URL>
+pac auth who
+pac pages list -v
 
-# List sites
-pac pages list
+# Existing migration state
+pac pages migrate-datamodel --webSiteId <GUID> --checkMigrationStatus --verbose
+pac pages migrate-datamodel --webSiteId <GUID> --resetMigration
 
-# Download customization report
-pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath [PATH]
+# Customization report
+pac pages migrate-datamodel --webSiteId <GUID> --siteCustomizationReportPath <PATH>
 
-# Migrate data
-pac pages migrate-datamodel --webSiteId [GUID] --mode configurationData
-pac pages migrate-datamodel --webSiteId [GUID] --mode configurationDataReferences
-pac pages migrate-datamodel --webSiteId [GUID] --mode all
+# Migrate
+pac pages migrate-datamodel --webSiteId <GUID> --mode configurationData
+pac pages migrate-datamodel --webSiteId <GUID> --mode configurationDataReferences
+pac pages migrate-datamodel --webSiteId <GUID> --mode all
 
-# Check status
-pac pages migrate-datamodel --webSiteId [GUID] --checkMigrationStatus
+# Poll status
+pac pages migrate-datamodel --webSiteId <GUID> --checkMigrationStatus
 
-# Update version
-pac pages migrate-datamodel --webSiteId [GUID] --updateDatamodelVersion --portalId [Portal-GUID]
+# Flip data model version
+pac pages migrate-datamodel --webSiteId <GUID> --updateDatamodelVersion --portalId <PORTAL_GUID>
 
-# Rollback
-pac pages migrate-datamodel --webSiteId [GUID] --revertToStandardDataModel --portalId [Portal-GUID]
+# Rollback to SDM
+pac pages migrate-datamodel --webSiteId <GUID> --revertToStandardDataModel --portalId <PORTAL_GUID>
 ```
+
+---
+
+## Migration Status Values
+
+From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constants.cs`):
+
+| Status | Value | Skill Behavior |
+| --- | --- | --- |
+| `NotStarted` | 746610000 | No prior migration; proceed normally |
+| `Running` | 746610001 | Prompt user: Wait / Reset / Exit |
+| `Completed` | 746610002 | Prior migration done; skip to Phase 11 if version not yet flipped |
+| `Failed` | 746610003 | Show last step + errors; offer Retry / Stop |
+| `Reverted` | 746610004 | Site was rolled back; proceed as fresh start |
+| `Unknown` | 0 | Warn user; ask whether to proceed |
+
+`--resetMigration` is non-destructive to migrated data — it only flips the tracker status from `Running` → `Failed` so a new migration can be triggered.
 
 ---
 
 ## Known Limitations
 
-1. **5K record batch limit** — Migration command processes only 5K records per batch; large sites take longer
-2. **Preview feature** — Not officially GA; behavior may change
-3. **Template restrictions** — D365 portal templates (Community, Customer Self Service, Employee Self Service, Partner) can't be migrated from SDM
-4. **EDM solutions required** — Some templates (Program Registration, Schedule & Manage Meetings) require EDM-compatible solutions to be provisioned first by creating a new EDM site for that template
+1. **5K record batch limit** — Migration processes records in batches of 5,000. Large sites can take hours.
+2. **Preview feature** — Not GA; behavior may change.
+3. **Template restrictions** — D365 portal templates (Community, Customer Self Service, Employee Self Service, Partner) cannot be migrated from SDM.
+4. **EDM template solutions required** — Some templates (Program Registration, Schedule & Manage Meetings) require EDM-compatible solutions provisioned in the environment first.
+5. **Portal Id column** — Available in `pac pages list -v` output only on PAC CLI builds with the 2026-02-24 commit (PR 14824169) or later. Older builds fall back to manual `_services/about` lookup in Phase 11.
+6. **30-minute polling ceiling** — The skill polls migration status for 30 minutes, then escalates to a wait/reset/exit prompt. PAC's own server-side migration continues regardless of skill polling.
 
 ---
 
-## Production Migration Strategy
+## Production Migration Strategy (Advisory Only)
 
-The Microsoft doc recommends creating a full environment copy before production migration. If feasible:
+The Microsoft documentation recommends creating a full environment copy before production migration. If feasible:
 
-```
-1. (Optional, recommended) Create copy of production environment via Admin Center
-2. Run full migration (Phases 1-9) on the copy to validate
-3. Add site configuration data to a managed solution
-4. Import managed solution to production environment
-5. Use PAC CLI to migrate nonconfiguration data on production
-6. Update data model version on production
-7. Conduct production validation
-```
+1. (Recommended) Create a copy of production via Power Platform admin center.
+2. Run the full skill on the copy to validate.
+3. Add site configuration data to a managed solution.
+4. Import the managed solution to production.
+5. Re-run the skill on production with `--mode configurationDataReferences` for non-configuration data.
+6. Flip the data model version on production.
+7. Conduct production validation.
 
-> The skill will surface this as advisory guidance. Environment copy is an Admin Center operation with no PAC CLI API — the skill cannot automate it. Always schedule production migration during non-business hours.
+The skill surfaces this as advisory guidance only. Environment copy is an admin-center operation outside PAC CLI's API surface. Schedule production migrations during non-business hours.
 
 ---
 
-## Open Questions / Decisions Needed
+## Future Work
 
-- [ ] Should the skill automate the customization report parsing or just guide the user through it?
-- [ ] Should Phase 8 (remediation) be a separate sub-skill or part of this skill?
-- [ ] How to handle the 5K batch limit — should the skill loop/retry automatically?
-- [ ] Should we add Playwright-based validation (browse site pages post-migration)?
-- [ ] What level of rollback automation is appropriate vs. manual guidance?
-- [ ] Should production migration be a separate skill given its extra complexity?
+- **ALM integration**: Phase 7 captures environment type but does not yet branch on it for ALM-aware mode selection or remediation deployment. Plan: integrate with a future ALM-deployment skill so Test/UAT/Prod can consume fixes from Dev via managed solutions.
+- **Resumable polling**: Persist a `.migration-state.json` keyed by WebSiteId so multi-session migrations can resume without re-running pre-checks. Currently Phase 4 detects in-flight state from PAC's server-side tracker, which is sufficient for most cases.
+- **Bulk-site migration**: Currently single-site. A wrapper skill could iterate `pac pages list -v` output and sequence migrations.
+- **More automated remediation**: Today only Data Model Extensions (string columns) are auto-fixed. Extend to other safe customization categories where the rewrite is mechanical.

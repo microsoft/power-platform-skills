@@ -14,14 +14,14 @@ model: sonnet
 
 # Migrate Power Pages Site from Standard to Enhanced Data Model
 
-Guide the user through a comprehensive migration of an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). This skill implements a multi-phase approach with environment-aware decision making, automatic dependency validation, customization analysis, and environment-specific remediation strategies (ALM-aware for Test/UAT/Prod).
+Guide the user through a comprehensive migration of an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). This skill implements a multi-phase approach with environment-aware decision making, automatic dependency validation, customization analysis, and customization remediation performed before migration execution.
 
 > **Important:** This is a preview feature. EDM migration behavior may change before GA.
 
 ## Core Principles
 
-- **Environment-aware**: Tailor migration strategy based on Dev vs Test/UAT/Prod environment type
-- **ALM-first for non-Dev**: In non-Dev environments, assume configuration via solution deployment; customization fixes come from Dev via ALM
+- **Environment-aware**: Capture environment type (Dev/Test/UAT/Prod) for context and future ALM integration
+- **Remediate before migrate**: Identify and fix customizations before executing the data model migration
 - **Validate comprehensively**: Check CLI context, site discovery, dependencies, and templates before any execution
 - **Confirm before executing**: Present all migration parameters and customization findings to user before proceeding
 - **Track all operations**: Generate comprehensive reports documenting all commands, results, and fixes applied
@@ -41,7 +41,7 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 **Actions**:
 
-1. **Create todo list** with all 11 phases (see [Progress Tracking](#progress-tracking) table)
+1. **Create todo list** with all 12 phases (see [Progress Tracking](#progress-tracking) table)
 
 2. **Check PAC CLI Installation**
 
@@ -143,18 +143,23 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    pac pages list -v
    ```
 
+   Verbose output columns: `Index | Website Id | Portal Id | Friendly Name | Portal Url | Data Model Version | Single Page Application | Is Site Active`.
+
    Parse output to extract all available sites with:
    - WebSiteId
+   - Portal Id (may render as `Unknown` if the Power Platform active-websites API failed, or `N/A` if the site is inactive — treat both as "missing" for Phase 11)
    - Site Name (display name from Friendly Name, the part before " - ")
    - URL slug (from Friendly Name, the part after " - ")
    - Current ModelVersion (`Standard` or `Enhanced`)
 
    > **Note:** Template name is not included in `pac pages list` output. Template will be confirmed separately in step 4.
+   >
+   > **PAC CLI version note:** The Portal Id column was added on 2026-02-24. If your installed PAC build predates that and the column is missing entirely, treat Portal Id as missing — Phase 11 will prompt the user before the data-model update.
 
 2. **Locate Target Site**
 
    Search the list for site matching user input (name or GUID):
-   - If found: Extract WebSiteId, ModelVersion, and URL slug. Store all three for later phases.
+   - If found: Extract WebSiteId, Portal Id, ModelVersion, and URL slug. Store all four for later phases. If Portal Id parsed as a valid GUID, mark it as "captured"; if `Unknown`/`N/A`/missing, mark as "needs prompt".
    - If not found: Show list and ask user to confirm site name/ID. If still not found, stop and ask user to verify in Power Platform admin center.
 
 3. **Validate Data Model**
@@ -174,11 +179,88 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    - If a supported template: Store template name and continue.
    - If "Other/Unknown": Check if it matches a non-migratable D365 portal (Community, Customer Self Service, Employee Self Service, Partner Portal). If so, stop with message: "This template cannot be migrated from SDM to EDM." Otherwise proceed with caution.
 
-**Output**: Target site confirmed as SDM, template confirmed by user, ModelVersion and URL slug captured
+**Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
 
 ---
 
-## Phase 4: Validate Required Dependencies
+## Phase 4: Check Existing Migration Status
+
+**Goal**: Detect whether a migration is already in flight, previously completed, or previously failed for this site — and recover or short-circuit accordingly before doing any new work
+
+**Actions**:
+
+1. **Query Current Status**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus --verbose
+   ```
+
+   The `--verbose` flag returns the tracker summary (`createdOn`, `modifiedOn`, `migrationStatus`) plus a step history with per-step UTC timestamps and any chunk errors.
+
+2. **Parse Status**
+
+   Extract:
+   - **Status**: one of `NotStarted`, `Running`, `Completed`, `Failed`, `Reverted`, `Unknown`
+   - **createdOn** (migration first started) and **modifiedOn** (last update) for elapsed-time calculations
+   - **currentStep** and **stepHistory** from the step config block (granular progress)
+
+3. **Branch Based on Status**
+
+   - **NotStarted / no tracker record**: No prior migration. Proceed to Phase 5.
+
+   - **Reverted**: Site was previously rolled back to SDM. Treat as fresh start. Proceed to Phase 5.
+
+   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise Phase 3 would have stopped earlier). Skip Phases 5–10 and jump directly to **Phase 11 (Update Data Model Version)**.
+
+   - **Failed**: A prior migration failed. Show the last step and error details (from chunk records in the verbose output), then ask:
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | Previous migration failed at step `<currentStep>`. Retry from the migration phase, or stop and investigate? | Failed Migration | Retry migration, Stop and investigate |
+
+     - **Retry**: Proceed to Phase 5 (full pre-checks still run).
+     - **Stop**: Halt. Direct user to verbose status output and Microsoft Learn for diagnostics.
+
+   - **Running**: Migration is in progress. Compute and present elapsed time:
+
+     > Migration started **`<createdOn → now>`**, last activity **`<modifiedOn → now>`** ago. Current step: **`<currentStep>`**. Migration processes records in batches of 5K — large sites can take hours.
+     > Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model>
+
+     Ask:
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | A migration is already running for this site. How to proceed? | In-Flight Migration | Wait and poll until complete, Reset and start over, Exit and check back later |
+
+     - **Wait**: Skip Phases 5–10's pre-migration work and jump directly to **Phase 10 step 3 (status polling loop)**. After completion, continue to Phase 11.
+     - **Reset and start over**: Show the reset warning (see step 4), confirm, run reset, then proceed to Phase 5.
+     - **Exit**: Halt the skill cleanly. User can re-invoke later — Phase 4 will re-detect the in-flight migration.
+
+   - **Unknown**: Print warning. Ask user to verify in Power Platform admin center, then choose to proceed or stop.
+
+4. **Reset Warning (only shown if user picks "Reset")**
+
+   > **Reset** flips the migration tracker status from `Running` → `Failed` so a new migration can be triggered. It does **not** undo any data already migrated — records already moved to the target tables stay there. PAC's own behavior: see <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model>.
+
+   Confirm:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Reset will mark the in-flight migration as Failed but will NOT undo migrated records. Continue? | Confirm Reset | Yes, reset, No, cancel |
+
+   If "Yes":
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration
+   ```
+
+   Then proceed to Phase 5.
+
+**Output**: Migration history known; skill either short-circuits to the appropriate phase or proceeds normally with a clean tracker state
+
+---
+
+## Phase 5: Validate Required Dependencies
 
 **Goal**: Verify required packages are installed in environment
 
@@ -200,7 +282,7 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 2. **Evaluate Results**
 
-   - **Both found and versions meet requirements**: Inform user and proceed to Phase 5.
+   - **Both found and versions meet requirements**: Inform user and proceed to Phase 6.
    - **One or both not found**: Stop with message: "Required packages are not installed. Please install them from Power Platform admin center > Manage > Dynamics 365 apps before proceeding."
    - **Found but version too low**: Show current vs required version and stop with upgrade guidance.
    - **`pac solution list` fails or output is unclear**: Fall back to asking the user:
@@ -210,13 +292,13 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    | Unable to verify packages automatically. Can you confirm both Dataverse base portal package (9.3.2307.x+) and Power Pages Core (1.0.2309.63+) are installed? | Deps Confirmed | Yes, confirmed, Not sure — help me check |
 
    - If "Not sure": Guide user to Power Platform admin center > Solutions to verify package versions.
-   - If "Yes": Proceed to Phase 5.
+   - If "Yes": Proceed to Phase 6.
 
 **Output**: Required package versions verified (Dataverse base portal 9.3.2307.x+, Power Pages Core 1.0.2309.63+)
 
 ---
 
-## Phase 5: Validate Site Template and V2 Package
+## Phase 6: Validate Site Template and V2 Package
 
 **Goal**: Ensure EDM-compatible template solution exists for the target site
 
@@ -236,7 +318,7 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
    - If "Need to install": Guide user to create a dummy site using same template in EDM-enabled environment (this installs the V2 packages)
    - If "Not sure": Continue and migration will warn if missing
-   - If "Yes": Proceed to Phase 6
+   - If "Yes": Proceed to Phase 7
 
 3. **Verify PowerPages_Core Installation**
 
@@ -257,9 +339,9 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 ---
 
-## Phase 6: Determine Environment Type and Migration Mode
+## Phase 7: Determine Environment Type and Migration Mode
 
-**Goal**: Decide on ALM strategy and migration data mode based on environment
+**Goal**: Capture environment type and select migration data mode
 
 **Actions**:
 
@@ -271,30 +353,20 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
    Store the choice.
 
-2. **For Test/UAT/Prod: Ask About ALM Strategy**
+2. **Recommend Migration Mode Based on Environment**
 
-   If Test/UAT/Prod selected:
+   - **Dev**: Recommend `all` (migrate both configuration metadata and transactional data — full migration on Dev)
+   - **Test/UAT/Prod**: Recommend `configurationData` (configuration metadata only)
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Have you already migrated this site in Dev and want to use ALM to deploy fixes? Or do you want to do a fresh migration? | ALM vs Fresh | Use ALM deployment (fixes from Dev), Fresh migration (generate new report) |
+   Environment type is captured for context; ALM integration is reserved for future versions of this skill.
 
-   - If "Use ALM": Store ALM strategy. Skip Phase 7 (customization report) and proceed directly to Phase 8.
-   - If "Fresh": Store Fresh strategy. Proceed to Phase 7.
-
-3. **Recommend Migration Mode Based on Environment**
-
-   - **Dev**: Recommend `configurationData` mode (full metadata + config)
-   - **Test/UAT/Prod + ALM**: Recommend `configurationDataReferences` only (assume config deployed via solution)
-   - **Test/UAT/Prod + Fresh**: Recommend `configurationData`
-
-4. **Confirm Migration Mode**
+3. **Confirm Migration Mode**
 
    Show recommendation with explanation:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Recommended migration mode for `<ENV_TYPE>`: `<MODE>`. Details: `<EXPLANATION>`. Proceed? | Migration Mode | Yes, use recommended mode, No, let me choose a different mode |
+   | Recommended migration mode for `<ENV_TYPE>`: `<MODE>`. Proceed? | Migration Mode | Yes, use recommended mode, No, let me choose a different mode |
 
    If "No", show all three modes with descriptions and allow selection:
    - `configurationData`: Migrate the metadata for the website. More information: List of tables to store configuration data.
@@ -303,13 +375,11 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
    Store final selected mode.
 
-**Output**: Environment type determined, migration mode selected, ALM strategy decided
+**Output**: Environment type captured, migration mode selected
 
 ---
 
-## Phase 7: Generate Customization Report
-
-> **Skip this phase** if the ALM deployment strategy was selected in Phase 6. Proceed directly to Phase 8.
+## Phase 8: Generate Customization Report
 
 **Goal**: Download and analyze current customizations on the SDM site
 
@@ -353,112 +423,13 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 ---
 
-## Phase 8: Migrate Site Data Model
+## Phase 9: Customization Remediation
 
-**Goal**: Execute the migration using PAC CLI with selected mode
-
-**Actions**:
-
-1. **Execute Migration Command**
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode <SELECTED_MODE>
-   ```
-
-   Where `<SELECTED_MODE>` is one of: `configurationData`, `configurationDataReferences`, `all`
-
-2. **Monitor Execution**
-
-   - Display progress to user
-   - If template warning appears, inform user that V2 packages may be missing and migration may not complete
-
-3. **Check Status**
-
-   Poll every 1 minute, up to a maximum of 30 attempts (30 minutes total):
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
-   ```
-
-   Possible statuses:
-   - **Complete/Success**: Proceed to Phase 9.
-   - **In Progress**: Inform user "Migration is running (attempt `<N>`/30). This can take time for large data volumes (5K records per batch). Next check in 1 minute..." and wait before checking again.
-   - **Failed**: Stop polling. Show error and ask:
-
-     | Question | Header | Options |
-     |----------|--------|---------|
-     | Migration encountered an error. How to proceed? | Migration Error | Retry migration, Skip to rollback, Stop and troubleshoot |
-
-   **If still In Progress after 30 minutes**: Stop polling and inform user:
-
-   > Migration is still running after 30 minutes. This is expected for large sites. Check status manually when ready:
-   > ```powershell
-   > pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
-   > ```
-   > Once status shows Complete, return and continue from Phase 9.
-
-**Output**: Migration executed and completed successfully
-
----
-
-## Phase 9: Update Data Model Version
-
-**Goal**: Activate EDM and deactivate SDM for the site
+**Goal**: Guide user through fixing customizations identified in Phase 8 before executing the migration
 
 **Actions**:
 
-1. **Retrieve Portal ID**
-
-   PAC CLI does not expose Portal ID directly. Construct the site URL using values collected in earlier phases:
-
-   - URL slug: captured from `pac pages list -v` Friendly Name (the part after " - ") in Phase 3
-   - Cloud domain: from `pac auth who` cloud field (captured in Phase 1)
-
-   | Cloud | Domain |
-   |-------|--------|
-   | Public | `powerappsportals.com` |
-   | UsGov | `powerappsportals.us` |
-   | UsGovHigh | `high.powerappsportals.us` |
-   | UsGovDod | `appsplatform.us` |
-   | China | `powerappsportals.cn` |
-
-   Constructed URL: `https://<URL_SLUG>.<CLOUD_DOMAIN>`
-
-   > **If the site uses a custom domain**, the constructed URL may not work. Ask user to provide the site's base URL directly.
-
-   Guide user to open: `<CONSTRUCTED_SITE_URL>/_services/about`
-
-   The page returns JSON — the `portalId` field contains the value needed. Ask user to copy and provide it:
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Open `<SITE_URL>/_services/about` and paste the `portalId` value from the JSON response | Portal ID | I'll paste the Portal ID |
-
-   Store the Portal ID — it will also be needed for rollback in Phase 11.
-
-2. **Execute Update Command**
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --updateDatamodelVersion --portalId "<PORTAL_ID>"
-   ```
-
-3. **Confirm Switch**
-
-   Inform user: "Data model updated. Site now uses Enhanced Data Model. SDM record has been deactivated."
-
-**Output**: Portal ID captured, site switched to EDM
-
----
-
-## Phase 10: Customization Remediation
-
-**Goal**: Guide user through fixing customizations (Dev-specific) or use ALM deployment (Test/UAT/Prod)
-
-**Actions**:
-
-### If Dev Environment OR Fresh Migration
-
-If customizations were found in Phase 7, present remediation guidance:
+If customizations were found in Phase 8, present remediation guidance:
 
 **For Liquid references to adx tables:**
 - Replace `entities['adx_webpage']` with `page` or `page.adx_*` where available
@@ -487,11 +458,10 @@ If customizations were found in Phase 7, present remediation guidance:
 node scripts/generate-migration-reports.js \
   --site-name "<SITE_NAME>" \
   --website-id "<WEBSITE_ID>" \
-  --portal-id "<PORTAL_ID>" \
   --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" \
   --env-url "https://org.crm.dynamics.com" \
   --automate \
-  --environment-type "dev" \
+  --environment-type "<ENV_TYPE>" \
   --output-dir "./migration-reports"
 ```
 
@@ -500,19 +470,118 @@ Script will:
 - Apply via Dataverse API
 - Log all operations in execution report
 
-### If Test/UAT/Prod + ALM Strategy
-
-Skip customization fixes. Instead:
-
-- Inform user: "Customization fixes should be applied in Dev environment first, then deployed via ALM/solution deployment"
-- Guide user to use ALM deployment skill to bring fixes from Dev
-- Do not generate fixes report in this environment
-
-**Output**: Remediation guidance provided (Dev) or ALM deployment acknowledged (Test/UAT/Prod)
+**Output**: Remediation guidance provided and automated fixes applied where safe
 
 ---
 
-## Phase 11: Post-Migration Validation and Summary
+## Phase 10: Migrate Site Data Model
+
+**Goal**: Execute the migration using PAC CLI with selected mode
+
+**Actions**:
+
+1. **Execute Migration Command**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode <SELECTED_MODE>
+   ```
+
+   Where `<SELECTED_MODE>` is one of: `configurationData`, `configurationDataReferences`, `all`
+
+2. **Monitor Execution**
+
+   - Display progress to user
+   - If template warning appears, inform user that V2 packages may be missing and migration may not complete
+
+3. **Check Status**
+
+   Poll every 1 minute, up to a maximum of 30 attempts (30 minutes total):
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   ```
+
+   Possible statuses:
+   - **Complete/Success**: Proceed to Phase 11.
+   - **In Progress**: Inform user "Migration is running (attempt `<N>`/30). This can take time for large data volumes (5K records per batch). Next check in 1 minute..." and wait before checking again.
+   - **Failed**: Stop polling. Show error and ask:
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | Migration encountered an error. How to proceed? | Migration Error | Retry migration, Skip to rollback, Stop and troubleshoot |
+
+   **If still In Progress after 30 minutes**: Stop polling. Run `--checkMigrationStatus --verbose` to get elapsed time (`createdOn`/`modifiedOn`) and current step, then ask:
+
+   > Migration started **`<X>` ago**, last activity **`<Y>` ago**. Current step: **`<currentStep>`**. Migration processes records in batches of 5K — large sites can take hours.
+   > Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model>
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Migration still running after 30 minutes. How to proceed? | Long Migration | Poll for another 30 minutes, Reset and restart migration, Exit and check back later |
+
+   - **Poll for another 30 minutes**: Restart the 30-attempt polling loop.
+   - **Reset and restart migration**: Show the reset warning (same as Phase 4 step 4 — reset only flips tracker status to Failed, does NOT undo migrated records), confirm, run `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration`, then re-run the migrate command in step 1 of this phase.
+   - **Exit and check back later**: Halt the skill. User can re-invoke later — Phase 4 will detect the in-flight migration and offer the same wait/reset choices.
+
+**Output**: Migration executed and completed successfully
+
+---
+
+## Phase 11: Update Data Model Version
+
+**Goal**: Activate EDM and deactivate SDM for the site
+
+**Actions**:
+
+1. **Retrieve Portal ID**
+
+   Check the Portal Id state captured in Phase 3:
+
+   - **If marked "captured"** (a valid GUID from `pac pages list -v`): Use it directly. Proceed to step 2 — no user prompt needed.
+   - **If marked "needs prompt"** (`Unknown`, `N/A`, or column missing from older PAC build): Fall through to the manual lookup below.
+
+   **Manual lookup** — construct the site URL from values collected earlier:
+
+   - URL slug: from Phase 3 (Friendly Name suffix after " - ")
+   - Cloud domain: from Phase 1 `pac auth who` cloud field
+
+   | Cloud | Domain |
+   |-------|--------|
+   | Public | `powerappsportals.com` |
+   | UsGov | `powerappsportals.us` |
+   | UsGovHigh | `high.powerappsportals.us` |
+   | UsGovDod | `appsplatform.us` |
+   | China | `powerappsportals.cn` |
+
+   Constructed URL: `https://<URL_SLUG>.<CLOUD_DOMAIN>`
+
+   > **If the site uses a custom domain**, the constructed URL may not work. Ask user to provide the site's base URL directly.
+
+   Guide user to open `<CONSTRUCTED_SITE_URL>/_services/about` — the page returns JSON containing a `portalId` field. Ask user to paste it:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | `pac pages list -v` did not return a usable Portal Id for this site. Open `<SITE_URL>/_services/about` and paste the `portalId` value from the JSON response | Portal ID | I'll paste the Portal ID |
+
+   Validate the pasted value is a GUID. Store it — it will also be needed for rollback in Phase 12.
+
+   > **Do not run the update command in step 2 until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
+
+2. **Execute Update Command**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --updateDatamodelVersion --portalId "<PORTAL_ID>"
+   ```
+
+3. **Confirm Switch**
+
+   Inform user: "Data model updated. Site now uses Enhanced Data Model. SDM record has been deactivated."
+
+**Output**: Portal ID captured, site switched to EDM
+
+---
+
+## Phase 12: Post-Migration Validation and Summary
 
 **Goal**: Validate migrated site and summarize results
 
@@ -537,11 +606,11 @@ Skip customization fixes. Instead:
 
    - If "Issues found":
 
-     Confirm the Portal ID collected in Phase 9 is still correct before proceeding:
+     Confirm the Portal ID collected in Phase 11 is still correct before proceeding:
 
      | Question | Header | Options |
      |----------|--------|---------|
-     | Confirm Portal ID for rollback: `<PORTAL_ID>` (from Phase 9). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+     | Confirm Portal ID for rollback: `<PORTAL_ID>` (from Phase 11). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
 
      If "No": Ask user to re-open `<SITE_URL>/_services/about` and provide the correct Portal ID.
 
@@ -578,14 +647,15 @@ Skip customization fixes. Instead:
 | Phase 1 | Establish CLI context | Establishing CLI context |
 | Phase 2 | Identify site context | Identifying site context |
 | Phase 3 | Site discovery and validation | Discovering and validating site |
-| Phase 4 | Validate dependencies | Validating dependencies |
-| Phase 5 | Validate template and V2 package | Validating template and V2 package |
-| Phase 6 | Determine environment and migration mode | Determining environment and migration mode |
-| Phase 7 | Generate customization report (Dev/Fresh only) | Generating customization report |
-| Phase 8 | Execute migration | Executing migration |
-| Phase 9 | Update data model version | Updating data model version |
-| Phase 10 | Remediate customizations | Remediating customizations |
-| Phase 11 | Validate and complete | Validating and completing migration |
+| Phase 4 | Check existing migration status | Checking existing migration status |
+| Phase 5 | Validate dependencies | Validating dependencies |
+| Phase 6 | Validate template and V2 package | Validating template and V2 package |
+| Phase 7 | Determine environment and migration mode | Determining environment and migration mode |
+| Phase 8 | Generate customization report | Generating customization report |
+| Phase 9 | Remediate customizations | Remediating customizations |
+| Phase 10 | Execute migration | Executing migration |
+| Phase 11 | Update data model version | Updating data model version |
+| Phase 12 | Validate and complete | Validating and completing migration |
 
 ---
 
