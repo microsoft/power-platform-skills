@@ -163,26 +163,11 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
-### Phase 4.5: Build Verified Icon List
+<!-- Phase 4.5 (npm install + extract icon list) has been removed.
+     A pre-generated `references/verified-icons.txt` ships with the plugin.
+     Page-builders read it directly from ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt — no runtime install needed.
+     To refresh after bumping @fluentui/react-icons: run scripts/regenerate-verified-icons.js. -->
 
-Generate a `verified-icons.txt` file so page-builders can verify icon names at code-generation time.
-
-Try to locate the `@fluentui/react-icons` package using node. Try these approaches in order, stopping at the first that succeeds:
-
-**Option A — package already installed locally:**
-```bash
-node -e "const icons = Object.keys(require('@fluentui/react-icons')); require('fs').writeFileSync('<working-dir>/verified-icons.txt', icons.join('\n'));"
-```
-
-**Option B — install into a temp subfolder:**
-```bash
-npm install --prefix <working-dir>/.icon-check @fluentui/react-icons@2.0.292 --no-save --silent
-node -e "const icons = Object.keys(require('<working-dir>/.icon-check/node_modules/@fluentui/react-icons')); require('fs').writeFileSync('<working-dir>/verified-icons.txt', icons.join('\n'));"
-```
-
-If both fail (e.g., no network, no node), skip this phase — page-builders will fall back to conservative icon choices. Log the failure in the workflow log.
-
-Pass the path `<working-dir>/verified-icons.txt` to each page-builder in Phase 5 (only if the file was successfully created).
 
 ### Phase 5: Build Pages (Parallel)
 
@@ -221,7 +206,6 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
-> - Verified icons: [absolute path to verified-icons.txt, or omit line if file was not generated]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
@@ -234,7 +218,6 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
-> - Verified icons: [absolute path to verified-icons.txt, or omit line if file was not generated]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >

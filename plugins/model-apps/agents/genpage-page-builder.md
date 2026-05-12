@@ -9,6 +9,8 @@ color: green
 tools:
   - Read
   - Write
+  - Edit
+  - Grep
   - TaskCreate
   - TaskUpdate
 ---
@@ -65,15 +67,24 @@ assume column names exist. Custom entities have unpredictable column names
 
 For **mock data pages:** Skip this step. Generate realistic sample data inline.
 
-## Step 2.5 — Read Verified Icon List (if provided)
+## Step 2.5 — Read Verified Icon List
 
-If your invocation prompt includes a `Verified icons` path, Read that file now and keep
-the list in context. In Step 5, before finalising any icon import, confirm the name
-appears in this list. If it does not, substitute the closest semantic alternative that
-does appear in the list.
+**Mandatory.** Read the pre-generated verified icon list:
 
-If no path was provided, skip this step and rely on the conservative guidance in
-genpage-rules-reference.md Rule 9.
+```
+${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt
+```
+
+This file ships with the plugin and lists every valid icon name from
+`@fluentui/react-icons` (5000+ entries, one per line). Keep the list in context
+for Step 5. Before finalising any icon import, confirm the name appears in this
+list. If a name you want is not in the list, substitute the closest semantic
+alternative that IS in the list. **Never guess an icon name.**
+
+After writing the `.tsx` file in Step 5, Grep your own output for every named
+import from `@fluentui/react-icons`. For each name, verify it appears in the
+verified-icons.txt list. If any name is missing, rewrite the file to substitute
+a verified name. Repeat until every icon import is verified.
 
 ## Step 3 — Read References and Samples
 
