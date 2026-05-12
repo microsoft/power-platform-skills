@@ -27,9 +27,9 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 - **Track all operations**: Generate comprehensive reports documenting all commands, results, and fixes applied
 - **Graceful failure**: Halt on blocking issues; guide user to support when needed
 
-**Supported templates:** Starter layout 1–5, Application processing, Blank page, Program registration, Schedule and manage meetings, FAQ.
+**Supported templates:** All Power Pages and D365 portal templates can be migrated, provided the corresponding V2 EDM solution is installed in the environment (see Phase 6). This includes Starter Layouts 1–5, Application Processing, Blank Page, Program Registration, Schedule and Manage Meetings, FAQ, Event Registration, and the D365 portal templates (Community, Customer Self-Service, Employee Self-Service, Partner).
 
-**Not migratable:** Community (D365), Customer Self Service Portal (D365), Employee Self Service Portal (D365), Partner Portal (D365) — these support new EDM creation but can't be migrated from SDM.
+> **PAC CLI version note:** Migration of D365 portal templates requires a recent PAC CLI build. Older builds may still reject these templates.
 
 **Initial request:** $ARGUMENTS
 
@@ -170,14 +170,13 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 4. **Identify Site Template**
 
-   Template name is not available from `pac pages list`. Ask user to confirm their site's template:
+   Template name is not available from `pac pages list`. If Phase 4 reads `adx_templatename` from the migration tracker (populated by a prior migration), use that; otherwise ask user:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | What template is this site based on? | Site Template | Starter layout 1, Starter layout 2, Starter layout 3, Starter layout 4, Starter layout 5, Application processing, Blank page, Program registration, Schedule and manage meetings, FAQ, Other/Unknown |
+   | What template is this site based on? | Site Template | Starter layout 1, Starter layout 2, Starter layout 3, Starter layout 4, Starter layout 5, Application processing, Blank page, Program registration, Schedule and manage meetings, FAQ, Event registration, Community Portal (D365), Customer Self-Service Portal (D365), Employee Self-Service Portal (D365), Partner Portal (D365), Other/Unknown |
 
-   - If a supported template: Store template name and continue.
-   - If "Other/Unknown": Check if it matches a non-migratable D365 portal (Community, Customer Self Service, Employee Self Service, Partner Portal). If so, stop with message: "This template cannot be migrated from SDM to EDM." Otherwise proceed with caution.
+   Store the chosen template — it drives the V2 package check in Phase 6. If "Other/Unknown", proceed with caution; Phase 6 will skip the template-specific package check and rely on `PowerPages_Core` validation only.
 
 **Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
 
@@ -300,27 +299,53 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 ## Phase 6: Validate Site Template and V2 Package
 
-**Goal**: Ensure EDM-compatible template solution exists for the target site
+**Goal**: Ensure the EDM-compatible (V2) solution for the site's template is installed in the environment
 
 **Actions**:
 
-1. **Identify Template Requirements**
+1. **Look Up V2 Package for the Captured Template**
 
-   Based on template extracted in Phase 3:
-   - Some templates (Program Registration, Schedule and Manage Meetings) require specific EDM-compatible solutions
-   - Inform user which V2 packages are needed
+   Use this mapping (template → V2 solution `UniqueName` to check in `pac solution list`):
 
-2. **Prompt About V2 Solution Availability**
+   | Template | V2 Package UniqueName |
+   | --- | --- |
+   | Starter layout 1 | `DefaultPortalTemplate_V2` |
+   | Starter layout 2 | `PowerPages_BlankDesign002_V2` |
+   | Starter layout 3 | `PowerPages_BlankDesign003_V2` |
+   | Starter layout 4 | `PowerPages_BlankDesign004_V2` |
+   | Starter layout 5 | `PowerPages_BlankDesign005_V2` |
+   | Blank page | `PowerPages_BlankTemplate_V2` |
+   | FAQ | `PowerPages_FAQ_V2` |
+   | Application processing | `PowerPages_BuildingPermit_V2` |
+   | Program registration | `PowerPages_ProgramRegistration_V2` |
+   | Schedule and manage meetings | `PowerPages_BookMeeting_V2` |
+   | Event registration | `EventRegistrationTemplate_V2` |
+   | Community Portal (D365) | `PowerPages_CommunityPortal_V2` |
+   | Customer Self-Service Portal (D365) | `PowerPages_CustomerPortal_V2` |
+   | Employee Self-Service Portal (D365) | `PowerPages_ESSPortal_V2` |
+   | Partner Portal (D365) | `PowerPages_PartnerPortal_V2` |
+   | Other/Unknown | (skip — fall through to step 3) |
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Does your environment have EDM-compatible solution for template `<TEMPLATE_NAME>`? | V2 Package | Yes, installed, Not sure — try and see, Need to install it |
+2. **Check Installation**
 
-   - If "Need to install": Guide user to create a dummy site using same template in EDM-enabled environment (this installs the V2 packages)
-   - If "Not sure": Continue and migration will warn if missing
-   - If "Yes": Proceed to Phase 7
+   ```powershell
+   pac solution list
+   ```
 
-3. **Verify PowerPages_Core Installation**
+   Search output for the V2 `UniqueName` from step 1.
+
+   - **Found**: Proceed to step 3.
+   - **Not found**: Ask user:
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed. How to proceed? | V2 Package | Install via dummy EDM site (recommended), Skip and let migration warn, Cancel |
+
+     - **Install via dummy EDM site**: Guide user to provision a new EDM site using the same template in this environment. Creating that site auto-installs the V2 solution. Once installed, the dummy site can be deleted.
+     - **Skip**: Continue to Phase 7; migration may warn or fail if the solution is genuinely needed.
+     - **Cancel**: Halt the skill.
+
+3. **Verify PowerPages_Core Application**
 
    Check if `PowerPages_Core` application is installed. If missing, ask:
 
@@ -329,13 +354,14 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    | PowerPages_Core application is not installed. Should I install it now? | Install Core | Yes, install, No, skip |
 
    If "Yes":
+
    ```powershell
    pac application install --application-name "PowerPages_Core"
    ```
 
    Wait for completion or failure.
 
-**Output**: V2 packages verified/installed, PowerPages_Core available
+**Output**: V2 template package verified/installed (or explicitly skipped); PowerPages_Core available
 
 ---
 

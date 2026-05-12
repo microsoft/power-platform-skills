@@ -33,7 +33,6 @@ This skill guides the user through migrating an existing Power Pages site from t
 ### Out of Scope
 
 - Creating new EDM sites from scratch (use a `create-site` skill instead)
-- Migrating unsupported templates (D365 portals: Community, Customer Self Service, Employee Self Service, Partner Portal)
 - ALM/solution deployment of migration artifacts (deferred to a future skill version; env type is captured but not acted on)
 - Dataverse schema design changes unrelated to migration
 - Environment-copy operations (only available via Power Platform admin center, no PAC CLI API)
@@ -42,7 +41,9 @@ This skill guides the user through migrating an existing Power Pages site from t
 
 ## Supported Templates
 
-Only sites with these templates can be migrated:
+All Power Pages and D365 portal templates can be migrated, provided the corresponding V2 EDM solution is installed in the target environment. Phase 6 validates installation per template.
+
+**Power Pages templates:**
 
 - Starter layout 1–5
 - Application processing
@@ -50,8 +51,16 @@ Only sites with these templates can be migrated:
 - Program registration
 - Schedule and manage meetings
 - FAQ
+- Event registration
 
-**Not migratable:** Community (D365), Customer Self Service Portal (D365), Employee Self Service Portal (D365), Partner Portal (D365) — these support new EDM creation but cannot migrate from SDM.
+**D365 portal templates (migratable in recent PAC CLI builds):**
+
+- Community Portal
+- Customer Self-Service Portal
+- Employee Self-Service Portal
+- Partner Portal
+
+Each template maps to a specific V2 solution `UniqueName` (see SKILL.md Phase 6 for the full mapping). Older PAC CLI builds may still reject D365 portal templates — confirm with `pac --version`.
 
 ---
 
@@ -64,7 +73,7 @@ Only sites with these templates can be migrated:
 | 3 | **Site Discovery & Validate Data Model** | List sites, locate target, capture WebSiteId / Portal Id / ModelVersion / URL slug; stop if already EDM; confirm template | `pac pages list -v` | Yes |
 | 4 | **Check Existing Migration Status** | Detect in-flight, completed, failed, or reverted prior migrations. Branch accordingly (wait / reset / short-circuit) | `pac pages migrate-datamodel --checkMigrationStatus --verbose` | Yes |
 | 5 | **Validate Required Dependencies** | Verify `MicrosoftCRMPortalBase ≥ 9.3.2307.x` and `PowerPagesCore ≥ 1.0.2309.63` | `pac solution list` | Yes |
-| 6 | **Validate Template & V2 Package** | Confirm EDM-compatible template solution exists; install `PowerPages_Core` if missing | `pac application install` | Guided |
+| 6 | **Validate Template & V2 Package** | Look up V2 solution `UniqueName` for the captured template, verify installed via `pac solution list`; install `PowerPages_Core` if missing | `pac solution list`, `pac application install` | Yes |
 | 7 | **Determine Env Type & Migration Mode** | Ask Dev/Test-UAT/Prod; recommend mode (Dev → `all`, others → `configurationData`) | — | Guided |
 | 8 | **Generate Customization Report** | Download CSV from PAC, render HTML report via JS script | `pac pages migrate-datamodel --siteCustomizationReportPath`, `node generate-migration-reports.js` | Yes |
 | 9 | **Customization Remediation** | Manual fix guidance per category + automated string-attribute creation for Data Model Extensions via Dataverse API | `node generate-migration-reports.js --automate` | Mixed |
@@ -201,8 +210,8 @@ From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constan
 
 1. **5K record batch limit** — Migration processes records in batches of 5,000. Large sites can take hours.
 2. **Preview feature** — Not GA; behavior may change.
-3. **Template restrictions** — D365 portal templates (Community, Customer Self Service, Employee Self Service, Partner) cannot be migrated from SDM.
-4. **EDM template solutions required** — Some templates (Program Registration, Schedule & Manage Meetings) require EDM-compatible solutions provisioned in the environment first.
+3. **EDM template solutions required** — Every template needs its corresponding V2 solution installed in the environment (see SKILL.md Phase 6 mapping). Missing V2 solutions can be provisioned by creating a dummy EDM site with the same template (the dummy can be deleted after).
+4. **PAC CLI version dependency for D365 portals** — Migration of D365 portal templates (Community, Customer Self-Service, Employee Self-Service, Partner) requires a recent PAC CLI build. Older builds may still reject these templates.
 5. **Portal Id column** — Available in `pac pages list -v` output only on PAC CLI builds with the 2026-02-24 commit (PR 14824169) or later. Older builds fall back to manual `_services/about` lookup in Phase 11.
 6. **30-minute polling ceiling** — The skill polls migration status for 30 minutes, then escalates to a wait/reset/exit prompt. PAC's own server-side migration continues regardless of skill polling.
 
