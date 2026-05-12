@@ -92,7 +92,7 @@ Ask the following in order. Each is a **separate** `AskUserQuestion` call — do
 | Label | Description |
 |-------|-------------|
 | Advanced | Covers common risks and deeper code weaknesses. (Recommended) |
-| Basic | Covers common risks only. Faster. |
+| Basic | Covers common risks only. |
 
 Depth mapping (internal, not shown to user): Advanced = `p/default,p/owasp-top-ten,p/cwe-top-25`. Basic = `p/default,p/owasp-top-ten`.
 
