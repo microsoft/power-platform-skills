@@ -20,7 +20,7 @@ function mkEnabledIkey(tmp) {
   fs.writeFileSync(
     p,
     JSON.stringify({
-      ikey: "placeholder",
+      instrumentationKey: "placeholder",
       collector_url: "https://example.invalid/",
       event_stream_name: "PowerPagesPluginEvent",
       disabled: false,
@@ -142,7 +142,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.ver, "4.0");
   assert.equal(body.name, "PowerPagesPluginEvent");
-  assert.equal(body.iKey, "o:real-ikey-32-chars-minimum-aaaaaaaaaaaaaa");
+  assert.equal(body.iKey, "o:real");
   assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(body.data, fakeEvent.data);
 });
@@ -231,7 +231,7 @@ test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => 
   fs.writeFileSync(
     disabledIkey,
     JSON.stringify({
-      ikey: "x",
+      instrumentationKey: "x",
       collector_url: "https://x",
       event_stream_name: "X",
       disabled: true,

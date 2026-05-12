@@ -18,7 +18,7 @@ function readIkey(telemetryDir) {
       fs.readFileSync(path.join(telemetryDir, "ikey.json"), "utf8")
     );
     return {
-      ikey: cfg.ikey || "",
+      ikey: cfg.instrumentationKey || "",
       collectorUrl: cfg.collector_url || "",
       eventStreamName: cfg.event_stream_name || "",
     };

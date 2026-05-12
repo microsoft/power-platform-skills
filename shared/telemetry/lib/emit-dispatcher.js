@@ -74,7 +74,7 @@ function buildEnvelope(event) {
     ver: "4.0",
     name: event.name,
     time: new Date().toISOString(),
-    iKey: "o:" + IKEY,
+    iKey: "o:" + IKEY.split("-")[0],
     data: sanitizeData(event.data),
   };
 }

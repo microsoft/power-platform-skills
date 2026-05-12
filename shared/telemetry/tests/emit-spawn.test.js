@@ -41,7 +41,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
   fs.writeFileSync(
     ikeyJsonPath,
     JSON.stringify({
-      ikey: "placeholder",
+      instrumentationKey: "placeholder",
       collector_url: "https://example.invalid/",
       event_stream_name: "PowerPagesPluginEvent",
       disabled: false,

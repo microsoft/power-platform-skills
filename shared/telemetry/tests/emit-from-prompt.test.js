@@ -40,7 +40,7 @@ function callWithStub({ promptText, telemetryDir, captured, pacAuth, agentInfo }
 
 test("returns { emitted: false } when detection returns null", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -56,7 +56,7 @@ test("returns { emitted: false } when detection returns null", () => {
 
 test("emits skill_started with envelope name from ikey.json", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -84,7 +84,7 @@ test("emits skill_started with envelope name from ikey.json", () => {
 
 test("populates orgId/tenantId when PAC auth is present", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -104,7 +104,7 @@ test("populates orgId/tenantId when PAC auth is present", () => {
 
 test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is present", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -126,7 +126,7 @@ test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is prese
 
 test("omits agent fields when agentInfo returns empty values", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -144,7 +144,7 @@ test("omits agent fields when agentInfo returns empty values", () => {
 
 test("omits orgId/tenantId when PAC auth is absent", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -161,7 +161,7 @@ test("omits orgId/tenantId when PAC auth is absent", () => {
 
 test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and FAKE_HTTPS into spawn opts", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
@@ -206,7 +206,7 @@ test("does not throw when ikey.json is missing", () => {
 
 test("does not throw when _emit throws", () => {
   const telemetryDir = mkTelemetryDir({
-    ikey: "x",
+    instrumentationKey: "x",
     collectorUrl: "https://x",
     eventStreamName: "PowerPagesPluginEvent",
   });
