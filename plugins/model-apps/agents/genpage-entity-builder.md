@@ -70,29 +70,21 @@ Determine the **dependency order**:
 
 ## Step 2 — Verify Auth and Connectivity
 
-Confirm `az` is logged in to the same identity that has access to the target env.
+The orchestrator runs `scripts/check-auth.js` in Phase 2a before invoking you,
+so by the time you start, `az` is logged in and WhoAmI works against the env.
+You still re-probe defensively in case the orchestrator's check went stale
+(e.g., the user revoked auth mid-run):
 
 ```bash
-az account show --query user.name -o tsv
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js" <envUrl>
 ```
 
-If that errors, tell the user:
-> "`az` is not logged in. Run `az login` (use the same account as your `pac auth list` active profile), then retry."
-> Stop the workflow.
+Parse the JSON output. If `ok: false`, **abort and surface the `message` field
+to the user verbatim** — do not try to recover. Each blocker has a clear
+fix-it instruction.
 
-Verify the token mints for this env and the user is a member of the org:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI
-```
-
-Expected: `{"status":200,"data":{"UserId":"...","BusinessUnitId":"...","OrganizationId":"..."}}`
-
-If `status:403` with `"The user is not a member of the organization"`, the `az`
-identity differs from the env's user list. Tell the user:
-> "`az` is signed in as a user who is not a member of this Dataverse env. Run
-> `az login --username <user>@<tenant>` with the same account as `pac auth who`."
-> Stop the workflow.
+If `identitiesMatch: false`, log a one-line warning in the transaction log
+(Step 3) but proceed — WhoAmI passed, which is the authoritative gate.
 
 ## Step 3 — Open the Transaction Log
 

@@ -23,6 +23,11 @@ Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 ### Added
 
 - **Node.js Web API scripts under `plugins/model-apps/scripts/`:**
+  - `check-auth.js` — consolidated pre-flight that verifies `az` is installed +
+    logged in, `pac` has an active env, the two identities match, and `WhoAmI`
+    against the env returns 200. Returns one structured JSON object with an
+    `ok`, `blocker` code, `message`, and `identitiesMatch` flag. Always exits 0
+    so callers can parse stdout to decide whether to proceed.
   - `dataverse-request.js` — general OData wrapper (escape hatch for any one-off call)
   - `create-table.js` — POST to `EntityDefinitions`, builds the primary name attribute
   - `add-column.js` — string, memo, integer, decimal, money, datetime, boolean, picklist

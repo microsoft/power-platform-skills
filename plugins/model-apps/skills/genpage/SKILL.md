@@ -133,34 +133,40 @@ Skip to Phase 3.
 
 **If entities need creating:**
 
-#### 2a. Verify az auth + Dataverse connectivity
+#### 2a. Pre-flight: az + pac + Dataverse
 
 Entity creation runs through the plugin's Node.js Web API scripts using `az` for
-auth. Verify both pieces before invoking the builder:
+auth, and the `az` and `pac` identities should normally match. Run the
+consolidated pre-flight:
 
 ```bash
-az account show --query user.name -o tsv
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-auth.js"
 ```
 
-If that fails (no `az`, not logged in, etc.), stop and tell the user:
-> "Entity creation requires Azure CLI. Run `az login` with the same account
-> as your active `pac auth` profile, then retry."
+It returns a single JSON object:
 
-Then probe the env with a `WhoAmI` call (extract the env URL from `pac org who`):
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI
+```json
+{
+  "ok": true | false,
+  "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
+                 | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+  "message": "human-readable next step",
+  "azUser": "...", "pacUser": "...", "envUrl": "...",
+  "identitiesMatch": true | false,
+  "whoAmI": { "ok": true, "userId": "...", "organizationId": "..." }
+}
 ```
 
-- **Status 200** with a `UserId`: connectivity OK, proceed to 2b.
-- **Status 401**: token didn't mint — bad `az login` state.
-- **Status 403** with `"The user is not a member of the organization"`: the `az`
-  identity differs from the env's user list. Tell the user:
-  > "Your `az` account does not have access to this Dataverse environment.
-  > Run `az login --username <user>@<tenant>` with the same identity that
-  > `pac auth who` shows, then retry."
-  Stop the workflow.
-- **Network / other error**: report and stop.
+- **`ok: true` and `identitiesMatch: true`** → proceed to 2b.
+- **`ok: true` and `identitiesMatch: false`** → proceed to 2b but surface the
+  `message` to the user as an inline warning ("az is X, pac is Y — WhoAmI works
+  for now, but if entity creation later returns 403, run the suggested
+  `az login --username` to align them").
+- **`ok: false`** → show the `message` field to the user verbatim and
+  **stop the workflow**. The script already includes a fix-it command for every
+  blocker (run `az login`, etc.).
+
+Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 
 #### 2b. Invoke entity-builder
 

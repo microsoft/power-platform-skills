@@ -42,6 +42,7 @@ samples/                       ← Example .tsx files (8 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   create-table.js              ← Creates a Dataverse custom table
   add-column.js                ← Adds a column to an existing table
