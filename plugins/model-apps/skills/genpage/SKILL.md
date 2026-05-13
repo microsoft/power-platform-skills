@@ -23,7 +23,7 @@ This skill orchestrates four specialist agents across the create and edit flows:
 1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
    entities and apps exist, presents a plan for approval, writes `genpage-plan.md`
 2. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
-   relationships, choices, sample data) using the Dataverse Skills plugin
+   relationships, choices, sample data) via the plugin's Node.js Web API scripts
 3. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
    builders run in parallel for multi-page requests
 
@@ -169,22 +169,34 @@ Invoke the `genpage-entity-builder` agent via the `Task` tool. Pass in the promp
 - Working directory (absolute path)
 - Plugin root: `${CLAUDE_PLUGIN_ROOT}`
 - Dataverse env URL (from `pac org who`)
-- Solution unique name (optional — if the plan calls one out)
+
+The entity-builder reads `Solution` and `Publisher Prefix` directly from the
+plan's `## Environment` — no need to re-thread them here.
 
 Wait for completion. The builder writes a transactional log at
 `<working-dir>/entity-creation-log.md` for recovery on failure.
 
 ### Phase 3: App Creation/Selection
 
-Read `genpage-plan.md` for the app decision:
+Read `genpage-plan.md` for the app decision and the `Solution` line in
+`## Environment`.
 
 **If "create new":**
+
 ```powershell
-pac model create --name "App Name"
+pac model create --name "App Name" --solution "<Solution unique name>"
 ```
+
+- If the plan's `Solution` line is set (anything other than `Default`), pass it
+  with `--solution`. This lands the new app in the same solution as the entities
+  created in Phase 2.
+- If the plan says `Solution: Default` or the field is absent, omit `--solution`
+  and the app goes to the active solution.
+
 Store the new app-id for Phase 6.
 
-**If existing app-id:** Use it directly.
+**If existing app-id:** Use it directly. The `Solution` line is irrelevant when
+no new app is being created.
 
 ### Phase 4: Generate RuntimeTypes (Conditional)
 

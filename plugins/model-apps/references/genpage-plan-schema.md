@@ -35,6 +35,20 @@ All sections must appear in this exact order with these exact headings:
 - URL: [environment URL]
 - App: [app name] ([app-id]) OR "create new: [name]"
 - Languages: [detected languages with LCIDs, or "English (1033) only"]
+- Solution: [solution unique name, e.g. "ConferenceRegistration" or "Default"]
+- Publisher Prefix: [prefix tied to the solution's publisher, e.g. "crb2b" or "new"]
+
+The Solution + Publisher Prefix fields are populated by the planner when there is
+metadata work to do (new entities OR a new app being created). If the plan section
+literally says "No entity creation required" AND the app already exists, both
+fields may be omitted — they have no effect on a code-only flow.
+
+When present, downstream consumers MUST honour them:
+- `genpage-entity-builder` passes `--solution <Solution>` on every script call
+  so newly-created tables/columns/relationships land in that solution. It also
+  uses `Publisher Prefix` to build schema names (e.g. `<prefix>_Candidate`).
+- The orchestrator (skill) passes `--solution <Solution>` to `pac model create`
+  when provisioning a new model-driven app.
 
 ## Pages
 | Page | File | Purpose | Entities |

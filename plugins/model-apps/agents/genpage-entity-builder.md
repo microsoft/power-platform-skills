@@ -28,7 +28,13 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 - The working directory (where to write logs and intermediate JSON)
 - The plugin root (`${CLAUDE_PLUGIN_ROOT}`) — where the JS scripts live
 - The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
-- The solution unique name (optional — if omitted, components go to the default solution)
+
+The **Solution unique name** and **Publisher Prefix** are read directly from the
+plan document's `## Environment` section (the planner picked them with the user).
+- If `Solution` is anything other than `Default`, pass it as `--solution <name>`
+  to every `create-table.js`, `add-column.js`, and `create-relationship.js` call.
+- If `Solution: Default` (or the line is absent), omit `--solution` entirely
+  and components land in the active solution.
 
 You operate entirely through the Web API via the plugin's scripts under
 `${CLAUDE_PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
@@ -44,7 +50,13 @@ The plan document follows a strict schema. See
 `${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contract,
 especially the `## Entity Creation Required` section.
 
-Extract from the **Entity Creation Required** section:
+Extract from the **`## Environment`** section:
+- **Solution** — `Solution: <uniqueName>`. If `Default` or missing → omit `--solution`.
+- **Publisher Prefix** — `Publisher Prefix: <prefix>`. Use this to build every
+  schema name (`<prefix>_TableName`, `<prefix>_columnname`). If missing → fall
+  back to `new`.
+
+Extract from the **`## Entity Creation Required`** section:
 - Tables to create (display name, schema name, primary name)
 - Column definitions (logical name, type, required level)
 - Choice column options (with numeric values starting at 100000000)
@@ -90,7 +102,8 @@ Before any writes, create `<working-dir>/entity-creation-log.md` with a header:
 # Entity Creation Log
 
 Env: <envUrl>
-Solution: <solutionUniqueName or "default">
+Solution: <Solution unique name or "Default">
+Publisher Prefix: <prefix>
 Started: <ISO timestamp>
 
 | Step | Operation | Status | Logical Name / ID | Notes |

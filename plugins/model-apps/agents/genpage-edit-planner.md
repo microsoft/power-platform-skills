@@ -111,8 +111,7 @@ Ask questions via `AskUserQuestion`, one at a time:
 3. **"Do any of these changes require new Dataverse entities or columns?"**
    - If yes: stop here. Inform the user:
      > "Adding new entities to an existing page requires the full create flow
-     > (invoke `/genpage` for a new page and migrate), or installing the
-     > Dataverse Skills plugin to modify the schema. The edit flow supports
+     > (invoke `/genpage` for a new page and migrate). The edit flow supports
      > code-only changes. Would you like to continue with code-only edits?"
    - If code-only: continue.
 

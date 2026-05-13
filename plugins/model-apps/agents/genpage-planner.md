@@ -147,15 +147,12 @@ the `Logical Name` column against your requested entities using **exact equality
 Do NOT trust the raw output as "exists" just because the search returned a match —
 the search is fuzzy, your check must be exact.
 
-If any entities need creating, inform the user that entity creation requires
-the Dataverse Skills plugin:
+If any entities need creating, note that entity creation requires:
+- **Azure CLI (`az`)** logged in with the same identity as the active `pac auth` profile
+- A target solution (the planner asks you to pick one in the next step)
 
-> "Some entities do not exist and need to be created. Entity creation requires
-> the Dataverse Skills plugin (`microsoft/Dataverse-skills`). If it's not
-> installed, install it or specify existing tables to continue."
-
-Only entity **creation** requires the Dataverse plugin — detection uses
-`pac model list-tables` natively.
+Detection uses `pac model list-tables` natively; creation runs through the
+plugin's own Web API scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
 
 ### App Detection
 
@@ -169,6 +166,67 @@ pac model list
   like to create a new one, or cancel?"
 - **1 app:** Confirm with user: "Found app [name] ([app-id]). Use this one?"
 - **N apps:** Ask user to select one or create a new one via `AskUserQuestion`.
+
+### Solution Selection (Conditional)
+
+**Only run this step if there is metadata work to do** — i.e., any entity needs
+creating, OR a new app will be created in this run. If the user is reusing all
+existing entities AND reusing an existing app, **skip this step entirely** —
+solutions don't affect a code-only flow.
+
+#### 1. Resolve the env URL
+
+```bash
+ENV_URL=$(pac org who | grep "Org URL" | awk '{print $3}' | sed 's:/*$::')
+```
+
+#### 2. List custom solutions
+
+Query the env for non-managed solutions (excluding the always-present "Default" and
+"Active"):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+  "solutions?\$select=uniquename,friendlyname&\$expand=publisherid(\$select=customizationprefix)&\$filter=ismanaged eq false and uniquename ne 'Default' and uniquename ne 'Active' and isvisible eq true&\$top=10"
+```
+
+Parse the JSON; capture each `uniquename`, `friendlyname`, and
+`publisherid.customizationprefix`.
+
+#### 3. Ask the user
+
+Use `AskUserQuestion`. Options depend on what the env has:
+
+- **If 1+ custom solutions exist:** First option(s) are existing solutions
+  (label them `<friendlyname> (prefix: <prefix>)`), then "Create a new solution
+  for this app", then "Use Default Solution (prefix: new)".
+- **If no custom solutions exist:** Two options — "Create a new solution for
+  this app" and "Use Default Solution (prefix: new)".
+
+> "Which solution should the new tables / app go in?
+>
+> - **[Existing name] (prefix: [prefix])** — adds to this existing solution
+> - **Create a new 'genpage-[app-slug]' solution (prefix: new)** — clean container for this build
+> - **Use Default Solution (prefix: new)** — fastest, but mixed with everything else"
+
+#### 4. Act on the answer
+
+- **Existing solution chosen:** Record `Solution: <uniquename>` and
+  `Publisher Prefix: <prefix>` in the plan's `## Environment`.
+- **Create new chosen:** Derive a unique name from the app/page name in PascalCase
+  alphanumerics (e.g., "Pet Tracker" → `PetTrackerSolution`). Run:
+
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+    "<UniqueName>" "<Friendly Name>" \
+    --description "Solution for the <app> generative pages"
+  ```
+
+  Parse the returned `uniqueName` + `publisherPrefix` and record them in the plan.
+  If the script returns an error (typically because the uniqueName already exists),
+  retry once with a numeric suffix (`PetTrackerSolution2`).
+- **Default Solution chosen:** Record `Solution: Default` and
+  `Publisher Prefix: new`.
 
 ## Step 5 — Present Plan for Approval
 
@@ -194,6 +252,9 @@ Enter plan mode (`EnterPlanMode`) and present:
 
 ### App
 - Using: [app name] ([app-id]) OR "Will create new app: [name]"
+
+### Solution
+- [solution unique name and prefix, OR "n/a — code-only flow"]
 
 ### Localization
 - [list detected languages, or "English only — no localization needed"]
@@ -251,6 +312,7 @@ Pages: [N]
 
 Entities to create: [list or "none"]
 App: [app name] ([app-id]) or "create new: [name]"
+Solution: [unique name / prefix, or "n/a"]
 Plan document: [working directory]/genpage-plan.md
 ```
 

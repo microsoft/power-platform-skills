@@ -26,11 +26,21 @@ Azure CLI (`az`) for auth. Same approach `power-pages` uses.
   - `dataverse-request.js` — general OData wrapper (escape hatch for any one-off call)
   - `create-table.js` — POST to `EntityDefinitions`, builds the primary name attribute
   - `add-column.js` — string, memo, integer, decimal, money, datetime, boolean, picklist
-  - `create-relationship.js` — `CreateOneToManyRelationship` (lookup) + `CreateManyToManyRelationship`
+  - `create-relationship.js` — 1:N (lookup) + N:N via `POST /RelationshipDefinitions`
   - `create-record.js` — single record + bulk via OData `$batch` (multipart/mixed, 100 per batch by default)
+  - `create-solution.js` — POST `/solutions` with auto-resolved env Default Publisher
   - `add-to-solution.js` — `AddSolutionComponent` action
   - `lib/dataverse-auth.js` — shared auth + HTTP helpers (uses `az account get-access-token`,
     refreshes on 401, backs off on 429/5xx)
+- **Solution selection in the planner.** When the build needs metadata work (new
+  entities OR a new app), the planner now queries the env for non-managed
+  solutions, asks the user via `AskUserQuestion`, and records the choice in
+  `genpage-plan.md` under `## Environment` as `Solution: <uniqueName>` and
+  `Publisher Prefix: <prefix>`. Options offered: existing custom solutions,
+  "Create a new 'genpage-<app>' solution", or "Use Default Solution". The
+  question is **skipped entirely** for code-only flows (no new entities, no new
+  app). The orchestrator threads `--solution` into `pac model create` and the
+  entity-builder threads it into every `create-*` / `add-column` call.
 - **Transactional log** (`<working-dir>/entity-creation-log.md`) written by
   entity-builder for every successful operation. On failure, the log gives a
   recovery point so reruns don't duplicate work.

@@ -47,6 +47,7 @@ scripts/
   add-column.js                ← Adds a column to an existing table
   create-relationship.js       ← Creates 1:N (lookup) or N:N relationships
   create-record.js             ← Creates one or many records (auto-batches via $batch)
+  create-solution.js           ← Creates a Dataverse solution with env's Default Publisher
   add-to-solution.js           ← Adds an existing component to a solution
   lib/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
