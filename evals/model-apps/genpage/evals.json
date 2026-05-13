@@ -7,8 +7,11 @@
     "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified",
     "Phase 1 (Planner): pac auth list is run and the active environment is identified and reported to the user",
     "Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion",
+    "Phase 1 (Planner): Solution selection runs ONLY when the build needs metadata work (new entities OR new app); for code-only flows over existing entities + existing app, the solution question is skipped entirely",
+    "Phase 1 (Planner): When solution selection runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
-    "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/genpage-plan-schema.md"
+    "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/genpage-plan-schema.md",
+    "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts"
   ],
   "common_code_assertions": [
     "Generated .tsx is a single file with `export default GeneratedComponent`",
@@ -194,14 +197,16 @@
       "expectations": [
         "Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)",
         "Phase 1 (Planner): Plan includes entity definitions with columns, types, and a lookup relationship (cr_candidate → cr_jobrequisition)",
-        "Phase 2a: Orchestrator probes Dataverse MCP list_tables availability BEFORE invoking entity-builder",
-        "Phase 2b: Orchestrator passes a resolved absolute Project Root path to the entity-builder invocation prompt (not the literal string '$PROJECT_ROOT')",
-        "Phase 2b (Entity Builder): Dataverse plugin readiness is verified using the passed project-root path",
-        "Phase 2b (Entity Builder): cr_jobrequisition (independent) is created BEFORE cr_candidate (has lookup)",
-        "Phase 2b (Entity Builder): Propagation delay (3-5s) is observed after table creation before adding columns",
-        "Phase 2b (Entity Builder): Relationships are created after both tables exist; propagation delay (5-10s) before using @odata.bind",
+        "Phase 1 (Planner): Because entities will be created, the planner asks the solution selection question via AskUserQuestion and records the choice in ## Environment as 'Solution: <uniqueName>' and 'Publisher Prefix: <prefix>'",
+        "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
+        "Phase 2b (Entity Builder): Reads Solution + Publisher Prefix from the plan's ## Environment",
+        "Phase 2b (Entity Builder): cr_jobrequisition (independent) is created via scripts/create-table.js BEFORE cr_candidate (has lookup)",
+        "Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> when Solution is not 'Default'",
+        "Phase 2b (Entity Builder): Propagation delay (4s) is observed after table creation before adding columns",
+        "Phase 2b (Entity Builder): Lookup is created via scripts/create-relationship.js 1n (POST /RelationshipDefinitions); 8s delay before using @odata.bind navigation properties",
         "Phase 2b (Entity Builder): User is asked about sample data via AskUserQuestion",
-        "Phase 2b (Entity Builder): Actual logical names are reported back (may be normalized by Dataverse)",
+        "Phase 2b (Entity Builder): Sample inserts use scripts/create-record.js; arrays of records go through OData $batch automatically",
+        "Phase 2b (Entity Builder): Actual logical names are reported back (may be normalized by Dataverse); a transaction log at <working-dir>/entity-creation-log.md captures each successful operation",
         "Phase 4: pac model genpage generate-types is run with the created entity names",
         "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
         "Phase 6: Upload includes --data-sources with both created entity names"
@@ -223,7 +228,8 @@
         "Phase 1 (Planner): pac model list returns zero apps",
         "Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel",
         "Phase 1 (Planner): Plan records 'create new app' decision",
-        "Phase 3: pac model create --name 'Account Metrics' is run",
+        "Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment",
+        "Phase 3: pac model create --name 'Account Metrics' is run; if Solution is anything other than 'Default', the command includes --solution <name>",
         "Phase 3: The new app-id returned from pac model create is stored for Phase 6",
         "Phase 6: Upload uses the newly created app-id"
       ]
@@ -244,11 +250,13 @@
       "expectations": [
         "Phase 1 (Planner): cr_project and cr_milestone confirmed as NOT existing",
         "Phase 1 (Planner): Plan includes a lookup relationship (cr_milestone → cr_project)",
-        "Phase 2a: Orchestrator probes Dataverse MCP availability before invoking entity-builder",
-        "Phase 2b (Entity Builder): cr_project (independent) is created first; cr_milestone (dependent) is created second",
+        "Phase 1 (Planner): Solution selection question is asked because new entities will be created",
+        "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
+        "Phase 2b (Entity Builder): cr_project (independent) is created via scripts/create-table.js first; cr_milestone (dependent) is created second; 1:N lookup via scripts/create-relationship.js 1n",
         "Phase 2b (Entity Builder): Sample data is created because the user explicitly requested it in the prompt",
+        "Phase 2b (Entity Builder): Sample inserts go through scripts/create-record.js; arrays trigger OData $batch (one round-trip per 100 records)",
         "Phase 2b (Entity Builder): Sample records are realistic (not lorem ipsum or empty values)",
-        "Phase 2b (Entity Builder): Sample records respect relationships (milestones reference valid project IDs)",
+        "Phase 2b (Entity Builder): Sample records respect relationships (milestones reference valid project IDs via @odata.bind)",
         "Phase 6: Deployment includes --data-sources with both entity names"
       ]
     },
@@ -266,10 +274,11 @@
       "expectations": [
         "Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)",
         "Phase 1 (Planner): Plan records cr_widget under Entity Creation Required",
-        "Phase 2a: Orchestrator runs `az account show` and a WhoAmI probe via scripts/dataverse-request.js BEFORE invoking entity-builder",
-        "Phase 2a: If `az` is not logged in, user is told to run `az login` and workflow halts (entity-builder is NOT invoked)",
-        "Phase 2a: If WhoAmI returns 403 (user not a member of org), user is told to `az login --username` matching their pac auth profile and workflow halts",
-        "Phase 2b: genpage-entity-builder is only invoked AFTER the probe succeeds"
+        "Phase 2a: Orchestrator runs scripts/check-auth.js BEFORE invoking entity-builder; parses the returned JSON",
+        "Phase 2a: If the script returns blocker:'az_not_logged_in', orchestrator surfaces the message ('Run `az login`...') to the user and halts (entity-builder is NOT invoked)",
+        "Phase 2a: If blocker:'whoami_403', orchestrator surfaces the message including the specific `az login --username <pacUser>` command and halts",
+        "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning",
+        "Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true"
       ]
     },
     {
@@ -386,11 +395,14 @@
         "Phase 1 (Planner): cr_ticket is identified as NOT existing",
         "Phase 1 (Planner): Plan includes choice column definitions for priority and status under Choice Columns, with numeric option values starting at 100000000",
         "Phase 1 (Planner): Plan includes a datetime column for due date",
+        "Phase 1 (Planner): Solution selection question is asked (because new entity will be created) and recorded in ## Environment",
+        "Phase 2a: scripts/check-auth.js returns ok:true before entity-builder is invoked",
         "Phase 2b (Entity Builder): cr_ticket is created via scripts/create-table.js (POST /EntityDefinitions)",
         "Phase 2b (Entity Builder): Choice columns are added using scripts/add-column.js with type 'picklist' and --options JSON listing {value,label} pairs",
         "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
         "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
         "Phase 2b (Entity Builder): Every script invocation includes --solution <Solution> when the plan's Solution field is not 'Default'",
+        "Phase 2b (Entity Builder): Transaction log (entity-creation-log.md) records each create with its returned metadataId",
         "Phase 4: pac model genpage generate-types picks up the enum registrations",
         "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
         "Phase 5 (Page Builder): Generated .tsx uses dataApi.getChoices() or reads FormattedValue annotations for choice display names"
