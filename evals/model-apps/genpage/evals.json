@@ -261,14 +261,14 @@
           "new_or_edit": "Create new page(s)",
           "data_source": "Dataverse entity: cr_widget (new, does not exist)"
         },
-        "environment_state": "Dataverse Skills plugin is NOT installed (or installed but not connected)"
+        "environment_state": "az CLI is not logged in, OR logged in as a user without access to the target Dataverse env"
       },
       "expectations": [
         "Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)",
         "Phase 1 (Planner): Plan records cr_widget under Entity Creation Required",
-        "Phase 2a: Orchestrator probes Dataverse MCP list_tables tool availability BEFORE invoking entity-builder",
-        "Phase 2a: If MCP is NOT installed, user is told to install microsoft/Dataverse-skills and workflow halts (entity-builder is NOT invoked)",
-        "Phase 2a: If MCP is installed but returns auth error, user is told to run /dv-connect and workflow halts",
+        "Phase 2a: Orchestrator runs `az account show` and a WhoAmI probe via scripts/dataverse-request.js BEFORE invoking entity-builder",
+        "Phase 2a: If `az` is not logged in, user is told to run `az login` and workflow halts (entity-builder is NOT invoked)",
+        "Phase 2a: If WhoAmI returns 403 (user not a member of org), user is told to `az login --username` matching their pac auth profile and workflow halts",
         "Phase 2b: genpage-entity-builder is only invoked AFTER the probe succeeds"
       ]
     },
@@ -386,10 +386,11 @@
         "Phase 1 (Planner): cr_ticket is identified as NOT existing",
         "Phase 1 (Planner): Plan includes choice column definitions for priority and status under Choice Columns, with numeric option values starting at 100000000",
         "Phase 1 (Planner): Plan includes a datetime column for due date",
-        "Phase 2b (Entity Builder): cr_ticket is created via Dataverse MCP create_table or Python SDK",
-        "Phase 2b (Entity Builder): Choice columns are added using Python SDK with IntEnum classes (MCP create_table does not support choices directly)",
-        "Phase 2b (Entity Builder): Priority IntEnum has 4 values starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
-        "Phase 2b (Entity Builder): Status IntEnum has 4 values starting at 100000000",
+        "Phase 2b (Entity Builder): cr_ticket is created via scripts/create-table.js (POST /EntityDefinitions)",
+        "Phase 2b (Entity Builder): Choice columns are added using scripts/add-column.js with type 'picklist' and --options JSON listing {value,label} pairs",
+        "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
+        "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
+        "Phase 2b (Entity Builder): Every script invocation includes --solution <Solution> when the plan's Solution field is not 'Default'",
         "Phase 4: pac model genpage generate-types picks up the enum registrations",
         "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
         "Phase 5 (Page Builder): Generated .tsx uses dataApi.getChoices() or reads FormattedValue annotations for choice display names"

@@ -34,7 +34,7 @@ Each eval has a `tier` for selective running:
 |------|-------|---------|
 | `smoke` | 4 | Diverse representatives (Dataverse page, mock page, edit, plan-schema compliance). Run on every PR. |
 | `full` | 9 | All core scenarios (wizard, kanban, analytics, entity creation, app creation, multi-page, localization, choices). Run nightly or pre-release. |
-| `stress` | 3 | Edge cases (Dataverse plugin absent, filename collision, plan revision loop). Run with full suite. |
+| `stress` | 3 | Edge cases (az not logged in / not member of org, filename collision, plan revision loop). Run with full suite. |
 
 ## Quick start: running one eval
 
