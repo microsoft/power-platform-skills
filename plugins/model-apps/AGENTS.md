@@ -6,7 +6,13 @@ This file provides guidance to AI Agents when working with the **model-apps** pl
 
 A plugin for building and deploying Power Apps generative pages (genux) for model-driven apps. Uses React 17 + TypeScript + Fluent UI V9 single-file components, deployed via PAC CLI.
 
-The `/genpage` skill orchestrates specialist agents: a planner (requirements + plan approval), an optional entity builder (Dataverse entity creation via the Dataverse Skills plugin), and parallel page builders (code generation). Entity creation requires the `microsoft/Dataverse-skills` plugin as a soft dependency.
+The `/genpage` skill orchestrates specialist agents: a planner (requirements + plan approval), an optional entity builder (Dataverse entity creation via the plugin's own Node.js Web API scripts), and parallel page builders (code generation).
+
+**Requirements:**
+- **PAC CLI ≥ 2.7.0** — for app and page deploy operations
+- **Azure CLI (`az`)** — used by entity-builder for Dataverse Web API auth; must be logged in with the same identity as the active `pac` profile
+
+No Dataverse Skills plugin or Python dependency.
 
 ## Local Development
 
@@ -25,7 +31,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
-  genpage-entity-builder.md    ← DV entity creation via Dataverse plugin (create flow)
+  genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
 references/                    ← Shared reference docs
@@ -35,6 +41,16 @@ references/                    ← Shared reference docs
 samples/                       ← Example .tsx files (8 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
+  regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
+  dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
+  create-table.js              ← Creates a Dataverse custom table
+  add-column.js                ← Adds a column to an existing table
+  create-relationship.js       ← Creates 1:N (lookup) or N:N relationships
+  create-record.js             ← Creates one or many records (auto-batches via $batch)
+  add-to-solution.js           ← Adds an existing component to a solution
+  lib/
+    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
+  tests/                       ← node --test coverage for the scripts above
 skills/
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
@@ -53,7 +69,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
 | `genpage-planner` | `genpage` (create flow) | Validates prereqs, gathers requirements, detects entity/app existence, presents plan for approval, writes `genpage-plan.md` |
-| `genpage-entity-builder` | `genpage` (create flow) | Creates Dataverse tables, columns, relationships, choices, and sample data using the Dataverse Skills plugin (soft dependency) |
+| `genpage-entity-builder` | `genpage` (create flow) | Creates Dataverse tables, columns, relationships, choices, and sample data via the plugin's Node.js Web API scripts (`scripts/`). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
 

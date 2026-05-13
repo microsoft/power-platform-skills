@@ -2,8 +2,8 @@
 name: genpage-entity-builder
 description: >-
   Creates Dataverse entities (tables, columns, relationships, choices) specified
-  in genpage-plan.md using Dataverse Skills plugin tools. Handles dependency ordering,
-  propagation delays, sample data creation, and solution management.
+  in genpage-plan.md using the plugin's Node.js Web API scripts. Handles dependency ordering,
+  propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
 color: yellow
 tools:
@@ -14,11 +14,6 @@ tools:
   - TaskUpdate
   - TaskList
   - AskUserQuestion
-  - mcp__dataverse__list_tables
-  - mcp__dataverse__describe_table
-  - mcp__dataverse__create_table
-  - mcp__dataverse__update_table
-  - mcp__dataverse__create_record
 ---
 
 # Genpage Entity Builder
@@ -30,10 +25,14 @@ then optionally seed sample data.
 You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - Path to `genpage-plan.md`
-- The working directory
-- The project root — absolute path where the Dataverse Skills plugin's `.env`
-  and `scripts/auth.py` files live (the orchestrator resolves this from the
-  user's current working directory when `/genpage` was invoked)
+- The working directory (where to write logs and intermediate JSON)
+- The plugin root (`${CLAUDE_PLUGIN_ROOT}`) — where the JS scripts live
+- The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
+- The solution unique name (optional — if omitted, components go to the default solution)
+
+You operate entirely through the Web API via the plugin's scripts under
+`${CLAUDE_PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
+is no Dataverse Skills plugin dependency.**
 
 ---
 
@@ -46,178 +45,222 @@ The plan document follows a strict schema. See
 especially the `## Entity Creation Required` section.
 
 Extract from the **Entity Creation Required** section:
-- Tables to create (with display names)
-- Column definitions (logical names, types, required flag)
+- Tables to create (display name, schema name, primary name)
+- Column definitions (logical name, type, required level)
 - Choice column options (with numeric values starting at 100000000)
-- Relationships (type, related entity, lookup field, cascade config)
+- Relationships (1:N lookup or N:N, related entity, cascade config)
 
 Determine the **dependency order**:
 - Tables with no relationships to other new tables → create first (independent)
 - Tables with lookups to already-created tables → create second (dependent)
+- 1:N lookups → create after both tables exist (creates a column on the referencing side)
 - N:N relationships → create after both participating tables exist
 
-## Step 2 — Check Dataverse Plugin Readiness
+## Step 2 — Verify Auth and Connectivity
 
-Verify the Dataverse Skills plugin has been configured by checking for its
-authentication files in the **project root** passed in your invocation prompt.
-Substitute the literal path you received — do NOT use `$PROJECT_ROOT` as a shell
-variable, the orchestrator resolved the path already.
+Confirm `az` is logged in to the same identity that has access to the target env.
 
 ```bash
-test -f "<project-root>/.env" && echo "EXISTS" || echo "MISSING"
-test -f "<project-root>/scripts/auth.py" && echo "EXISTS" || echo "MISSING"
+az account show --query user.name -o tsv
 ```
 
-If either file is missing, try calling `list_tables` as a connectivity test. If
-`list_tables` succeeds, the Dataverse connection is working regardless of file layout.
+If that errors, tell the user:
+> "`az` is not logged in. Run `az login` (use the same account as your `pac auth list` active profile), then retry."
+> Stop the workflow.
 
-If `list_tables` also fails, inform the user:
-
-> "The Dataverse Skills plugin needs to be connected first. Please run `/dv-connect`
-> to set up authentication, then retry."
-
-**Stop here** — do not attempt entity creation without proper Dataverse authentication.
-
-## Step 3 — Create Entities in Dependency Order
-
-Create a task for each table: "Create [table display name] entity"
-
-### Tool selection
-
-You have two mechanisms available, to be used according to the [dv-overview](../references/genpage-plan-schema.md) tool hierarchy:
-
-- **Dataverse MCP tools** (`create_table`, `update_table`, `create_record`) — use for:
-  - Simple table creation with basic column types
-  - Small sample data inserts (≤ 10 records)
-- **Python SDK via Bash** — use for:
-  - Choice/picklist columns (requires `IntEnum`)
-  - Relationships (lookups, N:N) with cascade configuration
-  - Currency, memo, file columns with precision/length
-  - Bulk sample data creates
-  - Anything else the MCP tools cannot express
-
-### How to execute Python SDK code
-
-You do NOT have a Python REPL. To run Python SDK code:
-
-1. Write a one-off `.py` script to the working directory's `scripts/` subfolder
-   (create it if missing). Use `Write` to create files like
-   `<working-dir>/scripts/create-cr_candidate.py`.
-2. The script should import `from dataverse_client import DataverseClient`, construct
-   the client (it reads `.env` and `scripts/auth.py` automatically when the Dataverse
-   Skills plugin is set up), perform the operation, and print a JSON summary of what it did.
-3. Run it via `Bash`:
-   ```bash
-   python "<working-dir>/scripts/create-cr_candidate.py"
-   ```
-4. Parse the script's stdout to extract the actual logical names assigned by Dataverse.
-
-Keep each script focused (one table or one relationship per script) so failures are
-recoverable. Do NOT embed credentials in scripts — the Dataverse Skills plugin's
-auth module handles that.
-
-### For each table (in dependency order):
-
-#### 3a. Create the table
-
-Use the Dataverse MCP `create_table` tool (preferred for simple tables):
-
-```
-mcp__dataverse__create_table(name="new_TableName", columns=[...])
-```
-
-Or write and run a Python script for tables with complex requirements:
-
-```python
-# File: <working-dir>/scripts/create-new_tablename.py
-from dataverse_client import DataverseClient
-import json
-
-client = DataverseClient()
-result = client.tables.create("new_TableName", {
-    "column1": "string",
-    "column2": "int",
-}, solution="SolutionName")
-print(json.dumps({"logical_name": result.logical_name}))
-```
-
-Then run `python <working-dir>/scripts/create-new_tablename.py` via Bash.
-
-#### 3b. Wait for propagation
-
-After table creation, wait 3-5 seconds before adding columns or relationships.
-Dataverse metadata propagation is not instant.
+Verify the token mints for this env and the user is a member of the org:
 
 ```bash
-sleep 4
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI
 ```
 
-#### 3c. Add additional columns
+Expected: `{"status":200,"data":{"UserId":"...","BusinessUnitId":"...","OrganizationId":"..."}}`
 
-If the table needs columns beyond what was created initially (e.g., choice columns,
-complex types), add them:
+If `status:403` with `"The user is not a member of the organization"`, the `az`
+identity differs from the env's user list. Tell the user:
+> "`az` is signed in as a user who is not a member of this Dataverse env. Run
+> `az login --username <user>@<tenant>` with the same account as `pac auth who`."
+> Stop the workflow.
 
-- **Choice/picklist columns:** Use Python SDK with `IntEnum` classes:
-  ```python
-  from enum import IntEnum
-  class Status(IntEnum):
-      Active = 100000000
-      Inactive = 100000001
-      OnHold = 100000002
+## Step 3 — Open the Transaction Log
 
-  client.tables.add_columns("new_TableName", {
-      "new_status": Status
-  }, solution="SolutionName")
-  ```
+Before any writes, create `<working-dir>/entity-creation-log.md` with a header:
 
-- **Currency, memo, file columns:** Use Web API fallback for advanced column types.
+```markdown
+# Entity Creation Log
 
-#### 3d. Add relationships
+Env: <envUrl>
+Solution: <solutionUniqueName or "default">
+Started: <ISO timestamp>
 
-After all tables in the dependency chain are created:
-
-- **1:N lookup (simple):**
-  ```python
-  client.tables.create_lookup_field(
-      referencing_table="new_DependentTable",
-      lookup_field_name="new_ParentLookup",
-      referenced_table="new_ParentTable",
-      display_name="Parent Record",
-      solution="SolutionName"
-  )
-  ```
-
-- **N:N:**
-  ```python
-  from dataverse_client.models import ManyToManyRelationshipMetadata
-  client.tables.create_many_to_many_relationship(
-      ManyToManyRelationshipMetadata(...)
-  )
-  ```
-
-**Wait 5-10 seconds** after creating lookup relationships before using
-`@odata.bind` navigation properties — the navigation property names are
-case-sensitive and may not be immediately available.
-
-#### 3e. Add to solution
-
-```powershell
-pac solution add-solution-component --solutionUniqueName MySolution --component new_tablename --componentType 1
+| Step | Operation | Status | Logical Name / ID | Notes |
+|------|-----------|--------|-------------------|-------|
 ```
 
-Mark each table's task as complete after creation.
+Append a row after **every successful script invocation** with the returned
+metadataId / logical name. If a step fails, append the row with `FAILED` and
+the error message. This lets the orchestrator (or a manual rerun) resume from
+the failure point instead of duplicating work.
 
-## Step 4 — Verify Created Entities
+## Step 4 — Create Entities in Dependency Order
 
-After all tables are created, verify with `list_tables` or `describe_table`:
+Create a `TaskCreate` task for each table: "Create [table display name] entity".
+Mark in_progress when starting, completed when done.
 
-- Confirm all tables exist
-- Note the **actual logical names** (Dataverse may normalize prefixes and casing)
-- If any table is missing, diagnose and retry
+### Per-table sequence
 
-## Step 5 — Ask About Sample Data
+For each table in dependency order, run the following steps in **strict sequence**
+(do not parallelize within a table — Dataverse metadata propagation is timing-sensitive):
 
-Ask the user via `AskUserQuestion`:
+#### 4a. Create the table
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table.js" \
+  <envUrl> \
+  "<prefix>_<SchemaName>" \
+  "<Display Name>" \
+  "<Display Plural>" \
+  --description "<desc>" \
+  --primary-name "<Primary Column Display>" \
+  --primary-name-logical "<prefix>_name" \
+  --primary-name-max-length 100 \
+  --ownership user \
+  ${solution ? `--solution ${solution}` : ''}
+```
+
+Parse the JSON output: `{ "ok": true, "logicalName": "...", "schemaName": "...", "metadataId": "..." }`.
+Record `logicalName` and `metadataId` — you'll need them for columns, relationships, and the log.
+
+**Wait 4 seconds** before adding columns. Dataverse metadata propagation is not instant.
+
+#### 4b. Add additional columns
+
+For each non-primary column on this table, call `add-column.js`. Examples:
+
+**String:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_email" "Email" string \
+  --max-length 200 --format Email \
+  --required-level None \
+  ${solution ? `--solution ${solution}` : ''}
+```
+
+**Memo (long text):**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_notes" "Notes" memo \
+  --max-length 4000 --format TextArea
+```
+
+**Integer / Decimal / Money:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_count" "Count" integer --min 0 --max 10000
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_amount" "Amount" money --precision 2 --max 1000000
+```
+
+**DateTime:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_startdate" "Start Date" datetime \
+  --format DateOnly --behavior UserLocal
+```
+
+**Boolean:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_isactive" "Active" boolean \
+  --true-label "Active" --false-label "Inactive" --default true
+```
+
+**Picklist (choice column) — options are inline JSON or @file:**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
+  <envUrl> <logicalName> "<prefix>_status" "Status" picklist \
+  --options '[{"value":100000000,"label":"Active"},{"value":100000001,"label":"Inactive"},{"value":100000002,"label":"OnHold"}]'
+```
+
+For large option lists, write the JSON to `<working-dir>/<column>-options.json`
+and pass `--options @<working-dir>/<column>-options.json`.
+
+Each call returns `{ "ok": true, "logicalName": "...", "metadataId": "..." }`.
+Append a row to the log for each successful add.
+
+#### 4c. Add lookups (1:N relationships)
+
+Once both the referenced and referencing tables exist:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" 1n \
+  <envUrl> \
+  "<prefix>_<referenced>_<prefix>_<referencing>" \
+  "<prefix>_<referencedTable>" \
+  "<prefix>_<referencingTable>" \
+  "<prefix>_<LookupSchemaName>" \
+  "<Lookup Display Name>" \
+  --lookup-required None \
+  --cascade-delete RemoveLink
+```
+
+Returns `{ "ok": true, "kind": "1n", "schemaName": "...", "relationshipId": "...", "attributeId": "..." }`.
+
+**Wait 8 seconds** after creating a lookup before using `@odata.bind` navigation
+properties on the child table — the navigation property name (e.g.
+`new_AccountLookup@odata.bind`) may not be immediately available.
+
+#### 4d. Add N:N relationships
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" nn \
+  <envUrl> \
+  "<prefix>_<entity1>_<prefix>_<entity2>" \
+  "<prefix>_<entity1>" \
+  "<prefix>_<entity2>"
+```
+
+#### 4e. Add to solution (if a solution was specified)
+
+The `--solution` flag on create-table.js / add-column.js / create-relationship.js
+sets the `MSCRM.SolutionUniqueName` header during create, which is the canonical
+way to land new components in a specific solution. **In most cases you do not
+need to call `add-to-solution.js`.**
+
+Use `add-to-solution.js` only when you need to add an **existing** component
+(e.g., a system table you didn't create) to a solution:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/add-to-solution.js" \
+  <envUrl> <solutionUniqueName> <componentId> 1
+```
+
+Component types: 1 = table, 2 = attribute, 9 = relationship.
+
+Mark each table's task complete after all its columns and outbound relationships
+are in place.
+
+## Step 5 — Verify Created Entities
+
+After all tables, columns, and relationships are created, run a verification query:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" \
+  <envUrl> GET \
+  "EntityDefinitions(LogicalName='<prefix>_<tableLogical>')?\$select=LogicalName,SchemaName,PrimaryNameAttribute"
+```
+
+Expected: `status: 200` with the metadata. If `status: 404`, the table did not
+land — diagnose (often a propagation race) and retry the create.
+
+Note the **actual logical names** in the log — Dataverse normalizes the prefix
+and casing (your `cr69c_Candidate` becomes `cr69c_candidate`). The orchestrator
+needs these for RuntimeTypes generation.
+
+## Step 6 — Ask About Sample Data
+
+Use `AskUserQuestion`:
 
 > "Entities created successfully:
 >
@@ -229,34 +272,51 @@ Ask the user via `AskUserQuestion`:
 >
 > Options: **"Yes, add sample data"** / **"No, skip"**
 
-## Step 6 — Create Sample Data (If Requested)
+## Step 7 — Create Sample Data (If Requested)
 
 If the user says yes:
 
 1. Generate realistic sample records that respect:
-   - Column types and constraints
-   - Relationship integrity (lookups reference valid parent records)
-   - Choice column values (use defined option values)
-   - Realistic data (names, dates, numbers — not "Test1", "Lorem ipsum")
+   - Column types and constraints (no nulls in required columns)
+   - Relationship integrity (lookups reference valid parent record IDs)
+   - Choice column values (use the defined option values, not labels)
+   - Realistic data (real names, plausible dates/numbers — not "Test1", "Lorem ipsum")
 
-2. Create records via Dataverse MCP `create_record` or Python SDK bulk create:
-
-   ```python
-   # Create parent records first
-   parent_ids = client.records.create("new_ParentTable", [
-       {"new_name": "Project Alpha", "new_startdate": "2026-01-15"},
-       {"new_name": "Project Beta", "new_startdate": "2026-03-01"},
-       # ... 5-10 records
-   ])
-
-   # Then child records referencing valid parent IDs
-   client.records.create("new_ChildTable", [
-       {"new_title": "Milestone 1", "new_ParentLookup@odata.bind": f"/new_parenttables({parent_ids[0]})"},
-       # ...
-   ])
+2. Write the records as a JSON array to `<working-dir>/<table>-records.json`:
+   ```json
+   [
+     {"<prefix>_name": "Project Alpha", "<prefix>_startdate": "2026-01-15"},
+     {"<prefix>_name": "Project Beta",  "<prefix>_startdate": "2026-03-01"}
+   ]
    ```
 
-3. Report what was created:
+3. Create parent records first (no @odata.bind references):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-record.js" \
+     <envUrl> "<prefix>_<plural>" --body @<working-dir>/<parent>-records.json
+   ```
+
+   The script auto-selects: single object → POST, JSON array → `$batch` (bulk).
+   Output: `{ "ok": true, "count": N, "ids": [...] }`.
+   **Capture the IDs** — child records need them.
+
+4. Then child records using `@odata.bind` to the captured parent IDs:
+   ```json
+   [
+     {"<prefix>_title": "Milestone 1", "<prefix>_ParentLookup@odata.bind": "/<plural>(GUID-FROM-STEP-3)"}
+   ]
+   ```
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-record.js" \
+     <envUrl> "<prefix>_<childPlural>" --body @<working-dir>/<child>-records.json
+   ```
+
+5. Append every successful insert to the log. If the bulk response includes
+   `errors: [...]`, log each and surface to the user — partial success is OK
+   if the failures are recoverable (e.g., bad lookup ID), but do not silently
+   drop them.
+
+6. Report what was created:
    ```
    Sample data added:
    | Table | Records |
@@ -264,7 +324,7 @@ If the user says yes:
    | [name] | [N] |
    ```
 
-## Step 7 — Return Result
+## Step 8 — Return Result
 
 Return a concise summary to the orchestrating skill:
 
@@ -272,23 +332,30 @@ Return a concise summary to the orchestrating skill:
 Entity creation complete.
 
 | Table | Actual Logical Name | Columns | Relationships | Sample Records |
-|-------|-------------------|---------|---------------|----------------|
+|-------|---------------------|---------|---------------|----------------|
 | [display] | [actual_name] | [N] | [description] | [N or "skipped"] |
 
+Log: <working-dir>/entity-creation-log.md
 Ready for RuntimeTypes generation.
 ```
 
 ## Critical Constraints
 
-- **Follow dv-metadata patterns:** Environment-first — create via API, never
-  hand-write solution XML.
-- **Use the Dataverse plugin tool hierarchy:** MCP for simple operations (<=10 records,
-  simple creates), Python SDK for complex schema (relationships, choice columns, bulk ops).
-- **Never guess column prefixes.** Read the actual publisher prefix from the environment.
-  Dataverse normalizes names — the actual logical name may differ from what you requested.
-- **Report actual logical names.** The orchestrator needs these for RuntimeTypes generation.
-- **Propagation delays are mandatory.** 3-5s after table creation, 5-10s after
-  relationship creation. Skipping these causes intermittent failures.
-- **Do NOT generate code.** Code generation is handled by `genpage-page-builder`.
-- **Do NOT deploy.** Deployment is handled by the orchestrating skill.
+- **All Dataverse operations go through the JS scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/`.**
+  Do NOT call `pac` for entity create/update (PAC's metadata commands are limited).
+  Do NOT write Python. Do NOT call MCP tools.
+- **One script invocation per logical operation.** Each script is idempotent in the
+  sense that if it fails, you re-run it with corrected input — no half-written state.
+- **Always pass `<envUrl>` explicitly.** Don't rely on env vars. The orchestrator
+  passes it in your prompt; thread it through every Bash call.
+- **Propagation delays are mandatory.** 4 seconds after table creation, 8 seconds
+  after lookup creation. Skipping these causes intermittent failures.
+- **Never guess column prefixes.** Read the actual publisher prefix from the plan
+  or query the active solution's publisher (the planner does this). Dataverse
+  normalizes names — the actual logical name returned by the script is authoritative.
+- **Report actual logical names.** The orchestrator needs these for RuntimeTypes
+  generation.
+- **Write the transaction log religiously.** It is the recovery contract on failure.
+- **Do NOT generate `.tsx` code.** Code generation is `genpage-page-builder`'s job.
+- **Do NOT deploy.** Deployment is the orchestrating skill's job.
 - **Do NOT generate RuntimeTypes.** The orchestrating skill handles this after you finish.
