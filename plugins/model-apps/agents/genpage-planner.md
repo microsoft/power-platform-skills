@@ -297,11 +297,11 @@ ${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md
 Read that file before writing the plan. Every required section must be present with
 the exact heading. Page filenames in the `## Pages` table must be unique.
 
-For the `## Per-Page Specifications` section, set a `needs_caching` hint per page:
-mark it `true` for list pages, detail pages, or any page where the user is likely
-to navigate away and return; mark it `false` for forms, single-visit dashboards,
-or mock-data pages. The page-builder uses this hint to decide whether to read
-`references/data-caching-pattern.md`.
+For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
+(exact key, with space) per page: `true` for list pages, detail pages, or any
+page where the user is likely to navigate away and return; `false` for forms,
+single-visit dashboards, or mock-data pages. The page-builder reads this field
+to decide whether to load `references/data-caching-pattern.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 8-responsive-cards.tsx for card

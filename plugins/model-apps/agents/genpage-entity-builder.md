@@ -212,7 +212,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" 1n \
   --cascade-delete RemoveLink
 ```
 
-Returns `{ "ok": true, "kind": "1n", "schemaName": "...", "relationshipId": "...", "attributeId": "..." }`.
+Returns `{ "ok": true, "kind": "1n", "schemaName": "...", "metadataId": "..." }`.
 
 **Wait 8 seconds** after creating a lookup before using `@odata.bind` navigation
 properties on the child table — the navigation property name (e.g.

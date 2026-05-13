@@ -25,7 +25,7 @@
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileSync } = require('child_process');
-const { dataverseRequest, getAuthToken } = require('./lib/dataverse-auth');
+const { dataverseRequest } = require('./lib/dataverse-auth');
 
 function runQuiet(cmd, args) {
   try {

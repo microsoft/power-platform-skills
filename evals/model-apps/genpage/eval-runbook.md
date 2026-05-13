@@ -14,7 +14,7 @@ How to evaluate the `genpage` skill. Three layers, run in order.
   - `plugins/model-apps/references/genpage-rules-reference.md`
   - `plugins/model-apps/references/genpage-plan-schema.md`
   - `plugins/model-apps/references/troubleshooting.md`
-- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `9-data-caching.tsx`
+- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `8-responsive-cards.tsx` (data-caching pattern lives in `references/data-caching-pattern.md`)
 
 ## Eval data
 
@@ -91,13 +91,13 @@ These can be verified with grep / regex against the source:
 | No `<FluentProvider>` wrapper | `grep '<FluentProvider'` should return nothing (except in Dark Mode Toggle pattern) |
 | No raw URL navigation | `grep -E '(window\.location\|href=.*pagetype=)'` should return nothing |
 | `Xrm.Navigation.navigateTo` | If navigation is used, must appear |
-| Unsized icons | `grep -E '\w+(16\|20\|24\|28\|32)Regular\|Filled'` should return nothing |
+| Unsized icons | `grep -E '\w+(16\|20\|24\|28\|32)(Regular\|Filled)\b'` should return nothing |
 | try-catch on dataApi | Each `await dataApi\.` must be inside a try block |
 | No placeholders | `grep -E '(TODO\|FIXME\|\.\.\..*$)'` should not match in function bodies |
 | FormattedValue for lookups | Any `_xxx_value` in a select must be paired with a FormattedValue access |
 | `createTableColumn` import | If `<DataGrid>` is used, must import `createTableColumn` |
 
-**Pass criteria:** Every generated `.tsx` passes all 14 code assertions. Regressions here indicate the page-builder agent drifted from the rules.
+**Pass criteria:** Every generated `.tsx` passes all 18 code assertions. Regressions here indicate the page-builder agent drifted from the rules.
 
 ### Step 4: Layer 3 — UX rubric
 

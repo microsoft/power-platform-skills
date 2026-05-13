@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Creates a Dataverse relationship via Web API.
-//   1:N (lookup) → POST /CreateOneToManyRelationship
-//   N:N (many-to-many) → POST /CreateManyToManyRelationship
+//   POST /RelationshipDefinitions with the full metadata payload
+//   - 1:N (lookup): @odata.type = OneToManyRelationshipMetadata + embedded Lookup attribute
+//   - N:N (many-to-many): @odata.type = ManyToManyRelationshipMetadata
 //
 // Usage (1:N / lookup):
 //   node create-relationship.js 1n <envUrl> <schemaName> <referencedTable> <referencingTable>
@@ -22,7 +23,7 @@
 //
 // schemaName MUST include a publisher prefix (e.g. "cr69c_candidate_cr69c_skill").
 //
-// Output: { "ok": true, "kind": "1n"|"nn", "schemaName": "...", "relationshipId": "..." }
+// Output: { "ok": true, "kind": "1n"|"nn", "schemaName": "...", "metadataId": "..." }
 
 const {
   dataverseRequest,

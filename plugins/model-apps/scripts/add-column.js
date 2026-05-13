@@ -11,7 +11,7 @@
 //   memo      — [--max-length 2000] [--format TextArea|RichText|Email|Url|Phone]
 //   integer   — [--min -2147483648] [--max 2147483647] [--format None|Duration|TimeZone|Language]
 //   decimal   — [--min ...] [--max ...] [--precision 2]
-//   money     — [--min 0] [--max 100000000] [--precision 2]
+//   money     — [--min 0] [--max 1000000000000] [--precision 2]
 //   datetime  — [--format DateOnly|DateAndTime] [--behavior UserLocal|DateOnly|TimeZoneIndependent]
 //   boolean   — [--true-label "Yes"] [--false-label "No"] [--default true|false]
 //   picklist  — --options '[{"value":100000000,"label":"Active"}, ...]'  (or @options.json)

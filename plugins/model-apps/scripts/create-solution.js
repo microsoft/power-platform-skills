@@ -10,8 +10,9 @@
 //     [--version 1.0.0.0]
 //     [--publisher <uniqueName>]    (default: env's Default Publisher)
 //
-// uniqueName must be alphanumeric, no spaces, kebab-or-camel case. Lower-case in
-// API responses regardless of what you submit.
+// uniqueName must be alphanumeric (camelCase or PascalCase), starting with a letter.
+// No hyphens, no spaces, no underscores at the start. Returns lower-case in API
+// responses regardless of what you submit.
 //
 // Output: { "ok": true, "solutionId": "...", "uniqueName": "...", "publisherUniqueName": "...", "publisherPrefix": "..." }
 

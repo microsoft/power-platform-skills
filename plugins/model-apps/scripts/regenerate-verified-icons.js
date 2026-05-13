@@ -19,7 +19,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const ICON_PKG = '@fluentui/react-icons@^2.0.292';
+// Pinned to an exact version so the committed verified-icons.txt is reproducible.
+// To regenerate after a bump, change this constant and re-run this script.
+const ICON_PKG = '@fluentui/react-icons@2.0.326';
 const OUTPUT = path.join(__dirname, '..', 'references', 'verified-icons.txt');
 
 // Install into a fresh temp dir to avoid polluting the plugin tree.

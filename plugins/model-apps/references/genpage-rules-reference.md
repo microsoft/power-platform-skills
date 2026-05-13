@@ -349,7 +349,7 @@ Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions wi
 
 **When to apply:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit shows a spinner; return visits render instantly.
 
-See [9-data-caching.tsx](../../samples/9-data-caching.tsx) for complete list-page and detail-page caching examples.
+See [`references/data-caching-pattern.md`](./data-caching-pattern.md) for complete list-page and detail-page caching examples.
 
 ### Charts and Visualization
 - Use D3.js for all charts

@@ -129,6 +129,8 @@ genpage-rules-reference.md:
 
 ### Component Structure
 
+**Data mode = `dataverse`** — import types from RuntimeTypes:
+
 ```typescript
 import {useEffect, useState} from 'react';
 import type {
@@ -144,16 +146,41 @@ import type {
 // Additional imports: @fluentui/react-components, @fluentui/react-icons, d3, etc.
 
 // Utility functions as separate top-level functions
-
 // Sub-components as separate top-level functions
 
 const GeneratedComponent = (props: GeneratedComponentProps) => {
-  const { dataApi } = props;
+  const { dataApi, pageInput } = props;
   // Component implementation
 }
 
 export default GeneratedComponent;
 ```
+
+**Data mode = `mock`** — do NOT import from `./RuntimeTypes` (it isn't generated
+for mock pages and the import would fail at build time). Define minimal local
+types instead and skip the dataApi-typed imports:
+
+```typescript
+import {useEffect, useState} from 'react';
+
+// Additional imports: @fluentui/react-components, @fluentui/react-icons, d3, etc.
+
+type Props = {
+  dataApi?: unknown;
+  pageInput?: { id?: string };
+};
+
+const GeneratedComponent = (props: Props) => {
+  const { pageInput } = props;
+  // Component implementation with inline mock data
+}
+
+export default GeneratedComponent;
+```
+
+Always destructure `pageInput` (even if unused on a particular page) — the eval
+suite enforces this and downstream features (dark mode, navigation state) rely
+on it.
 
 ### Mandatory Rules
 

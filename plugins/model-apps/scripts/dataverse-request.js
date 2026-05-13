@@ -41,7 +41,16 @@ async function main() {
   const method = methodRaw.toUpperCase();
   const body = flags.body !== undefined ? readJsonArg(flags.body) : null;
   const includeHeaders = flags['include-headers'] === true;
-  const timeout = flags.timeout ? Number(flags.timeout) : undefined;
+
+  let timeout = undefined;
+  if (flags.timeout !== undefined) {
+    const parsed = Number(flags.timeout);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);
+      process.exit(1);
+    }
+    timeout = parsed;
+  }
 
   try {
     const res = await dataverseRequest(envUrl, method, apiPath, body, { includeHeaders, timeout });
