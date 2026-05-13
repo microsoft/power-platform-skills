@@ -70,7 +70,7 @@ Used in `migrate-edm-to-spa-implement` Phase 8.4. The validator is independent o
 >
 > The validator must drive its live-site checks against `LIVE_SITE_URL` when one is provided. When `LIVE_SITE_URL` is `none`, mark every live-site check as `deferred` (not `pass`, not `fail`) and surface the reason as `activation deferred or failed in Phase 7.2.d`.
 >
-> Walk every entry in the checklist, run the synthetic gate-* checks documented in your workflow (`skill-manifest`, `skill-evidence`, `mandatory-routes`, `auth-wiring`, `profile-route`, `copilot-embed`, `stock-drift`, `no-scaffold-leak`, `no-planning-metadata`, `no-secret-leak`), and write all three artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
+> Walk every entry in the checklist, run the synthetic gate-* checks documented in your workflow — both the **structural** gates (`skill-manifest`, `skill-evidence`, `mandatory-routes`, `auth-wiring`, `profile-route`, `copilot-embed`, `stock-drift`, `no-scaffold-leak`, `no-planning-metadata`, `no-secret-leak`) and the **behavioural** gates (`route-reachability`, `signin-click-redirect`, `form-submission-shape`). The behavioural gates require a running site (`DEV_SERVER_URL` or `LIVE_SITE_URL`) — when neither is available, mark them `deferred`, not `pass`. Write all three artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
 >
 > - `migration-validation-report.json`
 > - `migration-validation-report.md`

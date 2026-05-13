@@ -347,15 +347,16 @@ Fix failures before continuing.
 
 #### 8.3 Browser-Verify the SPA
 
-Start the dev server and navigate with Playwright. Capture the dev-server URL — Phase 8.4 passes it to the validator. Confirm at a minimum:
+Start the dev server and navigate with Playwright. Capture the dev-server URL — Phase 8.4 passes it to the validator so its behavioural gates can drive the real UI. Confirm at a minimum:
 
 - All in-scope routes render meaningful content.
-- Navigation matches the approved route model.
+- Navigation matches the approved route model — **and every authenticated/role-gated route is reachable from a visible `<Link>` / `<NavLink>` in the AppShell**, not just by typing the URL.
 - No critical console errors.
 - Data/API placeholders, pending work, and manual gaps are visibly and accurately documented.
+- The Sign-in button, when present, actually navigates to the identity provider when clicked (not just renders the right label).
 - Auth-gated or role-gated routes behave per the approved scope.
 
-Leave the dev server running until Phase 8.4 completes.
+Leave the dev server running until Phase 8.4 completes — the validator's behavioural gates (`gate-route-reachability`, `gate-signin-click-redirect`, `gate-form-submission-shape`) need it alive. If the dev server cannot stay up (port conflict, build failure that the build step missed), those gates are marked `deferred` and the migration cannot finish `Complete`.
 
 #### 8.4 Invoke the Migration Validator (Completion Gate)
 

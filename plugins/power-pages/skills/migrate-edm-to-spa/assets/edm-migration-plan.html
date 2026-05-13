@@ -17,9 +17,6 @@
 html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
-.ai-disclaimer{background:var(--surface2);border-bottom:1px solid var(--border-light);color:var(--text-dim);font-size:12px;padding:8px 28px;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px;}
-.ai-disclaimer strong{color:var(--text);font-weight:600;}
-.ai-disclaimer-icon{display:inline-block;width:16px;height:16px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:11px;font-weight:700;line-height:16px;text-align:center;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
@@ -123,11 +120,6 @@ td.rationale-cell{vertical-align:top;font-size:12px;line-height:1.55;color:var(-
         <div class="topbar-sub">__SITE_NAME__</div>
       </div>
     </div>
-  </div>
-
-  <div class="ai-disclaimer" role="note" aria-label="AI-generated content disclaimer">
-    <span class="ai-disclaimer-icon" aria-hidden="true">i</span>
-    <span><strong>AI-generated content may be incorrect.</strong> This migration plan was produced by Claude analyzing the EDM source and the live site. Review every recommendation — especially the Routes and Gaps tabs — before approving the plan.</span>
   </div>
 
   <div class="layout">
@@ -673,6 +665,8 @@ if (typeof renderErdOnce === 'function') {
   }
 }
 </script>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 
 </body>
 </html>

@@ -550,7 +550,7 @@ test('render-edm-migration-plan renders DESIGN_DATA.weblinkLayout when present, 
   assert.match(html2, /if\s*\(\s*DESIGN_DATA\.weblinkLayout\s*\)/);
 });
 
-test('render-edm-migration-plan surfaces the AI-generated-content disclaimer near the top of the page', () => {
+test('render-edm-migration-plan surfaces the AI-generated-content disclaimer as a fixed footer', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
   const dataPath = path.join(tempDir, 'data.json');
   const outputPath = path.join(tempDir, 'edm-migration-plan.html');
@@ -562,15 +562,15 @@ test('render-edm-migration-plan surfaces the AI-generated-content disclaimer nea
   assert.equal(result.status, 0, result.stderr || result.stdout);
 
   const html = fs.readFileSync(outputPath, 'utf8');
-  // The disclaimer must be present, exactly worded, and styled so it's visible above the layout.
-  assert.match(html, /AI-generated content may be incorrect/);
-  assert.match(html, /class="ai-disclaimer"/);
-  // It must sit between the topbar and the layout (so it's the first thing users see after the title).
-  const topbarIdx = html.indexOf('class="topbar"');
-  const disclaimerIdx = html.indexOf('class="ai-disclaimer"');
+  // Matches the canonical pattern used by every other Power Pages plan (create-site,
+  // add-cloud-flow, add-server-logic, audit-permissions, data-model-plan, permissions-plan):
+  // a single-line fixed footer with inline styles, exact text "AI-generated content may be incorrect".
+  assert.match(html, /<footer style="position:fixed;bottom:0;[^"]*">AI-generated content may be incorrect<\/footer>/);
+  // The footer must come after the layout block, not before it.
   const layoutIdx = html.indexOf('class="layout"');
-  assert.ok(topbarIdx >= 0 && disclaimerIdx > topbarIdx && layoutIdx > disclaimerIdx,
-    'disclaimer must appear between the topbar and the layout');
+  const footerIdx = html.indexOf('AI-generated content may be incorrect');
+  assert.ok(layoutIdx >= 0 && footerIdx > layoutIdx,
+    'disclaimer footer must appear after the layout block');
 });
 
 test('render-edm-migration-plan includes an EDM-vs-SPA comparison table on the Overview tab', () => {
