@@ -2,6 +2,70 @@
 
 All notable changes to the **model-apps** plugin.
 
+## 2.1.0 — 2026-05-12
+
+Replaces the Dataverse MCP server + Python SDK fallback in `genpage-entity-builder`
+with a set of plain Node.js scripts that hit the Dataverse Web API directly using
+Azure CLI (`az`) for auth. Same approach `power-pages` uses.
+
+### Breaking changes
+
+- **Dataverse Skills plugin is no longer required.** The soft dependency has been
+  removed. If you had it installed for `/genpage` entity creation, you can keep
+  it (used by other plugins) but `/genpage` no longer talks to it.
+- **Azure CLI (`az`) is now required for entity creation.** The `az` identity must
+  have access to the target Dataverse env (same account as your active
+  `pac auth` profile in most cases). Run `az login` if you haven't.
+- **`.env`, `scripts/auth.py`, and any device-code prompts from the Dataverse
+  Skills plugin are gone.** Entity-builder no longer reads them and no longer
+  shells out to Python.
+
+### Added
+
+- **Node.js Web API scripts under `plugins/model-apps/scripts/`:**
+  - `dataverse-request.js` — general OData wrapper (escape hatch for any one-off call)
+  - `create-table.js` — POST to `EntityDefinitions`, builds the primary name attribute
+  - `add-column.js` — string, memo, integer, decimal, money, datetime, boolean, picklist
+  - `create-relationship.js` — `CreateOneToManyRelationship` (lookup) + `CreateManyToManyRelationship`
+  - `create-record.js` — single record + bulk via OData `$batch` (multipart/mixed, 100 per batch by default)
+  - `add-to-solution.js` — `AddSolutionComponent` action
+  - `lib/dataverse-auth.js` — shared auth + HTTP helpers (uses `az account get-access-token`,
+    refreshes on 401, backs off on 429/5xx)
+- **Transactional log** (`<working-dir>/entity-creation-log.md`) written by
+  entity-builder for every successful operation. On failure, the log gives a
+  recovery point so reruns don't duplicate work.
+- **`node --test` coverage** at `plugins/model-apps/scripts/tests/` for argument
+  parsing, payload shape, and error-path exit codes.
+
+### Changed
+
+- `genpage-entity-builder.md` rewritten end-to-end. No MCP tool references. No
+  Python. Step 2 is an `az` + `WhoAmI` connectivity probe instead of an MCP probe.
+- `SKILL.md` Phase 2a swapped from "probe Dataverse Skills plugin" to
+  "verify `az account show` + `WhoAmI`".
+- `AGENTS.md` / `CLAUDE.md` updated to drop the Dataverse Skills plugin
+  dependency note and add the `az` requirement.
+
+### Why this change
+
+The Dataverse MCP server has been unreliable in practice:
+- `settings.local.json` server-name drift silently disables the MCP entirely
+  (we hit this twice in one week)
+- `npx`-based stdio servers cold-start slow and don't always handshake cleanly
+- The Python SDK fallback required a second plugin to be installed AND
+  connected, multiplying setup failure modes
+
+The new path collapses two auth chains into one (`az` only) and is the same
+production-hardened pattern that `power-pages` already ships.
+
+### Migration from 2.0
+
+1. `az login` if you haven't (or `az login --username <user>@<tenant>` to match
+   the test account on your Dataverse env)
+2. You can uninstall the Dataverse Skills plugin if it was only there for
+   `/genpage` — `/genpage` no longer uses it
+3. No code or page changes needed; existing pages keep working
+
 ## 2.0.0 — 2026-05-12
 
 Major refactor of the `/genpage` skill into an agent-orchestrated architecture.

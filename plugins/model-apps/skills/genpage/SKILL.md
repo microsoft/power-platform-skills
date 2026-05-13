@@ -1,6 +1,6 @@
 ---
 name: genpage
-version: 2.0.0
+version: 2.1.0
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
@@ -133,36 +133,46 @@ Skip to Phase 3.
 
 **If entities need creating:**
 
-#### 2a. Probe Dataverse plugin availability
+#### 2a. Verify az auth + Dataverse connectivity
 
-Before invoking the entity-builder, verify the Dataverse Skills plugin is both
-**installed** AND **connected**. Try calling the Dataverse MCP `list_tables` tool:
+Entity creation runs through the plugin's Node.js Web API scripts using `az` for
+auth. Verify both pieces before invoking the builder:
 
-- **If the tool is not available** (not installed): Tell the user exactly this:
-  > "Entity creation requires the Dataverse Skills plugin. Install it from
-  > `microsoft/Dataverse-skills`, then retry."
-  Stop the workflow — do NOT invoke the entity-builder.
+```bash
+az account show --query user.name -o tsv
+```
 
-- **If the tool is available but call fails with auth/connection error** (installed but not connected):
-  > "The Dataverse Skills plugin is installed but not connected to this environment.
-  > Run `/dv-connect` to configure authentication, then retry."
-  Stop the workflow — do NOT invoke the entity-builder.
+If that fails (no `az`, not logged in, etc.), stop and tell the user:
+> "Entity creation requires Azure CLI. Run `az login` with the same account
+> as your active `pac auth` profile, then retry."
 
-- **If the call succeeds:** The plugin is installed and connected. Proceed to 2b.
+Then probe the env with a `WhoAmI` call (extract the env URL from `pac org who`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI
+```
+
+- **Status 200** with a `UserId`: connectivity OK, proceed to 2b.
+- **Status 401**: token didn't mint — bad `az login` state.
+- **Status 403** with `"The user is not a member of the organization"`: the `az`
+  identity differs from the env's user list. Tell the user:
+  > "Your `az` account does not have access to this Dataverse environment.
+  > Run `az login --username <user>@<tenant>` with the same identity that
+  > `pac auth who` shows, then retry."
+  Stop the workflow.
+- **Network / other error**: report and stop.
 
 #### 2b. Invoke entity-builder
 
-Resolve the **project root** before invoking — this is the absolute path where
-the user invoked `/genpage` (typically the parent of the working directory, or
-the current directory at invocation time). The Dataverse Skills plugin's `.env`
-and `scripts/auth.py` live here.
-
-Invoke the `genpage-entity-builder` agent via the `Task` tool. Pass:
+Invoke the `genpage-entity-builder` agent via the `Task` tool. Pass in the prompt:
 - Path to `genpage-plan.md`
 - Working directory (absolute path)
-- Project root (absolute path, resolved above)
+- Plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- Dataverse env URL (from `pac org who`)
+- Solution unique name (optional — if the plan calls one out)
 
-Wait for completion.
+Wait for completion. The builder writes a transactional log at
+`<working-dir>/entity-creation-log.md` for recovery on failure.
 
 ### Phase 3: App Creation/Selection
 
