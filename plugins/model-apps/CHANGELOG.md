@@ -8,6 +8,16 @@ Replaces the Dataverse MCP server + Python SDK fallback in `genpage-entity-build
 with a set of plain Node.js scripts that hit the Dataverse Web API directly using
 Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 
+### Fixed
+
+- **`pac model create` always passes `--solution`.** The PAC CLI help claims
+  `--solution` defaults to "the active solution", but in practice the command
+  errors out with `"The given solution name is not valid: ()"` when omitted.
+  The plan schema now mandates `Solution:` (default `Default`) and
+  `Publisher Prefix:` (default `new`) on every plan, and the orchestrator/
+  entity-builder always pass `--solution <name>` to every call. No conditional
+  "omit if Default" branch.
+
 ### Breaking changes
 
 - **Dataverse Skills plugin is no longer required.** The soft dependency has been

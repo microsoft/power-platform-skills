@@ -167,12 +167,19 @@ pac model list
 - **1 app:** Confirm with user: "Found app [name] ([app-id]). Use this one?"
 - **N apps:** Ask user to select one or create a new one via `AskUserQuestion`.
 
-### Solution Selection (Conditional)
+### Solution Selection
 
-**Only run this step if there is metadata work to do** — i.e., any entity needs
-creating, OR a new app will be created in this run. If the user is reusing all
-existing entities AND reusing an existing app, **skip this step entirely** —
-solutions don't affect a code-only flow.
+The plan's `## Environment` **always** contains both `Solution:` and
+`Publisher Prefix:` lines — never omit them. The default fallback is
+`Solution: Default` + `Publisher Prefix: new`, which works in every env.
+
+The user-facing **question** about which solution to use is conditional:
+
+- **Ask the question** when there is metadata work to do — any entity needs
+  creating, OR a new app will be created in this run.
+- **Skip the question** for code-only flows (existing entities + existing app).
+  Write `Solution: Default` and `Publisher Prefix: new` directly into the plan
+  without prompting.
 
 #### 1. Resolve the env URL
 
@@ -228,6 +235,11 @@ Use `AskUserQuestion`. Options depend on what the env has:
 - **Default Solution chosen:** Record `Solution: Default` and
   `Publisher Prefix: new`.
 
+Why `Default` rather than omitting: `pac model create` errors out with
+`"The given solution name is not valid: ()"` when called without `--solution`,
+so the orchestrator's Phase 3 always passes the field. Writing `Default`
+unconditionally makes the contract uniform.
+
 ## Step 5 — Present Plan for Approval
 
 Create tasks via `TaskCreate`:
@@ -254,7 +266,7 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Using: [app name] ([app-id]) OR "Will create new app: [name]"
 
 ### Solution
-- [solution unique name and prefix, OR "n/a — code-only flow"]
+- [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
 - [list detected languages, or "English only — no localization needed"]

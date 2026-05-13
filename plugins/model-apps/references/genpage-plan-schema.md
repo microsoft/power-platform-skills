@@ -35,15 +35,20 @@ All sections must appear in this exact order with these exact headings:
 - URL: [environment URL]
 - App: [app name] ([app-id]) OR "create new: [name]"
 - Languages: [detected languages with LCIDs, or "English (1033) only"]
-- Solution: [solution unique name, e.g. "ConferenceRegistration" or "Default"]
-- Publisher Prefix: [prefix tied to the solution's publisher, e.g. "crb2b" or "new"]
+- Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
+- Publisher Prefix: [prefix tied to the solution's publisher — ALWAYS present, default fallback is "new"]
 
-The Solution + Publisher Prefix fields are populated by the planner when there is
-metadata work to do (new entities OR a new app being created). If the plan section
-literally says "No entity creation required" AND the app already exists, both
-fields may be omitted — they have no effect on a code-only flow.
+Both `Solution` and `Publisher Prefix` are **mandatory** in every plan. The
+planner picks them by asking the user (when metadata work is needed) or by
+writing the safe defaults `Solution: Default` + `Publisher Prefix: new` (when
+no question is needed). They are never omitted.
 
-When present, downstream consumers MUST honour them:
+Why mandatory: `pac model create --solution <name>` errors out with
+`"The given solution name is not valid: ()"` when `--solution` is missing —
+its documented "active solution" fallback does not work in practice. Always
+writing the field eliminates a fragile conditional branch in the orchestrator.
+
+Downstream consumers honour them:
 - `genpage-entity-builder` passes `--solution <Solution>` on every script call
   so newly-created tables/columns/relationships land in that solution. It also
   uses `Publisher Prefix` to build schema names (e.g. `<prefix>_Candidate`).

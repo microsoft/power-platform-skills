@@ -193,16 +193,19 @@ Read `genpage-plan.md` for the app decision and the `Solution` line in
 pac model create --name "App Name" --solution "<Solution unique name>"
 ```
 
-- If the plan's `Solution` line is set (anything other than `Default`), pass it
-  with `--solution`. This lands the new app in the same solution as the entities
-  created in Phase 2.
-- If the plan says `Solution: Default` or the field is absent, omit `--solution`
-  and the app goes to the active solution.
+**`--solution` is mandatory.** `pac model create` errors out with
+`"The given solution name is not valid: ()"` if you omit it — its claimed
+"active solution" fallback does not work in practice.
+
+- Use the plan's `Solution` value verbatim. The planner always writes one
+  (default fallback is literally `Default`).
+- If the plan is somehow missing `Solution`, pass `--solution Default` —
+  every Dataverse env has a built-in "Default Solution" by that unique name.
 
 Store the new app-id for Phase 6.
 
-**If existing app-id:** Use it directly. The `Solution` line is irrelevant when
-no new app is being created.
+**If existing app-id:** Use it directly. `pac model create` is not called, so
+the `Solution` line is informational only for this phase.
 
 ### Phase 4: Generate RuntimeTypes (Conditional)
 

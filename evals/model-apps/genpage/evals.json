@@ -7,8 +7,9 @@
     "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified",
     "Phase 1 (Planner): pac auth list is run and the active environment is identified and reported to the user",
     "Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion",
-    "Phase 1 (Planner): Solution selection runs ONLY when the build needs metadata work (new entities OR new app); for code-only flows over existing entities + existing app, the solution question is skipped entirely",
-    "Phase 1 (Planner): When solution selection runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
+    "Phase 1 (Planner): genpage-plan.md ALWAYS contains 'Solution:' and 'Publisher Prefix:' lines in ## Environment; default fallback is 'Solution: Default' + 'Publisher Prefix: new' for code-only flows",
+    "Phase 1 (Planner): The solution selection question is asked via AskUserQuestion ONLY when the build needs metadata work (new entities OR new app); for code-only flows the question is skipped but the Default values are still written",
+    "Phase 1 (Planner): When the solution question runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
     "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/genpage-plan-schema.md",
     "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts"
@@ -201,7 +202,7 @@
         "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
         "Phase 2b (Entity Builder): Reads Solution + Publisher Prefix from the plan's ## Environment",
         "Phase 2b (Entity Builder): cr_jobrequisition (independent) is created via scripts/create-table.js BEFORE cr_candidate (has lookup)",
-        "Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> when Solution is not 'Default'",
+        "Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — 'Default' is a valid value, never omitted)",
         "Phase 2b (Entity Builder): Propagation delay (4s) is observed after table creation before adding columns",
         "Phase 2b (Entity Builder): Lookup is created via scripts/create-relationship.js 1n (POST /RelationshipDefinitions); 8s delay before using @odata.bind navigation properties",
         "Phase 2b (Entity Builder): User is asked about sample data via AskUserQuestion",
@@ -229,7 +230,7 @@
         "Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel",
         "Phase 1 (Planner): Plan records 'create new app' decision",
         "Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment",
-        "Phase 3: pac model create --name 'Account Metrics' is run; if Solution is anything other than 'Default', the command includes --solution <name>",
+        "Phase 3: pac model create --name 'Account Metrics' --solution '<Solution from plan>' is run; --solution is ALWAYS passed (pac model create errors out without it)",
         "Phase 3: The new app-id returned from pac model create is stored for Phase 6",
         "Phase 6: Upload uses the newly created app-id"
       ]
@@ -401,7 +402,7 @@
         "Phase 2b (Entity Builder): Choice columns are added using scripts/add-column.js with type 'picklist' and --options JSON listing {value,label} pairs",
         "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
         "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
-        "Phase 2b (Entity Builder): Every script invocation includes --solution <Solution> when the plan's Solution field is not 'Default'",
+        "Phase 2b (Entity Builder): Every script invocation includes --solution <Solution> (always — 'Default' is a valid value, never omitted)",
         "Phase 2b (Entity Builder): Transaction log (entity-creation-log.md) records each create with its returned metadataId",
         "Phase 4: pac model genpage generate-types picks up the enum registrations",
         "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",

@@ -30,11 +30,12 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 - The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
 
 The **Solution unique name** and **Publisher Prefix** are read directly from the
-plan document's `## Environment` section (the planner picked them with the user).
-- If `Solution` is anything other than `Default`, pass it as `--solution <name>`
-  to every `create-table.js`, `add-column.js`, and `create-relationship.js` call.
-- If `Solution: Default` (or the line is absent), omit `--solution` entirely
-  and components land in the active solution.
+plan document's `## Environment` section (the planner always writes them — the
+default fallback is `Solution: Default` + `Publisher Prefix: new`).
+
+**Always pass `--solution <name>`** to every `create-table.js`, `add-column.js`,
+and `create-relationship.js` call. `Default` is a valid value — it lands new
+components in the env's built-in Default Solution. There is no "omit" branch.
 
 You operate entirely through the Web API via the plugin's scripts under
 `${CLAUDE_PLUGIN_ROOT}/scripts/`. **There is no MCP server. There is no Python. There
@@ -51,10 +52,11 @@ The plan document follows a strict schema. See
 especially the `## Entity Creation Required` section.
 
 Extract from the **`## Environment`** section:
-- **Solution** — `Solution: <uniqueName>`. If `Default` or missing → omit `--solution`.
-- **Publisher Prefix** — `Publisher Prefix: <prefix>`. Use this to build every
-  schema name (`<prefix>_TableName`, `<prefix>_columnname`). If missing → fall
-  back to `new`.
+- **Solution** — `Solution: <uniqueName>`. Always present in a valid plan.
+  Pass to every script as `--solution <uniqueName>` (yes, even when the value
+  is literally `Default`).
+- **Publisher Prefix** — `Publisher Prefix: <prefix>`. Always present. Use this
+  to build every schema name (`<prefix>_TableName`, `<prefix>_columnname`).
 
 Extract from the **`## Entity Creation Required`** section:
 - Tables to create (display name, schema name, primary name)
