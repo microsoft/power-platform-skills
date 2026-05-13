@@ -55,14 +55,44 @@ Extract from the **`## Environment`** section:
 - **Solution** — `Solution: <uniqueName>`. Always present in a valid plan.
   Pass to every script as `--solution <uniqueName>` (yes, even when the value
   is literally `Default`).
-- **Publisher Prefix** — `Publisher Prefix: <prefix>`. Always present. Use this
-  to build every schema name (`<prefix>_TableName`, `<prefix>_columnname`).
+- **Publisher Prefix** — `Publisher Prefix: <prefix>`. Always present. This is
+  the **single source of truth** for the prefix. Construct every full logical
+  name as `${prefix}_${suffix}` (lowercase) when calling scripts.
 
-Extract from the **`## Entity Creation Required`** section:
-- Tables to create (display name, schema name, primary name)
-- Column definitions (logical name, type, required level)
+Extract from the **`## Entity Creation Required`** section. Names in this
+section are **suffixes only** — they MUST NOT contain a prefix or underscore:
+- Tables to create (suffix, display name, primary name suffix)
+- Column definitions (suffix, type, required level)
 - Choice column options (with numeric values starting at 100000000)
-- Relationships (1:N lookup or N:N, related entity, cascade config)
+- Relationships (1:N lookup or N:N, related table suffix, lookup field suffix,
+  cascade config)
+
+### Suffix validation (defense in depth)
+
+Before any write, validate each suffix you parsed against `^[a-z][a-z0-9]+$`.
+If any value contains an underscore or doesn't match (e.g., the planner slipped
+and wrote `crb2b_playername`), **abort with a clear error**:
+
+> "Plan contains a prefixed name in `## Entity Creation Required`:
+> `<offending value>`. This section must store suffixes only — the prefix is
+> recorded once in `## Environment`. Regenerate the plan with the suffix-only
+> format and retry."
+
+This prevents a silent override where the script would use the wrong name.
+
+### Constructing full names
+
+For every script call, build:
+- Table logical name: `${prefix}_${tableSuffix}` (lowercase) — e.g.
+  `crb2b_playerresult`
+- Table schema name: `${prefix}_${TableSuffixPascal}` — e.g.
+  `crb2b_PlayerResult` (PascalCase for the suffix in the schema-name argument)
+- Column logical name: `${prefix}_${columnSuffix}` — e.g. `crb2b_playername`
+- Relationship schema name (1:N): `${prefix}_${parentSuffix}_${prefix}_${childSuffix}`
+- Lookup attribute schema name: `${prefix}_${LookupSuffixPascal}`
+
+Always pass the full constructed names to the scripts. The scripts treat
+their schemaName arguments as opaque — they don't do prefix construction.
 
 Determine the **dependency order**:
 - Tables with no relationships to other new tables → create first (independent)
@@ -100,9 +130,15 @@ Solution: <Solution unique name or "Default">
 Publisher Prefix: <prefix>
 Started: <ISO timestamp>
 
-| Step | Operation | Status | Logical Name / ID | Notes |
-|------|-----------|--------|-------------------|-------|
+| Step | Operation | Status | Resolved Full Name | MetadataId | Notes |
+|------|-----------|--------|---------------------|------------|-------|
 ```
+
+The **Resolved Full Name** column records the `${prefix}_${suffix}` you
+constructed and passed to the script (e.g., `crb2b_playerresult` or
+`crb2b_playername`) — NOT the bare suffix from the plan. This makes the log
+grep-able for the actual names in Dataverse, lets the user verify the prefix
+landed correctly, and gives the eval suite something to assert against.
 
 Append a row after **every successful script invocation** with the returned
 metadataId / logical name. If a step fails, append the row with `FAILED` and

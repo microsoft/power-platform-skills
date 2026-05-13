@@ -10,6 +10,34 @@ Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 
 ### Fixed
 
+- **Prefix drift in plans is now structurally impossible.** Previously the plan
+  recorded the publisher prefix in two places — `## Environment` →
+  `Publisher Prefix:` AND inside every schema name in `## Entity Creation
+  Required` (e.g., `crb2b_playername`). When the two drifted, the entity-builder
+  silently followed `Publisher Prefix:` and overrode every column name, leaving
+  the user with `new_playername` despite a plan that said `crb2b_playername`.
+  Four-layer fix:
+  - **Plan format change**: `## Entity Creation Required` now stores
+    **suffixes only** (e.g., `playername`, not `crb2b_playername`). Table
+    headings, column `Suffix` values, choice column suffixes, and relationship
+    `Lookup Suffix` values are all bare. Entity-builder constructs
+    `${prefix}_${suffix}` at runtime from the single `Publisher Prefix:`
+    source of truth.
+  - **Smart prefix detection in the planner**: `pac model list-tables` now
+    scans the env for the dominant non-system custom prefix. If one is found
+    (≥50% of custom tables and ≥3 such tables), it's surfaced in the solution
+    question with the matching-prefix option ordered first.
+  - **Better solution UX**: solution-selection options now show prefix labels,
+    flag conflicts with a ⚠, and recommend the matching-prefix choice. "Create
+    new solution under publisher `<prefix>`" is offered when no existing
+    solution matches the dominant prefix.
+  - **Defense in depth**: planner validates every name in `## Entity Creation
+    Required` against `^[a-z][a-z0-9]+$` before writing the plan. Entity-builder
+    re-validates on read and aborts with a clear error if a prefix snuck through.
+    Transaction log now records the resolved full name (e.g., `crb2b_playername`)
+    not the bare suffix — making the actual Dataverse name grep-able.
+  - **Eval lock-in**: 3 new `common_workflow_assertions` enforce plan-format
+    consistency, resolved-name consistency, and solution-prefix alignment.
 - **Bulk-insert partial failure now reports structured JSON instead of
   `[object Object]`.** `emitResult(false, <object>)` previously wrote
   `String(payload)` to stderr, which dropped per-record error detail that the

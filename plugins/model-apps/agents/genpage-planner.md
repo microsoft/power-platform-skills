@@ -147,6 +147,28 @@ the `Logical Name` column against your requested entities using **exact equality
 Do NOT trust the raw output as "exists" just because the search returned a match —
 the search is fuzzy, your check must be exact.
 
+#### Dominant-prefix detection (for solution UX)
+
+Also run a broader scan to detect the env's working prefix. This lets the
+solution question (later) steer the user to a consistent choice:
+
+```powershell
+pac model list-tables
+```
+
+From the full output, look at the **Custom** rows only (Type column = Custom).
+Extract each logical name's prefix (everything before the first `_`). Count
+prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
+`mscrm`, `appsource`, `msft`).
+
+- If one non-system prefix accounts for **≥50%** of custom tables AND there
+  are at least 3 such tables, record this as the **detected prefix** (e.g.
+  `crb2b`). Use it as the default solution suggestion in Step 4.
+- Otherwise, there's no clear dominant prefix — fall back to "Default" as the
+  safe suggestion.
+
+Store: `detectedPrefix`, `detectedTableCount` for use in the Solution-Selection step.
+
 If any entities need creating, note that entity creation requires:
 - **Azure CLI (`az`)** logged in with the same identity as the active `pac auth` profile
 - A target solution (the planner asks you to pick one in the next step)
@@ -205,38 +227,80 @@ Parse the JSON; capture each `uniquename`, `friendlyname`, and
 
 #### 3. Ask the user
 
-Use `AskUserQuestion`. Options depend on what the env has:
+Use `AskUserQuestion`. Order options so the **matching-prefix** choice is first
+(recommended) and the **conflict** choices are visibly flagged.
 
-- **If 1+ custom solutions exist:** First option(s) are existing solutions
-  (label them `<friendlyname> (prefix: <prefix>)`), then "Create a new solution
-  for this app", then "Use Default Solution (prefix: new)".
-- **If no custom solutions exist:** Two options — "Create a new solution for
-  this app" and "Use Default Solution (prefix: new)".
+**Recommended-first ordering rule:**
+
+1. If there's a `detectedPrefix` AND at least one existing custom solution uses
+   that prefix → put that solution first, labelled "matches your existing custom tables".
+2. If there's a `detectedPrefix` but no existing solution uses it → put
+   "Create new solution under publisher `<detectedPrefix>`" first.
+3. Then any other existing custom solutions.
+4. Then "Create a new solution under Default Publisher (prefix: new)".
+5. Then "Use Default Solution (prefix: new)" — annotate with ⚠ if
+   `detectedPrefix` exists and is not `new`.
+
+**Example question when `detectedPrefix = crb2b`:**
+
+> "Which solution should the new tables / app go in? I see your env has
+> 12 existing custom tables using prefix `crb2b` — keeping the new ones in
+> the same publisher means a consistent prefix and a single export story.
+>
+> - **Continue in 'Crdec34' (prefix: crb2b)** — matches your existing custom tables [RECOMMENDED]
+> - **Create new 'genpage-<app>' solution under crb2b publisher** — clean container, same prefix
+> - **Use existing 'LandscapeBusiness' (prefix: lndscp)**
+> - **Use Default Solution (prefix: new)** ⚠ different from your existing custom tables"
+
+**Example when no `detectedPrefix` (fresh env):**
 
 > "Which solution should the new tables / app go in?
 >
-> - **[Existing name] (prefix: [prefix])** — adds to this existing solution
-> - **Create a new 'genpage-[app-slug]' solution (prefix: new)** — clean container for this build
+> - **Create a new 'genpage-<app>' solution (prefix: new)** — clean container for this build [RECOMMENDED]
 > - **Use Default Solution (prefix: new)** — fastest, but mixed with everything else"
 
 #### 4. Act on the answer
 
 - **Existing solution chosen:** Record `Solution: <uniquename>` and
   `Publisher Prefix: <prefix>` in the plan's `## Environment`.
-- **Create new chosen:** Derive a unique name from the app/page name in PascalCase
-  alphanumerics (e.g., "Pet Tracker" → `PetTrackerSolution`). Run:
+
+- **Create new under a specific publisher (matching `detectedPrefix`):**
+  First, resolve the publisher's unique name from its prefix:
+
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+    "publishers?\$select=uniquename&\$filter=customizationprefix eq '<detectedPrefix>'&\$top=1"
+  ```
+
+  Then create the solution with that publisher:
 
   ```bash
   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" \
+    --publisher "<publisherUniqueName>" \
     --description "Solution for the <app> generative pages"
   ```
 
-  Parse the returned `uniqueName` + `publisherPrefix` and record them in the plan.
-  If the script returns an error (typically because the uniqueName already exists),
-  retry once with a numeric suffix (`PetTrackerSolution2`).
+  Record the returned `uniqueName` + `publisherPrefix` (should equal
+  `detectedPrefix`) in the plan.
+
+- **Create new under Default Publisher:** Same as above but omit `--publisher`.
+  The returned `publisherPrefix` will be `new`.
+
 - **Default Solution chosen:** Record `Solution: Default` and
   `Publisher Prefix: new`.
+
+In every case, if the user picked a solution whose prefix differs from
+`detectedPrefix` AND `detectedPrefix` exists, surface a one-line warning before
+proceeding:
+
+> "Heads up — your env has existing custom tables with prefix `<detectedPrefix>`,
+> but you chose a solution with prefix `<chosenPrefix>`. The new tables will
+> not visually match your existing work. Proceeding anyway."
+
+If the script returns an error on solution creation (typically because the
+uniqueName already exists), retry once with a numeric suffix
+(`PetTrackerSolution2`).
 
 Why `Default` rather than omitting: `pac model create` errors out with
 `"The given solution name is not valid: ()"` when called without `--solution`,
@@ -300,6 +364,27 @@ ${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md
 Read that file before writing the plan. Every required section must be present with
 the exact heading. Page filenames in the `## Pages` table must be unique.
 
+### CRITICAL — Prefix discipline in `## Entity Creation Required`
+
+The plan stores **logical-name suffixes only**, never full prefixed names. The
+prefix lives once in `## Environment` → `Publisher Prefix:` and the entity-builder
+constructs `${prefix}_${suffix}` at runtime.
+
+- Table headings: `### playerresult` — NOT `### crb2b_playerresult`
+- Column suffixes: `playername` — NOT `crb2b_playername`, NOT `new_playername`
+- Relationship lookup suffixes: `sessionref` — NOT `cr_sessionref`
+- Every suffix must match `^[a-z][a-z0-9]+$` (lowercase letters and digits only,
+  no underscores, no separators)
+
+**Even if you're inspired by an existing entity in the env** (e.g., you ran
+`pac model list-tables` and saw `crb2b_testclaude007`), do NOT copy its prefix
+into the plan. Strip the prefix and write only the suffix. The prefix you
+record in `## Environment` is the one downstream agents will use — and any
+prefix you embed in a column name is a silent footgun.
+
+**Plan-mode preview**: render the resolved full names for the user (so they see
+`crb2b_playerresult.crb2b_playername`), but write only suffixes in the document.
+
 For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
 (exact key, with space) per page: `true` for list pages, detail pages, or any
 page where the user is likely to navigate away and return; `false` for forms,
@@ -310,6 +395,26 @@ For the `## Relevant Samples` section: pick the most structurally relevant sampl
 from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 8-responsive-cards.tsx for card
 layouts, 2-wizard-multi-step.tsx for wizards). Do NOT list reference docs as
 samples — only files under `samples/`.
+
+### CRITICAL — Pre-write validation pass
+
+Before calling `Write` to save `genpage-plan.md`, scan the in-memory document
+and verify the prefix discipline:
+
+1. For each row in `## Entity Creation Required` (table heading, every column
+   `Suffix`, every choice column `Column Suffix`, every relationship
+   `Lookup Suffix`):
+   - Assert the value matches `^[a-z][a-z0-9]+$`.
+   - Reject if it contains `_` (means a prefix slipped in).
+   - Reject if it starts with a digit, contains uppercase, or has whitespace.
+
+2. If any value fails, do NOT write the plan. Rewrite the offending values to
+   their bare suffix form and re-validate. Only write once all values pass.
+
+This is a hard gate. If you can't produce a valid plan after one rewrite,
+abort and report the offending name to the user — better to fail loudly than
+let the entity-builder construct a wrong-prefix name and silently corrupt the
+build.
 
 Mark the "Write plan document" task complete when done.
 

@@ -64,22 +64,37 @@ Downstream consumers honour them:
 [If NO entities need creating, the value is exactly:]
 No entity creation required — all entities already exist.
 
-[If entities need creating, use this structure per entity:]
+[If entities need creating, use this structure per entity. **Names in this section
+are SUFFIXES ONLY — they must NOT contain a publisher prefix.** The prefix is
+recorded once in `## Environment` → `Publisher Prefix:` and downstream agents
+construct the full logical name as `${prefix}_${suffix}` at runtime. This is the
+plan's only source of truth for the prefix.]
 
-### [Entity logical name]
+### [Table suffix]
+[The full logical name is constructed by the entity-builder as
+`${prefix}_${tableSuffix}` (lowercase). Display this resolved name to the user
+in plan-mode preview, but write only the suffix here. Suffix must match
+`^[a-z][a-z0-9]+$` — lowercase letters and digits only.]
+
 - Display Name: [display name]
+- Display Plural: [display collection name]
+- Primary Name Suffix: [primary column suffix, default: "name"]
 - Columns:
-  | Logical Name | Type | Required | Notes |
-  |-------------|------|----------|-------|
-  | [name] | string / int / decimal / datetime / bool / choice | yes / no | [notes] |
+  | Suffix | Type | Required | Notes |
+  |--------|------|----------|-------|
+  | [column suffix] | string / int / decimal / money / memo / datetime / boolean / picklist | yes / no | [notes] |
 - Choice Columns:
-  | Column | Options |
-  |--------|---------|
-  | [column logical name] | value1 (100000000), value2 (100000001), ... |
+  | Column Suffix | Options |
+  |---------------|---------|
+  | [column suffix] | value1 (100000000), value2 (100000001), ... |
 - Relationships:
-  | Type | Related Entity | Lookup Field | Cascade |
-  |------|---------------|-------------|---------|
-  | 1:N lookup / N:N | [entity logical name] | [lookup field logical name] | [cascade config] |
+  | Type | Related Table | Lookup Suffix | Cascade |
+  |------|---------------|---------------|---------|
+  | 1:N lookup / N:N | [related table suffix] | [lookup field suffix, 1:N only] | [cascade config] |
+
+**No name in this section may contain an underscore or any prefix.** Plan-write
+validation rejects values that look like `crb2b_playername` or even
+`new_playername` — the section stores `playername`, period.
 
 ## Existing Entities
 [Comma-separated list of entity logical names that already exist in the environment
