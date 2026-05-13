@@ -22,6 +22,56 @@ const path = require('path');
 // const { parse: parseCSV } = require('csv-parse/sync');
 const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
 
+// Map of adx_* entity logical names to their powerpagecomponenttype value.
+// Source: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#site-component-type-and-values
+const COMPONENT_TYPE_MAP = {
+  'adx_publishingstate': 1,
+  'adx_webpage': 2,
+  'adx_webfile': 3,
+  'adx_weblinkset': 4,
+  'adx_weblink': 5,
+  'adx_pagetemplate': 6,
+  'adx_contentsnippet': 7,
+  'adx_webtemplate': 8,
+  'adx_sitesetting': 9,
+  'adx_webpageaccesscontrolrule': 10,
+  'adx_webrole': 11,
+  'adx_websiteaccess': 12,
+  'adx_sitemarker': 13,
+  'adx_entityform': 15,
+  'adx_entityformmetadata': 16,
+  'adx_entitylist': 17,
+  'adx_entitypermission': 18,
+  'adx_webform': 19,
+  'adx_webformstep': 20,
+  'adx_webformmetadata': 21,
+  'adx_pollplacement': 24,
+  'adx_adplacement': 26,
+  'adx_botconsumer': 27,
+  'adx_columnpermissionprofile': 28,
+  'adx_columnpermission': 29,
+  'adx_redirect': 30,
+  'adx_publishingstatetransitionrule': 31,
+  'adx_shortcut': 32,
+};
+
+// Map of adx_* tables to the dedicated Liquid object suggested by the migration doc.
+// Source: https://learn.microsoft.com/en-us/power-pages/configure/liquid/liquid-objects
+const LIQUID_OBJECT_MAP = {
+  'adx_weblinkset': { object: 'weblinks', usage: "weblinks['<Web Link Set name>']" },
+  'adx_weblinks': { object: 'weblinks', usage: "weblinks['<Web Link Set name>']" },
+  'adx_contentsnippet': { object: 'snippets', usage: "snippets['<snippet name>']" },
+  'adx_sitesetting': { object: 'settings', usage: "settings['<setting name>']" },
+  'adx_sitemarker': { object: 'sitemarkers', usage: "sitemarkers['<marker name>']" },
+  'adx_ad': { object: 'ads', usage: "ads['<ad name>']" },
+  'adx_poll': { object: 'polls', usage: "polls['<poll name>']" },
+  'adx_event': { object: 'events', usage: "events['<event name>']" },
+  'adx_communityforum': { object: 'forums', usage: "forums['<forum name>']" },
+  'adx_blog': { object: 'blogs', usage: "blogs['<blog name>']" },
+  'adx_webpage': { object: 'page', usage: 'page (current page only — for other pages use powerpagecomponent FetchXML)' },
+  'adx_website': { object: 'website', usage: 'website (singleton)' },
+};
+
 // Parse command line arguments
 function parseArgs(args) {
   const result = {};
@@ -268,9 +318,106 @@ function generateCustomizationAnalysisSection(customizations) {
 }
 
 /**
+ * Generate HTML block summarizing file-level auto-rewrites from the FetchXML and Liquid passes.
+ * Returns an empty string when no rewriter was run or no files were touched.
+ */
+function generateAutoRewriteSection(fetchXmlResults, liquidResults) {
+  const hasFx = fetchXmlResults && (fetchXmlResults.filesScanned > 0 || fetchXmlResults.filesModified > 0);
+  const hasLq = liquidResults && (liquidResults.filesScanned > 0 || liquidResults.filesAnnotated > 0);
+  if (!hasFx && !hasLq) return '';
+
+  let html = `
+    <div class="remediation-section">
+      <h3>⚙️ Auto-applied Rewrites</h3>
+      <p>The skill applied the following automated rewrites to your downloaded site files. Originals are backed up alongside each modified file as <code>&lt;file&gt;.pre-edm.bak</code>.</p>
+  `;
+
+  if (hasFx) {
+    const fx = fetchXmlResults;
+    html += `
+      <div class="remediation-steps" style="margin-top: 12px;">
+        <div class="remediation-title">FetchXML rewriter</div>
+        <ul class="remediation-list">
+          <li>Files scanned: <strong>${fx.filesScanned}</strong></li>
+          <li>Files modified: <strong>${fx.filesModified}</strong></li>
+          <li>Entity / link-entity rewrites: <strong>${(fx.rewrites || []).reduce((sum, r) => sum + (r.changes ? r.changes.length : 0), 0)}</strong></li>
+          <li>Skipped (manual review needed): <strong>${(fx.skipped || []).length}</strong></li>
+          <li>Diff file: <code>${escapeHtml(fx.diffPath || 'N/A')}</code></li>
+        </ul>
+    `;
+
+    const allChanges = [].concat(...(fx.rewrites || []).map((r) => (r.changes || []).map((c) => ({ ...c, file: r.file }))));
+    if (allChanges.length > 0) {
+      html += `
+        <div class="table-container" style="margin-top: 8px;">
+          <table class="summary-table">
+            <thead>
+              <tr><th>File</th><th>Tag</th><th>Original entity</th><th>Component type</th></tr>
+            </thead>
+            <tbody>
+              ${allChanges
+                .map(
+                  (c) => `
+                <tr>
+                  <td><small>${escapeHtml(c.file)}</small></td>
+                  <td>&lt;${escapeHtml(c.tag)}&gt;</td>
+                  <td><code>${escapeHtml(c.entity)}</code></td>
+                  <td><code>${c.typeValue}</code></td>
+                </tr>
+              `,
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    if ((fx.skipped || []).length > 0) {
+      html += `
+        <div class="alert alert-warning" style="margin-top: 8px;">
+          <div class="alert-title">FetchXML findings flagged for manual review</div>
+          <ul>
+            ${(fx.skipped || [])
+              .map((s) => `<li><code>${escapeHtml(s.entity)}</code> — ${escapeHtml(s.reason)}</li>`)
+              .join('')}
+          </ul>
+        </div>
+      `;
+    }
+
+    html += '</div>';
+  }
+
+  if (hasLq) {
+    const lq = liquidResults;
+    const totalSuggestions = (lq.suggestions || []).reduce((sum, s) => sum + (s.suggestions ? s.suggestions.length : 0), 0);
+    html += `
+      <div class="remediation-steps" style="margin-top: 12px;">
+        <div class="remediation-title">Liquid <code>entities['adx_*']</code> annotator</div>
+        <ul class="remediation-list">
+          <li>Files scanned: <strong>${lq.filesScanned}</strong></li>
+          <li>Files annotated: <strong>${lq.filesAnnotated}</strong></li>
+          <li>Suggestions inserted: <strong>${totalSuggestions}</strong></li>
+          <li>Diff file: <code>${escapeHtml(lq.diffPath || 'N/A')}</code></li>
+        </ul>
+        <p><em>Suggestions are inserted as <code>{%- comment -%}</code> blocks above each <code>entities['adx_*']</code> usage. Review and replace the original line — or accept the comment and leave the original (Liquid will ignore comments).</em></p>
+      </div>
+    `;
+  }
+
+  html += `
+      <p style="margin-top: 12px;"><strong>Next step:</strong> review the diff files, then run <code>pac pages upload --path &lt;site-path&gt; --webSiteId &lt;GUID&gt;</code> to push the rewritten source back to Dataverse.</p>
+    </div>
+  `;
+
+  return html;
+}
+
+/**
  * Generate execution report HTML with placeholder structure
  */
-function generateExecutionReportHtml(args, remediationResults = null, customizations = {}) {
+function generateExecutionReportHtml(args, remediationResults = null, customizations = {}, autoRewriteResults = {}) {
   const templatePath = path.join(__dirname, '../assets/skill-execution-report.html');
   let template = fs.readFileSync(templatePath, 'utf-8');
 
@@ -541,8 +688,21 @@ function generateExecutionReportHtml(args, remediationResults = null, customizat
   `;
 
   const customizationAnalysis = generateCustomizationAnalysisSection(customizations);
+
+  // Auto-rewrite section (FetchXML + Liquid). Placed at the top of the remediation block so the
+  // user sees what was actually applied before the per-finding manual guidance.
+  const autoRewriteSection = generateAutoRewriteSection(
+    autoRewriteResults.fetchXml,
+    autoRewriteResults.liquid,
+  );
+
   // Generate remediation results section
-  const remediationSection = remediationResults ? generateRemediationResultsSection(remediationResults) : '<div class="result-item success"><div class="result-title">✓ Automation not requested</div><div class="result-description">No automated remediation was executed for this report.</div></div>';
+  const remediationCategorization = remediationResults
+    ? generateRemediationResultsSection(remediationResults)
+    : '<div class="result-item success"><div class="result-title">✓ No findings to categorize</div><div class="result-description">No customizations were found in this run.</div></div>';
+
+  const remediationSection = `${autoRewriteSection}${remediationCategorization}`;
+  const showRemediationBlock = autoRewriteSection || remediationResults;
 
   // Replace placeholders
   template = template
@@ -558,7 +718,7 @@ function generateExecutionReportHtml(args, remediationResults = null, customizat
     .replace('{{PAC_COMMANDS_SECTION}}', pacCommandsHtml)
     .replace('{{CUSTOMIZATION_ANALYSIS_SECTION}}', customizationAnalysis)
     .replace('{{MIGRATION_PHASES_SECTION}}', phasesHtml)
-    .replace('{{REMEDIATION_DISPLAY}}', remediationResults ? 'block' : 'none')
+    .replace('{{REMEDIATION_DISPLAY}}', showRemediationBlock ? 'block' : 'none')
     .replace('{{REMEDIATION_GUIDANCE_SECTION}}', remediationSection)
     .replace('{{SUMMARY_METRICS}}', metricsHtml)
     .replace('{{NEXT_STEPS_ITEMS}}', '<li>Verify all customizations have been remediated</li><li>Test the migrated site thoroughly</li>');
@@ -670,90 +830,270 @@ async function createStringAttribute(envUrl, tableLogicalName, columnLogicalName
 }
 
 /**
- * Identify and execute automatable remediation actions
+ * Categorize a Liquid customization-report finding by the patterns it contains.
+ *
+ * The PAC customization report flags any file containing `adx_*` in Liquid context, but most
+ * patterns work as-is on EDM via the documented `[logical_name]` accessor. Only a small subset
+ * requires actual rewriting. This categorizer scans the snippet for known patterns and emits
+ * the highest-priority signal:
+ *
+ *   needs-rewrite          — entities['adx_*'] collection access (rewrite to dedicated Liquid object)
+ *   auto-fetchxml          — contains {% fetchxml %} block with adx_* entity (handled by --automate-fetchxml)
+ *   false-positive         — only property access, editable tag, or lookup keys (no action needed)
+ *   unknown                — unrecognized adx_* usage; flag for manual review
+ */
+function categorizeLiquidFinding(snippet) {
+  if (!snippet) return { category: 'unknown', action: 'Empty snippet — review manually.' };
+
+  const patterns = {
+    entitiesCollection: /entities\s*\[\s*['"]?adx_\w+['"]?\s*\]/,
+    fetchxmlBlock: /\{%\s*fetchxml\b[\s\S]*?<entity\s+name\s*=\s*['"]adx_/,
+    editableTag: /\{%\s*editable\s+\w+\s+['"]adx_\w+['"]/,
+    lookupKey: /\b(?:snippets|weblinks|sitemarkers|settings|ads|polls|events|forums|blogs)\s*\[\s*['"]adx_\w+['"]\s*\]/,
+    propertyAccess: /\.\s*adx_\w+\b/,
+  };
+
+  // Priority order: actionable patterns first.
+  if (patterns.entitiesCollection.test(snippet)) {
+    return {
+      category: 'needs-rewrite',
+      pattern: 'entities[\'adx_*\']',
+      action: "Rewrite needed: replace `entities['adx_*']` with the dedicated Liquid object (e.g., `weblinks['<name>']`, `snippets['<name>']`). Run `--automate-liquid` to surface annotated suggestions.",
+    };
+  }
+  if (patterns.fetchxmlBlock.test(snippet)) {
+    return {
+      category: 'auto-fetchxml',
+      pattern: '{% fetchxml %} with adx_* entity',
+      action: 'Embedded FetchXML inside Liquid — automatically rewritten by `--automate-fetchxml` (renames `adx_*` entity to `powerpagecomponent` + injects type filter).',
+    };
+  }
+
+  // From here on, the only adx_ usages are documented runtime-safe patterns.
+  const onlyFalsePositive =
+    !patterns.entitiesCollection.test(snippet) && !patterns.fetchxmlBlock.test(snippet);
+
+  if (onlyFalsePositive) {
+    const reasons = [];
+    if (patterns.propertyAccess.test(snippet)) {
+      reasons.push("`object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization");
+    }
+    if (patterns.editableTag.test(snippet)) {
+      reasons.push("`{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM");
+    }
+    if (patterns.lookupKey.test(snippet)) {
+      reasons.push("`snippets['adx_X']` / `weblinks['adx_X']` / similar — the index is a user-defined snippet/link/setting name, not an attribute");
+    }
+    if (reasons.length === 0) {
+      // Some adx_ reference we didn't classify — be honest.
+      return {
+        category: 'unknown',
+        pattern: 'unrecognized adx_ usage',
+        action: 'Pattern not recognized as auto-fixable or known-safe. Review manually against the Liquid Objects doc: https://learn.microsoft.com/en-us/power-pages/configure/liquid/liquid-objects',
+      };
+    }
+    return {
+      category: 'false-positive',
+      pattern: 'documented runtime-safe access',
+      action: `Likely no action needed. Reason: ${reasons.join('; ')}.`,
+    };
+  }
+
+  return { category: 'unknown', pattern: 'mixed', action: 'Review manually.' };
+}
+
+/**
+ * Categorize a plugin finding by class-name prefix.
+ *
+ * Microsoft.*   → system plugin, no user action needed (auto-handled by Power Pages Core)
+ * Adxstudio.*   → legacy framework plugin; verify V2 EDM solution is installed (Phase 6 check)
+ * (anything else) → custom user plugin; needs code refactor + re-registration
+ */
+function categorizePlugin(snippet) {
+  const pluginMatch = snippet.match(/Plugin name\s*:\s*([^\s]+)/i);
+  const entityMatch = snippet.match(/Entity Name\s*:\s*(\w+)/i);
+  const stepMatch = snippet.match(/Step name\s*:\s*([^\n]*?)(?:\s\s+Entity Name|$)/i);
+  const pluginName = (pluginMatch && pluginMatch[1]) || 'unknown';
+  const entity = (entityMatch && entityMatch[1]) || null;
+  const stepName = (stepMatch && stepMatch[1].trim()) || null;
+
+  let category;
+  let action;
+  if (/^Microsoft\./i.test(pluginName)) {
+    category = 'system';
+    action = `System plugin (\`${pluginName}\`) — no user action needed. Power Pages Core handles this on EDM.`;
+  } else if (/^Adxstudio\./i.test(pluginName)) {
+    category = 'adxstudio';
+    action = `Legacy Adxstudio framework plugin (\`${pluginName}\`) — verify the V2 EDM-compatible version of Power Pages Core / template solution is installed (covered by Phase 6). No code changes typically needed.`;
+  } else {
+    category = 'custom';
+    action = `Custom plugin (\`${pluginName}\`) — refactor the plugin code to target \`powerpagecomponent\` (was \`${entity || 'adx_*'}\`), update attribute references, and re-register the plugin step${
+      stepName ? ` (was: ${stepName})` : ''
+    }.`;
+  }
+
+  return { pluginName, entity, stepName, category, action };
+}
+
+/**
+ * Parse a Data Model Extension snippet into {table, column}.
+ * CSV snippet format: "Table name : adx_webpage   Column name : contoso_redirecturl"
+ */
+function parseDataModelExtension(snippet) {
+  const tableMatch = snippet.match(/Table name\s*:\s*(\w+)/i);
+  const columnMatch = snippet.match(/Column name\s*:\s*(\w+)/i);
+  return {
+    table: tableMatch ? tableMatch[1] : null,
+    column: columnMatch ? columnMatch[1] : null,
+  };
+}
+
+/**
+ * Group Data Model Extension findings by source adx_* table and produce a
+ * per-table remediation checklist (no Dataverse API calls — pure guidance).
+ *
+ * Per the migration doc, the correct fix for a custom column on an adx_* table is:
+ *   1. Create a NEW custom table (e.g., contoso_<original-suffix>)
+ *   2. Add the custom column on the new table
+ *   3. Add a lookup column on the new table that points to powerpagecomponent
+ *   4. Migrate data from the original adx_* column to the new table
+ *   5. Update Liquid/FetchXML to reference the new table
+ *
+ * https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#custom-columns-on-adx-metadata-tables
+ */
+function buildDataModelExtensionChecklists(items) {
+  const groups = {};
+  for (const item of items) {
+    const { table, column } = parseDataModelExtension(item.snippet || '');
+    if (!table || !column) continue;
+    if (!groups[table]) {
+      groups[table] = { sourceTable: table, columns: [], snippets: [] };
+    }
+    // De-duplicate column names per table (the CSV sometimes lists a column twice if its
+    // lookup display name is also flagged — e.g., `mspp_websiteid` and `mspp_websiteidName`).
+    if (!groups[table].columns.includes(column)) {
+      groups[table].columns.push(column);
+    }
+    groups[table].snippets.push(item.snippet);
+  }
+
+  // Build per-table checklists.
+  return Object.values(groups).map((group) => {
+    const suffix = group.sourceTable.replace(/^adx_/i, '');
+    // Suggested new table name uses a placeholder prefix — the user picks the actual publisher prefix.
+    const suggestedNewTable = `<your_prefix>_${suffix}`;
+    return {
+      sourceTable: group.sourceTable,
+      suggestedNewTable,
+      columns: group.columns,
+      checklist: [
+        `Create a new custom table \`${suggestedNewTable}\` in the Data workspace. Use your publisher's prefix in place of \`<your_prefix>\`.`,
+        `On the new table, add a lookup column (e.g., \`${suggestedNewTable}_powerpagecomponentid\`) targeting the \`powerpagecomponent\` table.`,
+        `Add each custom column from the original \`${group.sourceTable}\` table to the new table:\n${group.columns
+          .map((c) => `   - \`${c}\``)
+          .join('\n')}`,
+        `Migrate data: for each row in the source \`${group.sourceTable}\`, create a row in \`${suggestedNewTable}\` with the lookup column set to the matching \`powerpagecomponent\` record (joined via the same id) and copy the custom column values.`,
+        `Update any Liquid/FetchXML/plugin references that previously read \`${group.sourceTable}.<custom_column>\` to query the new \`${suggestedNewTable}\` table via the lookup.`,
+      ],
+    };
+  });
+}
+
+/**
+ * Categorize customization findings into manual-remediation buckets with per-finding guidance.
+ *
+ * NOTE: Earlier versions of this function attempted to "auto-create" missing string columns on
+ * adx_* tables for Data Model Extension findings. That implementation was incorrect — per the
+ * official migration doc, the correct fix is to create a NEW custom table with a lookup to
+ * powerpagecomponent and migrate data. That's a multi-step schema operation we don't automate.
+ *
+ * This function reports all five customization categories with category-specific richer guidance:
+ *  - Data Model Extension: grouped by source table with full per-table checklist
+ *  - Plugins: categorized by name prefix (Microsoft / Adxstudio / custom)
+ *  - Custom workflow: doc's generic guidance (no per-workflow info available without Dataverse queries)
+ *  - Liquid / FetchXML: pointer to the automate-* flags
+ *
+ * See: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#considerations-for-site-customization-when-migrating-sites-from-standard-to-enhanced-data-model
  */
 async function executeAutomatedRemediation(customizations, envUrl) {
+  // envUrl is preserved for future use (e.g., querying Dataverse for workflow details).
+  void envUrl;
+
   const remediationResults = {
     automated: [],
     manual: [],
-    errors: []
+    errors: [],
+    dataModelChecklists: [],
+    pluginCategorySummary: { system: 0, adxstudio: 0, custom: 0 },
+    liquidCategorySummary: { 'needs-rewrite': 0, 'auto-fetchxml': 0, 'false-positive': 0, unknown: 0 },
   };
 
-  // Only Data Model Extensions are automatable
-  const dataModelExtensions = customizations['Data Model Extension'] || [];
+  const genericGuidance = {
+    'Custom workflow':
+      'Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.',
+    'FetchXml contains adx references':
+      "Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.",
+  };
 
-  for (const extension of dataModelExtensions) {
-    try {
-      // Parse the snippet to extract table and column info
-      // Format: "Table name : annotation   Column name : iscompressedName"
-      const snippet = extension.snippet || '';
-      const tableMatch = snippet.match(/Table name\s*:\s*(\w+)/);
-      const columnMatch = snippet.match(/Column name\s*:\s*(\w+)/);
-
-      if (!tableMatch || !columnMatch) {
-        remediationResults.manual.push({
-          type: 'Data Model Extension',
-          description: 'Could not parse table/column from snippet',
-          snippet: snippet,
-          location: extension.location,
-          reason: 'Unparseable format'
-        });
-        continue;
-      }
-
-      const tableLogicalName = tableMatch[1];
-      const columnLogicalName = columnMatch[1];
-
-      // Check if column already exists
-      const exists = await checkColumnExists(envUrl, tableLogicalName, columnLogicalName);
-
-      if (exists) {
-        remediationResults.manual.push({
-          type: 'Data Model Extension',
-          description: `Column ${columnLogicalName} already exists on ${tableLogicalName}`,
-          snippet: snippet,
-          location: extension.location,
-          reason: 'Column already exists'
-        });
-        continue;
-      }
-
-      // Create the column
-      const displayName = columnLogicalName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim();
-      await createStringAttribute(envUrl, tableLogicalName, columnLogicalName, displayName);
-
-      remediationResults.automated.push({
-        type: 'Data Model Extension',
-        action: 'Created string attribute',
-        table: tableLogicalName,
-        column: columnLogicalName,
-        displayName: displayName,
-        snippet: snippet,
-        location: extension.location
-      });
-
-    } catch (error) {
-      remediationResults.errors.push({
-        type: 'Data Model Extension',
-        snippet: extension.snippet,
-        location: extension.location,
-        error: error.message
-      });
-    }
-  }
-
-  // All other customization types require manual remediation
   Object.entries(customizations).forEach(([type, items]) => {
-    if (type !== 'Data Model Extension') {
-      items.forEach(item => {
+    if (type === 'Data Model Extension') {
+      // Per-table checklist — replaces row-by-row manual entries.
+      remediationResults.dataModelChecklists = buildDataModelExtensionChecklists(items);
+      // Still record each finding in the manual list for traceability, but with the table-level
+      // reason pointing at the checklist.
+      items.forEach((item) => {
+        const { table, column } = parseDataModelExtension(item.snippet || '');
         remediationResults.manual.push({
-          type: type,
+          type,
           snippet: item.snippet,
           location: item.location,
-          reason: 'Requires manual remediation'
+          reason: table && column
+            ? `Custom column \`${column}\` on \`${table}\` — see per-table remediation checklist below.`
+            : 'Could not parse table/column; review manually.',
+          parsed: { table, column },
         });
       });
+      return;
     }
+
+    if (type === 'Plugins registered on adx entities') {
+      items.forEach((item) => {
+        const categorization = categorizePlugin(item.snippet || '');
+        remediationResults.pluginCategorySummary[categorization.category]++;
+        remediationResults.manual.push({
+          type,
+          snippet: item.snippet,
+          location: item.location,
+          reason: categorization.action,
+          parsed: categorization,
+        });
+      });
+      return;
+    }
+
+    if (type === 'Liquid contains adx references') {
+      items.forEach((item) => {
+        const categorization = categorizeLiquidFinding(item.snippet || '');
+        remediationResults.liquidCategorySummary[categorization.category]++;
+        remediationResults.manual.push({
+          type,
+          snippet: item.snippet,
+          location: item.location,
+          reason: categorization.action,
+          parsed: categorization,
+        });
+      });
+      return;
+    }
+
+    items.forEach((item) => {
+      remediationResults.manual.push({
+        type,
+        snippet: item.snippet,
+        location: item.location,
+        reason: genericGuidance[type] || 'Requires manual remediation.',
+      });
+    });
   });
 
   return remediationResults;
@@ -764,6 +1104,68 @@ async function executeAutomatedRemediation(customizations, envUrl) {
  */
 function generateRemediationResultsSection(remediationResults) {
   let html = '';
+
+  // Liquid finding categorization summary (if any Liquid findings were found)
+  const liquidCat = remediationResults.liquidCategorySummary;
+  const liquidTotal = liquidCat
+    ? liquidCat['needs-rewrite'] + liquidCat['auto-fetchxml'] + liquidCat['false-positive'] + liquidCat.unknown
+    : 0;
+  if (liquidTotal > 0) {
+    html += `
+      <div class="remediation-section">
+        <h3>💧 Liquid Findings — Categorized by Pattern</h3>
+        <p>The customization report flags any <code>adx_*</code> occurrence in Liquid files, but most are false positives. Per-finding breakdown:</p>
+        <ul class="remediation-list">
+          <li><strong>Needs rewrite (entities['adx_*'])</strong>: ${liquidCat['needs-rewrite']} — run <code>--automate-liquid</code> to surface annotated suggestions.</li>
+          <li><strong>Auto-fixable via FetchXML rewriter</strong>: ${liquidCat['auto-fetchxml']} — embedded <code>{% fetchxml %}</code> blocks; run <code>--automate-fetchxml</code>.</li>
+          <li><strong>Likely no action needed (false positive)</strong>: ${liquidCat['false-positive']} — property access (<code>page.adx_X</code>, <code>website.adx_X</code>), <code>{% editable %}</code> tags, or snippet/weblink lookup keys. All use documented logical-name access.</li>
+          <li><strong>Unknown / unrecognized pattern</strong>: ${liquidCat.unknown} — review manually.</li>
+        </ul>
+      </div>
+    `;
+  }
+
+  // Plugin categorization summary (if any plugins were found)
+  const pluginCat = remediationResults.pluginCategorySummary;
+  if (pluginCat && (pluginCat.system + pluginCat.adxstudio + pluginCat.custom) > 0) {
+    html += `
+      <div class="remediation-section">
+        <h3>🔌 Plugin Findings — Categorized</h3>
+        <p>Plugins registered on <code>adx_*</code> tables, grouped by ownership:</p>
+        <ul class="remediation-list">
+          <li><strong>System plugins (Microsoft.*)</strong>: ${pluginCat.system} — no action needed; Power Pages Core handles these on EDM.</li>
+          <li><strong>Adxstudio framework plugins (Adxstudio.*)</strong>: ${pluginCat.adxstudio} — verify the V2 EDM-compatible Power Pages Core solution is installed (Phase 6 check).</li>
+          <li><strong>Custom plugins</strong>: ${pluginCat.custom} — refactor code to target <code>powerpagecomponent</code> and re-register step bindings.</li>
+        </ul>
+      </div>
+    `;
+  }
+
+  // Data Model Extension per-table checklists
+  const dmeChecklists = remediationResults.dataModelChecklists || [];
+  if (dmeChecklists.length > 0) {
+    html += `
+      <div class="remediation-section">
+        <h3>🗂️ Data Model Extensions — Per-table Remediation Checklists</h3>
+        <p>For each source <code>adx_*</code> table with custom columns, perform the following steps in the
+        <a href="https://learn.microsoft.com/en-us/power-pages/getting-started/use-data-workspace" target="_blank">Data workspace</a>:</p>
+    `;
+
+    dmeChecklists.forEach((group) => {
+      html += `
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>${escapeHtml(group.sourceTable)}</code> → Target: <code>${escapeHtml(group.suggestedNewTable)}</code></div>
+          <ol class="remediation-list">
+            ${group.checklist.map((step) => `<li>${escapeHtml(step).replace(/\n/g, '<br>')}</li>`).join('\n            ')}
+          </ol>
+        </div>
+      `;
+    });
+
+    html += `
+      </div>
+    `;
+  }
 
   // Automated fixes
   if (remediationResults.automated.length > 0) {
@@ -797,7 +1199,7 @@ function generateRemediationResultsSection(remediationResults) {
   if (remediationResults.manual.length > 0) {
     html += `
       <div class="remediation-section">
-        <h3>📋 Manual Fixes Required</h3>
+        <h3>📋 Manual Fixes Required (per finding)</h3>
         <div class="results-list">
     `;
 
@@ -850,6 +1252,288 @@ function generateRemediationResultsSection(remediationResults) {
   return html;
 }
 
+// ---------------------------------------------------------------------------
+// FetchXML and Liquid file rewriters (Phase 9 customization remediation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk a directory recursively and return all files matching the given extensions.
+ */
+function walkSiteDirectory(rootPath, extensions) {
+  const results = [];
+  const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      results.push(...walkSiteDirectory(fullPath, extensions));
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (extensions.includes(ext)) {
+        results.push(fullPath);
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Rewrite FetchXML in a string. Handles BOTH <entity> and <link-entity> blocks:
+ * renames `name="adx_X"` to `name="powerpagecomponent"` and injects a
+ * `powerpagecomponenttype` filter.
+ *
+ * Returns { newContent, changes: [{ tag, entity, typeValue }], skipped: [...] }.
+ * Unrecognized adx_* entities (e.g., custom tables) are flagged but not modified.
+ */
+function rewriteFetchXmlInContent(content) {
+  const changes = [];
+  const skipped = [];
+
+  // Pass 1: rewrite inner <link-entity> blocks first so they don't sit untouched
+  // inside an already-rewritten <entity> body.
+  let result = rewriteTagBlocks(content, 'link-entity', changes, skipped);
+
+  // Pass 2: rewrite outer <entity> blocks.
+  result = rewriteTagBlocks(result, 'entity', changes, skipped);
+
+  return { newContent: result, changes, skipped };
+}
+
+/**
+ * Rewrite all <tagName ... name='adx_X' ...> ... </tagName> blocks in `content`.
+ * Used for both <entity> and <link-entity> — same rename + filter-injection logic.
+ *
+ * When tagName === 'entity', any nested <link-entity> blocks in the body are temporarily
+ * replaced with placeholders before searching for the entity's own <filter>, then restored.
+ * This prevents the outer entity from accidentally injecting its type filter into a nested
+ * link-entity's filter.
+ */
+function rewriteTagBlocks(content, tagName, changes, skipped) {
+  const blockRegex = new RegExp(
+    `<${tagName}\\b([^>]*?)\\bname\\s*=\\s*(['"])(adx_[\\w]+)\\2([^>]*)>([\\s\\S]*?)<\\/${tagName}>`,
+    'g',
+  );
+
+  return content.replace(blockRegex, (match, beforeName, quote, entityName, afterName, body) => {
+    const typeValue = COMPONENT_TYPE_MAP[entityName.toLowerCase()];
+    if (typeValue === undefined) {
+      skipped.push({
+        tag: tagName,
+        entity: entityName,
+        reason: 'No powerpagecomponenttype mapping (custom or non-portal entity)',
+      });
+      return match;
+    }
+
+    const newOpenTag = `<${tagName}${beforeName}name=${quote}powerpagecomponent${quote}${afterName}>`;
+    const condition = `<condition attribute="powerpagecomponenttype" operator="eq" value="${typeValue}" />`;
+
+    // For outer <entity> tags, hide nested <link-entity>...</link-entity> behind placeholders
+    // so the filter regex only matches the entity's own (direct-child) filter.
+    const linkEntityBlocks = [];
+    let scanBody = body;
+    if (tagName === 'entity') {
+      scanBody = body.replace(/<link-entity\b[\s\S]*?<\/link-entity>/g, (linkBlock) => {
+        const placeholder = ` LINK_ENTITY_${linkEntityBlocks.length} `;
+        linkEntityBlocks.push(linkBlock);
+        return placeholder;
+      });
+    }
+
+    const filterRegex = /<filter\b([^>]*)>([\s\S]*?)<\/filter>/;
+    let newScanBody;
+    const filterMatch = scanBody.match(filterRegex);
+    if (filterMatch) {
+      const filterAttrs = filterMatch[1] || '';
+      if (/type\s*=\s*(['"])or\1/i.test(filterAttrs)) {
+        skipped.push({
+          tag: tagName,
+          entity: entityName,
+          reason: "Existing <filter type='or'> — auto-injection would change semantics; manual review needed",
+        });
+        return match;
+      }
+      newScanBody = scanBody.replace(filterRegex, (_, attrs, inner) => {
+        const safeAttrs = attrs.trim() ? attrs : ' type="and"';
+        return `<filter${safeAttrs}>${inner}${condition}</filter>`;
+      });
+    } else {
+      newScanBody = scanBody.replace(/(\s*)$/, `\n  <filter type="and">${condition}</filter>$1`);
+    }
+
+    // Restore link-entity blocks from placeholders.
+    let newBody = newScanBody;
+    if (linkEntityBlocks.length > 0) {
+      newBody = newBody.replace(/ LINK_ENTITY_(\d+) /g, (_, idx) => linkEntityBlocks[parseInt(idx, 10)]);
+    }
+
+    changes.push({ tag: tagName, entity: entityName, typeValue });
+    return `${newOpenTag}${newBody}</${tagName}>`;
+  });
+}
+
+/**
+ * Add Liquid-comment suggestions next to entities['adx_*'] / entities["adx_*"] patterns.
+ * Does NOT overwrite the original — only inserts a `{# SUGGESTION: ... #}` (or `{%- comment -%}`) hint.
+ */
+function annotateLiquidEntitiesInContent(content) {
+  const suggestions = [];
+
+  // Match entities['adx_X'] and entities["adx_X"] (also handles entities[adx_X] without quotes)
+  const entitiesRegex = /entities\s*\[\s*(['"]?)(adx_\w+)\1\s*\]/g;
+
+  // Use a Set to keep one suggestion-comment per distinct line (avoid duplicates if same line has multiple matches).
+  const annotatedLines = new Set();
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    entitiesRegex.lastIndex = 0;
+    while ((m = entitiesRegex.exec(line)) !== null) {
+      const entityName = m[2].toLowerCase();
+      const mapping = LIQUID_OBJECT_MAP[entityName];
+      const suggestion = mapping
+        ? `Replace entities['${entityName}'] with: ${mapping.usage}`
+        : `entities['${entityName}'] — no dedicated Liquid object found; use powerpagecomponent FetchXML with powerpagecomponenttype filter`;
+      suggestions.push({ line: i + 1, entity: entityName, suggestion });
+      annotatedLines.add(i);
+    }
+  }
+
+  // Insert a comment line ABOVE each annotated line.
+  // Walk lines in reverse so insertion indices stay stable.
+  const sortedLineIndices = [...annotatedLines].sort((a, b) => b - a);
+  for (const idx of sortedLineIndices) {
+    const matchesOnThisLine = suggestions.filter((s) => s.line === idx + 1);
+    const commentText = matchesOnThisLine.map((s) => s.suggestion).join(' | ');
+    // Detect leading whitespace of the target line so the comment lines up.
+    const leadingWhitespace = (lines[idx].match(/^\s*/) || [''])[0];
+    const commentLine = `${leadingWhitespace}{%- comment -%} SDM→EDM SUGGESTION: ${commentText} {%- endcomment -%}`;
+    lines.splice(idx, 0, commentLine);
+  }
+
+  return { newContent: lines.join('\n'), suggestions };
+}
+
+/**
+ * Generate a unified-diff-style string for two file contents.
+ * Minimal implementation — line-level only, no context smarts.
+ */
+function unifiedDiff(oldContent, newContent, filePath) {
+  if (oldContent === newContent) return '';
+  const oldLines = oldContent.split('\n');
+  const newLines = newContent.split('\n');
+  const header = `--- ${filePath}\n+++ ${filePath}\n`;
+
+  // Greedy block diff: walk both line arrays in parallel.
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      out.push(`  ${oldLines[i]}`);
+      i++;
+      j++;
+    } else {
+      // Find next sync point.
+      let oi = i;
+      let nj = j;
+      while (oi < oldLines.length && newLines.indexOf(oldLines[oi], j) === -1) oi++;
+      while (nj < newLines.length && oldLines.indexOf(newLines[nj], i) === -1) nj++;
+      for (let k = i; k < oi; k++) out.push(`- ${oldLines[k]}`);
+      for (let k = j; k < nj; k++) out.push(`+ ${newLines[k]}`);
+      i = oi;
+      j = nj;
+    }
+  }
+
+  return header + out.join('\n') + '\n';
+}
+
+/**
+ * Backup a file by writing a `.pre-edm.bak` sibling if not already present.
+ */
+function backupFileOnce(filePath) {
+  const backupPath = `${filePath}.pre-edm.bak`;
+  if (!fs.existsSync(backupPath)) {
+    fs.copyFileSync(filePath, backupPath);
+  }
+  return backupPath;
+}
+
+/**
+ * Run the FetchXML auto-rewriter against all .html and .yml files under sitePath.
+ */
+function executeFetchXmlRewrites(sitePath, outputDir) {
+  if (!fs.existsSync(sitePath)) {
+    throw new Error(`Site path not found: ${sitePath}`);
+  }
+
+  const files = walkSiteDirectory(sitePath, ['.html', '.yml']);
+  const results = { filesScanned: 0, filesModified: 0, rewrites: [], skipped: [] };
+  const diffs = [];
+
+  for (const file of files) {
+    results.filesScanned++;
+    const content = fs.readFileSync(file, 'utf-8');
+    if (!/<entity\b[^>]*\bname\s*=\s*['"]adx_/.test(content)) continue;
+
+    const { newContent, changes, skipped } = rewriteFetchXmlInContent(content);
+    if (changes.length > 0 && newContent !== content) {
+      const backup = backupFileOnce(file);
+      fs.writeFileSync(file, newContent, 'utf-8');
+      results.filesModified++;
+      results.rewrites.push({ file, backup, changes });
+      diffs.push(unifiedDiff(content, newContent, path.relative(sitePath, file)));
+    }
+    if (skipped.length > 0) {
+      results.skipped.push({ file, skipped });
+    }
+  }
+
+  // Write the consolidated diff file.
+  const diffPath = path.join(outputDir, 'fetchxml-rewrites.diff');
+  fs.writeFileSync(diffPath, diffs.join('\n'), 'utf-8');
+  results.diffPath = diffPath;
+
+  return results;
+}
+
+/**
+ * Run the Liquid entities['adx_*'] semi-auto rewriter (annotate, don't overwrite).
+ */
+function executeLiquidRewrites(sitePath, outputDir) {
+  if (!fs.existsSync(sitePath)) {
+    throw new Error(`Site path not found: ${sitePath}`);
+  }
+
+  const files = walkSiteDirectory(sitePath, ['.html']);
+  const results = { filesScanned: 0, filesAnnotated: 0, suggestions: [] };
+  const diffs = [];
+
+  for (const file of files) {
+    results.filesScanned++;
+    const content = fs.readFileSync(file, 'utf-8');
+    if (!/entities\s*\[/.test(content)) continue;
+
+    const { newContent, suggestions } = annotateLiquidEntitiesInContent(content);
+    if (suggestions.length > 0 && newContent !== content) {
+      const backup = backupFileOnce(file);
+      fs.writeFileSync(file, newContent, 'utf-8');
+      results.filesAnnotated++;
+      results.suggestions.push({ file, backup, suggestions });
+      diffs.push(unifiedDiff(content, newContent, path.relative(sitePath, file)));
+    }
+  }
+
+  const diffPath = path.join(outputDir, 'liquid-suggestions.diff');
+  fs.writeFileSync(diffPath, diffs.join('\n'), 'utf-8');
+  results.diffPath = diffPath;
+
+  return results;
+}
+
 /**
  * Main function
  */
@@ -884,17 +1568,50 @@ async function main() {
       customizations = parseCustomizationReport(customizationReportPath);
     }
 
-    // Execute automated remediation if requested
+    // Always categorize findings if we have a customization report — this is local-only
+    // analysis (no Dataverse calls) that enriches the execution report with per-finding
+    // guidance (Liquid categorization, plugin categorization, Data Model Extension
+    // per-table checklists). The legacy --automate flag is retained for back-compat but
+    // is now a no-op marker.
     let remediationResults = null;
-    if (args['automate']) {
-      const envUrl = args['env-url'] || args['envUrl'] || getEnvironmentUrl();
-      if (!envUrl) {
-        console.error('Error: Could not determine environment URL. Run: pac auth create -u <url> or pass --env-url <env-url>');
+    if (Object.keys(customizations).length > 0) {
+      const envUrl = args['env-url'] || args['envUrl'] || null;
+      remediationResults = await executeAutomatedRemediation(customizations, envUrl);
+      const total =
+        remediationResults.manual.length +
+        remediationResults.automated.length +
+        remediationResults.errors.length;
+      console.log(
+        `Categorized ${total} findings: ${remediationResults.manual.length} manual, ${remediationResults.automated.length} automated, ${remediationResults.errors.length} errors`,
+      );
+    }
+
+    // Run FetchXML auto-rewriter if requested
+    let fetchXmlRewriteResults = null;
+    if (args['automate-fetchxml']) {
+      const sitePath = args['site-path'] || args['sitePath'];
+      if (!sitePath) {
+        console.error('Error: --site-path <path> is required with --automate-fetchxml. Point this at your `pac pages download` output directory.');
         process.exit(1);
       }
-      console.log(`Executing automated remediation against environment: ${envUrl}`);
-      remediationResults = await executeAutomatedRemediation(customizations, envUrl);
-      console.log(`Automated ${remediationResults.automated.length} fixes, ${remediationResults.manual.length} manual fixes needed, ${remediationResults.errors.length} errors`);
+      console.log(`Rewriting FetchXML in: ${sitePath}`);
+      fetchXmlRewriteResults = executeFetchXmlRewrites(sitePath, args['output-dir']);
+      console.log(`✓ FetchXML: scanned ${fetchXmlRewriteResults.filesScanned} files, modified ${fetchXmlRewriteResults.filesModified}, skipped ${fetchXmlRewriteResults.skipped.length}`);
+      console.log(`  Diff: ${fetchXmlRewriteResults.diffPath}`);
+    }
+
+    // Run Liquid entities[''] semi-auto rewriter if requested
+    let liquidRewriteResults = null;
+    if (args['automate-liquid']) {
+      const sitePath = args['site-path'] || args['sitePath'];
+      if (!sitePath) {
+        console.error('Error: --site-path <path> is required with --automate-liquid. Point this at your `pac pages download` output directory.');
+        process.exit(1);
+      }
+      console.log(`Annotating Liquid entities[adx_*] usages in: ${sitePath}`);
+      liquidRewriteResults = executeLiquidRewrites(sitePath, args['output-dir']);
+      console.log(`✓ Liquid: scanned ${liquidRewriteResults.filesScanned} files, annotated ${liquidRewriteResults.filesAnnotated}`);
+      console.log(`  Diff: ${liquidRewriteResults.diffPath}`);
     }
 
     // Generate customization report
@@ -903,8 +1620,13 @@ async function main() {
     fs.writeFileSync(customizationPath, customizationHtml, 'utf-8');
     console.log(`✓ Customization report generated: ${customizationPath}`);
 
-    // Generate execution report
-    const executionHtml = generateExecutionReportHtml(args, remediationResults, customizations);
+    // Generate execution report (include auto-rewrite results so the report shows what was applied).
+    const executionHtml = generateExecutionReportHtml(
+      args,
+      remediationResults,
+      customizations,
+      { fetchXml: fetchXmlRewriteResults, liquid: liquidRewriteResults },
+    );
     const executionPath = path.join(args['output-dir'], 'skill-execution-report.html');
     fs.writeFileSync(executionPath, executionHtml, 'utf-8');
     console.log(`✓ Execution report generated: ${executionPath}`);

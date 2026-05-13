@@ -76,17 +76,20 @@ Each template maps to a specific V2 solution `UniqueName` (see SKILL.md Phase 6 
 | 6 | **Validate Template & V2 Package** | Look up V2 solution `UniqueName` for the captured template, verify installed via `pac solution list`; install `PowerPages_Core` if missing | `pac solution list`, `pac application install` | Yes |
 | 7 | **Determine Env Type & Migration Mode** | Ask Dev/Test-UAT/Prod; recommend mode (Dev → `all`, others → `configurationData`) | — | Guided |
 | 8 | **Generate Customization Report** | Download CSV from PAC, render HTML report via JS script | `pac pages migrate-datamodel --siteCustomizationReportPath`, `node generate-migration-reports.js` | Yes |
-| 9 | **Customization Remediation** | Manual fix guidance per category + automated string-attribute creation for Data Model Extensions via Dataverse API | `node generate-migration-reports.js --automate` | Mixed |
+| 9 | **Customization Remediation** | FetchXML auto-rewrite (incl. link-entity) and Liquid `entities['adx_*']` semi-auto annotation in downloaded site files; per-finding Liquid/plugin categorization; per-table DME checklists; user reviews diffs, approves, then `pac pages upload`; final readiness gate before Phase 10 | `pac pages download`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload` | Mixed |
 | 10 | **Migrate Site Data Model** | Run migrate command, poll every 1 min × 30. On timeout: wait/reset/exit | `pac pages migrate-datamodel --mode <…>`, `--checkMigrationStatus` | Yes |
 | 11 | **Update Data Model Version** | Flip SDM → EDM using captured Portal Id (or manual fallback) | `pac pages migrate-datamodel --updateDatamodelVersion --portalId` | Yes |
 | 12 | **Post-Migration Validation & Summary** | Validation checklist, optional rollback, success summary, execution report | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (if rollback) | Guided |
 
 ### Why Customization Remediation moved before Migration (Phase 9, was post-migration)
 
-The previous design placed remediation after migration. Two issues:
+The previous design placed remediation after migration. The current design fixes customizations **before** migration for three reasons:
 
-1. Manual fixes (Liquid/FetchXML rewrites in source files, plugin re-targeting) can be done before migration without risk.
-2. Automated fixes (creating missing string attributes on `adx_*` tables) need to land before metadata is migrated, otherwise they'd have to be re-created on the EDM side.
+1. **File-level rewrites are safer on SDM source.** Both Liquid and FetchXML rewrites operate on the downloaded source files (`.html` / `.yml`); editing SDM-source files and re-uploading via `pac pages upload` is well-understood, with `pac pages download` providing a clean rollback point.
+2. **Data Model Extensions need a clean target before metadata moves.** Per the migration doc, the correct fix for a custom column on an `adx_*` table is to create a new custom table with a lookup to `powerpagecomponent`. If this happens before Phase 10, the data migration is straightforward; if deferred to post-migration the user has to navigate the new EDM `content` JSON structure.
+3. **Plugins/workflows are deferrable.** These are also recommended pre-migration (so EDM has working plugins from day 1) but can be safely deferred — the Phase 9 final-readiness gate makes that choice explicit.
+
+The Microsoft doc places all fixes post-migration. The skill deviates here intentionally for the reasons above; the deviation is documented in SKILL.md and DESIGN.md.
 
 Moving remediation to Phase 9 means the migration runs against a cleaner customization surface.
 
@@ -104,15 +107,50 @@ A single early status check in Phase 4 detects any of these and routes the flow 
 
 ## Customization Remediation Categories
 
-The customization report (Phase 8) categorizes findings into five types. Phase 9 handles each:
+The customization report (Phase 8) categorizes findings into five types. Phase 9 applies a mix of auto-rewrites, per-finding categorization, and per-table manual checklists. The rule is: **fix what the official doc shows as a mechanical rewrite; categorize and recommend everything else**.
 
-| Type | Examples | Automated? | Remediation Strategy |
-| --- | --- | --- | --- |
-| **Data Model Extensions** | Custom columns on `adx_*` tables | **Yes** — script creates missing string attributes via Dataverse Web API | New tables in Data workspace for complex types; auto-add string columns where safe |
-| **Liquid contains adx references** | `entities['adx_webpage']`, `website.adx_partialurl` | No (manual) | Replace with `page`, `page.adx_*`, or `powerpagecomponent` + type filter |
-| **FetchXml contains adx references** | `<entity name="adx_webrole">` queries | No (manual) | Replace entity name with `powerpagecomponent`, add `powerpagecomponenttype` filter |
-| **Plugins registered on adx entities** | Custom plugins targeting `adx_webpage`, `adx_contentsnippet`, etc. | No (manual) | Re-target to `powerpagecomponent` logical name; update attribute references; re-register |
-| **Custom workflow** | Workflows operating on `adx_*` records | No (manual) | Refactor to target `powerpagecomponent` |
+| Type | Sub-pattern | Phase 9 action |
+| --- | --- | --- |
+| **FetchXml contains adx references** | `<entity name='adx_*'>` | **Auto-rewritten** — rename to `powerpagecomponent`, inject `powerpagecomponenttype` filter |
+| **FetchXml contains adx references** | `<link-entity name='adx_*'>` | **Auto-rewritten** — same logic, two-pass to avoid nested-filter collision |
+| **FetchXml contains adx references** | `<filter type='or'>` containing adx_* | Flagged for manual review (semantic-change risk) |
+| **FetchXml contains adx references** | Unknown adx_* entity (custom table) | Flagged manually (no `powerpagecomponenttype` mapping) |
+| **Liquid contains adx references** | `entities['adx_*']` collection access | **Semi-auto** — Liquid-comment suggestion inserted above the original; user reviews diff |
+| **Liquid contains adx references** | Embedded `{% fetchxml %}` blocks | Caught by the FetchXML rewriter (above) |
+| **Liquid contains adx references** | Property access (`page.adx_X`, `website.adx_X`, etc.) | Categorized as **false positive** — runtime resolves via documented `[logical_name]` accessor |
+| **Liquid contains adx references** | `{% editable obj 'adx_X' %}` editable tag | Categorized as **false positive** — parameter is a logical attribute name |
+| **Liquid contains adx references** | `snippets[...]` / `weblinks[...]` lookup keys | Categorized as **false positive** — index is a user-defined name, not an attribute |
+| **Data Model Extensions** | Custom columns on `adx_*` tables | **Per-table checklist** — grouped by source table; checklist suggests new custom table name, lookup-to-`powerpagecomponent` column, and data-migration steps. **No Dataverse API calls** — schema decisions stay with the user |
+| **Plugins registered on adx entities** | `Microsoft.*` system plugins | Categorized as **no action needed** (Power Pages Core handles on EDM) |
+| **Plugins registered on adx entities** | `Adxstudio.*` framework plugins | Recommendation: verify V2 EDM-compatible solution installed (Phase 6 check) |
+| **Plugins registered on adx entities** | Custom plugins | Per-finding refactor recommendation with original entity + step name |
+| **Custom workflow** | Any | Generic doc guidance (no per-finding info available without Dataverse queries) |
+| **Relationships between custom and adx tables** | (not in sample reports) | Manual guidance in SKILL.md if encountered |
+
+### Phase 9 workflow
+
+```text
+1. Has cwd got the site downloaded?    Yes → confirm work is committed
+                                       No  → pac pages download --path ./mysite
+2. Run --automate-fetchxml             → file-level regex rewrites + backups + diff
+3. Run --automate-liquid               → annotated suggestions + backups + diff
+4. Review diffs                        → user approves / cancels / edits further
+5. pac pages upload                    → push rewritten source back to Dataverse
+6. Show manual reminders               → DME per-table checklists, plugin recs, etc.
+7. Final readiness gate                → user confirms before Phase 10 (migration)
+```
+
+The auto-rewriter is non-destructive: every modified file gets a `<file>.pre-edm.bak` sibling so the user can revert. Diffs (unified format) are written to `<output-dir>/fetchxml-rewrites.diff` and `liquid-suggestions.diff`.
+
+### Per-finding categorization logic
+
+The skill executes local-only analysis (no Dataverse API) for every customization finding:
+
+- **`categorizeLiquidFinding(snippet)`** — pattern-matches the snippet against `entities[...]`, `{% fetchxml %}`, `{% editable %}`, property access, and lookup-key patterns; emits one of `needs-rewrite` / `auto-fetchxml` / `false-positive` / `unknown` with a tailored action message.
+- **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name.
+- **`buildDataModelExtensionChecklists(items)`** — groups column findings by source `adx_*` table; produces one checklist per source table with suggested new-table name and step-by-step guidance from the migration doc.
+
+Output is rendered in `skill-execution-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", and "Data Model Extensions — Per-table Remediation Checklists" sections.
 
 See `assets/skill-execution-report.html` for the rendered remediation guidance shown to users.
 
@@ -238,4 +276,5 @@ The skill surfaces this as advisory guidance only. Environment copy is an admin-
 - **ALM integration**: Phase 7 captures environment type but does not yet branch on it for ALM-aware mode selection or remediation deployment. Plan: integrate with a future ALM-deployment skill so Test/UAT/Prod can consume fixes from Dev via managed solutions.
 - **Resumable polling**: Persist a `.migration-state.json` keyed by WebSiteId so multi-session migrations can resume without re-running pre-checks. Currently Phase 4 detects in-flight state from PAC's server-side tracker, which is sufficient for most cases.
 - **Bulk-site migration**: Currently single-site. A wrapper skill could iterate `pac pages list -v` output and sequence migrations.
-- **More automated remediation**: Today only Data Model Extensions (string columns) are auto-fixed. Extend to other safe customization categories where the rewrite is mechanical.
+- **Data Model Extension table-creation automation**: Phase 9 currently produces per-table checklists with suggested table names. A future enhancement could pre-populate Dataverse via API given publisher prefix and column-type input — but schema decisions remain user-driven, so this is deliberately deferred.
+- **Per-workflow guidance**: Custom workflow remediation is generic doc-text today. Adding Dataverse queries to fetch each workflow's primary entity and step bindings would let us emit per-finding guidance, similar to plugins.

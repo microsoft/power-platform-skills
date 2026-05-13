@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Power Pages Migration - Customization Report</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+      padding: 40px;
+    }
+
+    .header {
+      margin-bottom: 40px;
+      border-bottom: 3px solid #0078d4;
+      padding-bottom: 20px;
+    }
+
+    .header h1 {
+      color: #003d82;
+      margin-bottom: 8px;
+      font-size: 28px;
+    }
+
+    .header p {
+      color: #666;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .metadata {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+      padding: 20px;
+      background: #f0f4f8;
+      border-radius: 6px;
+    }
+
+    .metadata-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .metadata-label {
+      font-weight: 600;
+      color: #003d82;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .metadata-value {
+      color: #333;
+      font-size: 14px;
+      word-break: break-all;
+    }
+
+    .summary {
+      background: #e7f3ff;
+      border-left: 4px solid #0078d4;
+      padding: 15px 20px;
+      margin: 30px 0;
+      border-radius: 4px;
+    }
+
+    .summary-title {
+      font-weight: 600;
+      color: #003d82;
+      margin-bottom: 8px;
+    }
+
+    .summary-content {
+      color: #333;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .customization-section {
+      margin: 40px 0;
+    }
+
+    .customization-section h2 {
+      color: #003d82;
+      font-size: 18px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #0078d4;
+      display: flex;
+      align-items: center;
+    }
+
+    .customization-count {
+      display: inline-block;
+      background: #0078d4;
+      color: white;
+      border-radius: 20px;
+      padding: 2px 10px;
+      font-size: 12px;
+      margin-left: 10px;
+      font-weight: 600;
+    }
+
+    .customization-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+
+    .customization-table thead {
+      background: #f0f4f8;
+    }
+
+    .customization-table th {
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: #003d82;
+      border-bottom: 2px solid #e0e0e0;
+      font-size: 13px;
+    }
+
+    .customization-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e0e0e0;
+      color: #333;
+      font-size: 13px;
+    }
+
+    .customization-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .snippet {
+      background: #f5f5f5;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      padding: 10px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      color: #333;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .no-data {
+      padding: 40px;
+      text-align: center;
+      color: #666;
+      background: #f9fafb;
+      border-radius: 6px;
+    }
+
+    .no-data-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+      text-align: center;
+      color: #999;
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-right: 8px;
+    }
+
+    .badge-liquid {
+      background: #fff4e6;
+      color: #e67e22;
+    }
+
+    .badge-workflow {
+      background: #e8f5e9;
+      color: #27ae60;
+    }
+
+    .badge-data-model {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+
+    .badge-plugin {
+      background: #fce4ec;
+      color: #c2185b;
+    }
+
+    .status-badge {
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .status-completed {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .status-warning {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status-error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔄 Power Pages Site Customization Report</h1>
+      <p>SDM to EDM Migration Analysis</p>
+      
+      <div class="metadata">
+        <div class="metadata-item">
+          <span class="metadata-label">Site Name</span>
+          <span class="metadata-value">Contoso Portal</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Website ID</span>
+          <span class="metadata-value">076bf556-9ae6-ee11-a203-6045bdf0328e</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Template</span>
+          <span class="metadata-value">Starter layout 1</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Current Model</span>
+          <span class="metadata-value">Standard Data Model (SDM)</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Report Generated</span>
+          <span class="metadata-value">2026-05-13</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Total Customizations Found</span>
+          <span class="metadata-value" style="font-weight: 600; color: #0078d4;">51</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary">
+      <div class="summary-title">What does this report mean?</div>
+      <div class="summary-content">
+        Found 51 customization(s) across 5 category(ies). Each customization will need specific post-migration remediation steps. See detailed guidance below.
+      </div>
+    </div>
+
+    
+    <div class="customization-section">
+      <h2>
+        <span class="badge badge-liquid">adx references</span>
+        Liquid contains adx references
+        <span class="customization-count">8</span>
+      </h2>
+      <table class="customization-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Snippet</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+  
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\default-studio-template\Default-studio-template.webtemplate.source.html</td>
+            <td><div class="snippet">{% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+      {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+      {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\header\Header.webtemplate.source.html</td>
+            <td><div class="snippet">{% assign homeurl = website.adx_partialurl %}
+{% assign homeurl = website.adx_partialurl %}
+{% assign homeurl = website.adx_partialurl %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-header\Page-Header.webtemplate.source.html</td>
+            <td><div class="snippet">&lt;h1&gt;{% editable page &#039;adx_title&#039; type: &#039;html&#039;, liquid: true %}&lt;/h1&gt;
+    &lt;h1&gt;{% editable page &#039;adx_title&#039; type: &#039;html&#039;, liquid: true %}&lt;/h1&gt;
+    &lt;h1&gt;{% editable page &#039;adx_title&#039; type: &#039;html&#039;, liquid: true %}&lt;/h1&gt;</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-copy\Page-Copy.webtemplate.source.html</td>
+            <td><div class="snippet">{% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+    {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+    {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</td>
+            <td><div class="snippet">{% assign botConfig = botconsumer.adx_configjson %}
+{% assign botConfig = botconsumer.adx_configjson %}
+{% assign botConfig = botconsumer.adx_configjson %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</td>
+            <td><div class="snippet">&quot;botSchemaName&quot;: &quot;{{ botconsumer.adx_botschemaname }}&quot;,
+            &quot;botSchemaName&quot;: &quot;{{ botconsumer.adx_botschemaname }}&quot;,
+            &quot;botSchemaName&quot;: &quot;{{ botconsumer.adx_botschemaname }}&quot;,</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\search\Search.webtemplate.source.html</td>
+            <td><div class="snippet">{% assign snippet = snippets[&#039;adx_name&#039;] %}
+{% assign snippet = snippets[&#039;adx_name&#039;] %}
+{% assign snippet = snippets[&#039;adx_name&#039;] %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\navigation\Navigation.webtemplate.source.html</td>
+            <td><div class="snippet">{% assign url = page.adx_partialurl %}
+  {% assign url = page.adx_partialurl %}
+  {% assign url = page.adx_partialurl %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  
+    <div class="customization-section">
+      <h2>
+        <span class="badge badge-liquid">FetchXml contains adx references</span>
+        FetchXml contains adx references
+        <span class="customization-count">4</span>
+      </h2>
+      <table class="customization-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Snippet</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+  
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\profile\Profile.webtemplate.source.html</td>
+            <td><div class="snippet">{% fetchxml roles %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_webrole&quot;&gt;
+    &lt;attribute name=&quot;adx_name&quot; /&gt;
+    &lt;filter&gt;&lt;condition attribute=&quot;statecode&quot; operator=&quot;eq&quot; value=&quot;0&quot; /&gt;&lt;/filter&gt;
+  &lt;/entity&gt;
+&lt;/fetch&gt;
+{% endfetchxml %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</td>
+            <td><div class="snippet">{% fetchxml pages %}
+&lt;fetch version=&quot;1.0&quot; top=&quot;10&quot;&gt;
+  &lt;entity name=&quot;adx_webpage&quot;&gt;
+    &lt;attribute name=&quot;adx_name&quot; /&gt;
+    &lt;attribute name=&quot;adx_partialurl&quot; /&gt;
+    &lt;filter&gt;&lt;condition attribute=&quot;adx_publishingstateid&quot; operator=&quot;not-null&quot; /&gt;&lt;/filter&gt;
+  &lt;/entity&gt;
+&lt;/fetch&gt;
+{% endfetchxml %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</td>
+            <td><div class="snippet">{% fetchxml lists %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_entitylist&quot;&gt;
+    &lt;attribute name=&quot;adx_name&quot; /&gt;
+    &lt;attribute name=&quot;adx_entityname&quot; /&gt;
+    &lt;filter&gt;&lt;condition attribute=&quot;statecode&quot; operator=&quot;eq&quot; value=&quot;0&quot; /&gt;&lt;/filter&gt;
+  &lt;/entity&gt;
+&lt;/fetch&gt;
+{% endfetchxml %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\footer\Footer.webtemplate.source.html</td>
+            <td><div class="snippet">{% fetchxml snippets %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_contentsnippet&quot;&gt;
+    &lt;attribute name=&quot;adx_name&quot; /&gt;
+    &lt;attribute name=&quot;adx_value&quot; /&gt;
+    &lt;filter&gt;&lt;condition attribute=&quot;adx_name&quot; operator=&quot;eq&quot; value=&quot;Footer/Copyright&quot; /&gt;&lt;/filter&gt;
+  &lt;/entity&gt;
+&lt;/fetch&gt;
+{% endfetchxml %}</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  
+    <div class="customization-section">
+      <h2>
+        <span class="badge badge-workflow">workflow</span>
+        Custom workflow
+        <span class="customization-count">5</span>
+      </h2>
+      <table class="customization-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Snippet</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+  
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Remove Web Role From Contact</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Send Welcome Email on Registration</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Expire Web File on Date</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Contact Portal Registration Notification</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Sync Account to Portal Access</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  
+    <div class="customization-section">
+      <h2>
+        <span class="badge badge-data-model">Data Model Extension</span>
+        Data Model Extension
+        <span class="customization-count">28</span>
+      </h2>
+      <table class="customization-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Snippet</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+  
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : iscompressedName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : IsCompressed</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : isautonomouslycreatedName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : isAutonomouslyCreated</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : DummyRegarding</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : annotation   Column name : DummyFileName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_poll   Column name : mspp_webtemplateidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_poll   Column name : mspp_webtemplateid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_poll   Column name : mspp_websiteidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_poll   Column name : mspp_websiteid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webtemplateidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webtemplateid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_websiteidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_websiteid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webpageidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webpageid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webfileidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_webfileid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_redirectwebfileidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_redirectwebfileid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_publishingstateidName</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_ad   Column name : mspp_publishingstateid</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_webpage   Column name : contoso_redirecturl</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_webpage   Column name : contoso_expirydate</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_entityform   Column name : contoso_successredirecturl</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_webform   Column name : contoso_completionmessage</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_contentsnippet   Column name : contoso_snippettype</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Table name : adx_sitesetting   Column name : contoso_environment</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  
+    <div class="customization-section">
+      <h2>
+        <span class="badge badge-plugin">Plugins registered on adx entities</span>
+        Plugins registered on adx entities
+        <span class="customization-count">6</span>
+      </h2>
+      <table class="customization-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Snippet</th>
+            <th>Guidance</th>
+          </tr>
+        </thead>
+        <tbody>
+  
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin   Step name : Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin: Create of adx_websitelanguage  Entity Name : adx_websitelanguage</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Microsoft.Crm.ObjectModel.SyncWorkflowExecutionPlugin   Step name :   Entity Name : adx_webrole</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Contoso.Plugins.WebPageAuditPlugin   Step name : Contoso.Plugins.WebPageAuditPlugin: Update of adx_webpage  Entity Name : adx_webpage</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Contoso.Plugins.ContentSnippetCachePlugin   Step name : Contoso.Plugins.ContentSnippetCachePlugin: Create of adx_contentsnippet  Entity Name : adx_contentsnippet</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Contoso.Plugins.EntityFormSubmitPlugin   Step name : Contoso.Plugins.EntityFormSubmitPlugin: Create of adx_entityform  Entity Name : adx_entityform</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+          <tr>
+            <td>N/A</td>
+            <td><div class="snippet">Plugin name : Contoso.Plugins.WebRoleAssignmentPlugin   Step name : Contoso.Plugins.WebRoleAssignmentPlugin: Associate of adx_webrole  Entity Name : adx_webrole</div></td>
+            <td><a href="https://go.microsoft.com/fwlink/?linkid=2247170" target="_blank">View Guidance</a></td>
+          </tr>
+    
+        </tbody>
+      </table>
+    </div>
+  
+
+    <div class="footer">
+      <p>Generated by Power Pages Migration Tool | Report created on {{REPORT_DATE}}</p>
+    </div>
+  </div>
+</body>
+</html>

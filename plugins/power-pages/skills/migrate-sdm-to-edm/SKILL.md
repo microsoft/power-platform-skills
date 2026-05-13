@@ -451,52 +451,138 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 ## Phase 9: Customization Remediation
 
-**Goal**: Guide user through fixing customizations identified in Phase 8 before executing the migration
+**Goal**: Apply fixes to the site source files for customizations that genuinely need rewriting, before executing migration
+
+> **Important — most flagged Liquid is a false positive.** The customization report greps for any `adx_` substring in Liquid files, but Power Pages Liquid runtime handles legacy attribute names transparently. Patterns like `page.adx_copy`, `website.adx_partialurl`, `{% editable page 'adx_copy' %}`, and `snippets['adx_name']` use documented logical-name access and **don't need rewriting**. See per-category table below.
 
 **Actions**:
 
-If customizations were found in Phase 8, present remediation guidance:
+### 1. Categorize findings: what to fix vs. leave alone
 
-**For Liquid references to adx tables:**
-- Replace `entities['adx_webpage']` with `page` or `page.adx_*` where available
-- Use `powerpagecomponent` table with type filters for complex queries
-- Reference component type mapping table
+| Customization category | Action | Reasoning |
+|---|---|---|
+| FetchXML with `<entity name='adx_*'>` | **Auto-fix** | Doc shows mechanical rewrite: rename entity to `powerpagecomponent` + inject `powerpagecomponenttype` filter |
+| Liquid `entities['adx_*']` collection | **Semi-auto fix (user reviews)** | Doc shows replacing with dedicated Liquid object (`weblinks`, `snippets`, etc.). Semantics may shift; user must approve |
+| Liquid property access (`page.adx_X`, `website.adx_X`, `botconsumer.adx_X`) | **Leave alone** | Documented `[logical_name]` accessor; works on EDM via virtualization |
+| Liquid `{% editable page 'adx_*' %}` tag | **Leave alone** | Uses logical attribute name; same access rule |
+| Liquid `snippets['adx_*']`, `weblinks['adx_*']` | **Leave alone** | Index is a user-defined name, not an attribute |
+| Data Model Extensions (custom columns on `adx_*`) | **Manual only** | Per migration doc, the fix is to create a new custom table with a lookup to `powerpagecomponent` and migrate data — multi-step schema operation, not automatable safely |
+| Relationships between custom and `adx_*` tables | **Manual only** | New relationship to `powerpagecomponent`-side; user-driven |
+| Custom plugins/workflows on `adx_*` tables | **Manual only** | Code refactor + re-registration — semantic, not mechanical |
 
-**For Data Model Extensions (custom columns on adx tables):**
-- Create new tables in Data workspace (e.g., `contoso_webpage`)
-- Add custom columns to new tables
-- Migrate data from old columns
-- Update Liquid/FetchXML to reference new tables
+### 2. Set up the working directory
 
-**For FetchXML with adx references:**
-- Replace entity names with `powerpagecomponent`
-- Add filter on `powerpagecomponenttype` attribute
-- Reference component type mapping table
+Auto-fix and semi-auto fix both require the site source files to be on disk:
 
-**For Plugins/Workflows on adx tables:**
-- Refactor to target `powerpagecomponent` (logical name)
-- Update attribute references
-- Re-register on new table
+- **If `website.yml` exists in the current working directory** (the user has the site downloaded): ask the user to confirm the working copy is committed/saved before any rewrites.
 
-**Execute Automated Fixes** (if safe):
+  | Question | Header | Options |
+  |----------|--------|---------|
+  | Site source detected at `<CWD>`. Have you committed/saved your work? We'll modify source files. | Source Ready | Yes, proceed, No, let me commit first, Cancel |
 
-```bash
-node scripts/generate-migration-reports.js \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" \
-  --env-url "https://org.crm.dynamics.com" \
-  --automate \
-  --environment-type "<ENV_TYPE>" \
+- **Otherwise**: download the site to cwd before fixing.
+
+  ```powershell
+  pac pages download --webSiteId "<WEBSITE_ID>" --path "./mysite"
+  ```
+
+  Use the downloaded path for subsequent steps.
+
+### 3. Run automated FetchXML rewrites
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+  --customization-report "./migration-report/SiteCustomization.csv" `
+  --site-name "<SITE_NAME>" `
+  --website-id "<WEBSITE_ID>" `
+  --site-path "./mysite" `
+  --automate-fetchxml `
   --output-dir "./migration-reports"
 ```
 
-Script will:
-- Identify safe fixes (string attribute creation)
-- Apply via Dataverse API
-- Log all operations in execution report
+Script behavior:
 
-**Output**: Remediation guidance provided and automated fixes applied where safe
+- Walks `.html` and `.yml` files under `--site-path`
+- Finds each `<entity name='adx_X'>` block (in `{% fetchxml %}` Liquid tags and YAML `query:` fields)
+- Renames entity to `powerpagecomponent` and injects `<condition attribute='powerpagecomponenttype' operator='eq' value='<N>'/>` based on the component type map
+- Writes `<file>.pre-edm.bak` sibling before modifying each file
+- Produces a unified diff in `<output-dir>/fetchxml-rewrites.diff`
+- Logs each rewrite in the execution report (`skill-execution-report.html`)
+
+### 4. Run semi-automated Liquid `entities['adx_*']` rewrites
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+  --customization-report "./migration-report/SiteCustomization.csv" `
+  --site-name "<SITE_NAME>" `
+  --website-id "<WEBSITE_ID>" `
+  --site-path "./mysite" `
+  --automate-liquid `
+  --output-dir "./migration-reports"
+```
+
+Script behavior:
+
+- Walks `.html` files for `entities['adx_*']` and `entities["adx_*"]` patterns
+- For each match, looks up the suggested dedicated Liquid object (e.g., `entities['adx_weblinkset']` → `weblinks`)
+- **Inserts a suggested rewrite as a Liquid comment next to the original** — does NOT overwrite the original line. User decides what to keep.
+- Logs all suggestions in the execution report
+
+### 5. Review and approve changes
+
+After steps 3 and 4, show the user:
+
+- Path to the diff file (`fetchxml-rewrites.diff`)
+- Path to the Liquid suggestions report
+- Path to all `*.pre-edm.bak` files (so they can revert if needed)
+
+  | Question | Header | Options |
+  |----------|--------|---------|
+  | Review the rewrites in `<diff-file>`. Approve and upload to Dataverse? | Approve Rewrites | Yes, upload now, No, cancel, Let me edit further first |
+
+### 6. Upload approved changes back to Dataverse
+
+If approved:
+
+```powershell
+pac pages upload --path "./mysite" --webSiteId "<WEBSITE_ID>"
+```
+
+This pushes the rewritten source files back to the SDM site's Dataverse records, ready for Phase 10 migration.
+
+### 7. Manual remediation reminders (for non-automatable categories)
+
+Show user the following before proceeding to Phase 10:
+
+**Data Model Extensions** — for each custom column found on `adx_*` tables, the user must, in the Data workspace:
+
+1. Create a new custom table (e.g., `contoso_webpage`)
+2. Add the custom column (e.g., `contoso_pagetype`) to the new table
+3. Add a lookup column on the new table pointing to `powerpagecomponent`
+4. Migrate data from the old column to the new table
+5. Update any Liquid/FetchXML to reference the new table
+
+**Custom-to-adx relationships** — create a new relationship between the custom table and `powerpagecomponent` (e.g., `powerpagecomponent_contoso_pagelogs`).
+
+**Plugins/Workflows on `adx_*` tables** — refactor code to target `powerpagecomponent`, update attribute references, re-register on the new table.
+
+Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#considerations-for-site-customization-when-migrating-sites-from-standard-to-enhanced-data-model>
+
+### 8. Final readiness check before migration
+
+After auto-rewrites are uploaded and manual recommendations have been presented, gate the transition to Phase 10 explicitly:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| All customization remediation complete? Auto-rewrites are uploaded; manual items (Data Model Extensions, plugins, workflows, relationships) have been addressed or knowingly deferred. | Migration Readiness | Yes — proceed to migration, Defer remaining manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
+
+- **Proceed to migration**: continue to Phase 10.
+- **Defer manual items**: capture the user's acknowledgment in the execution report (so post-migration audit shows what was deferred) and proceed to Phase 10. Skill records deferred items.
+- **Pause skill**: halt cleanly. User can re-invoke the skill later — Phase 4 will detect that no migration has started and pick up from Phase 5 with the (now-clean) site source.
+
+> **Why this gate exists:** Data Model Extension custom columns ideally land **before** migration so the data migrates cleanly into the new structure. Plugins and workflows can be fixed post-migration without data loss, but if deferred should be tracked. This gate makes the choice explicit rather than implicit.
+
+**Output**: FetchXML auto-rewrites applied and uploaded; Liquid rewrites suggested and uploaded after user review; manual remediation tasks surfaced; user has explicitly confirmed migration readiness or acknowledged deferred items
 
 ---
 

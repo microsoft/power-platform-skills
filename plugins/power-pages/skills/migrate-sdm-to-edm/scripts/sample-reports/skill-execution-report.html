@@ -1,0 +1,1694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Power Pages Migration - Execution Report</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+      padding: 40px;
+    }
+
+    .header {
+      margin-bottom: 40px;
+      border-bottom: 3px solid #0078d4;
+      padding-bottom: 20px;
+    }
+
+    .header h1 {
+      color: #003d82;
+      margin-bottom: 8px;
+      font-size: 28px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-icon {
+      font-size: 32px;
+    }
+
+    .status-icon.success {
+      color: #27ae60;
+    }
+
+    .status-icon.warning {
+      color: #e67e22;
+    }
+
+    .status-icon.error {
+      color: #e74c3c;
+    }
+
+    .header p {
+      color: #666;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .metadata {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+      padding: 20px;
+      background: #f0f4f8;
+      border-radius: 6px;
+    }
+
+    .metadata-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .metadata-label {
+      font-weight: 600;
+      color: #003d82;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .metadata-value {
+      color: #333;
+      font-size: 14px;
+      word-break: break-all;
+    }
+
+    .section {
+      margin: 40px 0;
+    }
+
+    .section h2 {
+      color: #003d82;
+      font-size: 20px;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #0078d4;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-icon {
+      font-size: 24px;
+    }
+
+    .prerequisites {
+      background: #f0f4f8;
+      border-left: 4px solid #0078d4;
+      padding: 20px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+
+    .prerequisite-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: white;
+      border-radius: 4px;
+    }
+
+    .prerequisite-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .check-icon {
+      font-size: 18px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .check-icon.success {
+      color: #27ae60;
+    }
+
+    .check-icon.warning {
+      color: #e67e22;
+    }
+
+    .prerequisite-content {
+      flex: 1;
+    }
+
+    .prerequisite-title {
+      font-weight: 600;
+      color: #003d82;
+      margin-bottom: 4px;
+    }
+
+    .prerequisite-description {
+      color: #666;
+      font-size: 13px;
+    }
+
+    .command-block {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 6px;
+      padding: 16px;
+      margin: 16px 0;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+      overflow-x: auto;
+      line-height: 1.5;
+      border: 1px solid #333;
+    }
+
+    .command-label {
+      color: #4ec9b0;
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .phase {
+      margin: 30px 0;
+      padding: 20px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      background: #fafafa;
+    }
+
+    .phase-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #003d82;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .phase-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: #0078d4;
+      color: white;
+      border-radius: 50%;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .phase-status {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 10px;
+    }
+
+    .status-completed {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .status-pending {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    .status-failed {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .phase-content {
+      margin-top: 12px;
+      padding-top: 12px;
+    }
+
+    .phase-description {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 12px;
+      font-style: italic;
+    }
+
+    .phase-logs {
+      background: #f8f9fa;
+      border-radius: 6px;
+      padding: 12px;
+      border-left: 3px solid #0078d4;
+    }
+
+    .phase-log-item {
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+      color: #333;
+      margin: 4px 0;
+      padding: 2px 0;
+      border-bottom: 1px solid #e9ecef;
+    }
+
+    .phase-log-item:last-child {
+      border-bottom: none;
+    }
+
+    .result-item {
+      background: white;
+      border-left: 3px solid #0078d4;
+      padding: 12px 16px;
+      margin: 12px 0;
+      border-radius: 4px;
+    }
+
+    .result-item.success {
+      border-left-color: #27ae60;
+    }
+
+    .result-item.error {
+      border-left-color: #e74c3c;
+    }
+
+    .result-item.warning {
+      border-left-color: #e67e22;
+    }
+
+    .result-title {
+      font-weight: 600;
+      color: #003d82;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .result-description {
+      color: #666;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .remediation-steps {
+      background: #fff9e6;
+      border-left: 4px solid #e67e22;
+      padding: 20px;
+      border-radius: 6px;
+      margin: 20px 0;
+    }
+
+    .remediation-title {
+      font-weight: 600;
+      color: #a67b00;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .remediation-list {
+      list-style: none;
+      counter-reset: step-counter;
+    }
+
+    .remediation-list li {
+      counter-increment: step-counter;
+      margin-bottom: 12px;
+      padding-left: 30px;
+      position: relative;
+      color: #666;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .remediation-list li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background: #e67e22;
+      color: white;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .table-container {
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .summary-table thead {
+      background: #f0f4f8;
+    }
+
+    .summary-table th {
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: #003d82;
+      border-bottom: 2px solid #e0e0e0;
+      font-size: 13px;
+    }
+
+    .summary-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e0e0e0;
+      color: #333;
+      font-size: 13px;
+    }
+
+    .summary-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+      text-align: center;
+      color: #999;
+      font-size: 12px;
+    }
+
+    .alert {
+      padding: 16px;
+      border-radius: 6px;
+      margin: 20px 0;
+    }
+
+    .alert-success {
+      background: #d4edda;
+      border: 1px solid #c3e6cb;
+      color: #155724;
+    }
+
+    .alert-warning {
+      background: #fff3cd;
+      border: 1px solid #ffeeba;
+      color: #856404;
+    }
+
+    .alert-error {
+      background: #f8d7da;
+      border: 1px solid #f5c6cb;
+      color: #721c24;
+    }
+
+    .alert-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .component-type-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 20px 0;
+    }
+
+    .component-type-table thead {
+      background: #f0f4f8;
+    }
+
+    .component-type-table th,
+    .component-type-table td {
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 12px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .component-type-table th {
+      font-weight: 600;
+      color: #003d82;
+    }
+
+    .code-snippet {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 4px;
+      padding: 12px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      margin: 10px 0;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>
+        <span class="status-icon success">✅</span>
+        Power Pages Migration Execution Report
+      </h1>
+      <p>SDM to EDM Migration Complete</p>
+      
+      <div class="metadata">
+        <div class="metadata-item">
+          <span class="metadata-label">Site Name</span>
+          <span class="metadata-value">Contoso Portal</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Website ID</span>
+          <span class="metadata-value">076bf556-9ae6-ee11-a203-6045bdf0328e</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Portal ID</span>
+          <span class="metadata-value">07f35d71-c45a-4a05-9702-8f127559e48e</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Migration Status</span>
+          <span class="metadata-value" style="font-weight: 600;">Completed Successfully</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Report Generated</span>
+          <span class="metadata-value">2026-05-13</span>
+        </div>
+        <div class="metadata-item">
+          <span class="metadata-label">Total Execution Time</span>
+          <span class="metadata-value">Pending</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prerequisites Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">✓</span>
+        Prerequisites Verification
+      </h2>
+      <div class="prerequisites">
+        
+    <div class="prerequisite-item">
+      <div class="check-icon success">✓</div>
+      <div class="prerequisite-content">
+        <div class="prerequisite-title">PAC CLI Version</div>
+        <div class="prerequisite-description">v1.31.6 or higher is installed</div>
+      </div>
+    </div>
+    <div class="prerequisite-item">
+      <div class="check-icon success">✓</div>
+      <div class="prerequisite-content">
+        <div class="prerequisite-title">Dataverse Package Version</div>
+        <div class="prerequisite-description">Dataverse base portal package 9.3.2307.x or higher is installed</div>
+      </div>
+    </div>
+    <div class="prerequisite-item">
+      <div class="check-icon success">✓</div>
+      <div class="prerequisite-content">
+        <div class="prerequisite-title">Power Pages Core Package</div>
+        <div class="prerequisite-description">Power Pages Core 1.0.2309.63 or higher is installed</div>
+      </div>
+    </div>
+    <div class="prerequisite-item">
+      <div class="check-icon success">✓</div>
+      <div class="prerequisite-content">
+        <div class="prerequisite-title">User Role</div>
+        <div class="prerequisite-description">User has System Administrator role</div>
+      </div>
+    </div>
+  
+      </div>
+    </div>
+
+    <!-- PAC Commands Executed Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">⚙️</span>
+        PAC Commands Executed
+      </h2>
+      
+    <div class="phase">
+      <div class="command-label">Step 1: Verify Authentication</div>
+      <div class="command-block">pac auth who</div>
+      <div class="result-item success">
+        <div class="result-title">✓ Success</div>
+        <div class="result-description">Authenticated to environment successfully</div>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="command-label">Step 2: List Available Sites</div>
+      <div class="command-block">pac pages list</div>
+      <div class="result-item success">
+        <div class="result-title">✓ Success</div>
+        <div class="result-description">Found target site for migration</div>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="command-label">Step 3: Download Customization Report</div>
+      <div class="command-block">pac pages migrate-datamodel --webSiteId "{{WEBSITE_ID}}" --siteCustomizationReportPath "./migration-report"</div>
+      <div class="result-item success">
+        <div class="result-title">✓ Success</div>
+        <div class="result-description">Customization report downloaded and analyzed</div>
+      </div>
+    </div>
+  
+    </div>
+
+    <!-- Customization Analysis Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">📋</span>
+        Customization Analysis Results
+      </h2>
+      
+    <div class="table-container">
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>Customization Type</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+      <tr>
+        <td>Liquid contains adx references</td>
+        <td>8</td>
+      </tr>
+    
+      <tr>
+        <td>FetchXml contains adx references</td>
+        <td>4</td>
+      </tr>
+    
+      <tr>
+        <td>Custom workflow</td>
+        <td>5</td>
+      </tr>
+    
+      <tr>
+        <td>Data Model Extension</td>
+        <td>28</td>
+      </tr>
+    
+      <tr>
+        <td>Plugins registered on adx entities</td>
+        <td>6</td>
+      </tr>
+    
+        </tbody>
+      </table>
+      <div class="alert alert-warning" style="margin-top: 16px;">
+        <div class="alert-title">Next step</div>
+        Review the remediation summary and confirm whether the automated remediation was executed successfully.
+      </div>
+    </div>
+  
+    </div>
+
+    <!-- Migration Phases Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">🔄</span>
+        Migration Phases
+      </h2>
+      
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">1</span>
+        Verify Prerequisites
+        <span class="phase-status status-completed">Completed</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">PAC CLI, Dataverse, and Power Pages packages are at required versions</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ PAC CLI version 1.32.1 detected (required: ≥1.31.6)</div>
+    
+        <div class="phase-log-item">✓ Dataverse base portal package 9.3.2307.1 detected (required: ≥9.3.2307.x)</div>
+    
+        <div class="phase-log-item">✓ Power Pages Core package 1.0.2309.63 detected (required: ≥1.0.2309.63)</div>
+    
+        <div class="phase-log-item">✓ User has System Administrator role confirmed</div>
+    
+        <div class="phase-log-item">✓ Environment connectivity verified</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">2</span>
+        Authenticate and Discover Sites
+        <span class="phase-status status-completed">Completed</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Target site identified and authenticated</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Successfully authenticated to environment</div>
+    
+        <div class="phase-log-item">✓ Retrieved list of available Power Pages sites</div>
+    
+        <div class="phase-log-item">✓ Target site identified: Contoso Portal</div>
+    
+        <div class="phase-log-item">✓ Website ID: 076bf556-9ae6-ee11-a203-6045bdf0328e</div>
+    
+        <div class="phase-log-item">✓ Site template validated: Starter layout 1 (supported for migration)</div>
+    
+        <div class="phase-log-item">✓ Site status: Active and ready for migration</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">3</span>
+        Analyze Customization Report
+        <span class="phase-status status-completed">Completed</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Customization report downloaded and analyzed</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath ./migration-report</div>
+    
+        <div class="phase-log-item">✓ SiteCustomization.csv downloaded successfully</div>
+    
+        <div class="phase-log-item">✓ Parsed 3 customization categories from report</div>
+    
+        <div class="phase-log-item">✓ Identified: Liquid contains adx references (1 instance)</div>
+    
+        <div class="phase-log-item">✓ Identified: Data Model Extension (1 instance)</div>
+    
+        <div class="phase-log-item">✓ Identified: Plugins registered on adx entities (1 instance)</div>
+    
+        <div class="phase-log-item">✓ Generated HTML customization analysis report</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">4</span>
+        Document Pre-Migration State
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Pre-migration state documented and safety measures in place</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Environment type confirmed: Development</div>
+    
+        <div class="phase-log-item">✓ Migration plan: Configuration data + customization metadata</div>
+    
+        <div class="phase-log-item">✓ Backup strategy: Automatic rollback capability maintained</div>
+    
+        <div class="phase-log-item">✓ Pre-migration site snapshot documented</div>
+    
+        <div class="phase-log-item">✓ User approval obtained for migration proceeding</div>
+    
+        <div class="phase-log-item">✓ Safety measures: Rollback available if needed</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">5</span>
+        Execute Migration
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Migration executed using PAC CLI</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --configurationData</div>
+    
+        <div class="phase-log-item">✓ Migration process initiated successfully</div>
+    
+        <div class="phase-log-item">✓ Data model conversion from SDM to EDM started</div>
+    
+        <div class="phase-log-item">✓ Configuration data migration in progress...</div>
+    
+        <div class="phase-log-item">✓ Migration completed without errors</div>
+    
+        <div class="phase-log-item">✓ Migration status: Success</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">6</span>
+        Verify Migration Status
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Migration status verified and confirmed</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Migration status check: PASSED</div>
+    
+        <div class="phase-log-item">✓ Data model version updated to EDM</div>
+    
+        <div class="phase-log-item">✓ Website record status: Active</div>
+    
+        <div class="phase-log-item">✓ Portal configuration validated</div>
+    
+        <div class="phase-log-item">✓ No migration errors detected</div>
+    
+        <div class="phase-log-item">✓ Ready for post-migration tasks</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">7</span>
+        Update Data Model Version
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Data model version updated to EDM</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ EDM website record activated</div>
+    
+        <div class="phase-log-item">✓ SDM website record deactivated</div>
+    
+        <div class="phase-log-item">✓ Data model version confirmed: Enhanced (EDM)</div>
+    
+        <div class="phase-log-item">✓ Portal metadata updated</div>
+    
+        <div class="phase-log-item">✓ Site configuration synchronized</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">8</span>
+        Guide Customization Remediation
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Post-migration customization fixes identified and guided</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Customization analysis reviewed</div>
+    
+        <div class="phase-log-item">✓ Remediation checklist generated</div>
+    
+        <div class="phase-log-item">✓ Manual fixes identified for Liquid references</div>
+    
+        <div class="phase-log-item">✓ Manual fixes identified for data model extensions</div>
+    
+        <div class="phase-log-item">✓ Manual fixes identified for plugin registrations</div>
+    
+        <div class="phase-log-item">✓ User guidance provided for each remediation step</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">9</span>
+        Execute Automated Remediation
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Automated fixes applied where safe</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Automated remediation initiated</div>
+    
+        <div class="phase-log-item">✓ Safe attribute creation attempted</div>
+    
+        <div class="phase-log-item">✓ 0 automated fixes applied (no safe automations available)</div>
+    
+        <div class="phase-log-item">✓ 3 manual remediation items identified</div>
+    
+        <div class="phase-log-item">✓ Remediation report generated</div>
+    
+        <div class="phase-log-item">✓ User notified of manual steps required</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">10</span>
+        Validate Post-Migration
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Post-migration validation completed</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Site accessibility verified</div>
+    
+        <div class="phase-log-item">✓ Basic page rendering tested</div>
+    
+        <div class="phase-log-item">✓ Authentication flows validated</div>
+    
+        <div class="phase-log-item">✓ Web roles and permissions checked</div>
+    
+        <div class="phase-log-item">✓ No critical errors detected</div>
+    
+        <div class="phase-log-item">✓ Site ready for user acceptance testing</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    <div class="phase">
+      <div class="phase-title">
+        <span class="phase-number">11</span>
+        Complete or Rollback
+        <span class="phase-status status-pending">Pending</span>
+      </div>
+      <div class="phase-content">
+        <div class="phase-description">Migration completed successfully or rolled back</div>
+        <div class="phase-logs">
+          
+        <div class="phase-log-item">✓ Migration completion confirmed</div>
+    
+        <div class="phase-log-item">✓ Final status: SUCCESS</div>
+    
+        <div class="phase-log-item">✓ Skill usage recorded for tracking</div>
+    
+        <div class="phase-log-item">✓ User notified of successful completion</div>
+    
+        <div class="phase-log-item">✓ Post-migration documentation provided</div>
+    
+        <div class="phase-log-item">✓ Migration process complete</div>
+    
+        </div>
+      </div>
+    </div>
+  
+    </div>
+
+    <!-- Remediation Required Section -->
+    <div class="section" id="remediation-section" style="display: block;">
+      <h2>
+        <span class="section-icon">⚠️</span>
+        Post-Migration Remediation Required
+      </h2>
+      
+    <div class="remediation-section">
+      <h3>⚙️ Auto-applied Rewrites</h3>
+      <p>The skill applied the following automated rewrites to your downloaded site files. Originals are backed up alongside each modified file as <code>&lt;file&gt;.pre-edm.bak</code>.</p>
+  
+      <div class="remediation-steps" style="margin-top: 12px;">
+        <div class="remediation-title">FetchXML rewriter</div>
+        <ul class="remediation-list">
+          <li>Files scanned: <strong>6</strong></li>
+          <li>Files modified: <strong>4</strong></li>
+          <li>Entity / link-entity rewrites: <strong>4</strong></li>
+          <li>Skipped (manual review needed): <strong>0</strong></li>
+          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\output\fetchxml-rewrites.diff</code></li>
+        </ul>
+    
+        <div class="table-container" style="margin-top: 8px;">
+          <table class="summary-table">
+            <thead>
+              <tr><th>File</th><th>Tag</th><th>Original entity</th><th>Component type</th></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</small></td>
+                  <td>&lt;entity&gt;</td>
+                  <td><code>adx_entitylist</code></td>
+                  <td><code>17</code></td>
+                </tr>
+              
+                <tr>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\footer\Footer.webtemplate.source.html</small></td>
+                  <td>&lt;entity&gt;</td>
+                  <td><code>adx_contentsnippet</code></td>
+                  <td><code>7</code></td>
+                </tr>
+              
+                <tr>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\profile\Profile.webtemplate.source.html</small></td>
+                  <td>&lt;entity&gt;</td>
+                  <td><code>adx_webrole</code></td>
+                  <td><code>11</code></td>
+                </tr>
+              
+                <tr>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</small></td>
+                  <td>&lt;entity&gt;</td>
+                  <td><code>adx_webpage</code></td>
+                  <td><code>2</code></td>
+                </tr>
+              
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="remediation-steps" style="margin-top: 12px;">
+        <div class="remediation-title">Liquid <code>entities['adx_*']</code> annotator</div>
+        <ul class="remediation-list">
+          <li>Files scanned: <strong>6</strong></li>
+          <li>Files annotated: <strong>2</strong></li>
+          <li>Suggestions inserted: <strong>2</strong></li>
+          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\output\liquid-suggestions.diff</code></li>
+        </ul>
+        <p><em>Suggestions are inserted as <code>{%- comment -%}</code> blocks above each <code>entities['adx_*']</code> usage. Review and replace the original line — or accept the comment and leave the original (Liquid will ignore comments).</em></p>
+      </div>
+    
+      <p style="margin-top: 12px;"><strong>Next step:</strong> review the diff files, then run <code>pac pages upload --path &lt;site-path&gt; --webSiteId &lt;GUID&gt;</code> to push the rewritten source back to Dataverse.</p>
+    </div>
+  
+      <div class="remediation-section">
+        <h3>💧 Liquid Findings — Categorized by Pattern</h3>
+        <p>The customization report flags any <code>adx_*</code> occurrence in Liquid files, but most are false positives. Per-finding breakdown:</p>
+        <ul class="remediation-list">
+          <li><strong>Needs rewrite (entities['adx_*'])</strong>: 0 — run <code>--automate-liquid</code> to surface annotated suggestions.</li>
+          <li><strong>Auto-fixable via FetchXML rewriter</strong>: 0 — embedded <code>{% fetchxml %}</code> blocks; run <code>--automate-fetchxml</code>.</li>
+          <li><strong>Likely no action needed (false positive)</strong>: 8 — property access (<code>page.adx_X</code>, <code>website.adx_X</code>), <code>{% editable %}</code> tags, or snippet/weblink lookup keys. All use documented logical-name access.</li>
+          <li><strong>Unknown / unrecognized pattern</strong>: 0 — review manually.</li>
+        </ul>
+      </div>
+    
+      <div class="remediation-section">
+        <h3>🔌 Plugin Findings — Categorized</h3>
+        <p>Plugins registered on <code>adx_*</code> tables, grouped by ownership:</p>
+        <ul class="remediation-list">
+          <li><strong>System plugins (Microsoft.*)</strong>: 1 — no action needed; Power Pages Core handles these on EDM.</li>
+          <li><strong>Adxstudio framework plugins (Adxstudio.*)</strong>: 1 — verify the V2 EDM-compatible Power Pages Core solution is installed (Phase 6 check).</li>
+          <li><strong>Custom plugins</strong>: 4 — refactor code to target <code>powerpagecomponent</code> and re-register step bindings.</li>
+        </ul>
+      </div>
+    
+      <div class="remediation-section">
+        <h3>🗂️ Data Model Extensions — Per-table Remediation Checklists</h3>
+        <p>For each source <code>adx_*</code> table with custom columns, perform the following steps in the
+        <a href="https://learn.microsoft.com/en-us/power-pages/getting-started/use-data-workspace" target="_blank">Data workspace</a>:</p>
+    
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>annotation</code> → Target: <code>&lt;your_prefix&gt;_annotation</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_annotation` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_annotation_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `annotation` table to the new table:<br>   - `iscompressedName`<br>   - `IsCompressed`<br>   - `isautonomouslycreatedName`<br>   - `isAutonomouslyCreated`<br>   - `DummyRegarding`<br>   - `DummyFileName`</li>
+            <li>Migrate data: for each row in the source `annotation`, create a row in `&lt;your_prefix&gt;_annotation` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `annotation.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_annotation` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_poll</code> → Target: <code>&lt;your_prefix&gt;_poll</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_poll` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_poll_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_poll` table to the new table:<br>   - `mspp_webtemplateidName`<br>   - `mspp_webtemplateid`<br>   - `mspp_websiteidName`<br>   - `mspp_websiteid`</li>
+            <li>Migrate data: for each row in the source `adx_poll`, create a row in `&lt;your_prefix&gt;_poll` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_poll.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_poll` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_ad</code> → Target: <code>&lt;your_prefix&gt;_ad</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_ad` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_ad_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_ad` table to the new table:<br>   - `mspp_webtemplateidName`<br>   - `mspp_webtemplateid`<br>   - `mspp_websiteidName`<br>   - `mspp_websiteid`<br>   - `mspp_webpageidName`<br>   - `mspp_webpageid`<br>   - `mspp_webfileidName`<br>   - `mspp_webfileid`<br>   - `mspp_redirectwebfileidName`<br>   - `mspp_redirectwebfileid`<br>   - `mspp_publishingstateidName`<br>   - `mspp_publishingstateid`</li>
+            <li>Migrate data: for each row in the source `adx_ad`, create a row in `&lt;your_prefix&gt;_ad` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_ad.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_ad` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_webpage</code> → Target: <code>&lt;your_prefix&gt;_webpage</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_webpage` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_webpage_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_webpage` table to the new table:<br>   - `contoso_redirecturl`<br>   - `contoso_expirydate`</li>
+            <li>Migrate data: for each row in the source `adx_webpage`, create a row in `&lt;your_prefix&gt;_webpage` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_webpage.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_webpage` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_entityform</code> → Target: <code>&lt;your_prefix&gt;_entityform</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_entityform` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_entityform_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_entityform` table to the new table:<br>   - `contoso_successredirecturl`</li>
+            <li>Migrate data: for each row in the source `adx_entityform`, create a row in `&lt;your_prefix&gt;_entityform` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_entityform.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_entityform` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_webform</code> → Target: <code>&lt;your_prefix&gt;_webform</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_webform` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_webform_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_webform` table to the new table:<br>   - `contoso_completionmessage`</li>
+            <li>Migrate data: for each row in the source `adx_webform`, create a row in `&lt;your_prefix&gt;_webform` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_webform.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_webform` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_contentsnippet</code> → Target: <code>&lt;your_prefix&gt;_contentsnippet</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_contentsnippet` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_contentsnippet_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_contentsnippet` table to the new table:<br>   - `contoso_snippettype`</li>
+            <li>Migrate data: for each row in the source `adx_contentsnippet`, create a row in `&lt;your_prefix&gt;_contentsnippet` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_contentsnippet.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_contentsnippet` table via the lookup.</li>
+          </ol>
+        </div>
+      
+        <div class="remediation-steps" style="margin-top: 16px;">
+          <div class="remediation-title">Source: <code>adx_sitesetting</code> → Target: <code>&lt;your_prefix&gt;_sitesetting</code></div>
+          <ol class="remediation-list">
+            <li>Create a new custom table `&lt;your_prefix&gt;_sitesetting` in the Data workspace. Use your publisher&#039;s prefix in place of `&lt;your_prefix&gt;`.</li>
+            <li>On the new table, add a lookup column (e.g., `&lt;your_prefix&gt;_sitesetting_powerpagecomponentid`) targeting the `powerpagecomponent` table.</li>
+            <li>Add each custom column from the original `adx_sitesetting` table to the new table:<br>   - `contoso_environment`</li>
+            <li>Migrate data: for each row in the source `adx_sitesetting`, create a row in `&lt;your_prefix&gt;_sitesetting` with the lookup column set to the matching `powerpagecomponent` record (joined via the same id) and copy the custom column values.</li>
+            <li>Update any Liquid/FetchXML/plugin references that previously read `adx_sitesetting.&lt;custom_column&gt;` to query the new `&lt;your_prefix&gt;_sitesetting` table via the lookup.</li>
+          </ol>
+        </div>
+      
+      </div>
+    
+      <div class="remediation-section">
+        <h3>📋 Manual Fixes Required (per finding)</h3>
+        <div class="results-list">
+    
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\default-studio-template\Default-studio-template.webtemplate.source.html</small>
+            <br><small>Snippet: {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+      {% editable page &#039;adx_copy&#039; type: &#039;h...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\header\Header.webtemplate.source.html</small>
+            <br><small>Snippet: {% assign homeurl = website.adx_partialurl %}
+{% assign homeurl = website.adx_partialurl %}
+{% assig...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-header\Page-Header.webtemplate.source.html</small>
+            <br><small>Snippet: &lt;h1&gt;{% editable page &#039;adx_title&#039; type: &#039;html&#039;, liquid: true %}&lt;/h1&gt;
+    &lt;h1&gt;{% editable page &#039;adx_ti...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-copy\Page-Copy.webtemplate.source.html</small>
+            <br><small>Snippet: {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
+    {% editable page &#039;adx_copy&#039; type: &#039;htm...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
+            <br><small>Snippet: {% assign botConfig = botconsumer.adx_configjson %}
+{% assign botConfig = botconsumer.adx_configjson...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
+            <br><small>Snippet: &quot;botSchemaName&quot;: &quot;{{ botconsumer.adx_botschemaname }}&quot;,
+            &quot;botSchemaName&quot;: &quot;{{ botconsumer...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `snippets['adx_X']` / `weblinks['adx_X']` / similar — the index is a user-defined snippet/link/setting name, not an attribute.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\search\Search.webtemplate.source.html</small>
+            <br><small>Snippet: {% assign snippet = snippets[&#039;adx_name&#039;] %}
+{% assign snippet = snippets[&#039;adx_name&#039;] %}
+{% assign sn...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Liquid contains adx references</div>
+          <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\navigation\Navigation.webtemplate.source.html</small>
+            <br><small>Snippet: {% assign url = page.adx_partialurl %}
+  {% assign url = page.adx_partialurl %}
+  {% assign url = pa...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\profile\Profile.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml roles %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_webrole&quot;&gt;
+    &lt;attribute name=&quot;adx_na...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml pages %}
+&lt;fetch version=&quot;1.0&quot; top=&quot;10&quot;&gt;
+  &lt;entity name=&quot;adx_webpage&quot;&gt;
+    &lt;attribute nam...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml lists %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_entitylist&quot;&gt;
+    &lt;attribute name=&quot;adx...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\footer\Footer.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml snippets %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_contentsnippet&quot;&gt;
+    &lt;attribute na...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Custom workflow</div>
+          <div class="result-description">Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Remove Web Role From Contact</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Custom workflow</div>
+          <div class="result-description">Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Send Welcome Email on Registration</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Custom workflow</div>
+          <div class="result-description">Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Expire Web File on Date</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Custom workflow</div>
+          <div class="result-description">Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Contact Portal Registration Notification</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Custom workflow</div>
+          <div class="result-description">Refactor the workflow to target `powerpagecomponent` and re-register on the new table; update attribute references. Workflow-specific guidance requires reviewing each workflow definition in Dataverse.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Sync Account to Portal Access</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `iscompressedName` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : iscompressedName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `IsCompressed` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : IsCompressed</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `isautonomouslycreatedName` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : isautonomouslycreatedName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `isAutonomouslyCreated` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : isAutonomouslyCreated</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `DummyRegarding` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : DummyRegarding</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `DummyFileName` on `annotation` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : annotation   Column name : DummyFileName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webtemplateidName` on `adx_poll` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_poll   Column name : mspp_webtemplateidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webtemplateid` on `adx_poll` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_poll   Column name : mspp_webtemplateid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_websiteidName` on `adx_poll` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_poll   Column name : mspp_websiteidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_websiteid` on `adx_poll` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_poll   Column name : mspp_websiteid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webtemplateidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webtemplateidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webtemplateid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webtemplateid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_websiteidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_websiteidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_websiteid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_websiteid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webpageidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webpageidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webpageid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webpageid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webfileidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webfileidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_webfileid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_webfileid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_redirectwebfileidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_redirectwebfileidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_redirectwebfileid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_redirectwebfileid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_publishingstateidName` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_publishingstateidName</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `mspp_publishingstateid` on `adx_ad` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_ad   Column name : mspp_publishingstateid</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_redirecturl` on `adx_webpage` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_webpage   Column name : contoso_redirecturl</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_expirydate` on `adx_webpage` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_webpage   Column name : contoso_expirydate</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_successredirecturl` on `adx_entityform` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_entityform   Column name : contoso_successredirecturl</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_completionmessage` on `adx_webform` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_webform   Column name : contoso_completionmessage</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_snippettype` on `adx_contentsnippet` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_contentsnippet   Column name : contoso_snippettype</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Data Model Extension</div>
+          <div class="result-description">Custom column `contoso_environment` on `adx_sitesetting` — see per-table remediation checklist below.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Table name : adx_sitesetting   Column name : contoso_environment</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">Legacy Adxstudio framework plugin (`Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin`) — verify the V2 EDM-compatible version of Power Pages Core / template solution is installed (covered by Phase 6). No code changes typically needed.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin   Step name : Adxstudi...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">System plugin (`Microsoft.Crm.ObjectModel.SyncWorkflowExecutionPlugin`) — no user action needed. Power Pages Core handles this on EDM.</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Microsoft.Crm.ObjectModel.SyncWorkflowExecutionPlugin   Step name :   Entity Name : ad...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">Custom plugin (`Contoso.Plugins.WebPageAuditPlugin`) — refactor the plugin code to target `powerpagecomponent` (was `adx_webpage`), update attribute references, and re-register the plugin step (was: Contoso.Plugins.WebPageAuditPlugin: Update of adx_webpage).</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Contoso.Plugins.WebPageAuditPlugin   Step name : Contoso.Plugins.WebPageAuditPlugin: U...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">Custom plugin (`Contoso.Plugins.ContentSnippetCachePlugin`) — refactor the plugin code to target `powerpagecomponent` (was `adx_contentsnippet`), update attribute references, and re-register the plugin step (was: Contoso.Plugins.ContentSnippetCachePlugin: Create of adx_contentsnippet).</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Contoso.Plugins.ContentSnippetCachePlugin   Step name : Contoso.Plugins.ContentSnippet...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">Custom plugin (`Contoso.Plugins.EntityFormSubmitPlugin`) — refactor the plugin code to target `powerpagecomponent` (was `adx_entityform`), update attribute references, and re-register the plugin step (was: Contoso.Plugins.EntityFormSubmitPlugin: Create of adx_entityform).</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Contoso.Plugins.EntityFormSubmitPlugin   Step name : Contoso.Plugins.EntityFormSubmitP...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ Plugins registered on adx entities</div>
+          <div class="result-description">Custom plugin (`Contoso.Plugins.WebRoleAssignmentPlugin`) — refactor the plugin code to target `powerpagecomponent` (was `adx_webrole`), update attribute references, and re-register the plugin step (was: Contoso.Plugins.WebRoleAssignmentPlugin: Associate of adx_webrole).</div>
+          <div class="result-details">
+            <small>Location: N/A</small>
+            <br><small>Snippet: Plugin name : Contoso.Plugins.WebRoleAssignmentPlugin   Step name : Contoso.Plugins.WebRoleAssignmen...</small>
+          </div>
+        </div>
+      
+        </div>
+      </div>
+    
+    </div>
+
+    <!-- Validation Checklist Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">📝</span>
+        Post-Migration Validation Checklist
+      </h2>
+      <div class="remediation-steps">
+        <div class="remediation-title">Please verify the following after migration:</div>
+        <ul class="remediation-list">
+          <li>Browse all site pages — check for rendering issues</li>
+          <li>Test forms and data operations (basic forms, advanced forms, lists)</li>
+          <li>Test web API calls (if applicable)</li>
+          <li>Test authentication flows (login, registration, role assignment)</li>
+          <li>Check web roles and table permissions</li>
+          <li>Validate pages that had Liquid/FetchXML customization fixes</li>
+          <li>Run functional smoke tests on critical user journeys</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Summary Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">📊</span>
+        Migration Summary
+      </h2>
+      <div class="table-container">
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+    <tr>
+      <td>Site Name</td>
+      <td>Contoso Portal</td>
+    </tr>
+    <tr>
+      <td>Website ID</td>
+      <td>076bf556-9ae6-ee11-a203-6045bdf0328e</td>
+    </tr>
+    <tr>
+      <td>Portal ID</td>
+      <td>07f35d71-c45a-4a05-9702-8f127559e48e</td>
+    </tr>
+    <tr>
+      <td>Previous Data Model</td>
+      <td>Standard Data Model (SDM)</td>
+    </tr>
+    <tr>
+      <td>Current Data Model</td>
+      <td>Enhanced Data Model (EDM)</td>
+    </tr>
+    <tr>
+      <td>Migration Date</td>
+      <td>2026-05-13</td>
+    </tr>
+  
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Next Steps Section -->
+    <div class="section">
+      <h2>
+        <span class="section-icon">→</span>
+        Next Steps
+      </h2>
+      <div class="remediation-steps">
+        <div class="remediation-title">Recommended Actions:</div>
+        <ul class="remediation-list">
+          <li>Verify all customizations have been remediated</li><li>Test the migrated site thoroughly</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>Generated by Power Pages Migration Tool | Report created on {{REPORT_DATE}}</p>
+    </div>
+  </div>
+</body>
+</html>
