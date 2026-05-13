@@ -17,6 +17,9 @@
 html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.ai-disclaimer{background:var(--surface2);border-bottom:1px solid var(--border-light);color:var(--text-dim);font-size:12px;padding:8px 28px;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px;}
+.ai-disclaimer strong{color:var(--text);font-weight:600;}
+.ai-disclaimer-icon{display:inline-block;width:16px;height:16px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:11px;font-weight:700;line-height:16px;text-align:center;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
@@ -28,7 +31,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
 .nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
 .nav-btn.active .nav-icon{opacity:0.9;}
-.content{flex:1;padding:32px 40px 72px;max-width:960px;}
+.content{flex:1;min-width:0;padding:32px 40px 72px;}
 .section{display:none;}
 .section.active{display:block;animation:fadeIn 0.3s ease;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
@@ -85,6 +88,7 @@ tbody tr:hover{background:var(--accent-bg);}
 td.comp-cell{vertical-align:top;}
 .comp-line{font-size:12px;line-height:1.55;padding:4px 0;}
 .comp-line + .comp-line{border-top:1px dashed var(--border-light);}
+td.rationale-cell{vertical-align:top;font-size:12px;line-height:1.55;color:var(--text-dim);max-width:320px;}
 .comp-edm{color:var(--text);}
 .comp-target-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 .comp-target{font-family:var(--mono);font-size:11px;color:var(--text-bright);background:var(--surface2);padding:2px 7px;border-radius:3px;border:1px solid var(--border);}
@@ -92,6 +96,7 @@ td.comp-cell{vertical-align:top;}
 .badge-content{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
 .badge-server-logic{background:var(--purple-bg);color:var(--purple);border:1px solid #8764b840;}
 .badge-webapi{background:var(--accent-bg);color:var(--accent);border:1px solid #0078d440;}
+.badge-static-asset{background:var(--warn-bg);color:var(--warn);border:1px solid #ff8c0040;}
 .badge-manualgap{background:var(--alert-bg);color:var(--alert);border:1px solid #ca501040;}
 .er-container{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin:8px 0 22px;overflow-x:auto;}
 .er-empty{font-size:13px;color:var(--text-dim);font-style:italic;text-align:center;padding:28px 12px;}
@@ -118,6 +123,11 @@ td.comp-cell{vertical-align:top;}
         <div class="topbar-sub">__SITE_NAME__</div>
       </div>
     </div>
+  </div>
+
+  <div class="ai-disclaimer" role="note" aria-label="AI-generated content disclaimer">
+    <span class="ai-disclaimer-icon" aria-hidden="true">i</span>
+    <span><strong>AI-generated content may be incorrect.</strong> This migration plan was produced by Claude analyzing the EDM source and the live site. Review every recommendation — especially the Routes and Gaps tabs — before approving the plan.</span>
   </div>
 
   <div class="layout">
@@ -151,11 +161,92 @@ td.comp-cell{vertical-align:top;}
 
         <h3>Design Rationale</h3>
         <div id="rationaleContainer"></div>
+
+        <h3>EDM vs. SPA — What's Different</h3>
+        <p class="section-desc">A quick reference for users new to the SPA code-site model. Each row shows how a Power Pages concept changes when the site moves off the classic Enhanced Data Model runtime.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Concept</th>
+                <th>Classic EDM (today)</th>
+                <th>Static SPA (target)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Rendering</strong></td>
+                <td>Server-rendered HTML built by the portal runtime from Web Pages, Web Templates, and Liquid.</td>
+                <td>Client-rendered React/Vue/Angular/Astro. Static assets ship to the CDN; the browser fetches data via the Dataverse Web API.</td>
+              </tr>
+              <tr>
+                <td><strong>Pages &amp; routes</strong></td>
+                <td>Pages live as <code>web-pages/</code> records with hierarchical parent/child relationships; the portal maps URLs to pages at runtime.</td>
+                <td>Routes are defined in the framework's router (e.g., React Router, Vue Router). The hierarchy is code, not Dataverse data.</td>
+              </tr>
+              <tr>
+                <td><strong>Layouts &amp; composition</strong></td>
+                <td>Web Templates with Liquid <code>{% include %}</code> directives compose the page server-side.</td>
+                <td>Component composition via JSX/SFC/Astro syntax. Shared layouts are AppShell/Layout components, not Liquid includes.</td>
+              </tr>
+              <tr>
+                <td><strong>Reusable content</strong></td>
+                <td>Content Snippets — records in Dataverse, referenced via <code>{{ snippets['name'] }}</code>.</td>
+                <td>Content constants, content modules, or localization resources imported at build time.</td>
+              </tr>
+              <tr>
+                <td><strong>Data access</strong></td>
+                <td>Liquid Dataverse helpers (<code>{% fetchxml %}</code>, <code>{% entityview %}</code>) execute server-side; entity lists/forms read from Dataverse implicitly.</td>
+                <td>Explicit client-side <code>fetch</code> calls to the Power Pages Web API (<code>/_api/&lt;table&gt;</code>) using table permissions and the anti-forgery token from <code>/_layout/tokenhtml</code>.</td>
+              </tr>
+              <tr>
+                <td><strong>Forms</strong></td>
+                <td>Basic Forms / Advanced Forms are server-rendered. Validation, anti-forgery, and CRUD are wired by the portal runtime.</td>
+                <td>Client-side form components (e.g., React Hook Form) backed by Web API <code>POST</code>/<code>PATCH</code> calls. CAPTCHA, attachments, and multi-step flows are explicit caveats.</td>
+              </tr>
+              <tr>
+                <td><strong>Authentication</strong></td>
+                <td>Configured via Site Settings + identity provider records; the portal handles the redirect flow.</td>
+                <td>Wired by <code>/setup-auth</code> — MSAL.js (or framework equivalent), sign-in/sign-out routes, <code>AuthButton</code> in the AppShell, route guards.</td>
+              </tr>
+              <tr>
+                <td><strong>Authorization</strong></td>
+                <td>Web Roles + Table Permissions enforced by the portal runtime; <code>{% if user.roles contains 'X' %}</code> in Liquid.</td>
+                <td>Server-enforced still — table permissions in Dataverse remain the authority. Client-side <code>RequireRole</code> guards are UX hints, not security boundaries.</td>
+              </tr>
+              <tr>
+                <td><strong>Server-side logic</strong></td>
+                <td>Liquid blocks that read privileged context or use server-only helpers.</td>
+                <td><code>/add-server-logic</code> deploys server endpoints; the SPA calls them like any other service.</td>
+              </tr>
+              <tr>
+                <td><strong>Site settings &amp; metadata</strong></td>
+                <td>Aggregate YAML records (<code>sitesetting.yml</code>, <code>webrole.yml</code>, <code>sitemarker.yml</code>) — many records per file.</td>
+                <td>Granular per-record files under <code>.powerpages-site/</code> (one file per setting / role / marker). Same data, different shape.</td>
+              </tr>
+              <tr>
+                <td><strong>Assets &amp; images</strong></td>
+                <td><code>web-files/</code> records with binaries attached; served by the portal runtime.</td>
+                <td>Files copied to <code>public/</code> (or <code>src/assets/</code> for bundler-imported), referenced by static paths or import statements.</td>
+              </tr>
+              <tr>
+                <td><strong>Customization</strong></td>
+                <td>Custom JS sidecars on web pages / lists / forms; jQuery, <code>Page_Validators</code>, portal-runtime globals.</td>
+                <td>First-class component source under <code>src/</code>; standard ESM modules; framework idioms (hooks, composables, signals).</td>
+              </tr>
+              <tr>
+                <td><strong>Deployment</strong></td>
+                <td><code>pac pages download</code> / <code>pac pages upload</code> against Dataverse records.</td>
+                <td><code>npm run build</code> + <code>pac pages upload-code-site</code>; hydrates <code>.powerpages-site/</code> metadata once activated.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="section" id="tab-routes">
         <h2>SPA Routes & Component Mapping</h2>
-        <p class="section-desc">Routes to be implemented in the target SPA, mapped from EDM pages and templates. The <strong>EDM Today</strong> column lists what exists in the classic site; <strong>Target Replacement</strong> lists what each EDM artifact becomes in the SPA.</p>
+        <p class="section-desc">Routes to be implemented in the target SPA, mapped from EDM pages and templates. The <strong>EDM Today</strong> column lists what exists in the classic site; <strong>Target Replacement</strong> lists what each EDM artifact becomes in the SPA; the <strong>Rationale</strong> column explains why the agent recommended that mapping.</p>
         <div class="table-wrapper">
           <table>
             <thead>
@@ -165,6 +256,7 @@ td.comp-cell{vertical-align:top;}
                 <th>EDM Today</th>
                 <th>Target Replacement</th>
                 <th>Data Needs</th>
+                <th>Rationale</th>
                 <th>Migration Confidence</th>
               </tr>
             </thead>
@@ -251,6 +343,7 @@ const TARGET_KIND_META = {
   content:     { label: 'Content',     cls: 'badge-content'      },
   webApi:      { label: 'Web API',     cls: 'badge-webapi'       },
   serverLogic: { label: 'Server Logic',cls: 'badge-server-logic' },
+  staticAsset: { label: 'Static Asset',cls: 'badge-static-asset' },
   manualGap:   { label: 'Manual Gap',  cls: 'badge-manualgap'    }
 };
 
@@ -282,11 +375,12 @@ if (DESIGN_DATA) {
     designHeadline.innerHTML = parts.join('');
   }
   const metaItems = [];
-  if (DESIGN_DATA.framework)  metaItems.push(`<div class="design-meta-item"><strong>Framework:</strong> ${esc(DESIGN_DATA.framework)}</div>`);
-  if (DESIGN_DATA.layout)     metaItems.push(`<div class="design-meta-item"><strong>Layout:</strong> ${esc(DESIGN_DATA.layout)}</div>`);
-  if (DESIGN_DATA.navigation) metaItems.push(`<div class="design-meta-item"><strong>Navigation:</strong> ${esc(DESIGN_DATA.navigation)}</div>`);
-  if (DESIGN_DATA.typography) metaItems.push(`<div class="design-meta-item"><strong>Typography:</strong> ${esc(DESIGN_DATA.typography)}</div>`);
-  if (DESIGN_DATA.motion)     metaItems.push(`<div class="design-meta-item"><strong>Motion:</strong> ${esc(DESIGN_DATA.motion)}</div>`);
+  if (DESIGN_DATA.framework)      metaItems.push(`<div class="design-meta-item"><strong>Framework:</strong> ${esc(DESIGN_DATA.framework)}</div>`);
+  if (DESIGN_DATA.layout)         metaItems.push(`<div class="design-meta-item"><strong>Layout:</strong> ${esc(DESIGN_DATA.layout)}</div>`);
+  if (DESIGN_DATA.navigation)     metaItems.push(`<div class="design-meta-item"><strong>Navigation:</strong> ${esc(DESIGN_DATA.navigation)}</div>`);
+  if (DESIGN_DATA.weblinkLayout)  metaItems.push(`<div class="design-meta-item"><strong>Weblink Layout:</strong> ${esc(DESIGN_DATA.weblinkLayout.charAt(0).toUpperCase() + DESIGN_DATA.weblinkLayout.slice(1))}</div>`);
+  if (DESIGN_DATA.typography)     metaItems.push(`<div class="design-meta-item"><strong>Typography:</strong> ${esc(DESIGN_DATA.typography)}</div>`);
+  if (DESIGN_DATA.motion)         metaItems.push(`<div class="design-meta-item"><strong>Motion:</strong> ${esc(DESIGN_DATA.motion)}</div>`);
   designMetaContainer.innerHTML = metaItems.join('');
 
   const palette = DESIGN_DATA.palette;
@@ -333,12 +427,16 @@ if (ROUTES_DATA && ROUTES_DATA.length > 0) {
     const targetCell = mapping.length === 0
       ? '<span style="color:var(--text-dim);font-style:italic;">&mdash;</span>'
       : mapping.map(renderTargetCell).join('');
+    const rationaleCell = route.rationale && String(route.rationale).trim()
+      ? esc(route.rationale)
+      : '<span style="color:var(--text-dim);font-style:italic;">&mdash;</span>';
     row.innerHTML = `
       <td><code>${esc(route.path)}</code></td>
       <td>${esc((route.sourcePages || []).join(', '))}</td>
       <td class="comp-cell">${edmCell}</td>
       <td class="comp-cell">${targetCell}</td>
       <td>${esc((route.dataNeeds || []).join(', '))}</td>
+      <td class="rationale-cell">${rationaleCell}</td>
       <td>${getConfidenceBadge(route.confidence)}</td>
     `;
     routesBody.appendChild(row);

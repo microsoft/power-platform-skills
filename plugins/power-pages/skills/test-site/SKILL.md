@@ -90,11 +90,11 @@ Store the user-provided URL as `SITE_URL`.
 
 ### Actions
 
-#### 2.1 Resize Browser
+#### 2.1 Use the Maximized Browser Window
 
-Set the browser to a standard desktop viewport:
+The Playwright MCP launcher (`scripts/launch-playwright-mcp.js`) already opens the browser at the user's full screen resolution (window position `0,0`, window size = detected screen width × height). The first navigation in 2.2 uses that maximized window directly — **do not call `browser_resize` here**, because that would shrink the maximized window back to a small viewport and produce empty gutters around the rendered page.
 
-- Use `browser_resize` with **width: 1280, height: 720**.
+Only call `browser_resize` later in the skill if a specific test scenario explicitly requires a different viewport (for example, exercising a responsive breakpoint). For routine site testing, keep the launcher's maximized window.
 
 #### 2.2 Navigate to Site
 
@@ -124,7 +124,7 @@ Set the browser to a standard desktop viewport:
 
 ### Output
 
-- Browser launched at correct viewport size
+- Browser launched maximized at the user's screen resolution (no manual resize)
 - Homepage loaded and verified via snapshot
 - Initial console errors and network requests recorded
 - If the homepage shows a login screen, noted for Phase 3
@@ -616,7 +616,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Resolve site URL | Resolving site URL | Get URL from user input, activation status check, or context |
-| Launch browser and verify initial load | Loading site in browser | Navigate to site, verify homepage loads, capture baseline errors |
+| Launch maximized browser and verify initial load | Loading site in maximized browser | Navigate to site in the launcher's maximized window, verify homepage loads, capture baseline errors |
 | Check authentication requirements | Checking authentication | Detect if site requires auth, handle login if needed |
 | Crawl and test all pages | Crawling site pages | Discover links, navigate each page, verify loads, check console errors |
 | Test API requests | Testing API endpoints | Capture network requests, verify API responses, analyze errors |

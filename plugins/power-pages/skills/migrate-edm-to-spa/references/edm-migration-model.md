@@ -2,6 +2,21 @@
 
 Use this reference during `/migrate-edm-to-spa` Phases 5, 6, and 8. The goal is to turn static PAC records and runtime Playwright observations into a reviewable model that can drive SPA re-authoring.
 
+## Contents
+
+- [Artifact Set](#artifact-set)
+- [Canonical Site Model Shape](#canonical-site-model-shape)
+- [Metadata Translation Model](#metadata-translation-model)
+- [Route Model](#route-model)
+- [Data Dependency Model](#data-dependency-model)
+- [Behavior Model](#behavior-model)
+- [Asset Model](#asset-model)
+- [Evidence Ledger](#evidence-ledger)
+- [Confidence Scoring](#confidence-scoring)
+- [Migration Mapping Matrix](#migration-mapping-matrix)
+- [Drift Report](#drift-report)
+- [Review Standard](#review-standard)
+
 ## Artifact Set
 
 Create these artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
@@ -157,6 +172,47 @@ Use behavior entries for Liquid, custom JavaScript, runtime interactions, and po
   "evidence": ["static:custom-js"]
 }
 ```
+
+## Asset Model
+
+Populate `assets[]` from the Phase 3.6 web-file inventory. Every EDM binary referenced by a migrated route, template, snippet, or CSS file must have an entry so Phase 7.6 can reuse it.
+
+```json
+{
+  "assetId": "hero-banner",
+  "sourcePath": "web-files/hero-banner.png/hero-banner.png",
+  "originalUrl": "/hero-banner.png",
+  "mediaType": "image",
+  "fileExtension": ".png",
+  "byteSize": 184320,
+  "altText": "Customer service team collaborating",
+  "targetPath": "public/hero-banner.png",
+  "targetKind": "staticAsset",
+  "usedBy": [
+    {"kind": "route", "id": "/"},
+    {"kind": "webTemplate", "id": "Home Hero"}
+  ],
+  "confidence": "high",
+  "evidence": ["static:web-file", "static:webtemplate-ref"]
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `assetId` | Stable identifier used by route `componentMapping[]` entries to reference the asset |
+| `sourcePath` | PAC-relative path to the **binary** alongside `*.webfile.yml` |
+| `originalUrl` | EDM URL or `adx_partialurl` the source site exposed the file at |
+| `mediaType` | `image`, `icon`, `document`, `font`, or `other` |
+| `byteSize` | Size of the source binary; used to flag oversized assets and to guard the verification report |
+| `altText` | Accessible name captured from referencing markup, if any |
+| `targetPath` | Planned SPA location (typically `public/<name>` or `src/assets/<name>`) |
+| `targetKind` | Always `staticAsset` for binary reuse |
+| `usedBy` | Routes, templates, snippets, or CSS files that reference the asset |
+| `confidence` | `high` when the reference is direct, `medium` when inferred via Liquid/dynamic URL, `low` for ambiguous matches |
+
+Routes whose source content references one or more assets must include matching `componentMapping[]` entries with `targetKind: "staticAsset"` so the migration plan surfaces the asset reuse to the user.
+
+Assets that exist in the EDM source but are not referenced by any migrated route/template/snippet must still be inventoried, but recorded in `unsupportedOrManual[]` (or `migration-gap-log.md` with `category: "asset-unreferenced"`) rather than silently dropped.
 
 ## Evidence Ledger
 

@@ -27,6 +27,7 @@ const SAMPLE_DATA = {
     mood: 'Professional & Trustworthy',
     layout: 'Spacious',
     navigation: 'Sidebar',
+    weblinkLayout: 'vertical',
     typography: 'Cabinet Grotesk + Fira Code',
     motion: 'Confident slide-ins',
     palette: {
@@ -49,6 +50,7 @@ const SAMPLE_DATA = {
         { edm: 'Snippet "Announcement"',       targetKind: 'content',   target: 'AnnouncementText' },
       ],
       dataNeeds: ['Static assets'],
+      rationale: 'Static landing page with no Liquid logic — direct SPA equivalent per the patterns reference.',
       confidence: 'high',
     },
     {
@@ -60,6 +62,7 @@ const SAMPLE_DATA = {
         { edm: 'Liquid {% fetchxml %} for incident counts', targetKind: 'serverLogic', target: 'getIncidentSummary' },
       ],
       dataNeeds: ['Web API: GET /incidents'],
+      rationale: 'Entity list reproducible via Web API + table permissions; FetchXML aggregate depends on server-only context so it routes to /add-server-logic.',
       confidence: 'high',
     },
     {
@@ -70,6 +73,7 @@ const SAMPLE_DATA = {
         { edm: 'Web API call /incident',     targetKind: 'webApi',    target: 'incidentService.getById' },
       ],
       dataNeeds: ['Web API: GET/PATCH /incidents/:id'],
+      rationale: 'Basic form in ReadOnly mode maps to client-form-readonly per Form Conversion Standards; runtime confirms GET /incidents/(id) shape.',
       confidence: 'medium',
     },
     {
@@ -79,6 +83,7 @@ const SAMPLE_DATA = {
         { edm: 'Liquid block with portal globals',  targetKind: 'manualGap', target: 'undocumented runtime' },
       ],
       dataNeeds: ['Inferred from Liquid block'],
+      rationale: 'Liquid block reads undocumented portal runtime globals; cannot be safely reproduced client-side without re-implementing portal internals.',
       confidence: 'low',
     },
   ],
@@ -504,6 +509,115 @@ test('render-edm-migration-plan handles missing relationships and an empty palet
   assert.match(html, /"name":"Slate"/);
   // Tables without relationships should still produce a valid mermaid block
   assert.match(html, /erDiagram/);
+});
+
+test('render-edm-migration-plan renders DESIGN_DATA.weblinkLayout when present, and omits the row when null', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // The chosen weblink layout from DESIGN_DATA must reach the page payload so the user sees the decision.
+  assert.match(html, /"weblinkLayout":"vertical"/);
+  // The Design System block renders a "Weblink Layout" row (title-cased) when a value is set.
+  assert.match(html, /Weblink Layout:/);
+
+  // When weblinkLayout is absent (source had no weblink-sets/), the payload must carry null so
+  // the runtime guard `if (DESIGN_DATA.weblinkLayout)` skips the row. Verify the data payload —
+  // the template's JS source string always contains the row markup inside a template literal,
+  // so grepping rendered HTML can't distinguish source from output. The data payload is the
+  // single point that drives runtime behaviour.
+  const outputPath2 = path.join(tempDir, 'edm-migration-plan-no-weblinks.html');
+  const noWeblinks = {
+    ...SAMPLE_DATA,
+    DESIGN_DATA: { ...SAMPLE_DATA.DESIGN_DATA, weblinkLayout: null },
+  };
+  fs.writeFileSync(dataPath, JSON.stringify(noWeblinks, null, 2), 'utf8');
+  const result2 = spawnSync(process.execPath, [scriptPath, '--output', outputPath2, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result2.status, 0, result2.stderr || result2.stdout);
+  const html2 = fs.readFileSync(outputPath2, 'utf8');
+  // Payload must carry the null so the runtime guard skips the row.
+  assert.match(html2, /"weblinkLayout":null/);
+  // The runtime metaItems builder must still use a truthy guard so null / undefined skip the row.
+  assert.match(html2, /if\s*\(\s*DESIGN_DATA\.weblinkLayout\s*\)/);
+});
+
+test('render-edm-migration-plan surfaces the AI-generated-content disclaimer near the top of the page', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // The disclaimer must be present, exactly worded, and styled so it's visible above the layout.
+  assert.match(html, /AI-generated content may be incorrect/);
+  assert.match(html, /class="ai-disclaimer"/);
+  // It must sit between the topbar and the layout (so it's the first thing users see after the title).
+  const topbarIdx = html.indexOf('class="topbar"');
+  const disclaimerIdx = html.indexOf('class="ai-disclaimer"');
+  const layoutIdx = html.indexOf('class="layout"');
+  assert.ok(topbarIdx >= 0 && disclaimerIdx > topbarIdx && layoutIdx > disclaimerIdx,
+    'disclaimer must appear between the topbar and the layout');
+});
+
+test('render-edm-migration-plan includes an EDM-vs-SPA comparison table on the Overview tab', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // Heading must be present so users with no SPA background can find the explainer.
+  assert.match(html, /EDM vs\. SPA — What's Different/);
+  // A representative sampling of rows must be there so the table covers the core concepts.
+  assert.match(html, /Server-rendered HTML built by the portal runtime/);
+  assert.match(html, /Liquid Dataverse helpers/);
+  assert.match(html, /Web Roles \+ Table Permissions enforced by the portal runtime/);
+  assert.match(html, /\/add-server-logic/);
+  // The table must sit on the Overview tab, not somewhere else.
+  const overviewIdx = html.indexOf('id="tab-overview"');
+  const tableIdx = html.indexOf("EDM vs. SPA");
+  const routesTabIdx = html.indexOf('id="tab-routes"');
+  assert.ok(overviewIdx >= 0 && tableIdx > overviewIdx && tableIdx < routesTabIdx,
+    'EDM-vs-SPA table must live on the Overview tab, before the Routes tab');
+});
+
+test('render-edm-migration-plan includes a Rationale column for routes', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edm-migration-plan-'));
+  const dataPath = path.join(tempDir, 'data.json');
+  const outputPath = path.join(tempDir, 'edm-migration-plan.html');
+
+  fs.writeFileSync(dataPath, JSON.stringify(SAMPLE_DATA, null, 2), 'utf8');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', dataPath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const html = fs.readFileSync(outputPath, 'utf8');
+  // Header must include the Rationale column so reviewers see *why* each mapping was chosen.
+  assert.match(html, /<th>Rationale<\/th>/);
+  // Rationale strings from SAMPLE_DATA must reach the page payload.
+  assert.match(html, /server-only context so it routes to/);
+  // The renderer must address a rationale-cell class so the column has consistent styling.
+  assert.match(html, /rationale-cell/);
 });
 
 test('render-edm-migration-plan labels the routes confidence column as "Migration Confidence"', () => {

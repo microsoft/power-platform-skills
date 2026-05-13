@@ -2,6 +2,17 @@
 
 Use this reference during `/migrate-edm-to-spa` Phase 2 and Phase 3 to locate and classify records in a PAC-downloaded classic EDM Power Pages site. The structure is based on observed Community Portal V2, Customer Portal V2, Employee Self-Service Portal V2, and FAQ V2 website-data patterns and should be treated as guidance, not as a fixed schema.
 
+## Contents
+
+- [Expected Root Shape](#expected-root-shape)
+- [SPA Metadata Shape After Deployment](#spa-metadata-shape-after-deployment)
+- [Observed Template Variants](#observed-template-variants)
+- [Nested Record and Sidecar Patterns](#nested-record-and-sidecar-patterns)
+- [Static Research Checklist](#static-research-checklist)
+- [High-Risk Indicators](#high-risk-indicators)
+- [Output Expectations](#output-expectations)
+- [EDM-aggregate to SPA-granular mapping](#edm-aggregate-to-spa-granular-mapping) — used by implement Phase 7.3.d
+
 ## Expected Root Shape
 
 A downloaded EDM website-data root commonly contains these files and folders:
@@ -266,3 +277,26 @@ The static analyzer should save:
 - `static-analysis-summary.md`: human-readable readiness and findings summary.
 
 Every finding that influences generated SPA code should include evidence paths and confidence.
+
+---
+
+## EDM-aggregate to SPA-granular mapping
+
+Used by `migrate-edm-to-spa-implement` Phase 7.3.d. EDM exports aggregate many records of the same kind into a single YAML file; the SPA's `.powerpages-site/` is more granular and expects one file per record. Do **not** copy EDM aggregate files directly — split them per the mapping below.
+
+| EDM source shape | SPA `.powerpages-site` target shape |
+|------------------|-------------------------------------|
+| `sitesetting.yml` with many settings | `site-settings/<sanitized-name>.sitesetting.yml`, one file per setting |
+| `webrole.yml` with many roles | `web-roles/<role-name>.webrole.yml`, one file per role |
+| `sitemarker.yml` | `sitemarkers/<marker-name>.sitemarker.yml`, one file per marker |
+| `webpagerule.yml` | `webpage-rules/<rule-name>.webpagerule.yml`, one file per rule |
+| `websitelanguage.yml` | `site-languages/<language-name>.websitelanguage.yml`, one file per language |
+| `publishingstate.yml` | `publishing-states/<state-name>.publishingstate.yml`, one file per state |
+| `websiteaccess.yml` | `website-accesss/<access-name>.websiteaccess.yml`, one file per access record. `website-accesss` reflects the current deployed code-site folder name. |
+| `table-permissions/*.tablepermission.yml` | `table-permissions/*.tablepermission.yml` using SPA/code-site field names |
+
+The field shape can also differ. EDM records often use `adx_`-prefixed keys such as `adx_name`, `adx_value`, and `adx_entitylogicalname`; code-site metadata commonly uses normalized keys such as `name`, `value`, and `entitylogicalname`. Use existing Power Pages scripts and skills when possible so IDs, filenames, field ordering, and normalized schemas are created correctly.
+
+Before writing metadata, save `migration-artifacts/metadata-translation-plan.md`. For each EDM aggregate record, show the source file, source record name, target `.powerpages-site` folder, target file name, action (`create` / `update` / `skip` / `gap`), ID strategy, and confidence. Use FAQ-style EDM exports as the cautionary example: records such as `Webapi/faq_topic/enabled` and `Webapi/faq_topic/fields` live inside one `sitesetting.yml` file in EDM, but must become separate `site-settings/*.sitesetting.yml` files in the SPA metadata folder.
+
+If a metadata item from the EDM source cannot be confidently mapped to the new SPA site, put it in `migration-gap-log.md` instead of copying it silently. Preserve the hydrated SPA baseline files created by `/deploy-site`; only add or update records that are required by the approved migration plan. Never bypass table permissions or imply that client-side role checks enforce data security.

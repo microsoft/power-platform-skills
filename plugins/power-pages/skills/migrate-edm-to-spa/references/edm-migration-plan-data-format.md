@@ -2,6 +2,14 @@
 
 This document defines the JSON data structure required to render `edm-migration-plan.html` via `render-edm-migration-plan.js`.
 
+## Contents
+
+- [Usage](#usage)
+- [Required Keys](#required-keys)
+- [Example Complete JSON](#example-complete-json)
+- [Best Practices](#best-practices)
+- [Error Handling](#error-handling)
+
 ## Usage
 
 ```bash
@@ -92,11 +100,12 @@ Array of SPA routes mapped from EDM pages and templates. Each route includes a t
   "componentMapping": [
     {
       "edm": "<EDM artifact description>",
-      "targetKind": "component | content | webApi | serverLogic | manualGap",
+      "targetKind": "component | content | webApi | serverLogic | staticAsset | manualGap",
       "target": "<SPA replacement name or hand-off label>"
     }
   ],
   "dataNeeds": [<array-of-api-or-service-names>],
+  "rationale": "<one-to-two sentences on why this mapping was chosen>",
   "confidence": "<high|medium|low>"
 }
 ```
@@ -109,6 +118,7 @@ Array of SPA routes mapped from EDM pages and templates. Each route includes a t
 | `content`    | The EDM artifact maps to a content constant, snippet, or copy block (no logic). | `AnnouncementText`, `FaqIntroCopy` |
 | `webApi`     | The EDM behavior is reproduced by a Dataverse Web API service the SPA can call directly with table permissions. | `incidentService.getById`, `contactService.list` |
 | `serverLogic`| The EDM behavior depends on server-only context, privileged access, or server-evaluated business rules and must be migrated via `/add-server-logic`. | `getIncidentSummary`, `evaluateAccessRule` |
+| `staticAsset`| The EDM artifact is a binary asset from `web-files/` (image, icon, document, font) that must be **reused** in the SPA. Use the asset's filename or `assetId` as the target. | `hero-banner.png`, `logo.svg`, `terms.pdf` |
 | `manualGap`  | No automatic SPA replacement is possible; needs manual work. | `undocumented portal globals`, `legacy Liquid block` |
 
 **Example:**
@@ -124,6 +134,7 @@ Array of SPA routes mapped from EDM pages and templates. Each route includes a t
       { "edm": "/_api/incidents call inside Liquid",            "targetKind": "webApi",      "target": "incidentService.list" }
     ],
     "dataNeeds": ["Web API: GET /incidents", "Site setting: webapi/incident/fields"],
+    "rationale": "EDM entity list + jQuery filter sidecar maps cleanly to a list page + filter component backed by `/integrate-webapi`. FetchXML aggregate moves to `/add-server-logic` because it depends on server-only context.",
     "confidence": "high"
   }
 ]
@@ -135,6 +146,7 @@ Array of SPA routes mapped from EDM pages and templates. Each route includes a t
 - `sourcePages`: name(s) of EDM pages this route is derived from; can be empty array for new routes.
 - `componentMapping`: list of `{ edm, targetKind, target }` pairs that show what each EDM artifact becomes in the SPA. Use this to make the EDM-to-SPA replacement visible to the user during review. Use the rules in `edm-to-spa-patterns.md` to assign `targetKind` — server-side Liquid that depends on server-only context, privileged access, or server-evaluated business rules must use `serverLogic` so it is handed off to `/add-server-logic` in Phase 7.3.
 - `dataNeeds`: human-readable list of data services, API calls, or site settings this route requires.
+- `rationale` (**required**): one or two sentences explaining *why* this mapping was chosen — which EDM evidence drove it, which Form Conversion Standard or pattern in `edm-to-spa-patterns.md` it follows, and any caveats. Keep it specific (cite the source artifact, the rule applied, or the runtime signal); avoid generic phrases like "standard mapping". Examples: *"Profile editor is `Edit` mode on `contact` scoped to the signed-in user → `client-form-update` per Form Conversion Standards; field set narrowed to what the EDM form exposed."* — *"Bot embed component reads `VITE_COPILOT_BOT_SCHEMA` from `.env`, value extracted from `botconsumer.yml#adx_botschemaname`."* The rendered Routes table surfaces this column so reviewers can challenge a mapping without re-reading the source.
 - `confidence`: `high` (supported by static + runtime evidence), `medium` (one source), `low` (inferred/ambiguous). The rendered Routes table column header reads **"Migration Confidence"** so users understand the score reflects confidence in the EDM-to-SPA mapping, not data confidence.
   - **High-confidence items** are highlighted in green in the HTML.
   - **Medium-confidence items** are highlighted in yellow/warning color.
@@ -355,6 +367,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
   "mood": "<Professional & Trustworthy | Creative & Playful | Technical & Precise | Elegant & Premium>",
   "layout": "<Spacious|Compact>",
   "navigation": "<Sidebar|Topbar|Minimal>",
+  "weblinkLayout": "<horizontal|vertical|null>",
   "typography": "<font pair description>",
   "motion": "<motion direction description>",
   "palette": {
@@ -378,6 +391,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
   "mood": "Professional & Trustworthy",
   "layout": "Spacious",
   "navigation": "Sidebar",
+  "weblinkLayout": "vertical",
   "typography": "Cabinet Grotesk + Fira Code",
   "motion": "Confident slide-ins",
   "palette": {
@@ -400,6 +414,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
 - `mood`: high-level mood the user picked in Phase 6.1. Pass to `/create-site` verbatim so it skips its own mood prompt.
 - `layout`: visual density derived from the EDM source's information density and the aesthetic. `Compact` for dense data UIs (dashboards, list-heavy portals); `Spacious` for marketing/content sites. Do not ask the user.
 - `navigation`: primary navigation pattern derived from the existing EDM's nav and the aesthetic (Sidebar for deep hierarchies and frequent task switching, Topbar for flat marketing sites, Minimal for landing pages). Do not ask the user.
+- `weblinkLayout`: `"horizontal"` (pill / inline row), `"vertical"` (stacked list), or `null` when the source has no `weblink-sets/`. Captured in Phase 6.1.b by asking the user. Applies to every weblink set the SPA renders — Phase 7.6's link-set component reads this value. If the source has zero weblink sets, this field is `null` and Phase 6.1.b is skipped.
 - `typography`: short label naming the Google Fonts pair derived from the Aesthetic × Mood Mapping table (e.g., `"Cabinet Grotesk + Fira Code"`). Never default to Inter/Roboto/Open Sans/Arial.
 - `motion`: short label describing the motion direction derived from the same mapping table (e.g., `"Subtle fades, minimal"`, `"Energetic staggers"`).
 - `palette.name`: short, descriptive label that reflects the actual derived palette (e.g., `"Charcoal + Copper"`, `"Earth Tones with Terracotta Accent"`). Avoid generic preset names.
@@ -426,6 +441,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
     "mood": "Professional & Trustworthy",
     "layout": "Spacious",
     "navigation": "Sidebar",
+    "weblinkLayout": "vertical",
     "typography": "Cabinet Grotesk + Fira Code",
     "motion": "Confident slide-ins",
     "palette": {
@@ -448,6 +464,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
         { "edm": "Snippet 'Announcement'",     "targetKind": "content",   "target": "AnnouncementText" }
       ],
       "dataNeeds": ["Static assets"],
+      "rationale": "Static landing page with no Liquid logic or Web API calls — direct SPA equivalent. Announcement snippet becomes a content constant per the patterns reference.",
       "confidence": "high"
     },
     {
@@ -459,6 +476,7 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
         { "edm": "{% fetchxml %} for incident counts",     "targetKind": "serverLogic", "target": "getIncidentSummary" }
       ],
       "dataNeeds": ["Web API: GET /incidents", "Site setting: webapi/incident/fields"],
+      "rationale": "Entity list reproducible via Dataverse Web API + table permissions; jQuery filters become a client component; FetchXML aggregate uses server-only context so it migrates via /add-server-logic.",
       "confidence": "high"
     }
   ],
@@ -525,9 +543,9 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
 
 In the skill's Phase 6 (Review Migration Plan), before calling the render script:
 
-1. Capture `DESIGN_DATA` (aesthetic, mood, palette, typography, motion, layout, navigation) by asking the user just two high-level questions and deriving the rest from the design aesthetics reference — see SKILL.md Phase 6.1.
+1. Capture `DESIGN_DATA` (aesthetic, mood, palette, typography, motion, layout, navigation, weblinkLayout) by asking the user just two high-level questions in Phase 6.1 (aesthetic + mood) and one optional question in Phase 6.1.b (weblink layout, only when the source has `weblink-sets/`). Derive the remaining fields from the design aesthetics reference. See SKILL.md Phase 6.1 and 6.1.b.
 2. Extract data from `canonical-site-model.json` built in Phase 5.
-3. Compute `SITE_STATS`. `componentCount` must count unique SPA components only (the unique `target` values where `targetKind` is `component` or `content`). Do not count `serverLogic`, `webApi`, or `manualGap` mappings.
+3. Compute `SITE_STATS`. `componentCount` must count unique SPA components only (the unique `target` values where `targetKind` is `component` or `content`). Do not count `serverLogic`, `webApi`, `staticAsset`, or `manualGap` mappings.
 4. Build `ROUTES_DATA` from the model's route/page inventory. For each route, populate `componentMapping` by pairing every EDM artifact (web template, snippet, entity list, basic/advanced form, custom JS, Liquid block) with its SPA replacement and the right `targetKind`. Server-side Liquid that depends on server-only context, privileged access, or server-evaluated business rules must use `targetKind: "serverLogic"` so it is handed off to `/add-server-logic` in Phase 7.3.
 5. Build `DATAVERSE_DATA` from the model's Dataverse dependency model. Populate `fields[]` and `relationships[]` so the ER diagram in the Data Model tab can render.
 6. Build `SECURITY_DATA` from the model's auth/security model.
