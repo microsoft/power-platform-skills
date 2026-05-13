@@ -10,6 +10,14 @@ Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 
 ### Fixed
 
+- **`--prompt` is now scoped to the upload's role on every `pac model genpage
+  upload` call.** First upload of a new page sends the full page description
+  (from the plan's `## User Requirements`). Every subsequent upload of an
+  existing page — Phase 6.5 PAGEREF resolution, Phase 7.5 fix re-deploy, and
+  the edit flow — sends a **delta-only prompt** describing just what changed
+  in that upload. Previously every upload re-sent the original full
+  description, polluting the page's prompt history. Locked behind a new
+  `common_workflow_assertion` so future drift is caught by the eval suite.
 - **`pac model create` always passes `--solution`.** The PAC CLI help claims
   `--solution` defaults to "the active solution", but in practice the command
   errors out with `"The given solution name is not valid: ()"` when omitted.

@@ -12,7 +12,8 @@
     "Phase 1 (Planner): When the solution question runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
     "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/genpage-plan-schema.md",
-    "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts"
+    "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts",
+    "Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan's ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description"
   ],
   "common_code_assertions": [
     "Generated .tsx is a single file with `export default GeneratedComponent`",
@@ -57,7 +58,8 @@
         "Phase 5b: A relevant sample file is read (e.g., 8-responsive-cards.tsx for card layout)",
         "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
-        "Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources 'account', --prompt, --model, --name, --agent-message, --add-to-sitemap"
+        "Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources 'account', --prompt, --model, --name, --agent-message, --add-to-sitemap",
+        "Phase 6: --prompt value is the FULL page description (from plan's ## User Requirements) — this is the create-step prompt, NOT a delta"
       ]
     },
     {
@@ -112,7 +114,8 @@
         "Edit Phase 5: Orchestrator applies edits inline using Edit tool on <working-dir>/<page-id>/page.tsx",
         "Edit Phase 5: Search implementation uses Fluent UI V9 SearchBox or Input; sort uses column header handlers",
         "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints",
-        "Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap"
+        "Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap",
+        "Edit Phase 6: --prompt value is the user's edit request (the DELTA of changes — 'Add a search bar and column sorting by company name'), NOT a re-statement of the original page description"
       ]
     },
     {
@@ -306,6 +309,7 @@
         "Phase 5c: Cross-page navigation (e.g., candidate list → candidate detail) uses quoted `\"PAGEREF_<filename>\"` placeholders, never invented GUIDs",
         "Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file",
         "Phase 6.5: If any .tsx contains PAGEREF_ tokens, orchestrator builds a filename→page-id map sorted by length desc, replaces quoted `\"PAGEREF_<name>\"` tokens with the matching GUID (word-boundary safe), and re-uploads only affected files with the full update flag set",
+        "Phase 6.5: Re-upload uses a DELTA --prompt (e.g. 'Resolve cross-page navigation placeholders to real page GUIDs') — NOT a copy of the original page description from Phase 6",
         "Phase 6.5: Unresolved PAGEREF tokens (typos, missing siblings) cause an explicit error to the user — never silently shipped",
         "Phase 8: Summary table lists all 3 pages with their files, entities, and deployment status"
       ]

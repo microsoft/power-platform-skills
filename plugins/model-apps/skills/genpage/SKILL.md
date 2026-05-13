@@ -313,7 +313,20 @@ For each `.tsx` file produced, deploy to Power Apps.
 
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
-**For Dataverse entity pages:**
+#### `--prompt` semantics (important)
+
+The `--prompt` value must match the upload's role:
+
+| Upload | `--prompt` content |
+|--------|--------------------|
+| **First upload of a new page** (`--add-to-sitemap`, no `--page-id`) | The **full page description** — summary of the plan's `## User Requirements` for this page |
+| **Any subsequent upload** of an existing page (`--page-id`, no `--add-to-sitemap`) | **Only the delta of changes** in this upload — not a re-statement of the full page description |
+
+Sending the full original prompt on every update pollutes the page's prompt
+history and makes downstream diffs noisy. Update prompts must read like commit
+messages, not requirements docs.
+
+#### For Dataverse entity pages (first upload — create):
 
 ```powershell
 pac model genpage upload `
@@ -321,7 +334,7 @@ pac model genpage upload `
   --code-file <working-dir>/<file>.tsx `
   --name "Page Display Name" `
   --data-sources "entity1,entity2" `
-  --prompt "User's original request summary" `
+  --prompt "<Full page description from plan's ## User Requirements>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was built and any relevant details" `
   --add-to-sitemap
@@ -329,7 +342,9 @@ pac model genpage upload `
 
 **For mock data pages:** Same but omit `--data-sources`.
 
-**For updating existing pages:** Use `--page-id`, omit `--add-to-sitemap`:
+#### For updating existing pages (subsequent upload):
+
+Use `--page-id`, omit `--add-to-sitemap`, and **scope `--prompt` to the delta only**:
 
 ```powershell
 pac model genpage upload `
@@ -337,9 +352,9 @@ pac model genpage upload `
   --page-id <page-id> `
   --code-file <working-dir>/<file>.tsx `
   --data-sources "entity1,entity2" `
-  --prompt "User's original request summary" `
+  --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was built and any relevant details"
+  --agent-message "Description of what was changed in this upload"
 ```
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
@@ -380,10 +395,10 @@ The placeholders let code generation proceed correctly; this phase resolves them
    surface this to the user explicitly — do NOT silently leave the literal string
    in the deployed code. Stop and report which file and which placeholder.
 
-6. Re-upload only the files that had at least one replacement. Use the full update
-   form of `pac model genpage upload` from Phase 6 — include `--app-id`, `--page-id`,
-   `--code-file`, `--data-sources` (if Dataverse), `--prompt`, `--model`,
-   `--agent-message`. Omit `--add-to-sitemap` (the page already exists). Example:
+6. Re-upload only the files that had at least one replacement. Use the update form
+   of `pac model genpage upload` (`--page-id`, no `--add-to-sitemap`). Per the
+   "`--prompt` semantics" rule in Phase 6, this is an **update**, so `--prompt`
+   describes the delta only — not the original page description:
 
    ```powershell
    pac model genpage upload `
@@ -391,9 +406,9 @@ The placeholders let code generation proceed correctly; this phase resolves them
      --page-id <page-id-from-Phase-6> `
      --code-file <working-dir>/<file>.tsx `
      --data-sources "entity1,entity2" `
-     --prompt "User's original request summary" `
+     --prompt "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)" `
      --model "<current-model-id>" `
-     --agent-message "Resolved cross-page navigation placeholders"
+     --agent-message "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.
@@ -497,7 +512,11 @@ visual record for the deployment summary.
 
 #### 7.5 Fix and Re-deploy
 
-If issues are found: fix the code, re-deploy (Phase 6), repeat verification.
+If issues are found: fix the code, re-deploy using the **update form** from
+Phase 6 (`--page-id`, no `--add-to-sitemap`). Per the "`--prompt` semantics"
+rule, `--prompt` for this re-deploy describes the fix delta only — e.g.
+`"Fix sort handler on Name column; correct accidental DataGrid type prop"` —
+not a re-statement of the full page description.
 
 **Common Playwright issues:**
 - "Target page, context or browser has been closed" → retry the navigation

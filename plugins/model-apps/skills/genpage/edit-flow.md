@@ -130,18 +130,23 @@ Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
 
 ## Edit Phase 6: Deploy Updated Page
 
+This is an **update** (existing page-id), so `--prompt` must describe the
+**delta of changes only** — not a re-statement of the original page description.
+See SKILL.md Phase 6 "`--prompt` semantics".
+
 ```powershell
 pac model genpage upload `
   --app-id <app-id> `
   --page-id <page-id> `
   --code-file <working-dir>/<page-id>/page.tsx `
   --data-sources "entity1,entity2" `
-  --prompt "User's edit request summary" `
+  --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed"
+  --agent-message "Description of what was changed in this upload"
 ```
 
-Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in the sitemap).
+Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
+the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 
 ## Edit Phase 7: Verify (Optional)

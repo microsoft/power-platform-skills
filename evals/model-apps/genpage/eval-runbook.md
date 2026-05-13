@@ -20,7 +20,7 @@ How to evaluate the `genpage` skill. Three layers, run in order.
 
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
-- `common_workflow_assertions`: 10 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log)
+- `common_workflow_assertions`: 12 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log, --prompt scoping)
 - `common_code_assertions`: 18 code-quality checks the generated `.tsx` must pass (Fluent UI V9 only, no forbidden patterns, etc.)
 - `evals`: 16 test cases — each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`
 

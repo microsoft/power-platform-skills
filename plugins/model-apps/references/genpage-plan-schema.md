@@ -124,7 +124,7 @@ No entity creation required — all entities already exist.
 | Section | Consumers | Rules |
 |---------|-----------|-------|
 | `# Genpage Plan` | N/A | Title only, no content |
-| `## User Requirements` | Page-builder (for `--prompt` deploy flag context) | Verbatim user input |
+| `## User Requirements` | Orchestrator — used as the `--prompt` value on the **first** `pac model genpage upload` for each new page only. Subsequent uploads (Phase 6.5 PAGEREF re-upload, Phase 7.5 fix re-deploy, edit flow) use delta prompts, NOT this field. | Verbatim user input |
 | `## Working Directory` | All downstream agents | Absolute path, forward slashes on Windows |
 | `## Plugin Root` | Page-builder (to Read references/samples) | Absolute path |
 | `## Environment` | Orchestrator | URL, app decision, languages |
