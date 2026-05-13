@@ -117,22 +117,33 @@ Mark in_progress when starting, completed when done.
 ### Per-table sequence
 
 For each table in dependency order, run the following steps in **strict sequence**
-(do not parallelize within a table — Dataverse metadata propagation is timing-sensitive):
+(do not parallelize within a table — Dataverse metadata propagation is timing-sensitive).
+
+All examples below assume you have these values from the plan's `## Environment`:
+
+```bash
+ENV_URL="<envUrl>"          # e.g. https://aurorabapenv4ab3f.crmtest.dynamics.com
+SOLUTION="<Solution>"        # e.g. Default
+PREFIX="<Publisher Prefix>"  # e.g. new
+```
+
+`--solution "$SOLUTION"` is **mandatory** on every metadata create — see Step 1
+contract above. Pass it on every command.
 
 #### 4a. Create the table
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table.js" \
-  <envUrl> \
-  "<prefix>_<SchemaName>" \
+  "$ENV_URL" \
+  "${PREFIX}_<SchemaName>" \
   "<Display Name>" \
   "<Display Plural>" \
   --description "<desc>" \
   --primary-name "<Primary Column Display>" \
-  --primary-name-logical "<prefix>_name" \
+  --primary-name-logical "${PREFIX}_name" \
   --primary-name-max-length 100 \
   --ownership user \
-  ${solution ? `--solution ${solution}` : ''}
+  --solution "$SOLUTION"
 ```
 
 Parse the JSON output: `{ "ok": true, "logicalName": "...", "schemaName": "...", "metadataId": "..." }`.
@@ -142,52 +153,58 @@ Record `logicalName` and `metadataId` — you'll need them for columns, relation
 
 #### 4b. Add additional columns
 
-For each non-primary column on this table, call `add-column.js`. Examples:
+For each non-primary column on this table, call `add-column.js`. Examples below
+omit `--solution "$SOLUTION"` for brevity but **every call must include it**.
 
 **String:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_email" "Email" string \
+  "$ENV_URL" "<logicalName>" "${PREFIX}_email" "Email" string \
   --max-length 200 --format Email \
   --required-level None \
-  ${solution ? `--solution ${solution}` : ''}
+  --solution "$SOLUTION"
 ```
 
 **Memo (long text):**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_notes" "Notes" memo \
-  --max-length 4000 --format TextArea
+  "$ENV_URL" "<logicalName>" "${PREFIX}_notes" "Notes" memo \
+  --max-length 4000 --format TextArea \
+  --solution "$SOLUTION"
 ```
 
 **Integer / Decimal / Money:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_count" "Count" integer --min 0 --max 10000
+  "$ENV_URL" "<logicalName>" "${PREFIX}_count" "Count" integer \
+  --min 0 --max 10000 --solution "$SOLUTION"
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_amount" "Amount" money --precision 2 --max 1000000
+  "$ENV_URL" "<logicalName>" "${PREFIX}_amount" "Amount" money \
+  --precision 2 --max 1000000 --solution "$SOLUTION"
 ```
 
 **DateTime:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_startdate" "Start Date" datetime \
-  --format DateOnly --behavior UserLocal
+  "$ENV_URL" "<logicalName>" "${PREFIX}_startdate" "Start Date" datetime \
+  --format DateOnly --behavior UserLocal --solution "$SOLUTION"
 ```
 
 **Boolean:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_isactive" "Active" boolean \
-  --true-label "Active" --false-label "Inactive" --default true
+  "$ENV_URL" "<logicalName>" "${PREFIX}_isactive" "Active" boolean \
+  --true-label "Active" --false-label "Inactive" --default true \
+  --solution "$SOLUTION"
 ```
 
 **Picklist (choice column) — options are inline JSON or @file:**
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/add-column.js" \
-  <envUrl> <logicalName> "<prefix>_status" "Status" picklist \
-  --options '[{"value":100000000,"label":"Active"},{"value":100000001,"label":"Inactive"},{"value":100000002,"label":"OnHold"}]'
+  "$ENV_URL" "<logicalName>" "${PREFIX}_status" "Status" picklist \
+  --options '[{"value":100000000,"label":"Active"},{"value":100000001,"label":"Inactive"},{"value":100000002,"label":"OnHold"}]' \
+  --solution "$SOLUTION"
 ```
 
 For large option lists, write the JSON to `<working-dir>/<column>-options.json`
@@ -202,14 +219,15 @@ Once both the referenced and referencing tables exist:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" 1n \
-  <envUrl> \
-  "<prefix>_<referenced>_<prefix>_<referencing>" \
-  "<prefix>_<referencedTable>" \
-  "<prefix>_<referencingTable>" \
-  "<prefix>_<LookupSchemaName>" \
+  "$ENV_URL" \
+  "${PREFIX}_<referenced>_${PREFIX}_<referencing>" \
+  "${PREFIX}_<referencedTable>" \
+  "${PREFIX}_<referencingTable>" \
+  "${PREFIX}_<LookupSchemaName>" \
   "<Lookup Display Name>" \
   --lookup-required None \
-  --cascade-delete RemoveLink
+  --cascade-delete RemoveLink \
+  --solution "$SOLUTION"
 ```
 
 Returns `{ "ok": true, "kind": "1n", "schemaName": "...", "metadataId": "..." }`.
@@ -222,10 +240,11 @@ properties on the child table — the navigation property name (e.g.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-relationship.js" nn \
-  <envUrl> \
-  "<prefix>_<entity1>_<prefix>_<entity2>" \
-  "<prefix>_<entity1>" \
-  "<prefix>_<entity2>"
+  "$ENV_URL" \
+  "${PREFIX}_<entity1>_${PREFIX}_<entity2>" \
+  "${PREFIX}_<entity1>" \
+  "${PREFIX}_<entity2>" \
+  --solution "$SOLUTION"
 ```
 
 #### 4e. Add to solution (if a solution was specified)

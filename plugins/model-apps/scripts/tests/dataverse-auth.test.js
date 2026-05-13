@@ -70,3 +70,24 @@ test('requiredLevel: defaults to None and is mutable', () => {
 test('requiredLevel: respects argument', () => {
   assert.equal(requiredLevel('ApplicationRequired').Value, 'ApplicationRequired');
 });
+
+test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {
+  // Spawn a tiny script that calls emitResult(false, {errors:[...]}) and
+  // verify that stdout contains the JSON payload — not the literal string
+  // "[object Object]". Regression guard for the bulk-insert failure path.
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const libPath = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
+  const code = `
+    const { emitResult } = require(${JSON.stringify(libPath)});
+    emitResult(false, { ok: false, count: 0, ids: [], errors: [{ index: 0, status: 400, message: 'bad row' }] });
+  `;
+  const res = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+  assert.equal(res.status, 1, 'expected exit 1');
+  assert.doesNotMatch(res.stdout, /\[object Object\]/, 'stdout must not be [object Object]');
+  const parsed = JSON.parse(res.stdout.trim());
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.errors.length, 1);
+  assert.equal(parsed.errors[0].message, 'bad row');
+  assert.match(res.stderr, /Operation completed with 1 error/);
+});

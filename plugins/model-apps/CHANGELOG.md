@@ -2,7 +2,7 @@
 
 All notable changes to the **model-apps** plugin.
 
-## 2.1.0 — 2026-05-12
+## 2.1.0 — 2026-05-13
 
 Replaces the Dataverse MCP server + Python SDK fallback in `genpage-entity-builder`
 with a set of plain Node.js scripts that hit the Dataverse Web API directly using
@@ -10,6 +10,22 @@ Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 
 ### Fixed
 
+- **Bulk-insert partial failure now reports structured JSON instead of
+  `[object Object]`.** `emitResult(false, <object>)` previously wrote
+  `String(payload)` to stderr, which dropped per-record error detail that the
+  entity-builder's sample-data step is supposed to surface. The shared helper
+  now emits the JSON payload to stdout (so callers can parse `errors[...]`),
+  writes a one-line summary to stderr, and exits 1. Locked behind a regression
+  test in `scripts/tests/dataverse-auth.test.js`.
+- **`genpage-entity-builder.md` no longer mixes JS template-literal syntax
+  into ```bash``` blocks.** Examples now use shell variables (`$ENV_URL`,
+  `$SOLUTION`, `$PREFIX`) and pass `--solution "$SOLUTION"` on every
+  metadata-create call (matches the "always pass `--solution`" contract that
+  was previously stated in prose but contradicted by the snippets).
+- **`genpage-planner.md` Solution-Selection no longer shells out to
+  `grep`/`awk`/`sed`** to extract the env URL. Those tools aren't reliably
+  present on Windows (this plugin's primary platform). The planner now reuses
+  the env URL it already discovered earlier from `pac org who`.
 - **`--prompt` is now scoped to the upload's role on every `pac model genpage
   upload` call.** First upload of a new page sends the full page description
   (from the plan's `## User Requirements`). Every subsequent upload of an

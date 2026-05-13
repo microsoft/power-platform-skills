@@ -183,9 +183,12 @@ The user-facing **question** about which solution to use is conditional:
 
 #### 1. Resolve the env URL
 
-```bash
-ENV_URL=$(pac org who | grep "Org URL" | awk '{print $3}' | sed 's:/*$::')
-```
+You already ran `pac auth list` / `pac org who` earlier for auth verification —
+reuse the env URL you read from that output (the line `Org URL: https://...`,
+stripped of any trailing slash). Don't try to re-parse it with `grep`/`awk`/
+`sed`; the orchestrator's Phase 2a (when entities need creating) runs
+`scripts/check-auth.js` which already returns `envUrl` in its JSON output,
+and you've stored it in plan-time state.
 
 #### 2. List custom solutions
 

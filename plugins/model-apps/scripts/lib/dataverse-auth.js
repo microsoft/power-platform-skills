@@ -225,16 +225,32 @@ function readJsonArg(raw) {
   return JSON.parse(raw);
 }
 
-/** Writes a JSON result to stdout and exits 0; or writes error to stderr and exits 1. */
+/**
+ * Writes a result to stdout and exits.
+ *   ok=true → JSON payload to stdout, exit 0
+ *   ok=false + Error → message to stderr, exit 1
+ *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
+ *                       details like `errors: [...]`), short note to stderr, exit 1
+ *   ok=false + string → string to stderr, exit 1
+ */
 function emitResult(ok, payload) {
   if (ok) {
     process.stdout.write(JSON.stringify(payload) + '\n');
     process.exit(0);
-  } else {
-    const msg = payload instanceof Error ? payload.message : String(payload);
-    process.stderr.write(msg + '\n');
-    process.exit(1);
   }
+  if (payload instanceof Error) {
+    process.stderr.write(payload.message + '\n');
+  } else if (payload !== null && typeof payload === 'object') {
+    // Partial failure (e.g., bulk insert with some errors). Emit the structured
+    // payload to stdout so callers can parse `errors`, and exit 1 so shells
+    // still treat it as a failure.
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    const n = Array.isArray(payload.errors) ? payload.errors.length : 'unknown';
+    process.stderr.write(`Operation completed with ${n} error(s); see stdout JSON\n`);
+  } else {
+    process.stderr.write(String(payload) + '\n');
+  }
+  process.exit(1);
 }
 
 module.exports = {

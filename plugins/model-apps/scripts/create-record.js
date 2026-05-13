@@ -2,7 +2,7 @@
 
 // Creates one or many records in a Dataverse table via Web API.
 // Single record  -> POST /<entitySet>
-// Many records   -> OData $batch (multipart/mixed) — up to 1000 per batch
+// Many records   -> OData $batch (multipart/mixed); default 100 per batch, max 1000
 //
 // Usage:
 //   node create-record.js <envUrl> <entitySet> --body <json|@path>

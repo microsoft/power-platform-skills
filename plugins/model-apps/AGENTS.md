@@ -113,7 +113,7 @@ TypeScript type definitions generated from Dataverse metadata. Contains entity t
 After modifying this plugin:
 
 1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/genpage`
-3. Verify tool restrictions work (should only allow pac, powershell, node commands)
-4. Test with both Dataverse entity pages and mock data pages
+2. Run `node --test plugins/model-apps/scripts/tests/*.test.js` (must pass)
+3. Test skill invocation with `/genpage`
+4. Test with both Dataverse entity pages and mock data pages (smoke + edit)
 5. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)

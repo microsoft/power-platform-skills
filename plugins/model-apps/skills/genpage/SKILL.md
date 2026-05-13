@@ -221,11 +221,6 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 **For mock data pages only:** Skip this phase.
 
-<!-- Phase 4.5 (npm install + extract icon list) has been removed.
-     A pre-generated `references/verified-icons.txt` ships with the plugin.
-     Page-builders read it directly from ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt — no runtime install needed.
-     To refresh after bumping @fluentui/react-icons: run scripts/regenerate-verified-icons.js. -->
-
 
 ### Phase 5: Build Pages (Parallel)
 
