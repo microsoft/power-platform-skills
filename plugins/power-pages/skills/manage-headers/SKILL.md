@@ -146,16 +146,27 @@ After all changes are applied, offer to deploy: "Ready to deploy these changes? 
 
 ### 5.1 Review mode
 
-In **review mode**, write `<REVIEW_DIR>/manage-headers.json` with:
+First, read the configured `HTTP/*` site settings (from Step 2 — you already have them). Then write `<REVIEW_DIR>/header-annotations.json` with a plain-language description for each header and, when the configured value has a genuine issue (missing critical directive, weak value), a suggested fix. The transform script no longer hardcodes header descriptions — they come from you.
 
-- `REPORT_TITLE` — `"Security Headers"`
-- `REPORT_DESC` — short description naming the site
-- `SITE_NAME` — site display name
-- `SUMMARY` — 2–3 sentences in plain language
-- `FINDINGS_DATA` — array of findings. Assess importance from context — compare each header's current value against the recommended value in `headers-reference.md`.
-- `DETAILS_DATA` — `{ label: 'Headers', kind: 'table', columns: ['Setting', 'Value', 'Status'], rows: [...] }`
+```json
+{
+  "headers": {
+    "HTTP/<HeaderName>": { "description": "What this header does, in plain language.", "fix": "Optional fix if the configured value has a genuine issue." }
+  }
+}
+```
 
-Then stop — the orchestrating skill handles presentation.
+Use `references/headers-reference.md` for authoritative descriptions and validation rules. Surface a `fix` **only** when the value has a real problem — do not editorialize on every header.
+
+Then run the transform:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --annotations "<REVIEW_DIR>/header-annotations.json"
+```
+
+Write the stdout to `<REVIEW_DIR>/manage-headers.json` and stop. The transform emits `{ status, findings, details }`; the orchestrating skill handles presentation.
 
 ### 5.2 Present summary
 
@@ -178,7 +189,6 @@ If a natural follow-up exists based on findings, suggest it. If no meaningful fo
 ## Constraints
 
 - **Plain language** — MUST NOT use technical jargon with the user. Explain header names using everyday language.
-- **Reason over the data directly** — read YAML files, identify gaps, compose CSP directives, and recommend changes using your own analysis. Do not rely on scripts for classification.
 - **headers-reference.md is the source of truth** — recommended values and the recognized header catalogue live there. Read it before assessing.
 - **Context-aware interactions** — every recommendation MUST reflect the site's actual configuration and usage:
   - Read the site's source files, integrations, and auth setup before recommending any value.
@@ -195,5 +205,5 @@ If a natural follow-up exists based on findings, suggest it. If no meaningful fo
 
 ## References
 
-- `references/headers-reference.md` — recognized header catalogue, recommended values, CSP composition rules, runtime sources. Read before Step 2 (inspect) and Step 3 (assess).
+- `references/headers-reference.md` — recognized header catalogue, recommended values, CSP composition rules, runtime sources. Read before Step 2 (inspect) and Step 3 (assess) in **interactive** mode.
 - `references/commands.md` — shared `create-site-setting.js` usage. Read at Step 4 (apply) when creating new settings.

@@ -161,55 +161,46 @@ Run polling with `run_in_background: true` so the user can keep working. The scr
 
 ## 5. Fetch and summarize
 
-### 5.1 Fetch the report
+### 5.1 Fetch and transform the report
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId "<PORTAL_ID>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId "<PORTAL_ID>"
 ```
 
-Parse the stdout JSON. `{ "status": "ok", "body": { ... } }` returns the full report. `{ "status": "empty" }` means no completed report — record an `info` finding explaining this and continue.
+Parse the stdout JSON. `{ "status": "empty" }` means no completed report — record a single `info` finding explaining this and continue. Otherwise the stdout has `findings` and `details`. See `references/scan-reference.md` for the `Risk` → severity mapping the script applies.
 
-### 5.2 Normalize findings
+### 5.2 Review mode
 
-Read `references/scan-reference.md` for the report shape, alert fields, risk values, and severity mapping (including how to handle `RulePassed`, `RuleNotRun`, and `RuleTimedOut`).
+In **review mode**, skip the HTML report and write the transform stdout to `<REVIEW_DIR>/scan-site.json`. Then stop. The transform emits `{ status, findings, details }`; the orchestrating skill handles presentation.
 
-For every finding, write:
-- `title` — the alert name in plain language
-- `severity` — from the mapping in `scan-reference.md`
-- `details` — the alert description
-- `fix` — the alert mitigation
-- `location` — the URL or endpoint when available
-
-### 5.3 Review mode
-
-In **review mode**, skip the HTML report — write `<REVIEW_DIR>/scan-site.json` with:
-
-- `REPORT_TITLE` — `"Live Site Scan"`
-- `REPORT_DESC` — short description naming the site
-- `SITE_NAME` — site display name
-- `SUMMARY` — 2–3 sentences in plain language
-- `FINDINGS_DATA` — array of findings as defined above. Assess severity from the API `Risk` values — do not invent severities the API does not produce.
-- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Started', value: '<StartTime>' }, { key: 'Ended', value: '<EndTime>' }, { key: 'Rules evaluated', value: '<TotalRuleCount>' }] }`
-
-Then stop — the orchestrating skill handles presentation.
-
-### 5.4 Render HTML report
+### 5.3 Render HTML report
 
 Skip in **review mode**.
 
-The shared render script requires `--data <file>`. Write the scan data JSON to the system temp directory, render, then delete immediately:
+Render uses the same shared template as the consolidated security review. Build a single-section review-data payload, then render:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" --data "<system-temp>/site-scan-data.json" --output "<PROJECT_ROOT>/docs/site-scan.html"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
+  --reportName "Site Scan" \
+  --inputDir "<TEMP_DIR>" \
+  --siteName "<SITE_NAME>" \
+  --goalLabel "Live Site Scan" \
+  --scopeLabel "<SCOPE_LABEL>" \
+  --summary "<SUMMARY_TEXT>" \
+  --output "<TEMP_DIR>/data.json"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
+  --data "<TEMP_DIR>/data.json" \
+  --output "<PROJECT_ROOT>/docs/site-scan-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
-Delete `<system-temp>/site-scan-data.json` after the render succeeds. Open the rendered HTML in the browser.
+`<TEMP_DIR>` should contain only `scan-site.json` (the transform output from Step 5.1) — `build-review-data.js` ignores intermediate files. The filename **must** include the local timestamp (e.g., `site-scan-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render succeeds. Open the rendered HTML in the browser.
 
-### 5.5 Present summary
+### 5.4 Present summary
 
 Plain-language summary in the chat: total findings, count by severity, and what changed since the last scan if available. Do not lead with technical names.
 
-### 5.6 Record skill usage
+### 5.5 Record skill usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
@@ -238,7 +229,6 @@ Suggest only the skills that match findings actually present in the report. If a
 - **Plain language** — MUST NOT use technical jargon with the user. Use everyday language; explain the technical name only when asked.
 - **Read-only** — this skill only runs scans and reads results. It never enables WAF, deletes scans, or changes site configuration.
 - **Background long-running calls** — start the scan, then poll via `run_in_background: true` so the user can continue working.
-- **Severity comes from `Risk`** — MUST map findings using the values in `scan-reference.md`. Never invent severity buckets the API does not produce.
 - **Context-aware interactions** — every recommendation MUST reflect the site's current state:
   - Never offer "Start a new scan" while one is already running.
   - Never offer "Show latest results" when no completed report exists.

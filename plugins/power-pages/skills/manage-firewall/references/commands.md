@@ -11,6 +11,7 @@ Reference for the helper scripts under `scripts/`. All scripts use the shared po
 - [`disable.js`](#disablejs)
 - [`set-rules.js`](#set-rulesjs)
 - [`delete-rules.js`](#delete-rulesjs)
+- [`transform-firewall.js`](#transform-firewalljs)
 - [Common error catalogue](#common-error-catalogue)
 - [Body schema](#body-schema)
 
@@ -198,6 +199,39 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" --po
 ```
 
 The deletion is asynchronous; the response is `202 Accepted`. To confirm the change, re-run `get-rules.js` after a short delay.
+
+---
+
+## `transform-firewall.js`
+
+Transforms `get-status.js` and `get-rules.js` stdout into the unified findings shape used by the consolidated security review. Read-only — does not call the service.
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" --statusFile <status-file> --rulesFile <rules-file>
+```
+
+### Parameters
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--statusFile` | Yes | Path to a saved `get-status.js` stdout JSON file. |
+| `--rulesFile` | Yes | Path to a saved `get-rules.js` stdout JSON file. |
+
+### Response (stdout)
+
+```json
+{ "status": "ok", "findings": [ ] }
+```
+
+…or, when the firewall is not available for the site:
+
+```json
+{ "status": "unsupported", "findings": [ ] }
+```
+
+Each finding has the inventory shape `{ id, title, tag, details }` — no `severity` (the section is informational; the orchestrator does not roll these up into severity totals).
 
 ---
 

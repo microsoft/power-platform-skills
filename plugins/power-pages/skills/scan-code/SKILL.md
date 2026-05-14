@@ -107,12 +107,12 @@ Both tools accept custom rules. Do not proactively offer — only use when the u
 
 ## 3. Run scans
 
-Run the selected tools. Both scripts output normalized JSON to stdout.
+Save each tool's **raw** JSON output to a temporary file. The transform script in Step 4 normalizes them.
 
 ### Static analysis (opengrep)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" --projectRoot "<PROJECT_ROOT>" --rulesets "<comma-separated-rulesets>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-opengrep.js" --projectRoot "<PROJECT_ROOT>" --rulesets "<comma-separated-rulesets>" > "<TEMP_DIR>/opengrep.json"
 ```
 
 Pass the rulesets for the chosen depth (Basic or Advanced). Append any user-provided custom rulesets. Run with `run_in_background: true` for large projects.
@@ -120,12 +120,21 @@ Pass the rulesets for the chosen depth (Basic or Advanced). Append any user-prov
 ### Dependency / secret / license scanning (trivy)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" --projectRoot "<PROJECT_ROOT>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/run-trivy.js" --projectRoot "<PROJECT_ROOT>" > "<TEMP_DIR>/trivy.json"
 ```
 
 `--licenseFull` is on by default — source code headers and LICENSE files are scanned alongside package metadata. Run with `run_in_background: true` for large projects.
 
-Parse each tool's stdout JSON. The `findings` array in each result contains normalized objects with `id`, `severity`, `title`, `location`, `tag`, `details`, and optionally `fix` and `category`.
+### Normalize
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-code/scripts/transform-scan-code.js" \
+  --opengrepFile "<TEMP_DIR>/opengrep.json" \
+  --trivyFile "<TEMP_DIR>/trivy.json" \
+  --projectRoot "<PROJECT_ROOT>"
+```
+
+Pass only the files for tools that actually ran. Stdout has the unified `{ status, findings }` shape.
 
 ---
 
@@ -133,36 +142,36 @@ Parse each tool's stdout JSON. The `findings` array in each result contains norm
 
 ### 4.1 Review mode
 
-In **review mode**, write `<REVIEW_DIR>/scan-code.json` with:
-
-- `REPORT_TITLE` — `"Code & Dependency Scan"`
-- `REPORT_DESC` — short description naming the site
-- `SITE_NAME` — site display name
-- `SUMMARY` — 2–3 sentences in plain language
-- `FINDINGS_DATA` — merged findings from both tools. Use the severity values from the tool output directly.
-- `DETAILS_DATA` — `{ label: 'Scan details', kind: 'kv', entries: [{ key: 'Opengrep version', value: '<version>' }, { key: 'Trivy version', value: '<version>' }, { key: 'Files scanned', value: '<count>' }] }`
-
-Then stop — the orchestrating skill handles presentation.
+In **review mode**, write the `transform-scan-code.js` stdout to `<REVIEW_DIR>/scan-code.json`. Then stop — the orchestrating skill handles presentation.
 
 ### 4.2 Render HTML report
 
 Skip in **review mode**.
 
-Write the merged data JSON to the system temp directory, render via the shared script, then delete the temp file:
+Render uses the same shared template as the consolidated security review. Build a single-section review-data payload, then render:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-scan-report.js" --data "<system-temp>/code-scan-data.json" --output "<PROJECT_ROOT>/docs/code-scan.html"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
+  --reportName "Code Scan" \
+  --inputDir "<TEMP_DIR>" \
+  --siteName "<SITE_NAME>" \
+  --goalLabel "Code & Packages scan" \
+  --scopeLabel "<SCOPE_LABEL>" \
+  --summary "<SUMMARY_TEXT>" \
+  --output "<TEMP_DIR>/data.json"
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
+  --data "<TEMP_DIR>/data.json" \
+  --output "<PROJECT_ROOT>/docs/code-scan-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
-Delete `<system-temp>/code-scan-data.json` after the render succeeds. Open the rendered HTML in the browser.
+`<TEMP_DIR>` should contain only `scan-code.json` (the transform output from Step 3) — `build-review-data.js` ignores intermediate files. The filename **must** include the local timestamp (e.g., `code-scan-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the render succeeds. Open the rendered HTML in the browser.
 
 ### 4.3 Present summary
 
 Skip in **review mode**.
 
 Plain-language summary: total findings, count by category (code patterns, vulnerable packages, secrets, licenses), and what the user should look at first.
-
-For each finding, write a `reasoning` line that explains the issue to a non-technical reader. Use the agent's own knowledge of the rule or advisory — do not just copy the tool's raw text.
 
 ### 4.4 Record skill usage
 
@@ -187,7 +196,6 @@ If no meaningful follow-up exists, end the skill.
 
 - **Plain language** — MUST NOT use technical jargon with the user. Never use words like opengrep, trivy, OWASP, CWE, static analysis, SAST, or ruleset in user-facing text. Use everyday language like "check your code for security problems", "check your packages for known issues", "thorough check", "quick check". Explain the technical name only when the user asks.
 - **Background long-running calls** — run both tools via `run_in_background: true` for large projects.
-- **Tool output is the source of truth** — use the severity values from the tool output directly. Do not remap or invent severity buckets.
 - **Context-aware interactions** — recommendations MUST reflect the site's actual scan results. Do not present generic advice.
 - **Recommendations MUST NOT break the site** — when suggesting fixes for code findings, verify that the fix does not introduce regressions.
 - **NEVER recommend broadening security** — if a finding suggests tightening (e.g., removing a hard-coded secret), do not suggest keeping it for convenience.

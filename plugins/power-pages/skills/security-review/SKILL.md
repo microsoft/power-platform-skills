@@ -35,7 +35,7 @@ The conversation always follows the same seven steps. Each step maps to a row in
 2. **Choose scope and depth** — one follow-up for code-and-config; release defaults to all checks at advanced depth; monitor skips this step
 3. **Confirm and start** — show a one-line plan, give the user a chance to back out
 4. **Scan in progress** — run the matching skills, surface progress
-5. **Results summary** — totals, top findings
+5. **Results summary** — totals across all findings
 6. **Findings and remediation** — group findings by section, offer to fix
 7. **Next steps and guidance** — concrete recommendations, link the next action
 
@@ -99,7 +99,7 @@ If the folder already exists from a previous interrupted run, delete its content
 
 ### 1.3 Determine the docs output path
 
-The final HTML lives at `<PROJECT_ROOT>/docs/security-review.html`. If that file already exists, append a date suffix (`security-review-2026-04-29.html`).
+The final HTML always lives at `<PROJECT_ROOT>/docs/security-review-<YYYY-MM-DD-HHMMSS>.html` using the local timestamp at the start of the run (e.g. `security-review-2026-05-14-053805.html`). Always include the timestamp — do not use a bare `security-review.html` name. This keeps each run's report distinct.
 
 ---
 
@@ -195,14 +195,16 @@ Example subagent call:
 ```
 Agent({
   description: "Run scan-code",
-  prompt: "Invoke the skill `scan-code` with argument `--review <SYSTEM_TEMP>/security-review/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write findings to <SYSTEM_TEMP>/security-review/scan-code.json in the section data format. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  prompt: "Invoke the skill `scan-code` with argument `--review <SYSTEM_TEMP>/security-review/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write the **transform script stdout verbatim** to <SYSTEM_TEMP>/security-review/scan-code.json. Do NOT synthesize, augment, or re-classify the findings. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
   run_in_background: true
 })
 ```
 
+**Verbatim rule:** the subagent's output JSON must contain only the findings emitted by the skill's transform script. The orchestrator must not append findings, rewrite titles, add severity, or otherwise editorialize.
+
 ### 4.1.2 Expected output
 
-After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json` matching the [section data format](references/section-data-format.md):
+After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json`. Each file has the shape `{ status, findings, details? }` produced by the skill's transform script:
 
 ```text
 <SYSTEM_TEMP>/security-review/
@@ -215,17 +217,41 @@ After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-revie
 
 If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
 
+### 4.1.3 Severity policy
+
+Only findings that come from a tool that genuinely outputs severity may carry a `severity` field:
+
+| Section | Source | Severity allowed? |
+|---------|--------|-------------------|
+| `scan-code` | opengrep, trivy | Yes |
+| `scan-site` | deep-scan (ZAP) | Yes |
+| `manage-headers` | `transform-headers.js` (inventory) | **No** |
+| `manage-firewall` | `transform-firewall.js` (inventory) | **No** |
+| `audit-permissions` | LLM audit | **No** |
+| `setup-auth` | YAML inspection | **No** |
+
+For inventory sections, do **not** add `severity` to findings — not even `info`. The subagent and orchestrator must write the transform output **verbatim** without inserting opinionated severity-bearing findings.
+
+### 4.1.4 Annotations policy (plain-language text)
+
+The transform scripts for `manage-firewall` and `manage-headers` produce only structured raw data — they do **not** hardcode plain-language descriptions. The subagent must generate an annotations JSON file and pass it to the transform via `--annotations`. The annotations supply:
+
+- Plain-language description per rule / per header
+- Optional suggested fix when a genuine issue is present
+
+See each skill's `SKILL.md` § 5.1 for the annotation file shape. The agent's job is to write accurate, terse descriptions based on the raw data — not to invent severities or fabricate issues.
+
 ### 4.2 Skills without `--review` mode
 
 `audit-permissions` and `setup-auth` do not support `--review`. Handle them inline (not as background subagents):
 
-- **audit-permissions** — invoke via the `Skill` tool (not `Agent`). After it completes, read its output and write a translated JSON file to `<SYSTEM_TEMP>/security-review/audit-permissions.json` in the skill review-mode format (`REPORT_TITLE`, `FINDINGS_DATA`, etc.).
+- **audit-permissions** — invoke via the `Skill` tool (not `Agent`). The skill audits **both web roles and table permissions** — capture both in its output. After it completes, read its output and write `<SYSTEM_TEMP>/security-review/audit-permissions.json` in the unified `{ status, findings, details? }` shape (mapping each audit finding into the common finding fields: `id`, `title`, `tag`, `location`, `details`, `fix`). **Do NOT include a `severity` field** — audit-permissions findings are inventory, not tool-output severities.
 - **setup-auth** — do not invoke as a skill. Instead, read `.powerpages-site/site-settings/` YAML files directly and check for:
   - identity provider configured? (`Authentication/OpenIdConnect/*/Authority`)
   - profile redirect disabled? (`Authentication/Registration/ProfileRedirectEnabled = false`)
   - cookie SameSite setting? (`HTTP/SameSite/Default`)
 
-Write the resulting findings to `<SYSTEM_TEMP>/security-review/setup-auth.json` in the same format.
+Write the resulting findings to `<SYSTEM_TEMP>/security-review/setup-auth.json` in the same format. **Do NOT include a `severity` field** on these findings — see § 4.1.3.
 
 ### 4.3 Status updates
 
@@ -235,90 +261,26 @@ Tell the user that all checks are running in parallel. As each subagent complete
 
 ## 5. Build the consolidated report
 
-### 5.1 Read and translate section data
+### 5.1 Consolidate
 
-Load every JSON file in `<SYSTEM_TEMP>/security-review/`. Skills write review-mode JSON with keys `REPORT_TITLE`, `REPORT_DESC`, `SITE_NAME`, `SUMMARY`, `FINDINGS_DATA`, `DETAILS_DATA`. Translate each into the [section data format](references/section-data-format.md):
-
-| Skill key | Section data key |
-|---------------|-----------------|
-| `REPORT_TITLE` | `label` |
-| `REPORT_DESC` | `description` |
-| `FINDINGS_DATA` | `findings` |
-| `DETAILS_DATA` | `details` |
-
-Derive `id` from the filename (e.g., `scan-code.json` → `"code-scan"`). Pick an `icon` per section. Skip files marked `status: "skipped"` after capturing their reason for the per-section placeholder.
-
-### 5.2 Compute totals
-
-Count `critical`, `warning`, `info`, and `pass` findings across all sections.
-
-### 5.3 Pick top findings
-
-Choose up to five findings for the Overview's "Top findings" list. Prioritize critical findings, break ties with the section order: code → site → headers → firewall → permissions → auth.
-
-### 5.4 Write next-step guidance
-
-Generate up to four concrete next steps in plain language. Examples:
-
-- "Fix the three critical items in **Browser headers** before publishing."
-- "Run a thorough live-site scan once the headers are deployed."
-- "Add a rate-limit rule for sign-in pages."
-
-The agent should reason about which next step is most valuable per case rather than picking from a hard-coded list.
-
-### 5.5 Build the data file
-
-Write the consolidated data to `<SYSTEM_TEMP>/security-review/security-review-data.json`:
-
-```json
-{
-  "SITE_NAME": "<site name>",
-  "GOAL_LABEL": "<plain-language goal label>",
-  "SCOPE_LABEL": "<plain-language scope label>",
-  "GENERATED_AT": "<YYYY-MM-DD HH:MM>",
-  "REVIEW_DATA": {
-    "summary": "<2-4 plain-language sentences>",
-    "totals": {
-      "critical": 0,
-      "warning": 0,
-      "info": 0,
-      "pass": 0
-    },
-    "topFindings": [
-      <findingObj>,
-      ...
-    ],
-    "sections": [
-      {
-        "id": "code-scan",
-        "icon": "▦",
-        "label": "Code & Packages",
-        "description": "Review of source files and packages.",
-        "findings": [
-          <findingObj>,
-          ...
-        ],
-        "details": {
-          "kind": "kv",
-          "label": "Tools used",
-          "entries": [
-            ...
-          ]
-        }
-      }
-      // … one entry per section
-    ],
-    "nextSteps": [
-      "..."
-    ],
-  }
-}
-```
-
-### 5.6 Render the master HTML
+Write up to four plain-language next-step recommendations as a JSON string array to `<SYSTEM_TEMP>/security-review/next-steps.json`. Compose a 2–4 sentence plain-language `summary` of the overall state.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/security-review/scripts/render-review.js" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
+  --reportName "Security Review" \
+  --inputDir "<SYSTEM_TEMP>/security-review/" \
+  --siteName "<SITE_NAME>" \
+  --goalLabel "<GOAL_LABEL>" \
+  --scopeLabel "<SCOPE_LABEL>" \
+  --summary "<SUMMARY_TEXT>" \
+  --nextStepsFile "<SYSTEM_TEMP>/security-review/next-steps.json" \
+  --output "<SYSTEM_TEMP>/security-review/security-review-data.json"
+```
+
+### 5.2 Render the master HTML
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
   --output "<DOCS_PATH>" \
   --data "<SYSTEM_TEMP>/security-review/security-review-data.json"
 ```
@@ -370,5 +332,4 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 ## References
 
-- `references/section-data-format.md` — the JSON shape every section uses
 - `references/flow.md` — the seven-step conversation in detail

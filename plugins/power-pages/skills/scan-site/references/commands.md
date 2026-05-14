@@ -20,6 +20,7 @@ Every script in this skill can exit with the following codes. Script-specific co
 - [`start-deep-scan.js`](#start-deep-scanjs)
 - [`poll-deep-scan.js`](#poll-deep-scanjs)
 - [`get-latest-report.js`](#get-latest-reportjs)
+- [`transform-report.js`](#transform-reportjs)
 - [Common error catalogue](#common-error-catalogue)
 - [Operating notes](#operating-notes)
 
@@ -211,6 +212,40 @@ See `scan-reference.md` for the full field-level schema of the report body.
 | `400 / A001`        | Site not found. |
 | `400 / A010`        | Invalid input. |
 | `500 / A009`        | Service-side failure. |
+
+---
+
+## `transform-report.js`
+
+Transforms a deep-scan report into the unified findings shape used by the consolidated security review.
+
+### Usage
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId <portal-id>
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --reportFile <report-file>
+```
+
+### Parameters
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--portalId` | One of the two | Power Platform API portalId. Fetches the latest report directly. |
+| `--reportFile` | One of the two | Path to a previously saved raw report JSON. Skips the API call. |
+
+### Response (stdout)
+
+```json
+{ "status": "ok", "findings": [ ], "details": { "kind": "kv", "label": "Scan details", "entries": [ ] } }
+```
+
+…or, when no completed scan exists:
+
+```json
+{ "status": "empty", "findings": [], "details": {} }
+```
+
+Each finding: `{ id, severity, category?, title, tag, location?, details, fix? }`. See `scan-reference.md` § "Severity mapping" for how `Risk` and `RuleStatus` map to `severity`.
 
 ---
 

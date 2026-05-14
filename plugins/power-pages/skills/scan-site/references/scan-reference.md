@@ -120,16 +120,17 @@ There is no `Critical` value — `3` (High) is the maximum severity returned.
 
 ## Severity mapping
 
-When normalizing alerts into the unified report format, map each alert `Risk` to a unified severity that matches the API values:
+`transform-report.js` maps each alert `Risk` to a finding `severity`, mirroring the Power Pages Studio classification:
 
-| Risk value | Unified severity |
-|------------|------------------|
-| `3` (High) | `high` |
-| `2` (Medium) | `medium` |
-| `1` (Low) | `low` |
-| `0` (Informational) | `info` |
+| Risk value | Studio label | `severity` |
+|------------|--------------|------------|
+| `3` (High) | Critical | `critical` |
+| `2` (Medium) | Warning | `warning` |
+| `1` (Low) | Warning | `warning` |
+| `0` (Informational) | Info | `info` |
+| missing | Warning | `warning` |
 
-For rules with `RuleStatus: "RulePassed"` and no alerts, treat as `pass`. Treat `RuleNotRun` and `RuleTimedOut` as `info` and note the status in the finding text.
+`RulePassed` → `pass`. `RuleNotRun` / `RuleTimedOut` → `warning`.
 
 ## Scan progress
 

@@ -188,9 +188,35 @@ After completion, re-run status and rules calls to verify the new state.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js"  --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
+```
+
+After capturing the raw output, **read both files** and write `<REVIEW_DIR>/firewall-annotations.json` with plain-language descriptions of the state and each rule (the transform script no longer hardcodes these — they come from you):
+
+```json
+{
+  "state": {
+    "description": "Plain-language explanation of what \"<value>\" means — is the firewall actively filtering requests, or not?",
+    "fix": "Optional — include only if the state genuinely needs action."
+  },
+  "rules": {
+    "<RuleName>": { "description": "What this rule does, in plain language.", "fix": "Optional fix if the rule has a genuine issue." }
+  }
+}
+```
+
+Power Pages WAF state semantics (use these when writing the state description — do not invent meanings):
+- `Created` — WAF is enabled. The firewall is active and filtering requests.
+- `Disabled` — WAF is not enabled and no firewall policy exists. The site is unprotected.
+- `Enabling` / `Disabling` — operation in progress; wait.
+- `Failed` — last enable/disable operation failed.
+
+Then run the transform:
+
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" \
   --statusFile "<REVIEW_DIR>/firewall-status.json" \
-  --rulesFile  "<REVIEW_DIR>/firewall-rules.json"
+  --rulesFile  "<REVIEW_DIR>/firewall-rules.json" \
+  --annotations "<REVIEW_DIR>/firewall-annotations.json"
 ```
 
 Write the transform stdout to `<REVIEW_DIR>/manage-firewall.json` and stop. The transform emits `{ status, findings }`; the orchestrating skill handles presentation.
