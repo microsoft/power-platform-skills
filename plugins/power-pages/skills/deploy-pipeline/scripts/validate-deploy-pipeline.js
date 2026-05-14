@@ -1,42 +1,43 @@
 #!/usr/bin/env node
 
-// Validates that deploy-pipeline completed: checks .last-deploy.json for required fields.
+// Validates that deploy-pipeline completed: checks docs/alm/last-deploy.json for required fields.
 // Blocks if status is "Failed" — a failed deployment requires investigation before retrying.
 // Gracefully exits 0 when no deploy marker is found (not a deploy-pipeline session).
 
 const fs = require('fs');
 const { approve, block, runValidation, findProjectRoot, findPath, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
+const { almPath } = require('../../../scripts/lib/alm-paths');
 
 runValidation(async (cwd) => {
   if (readDeferralMarker(findProjectRoot(cwd) || cwd)) return approve();  // ALM deferred — silent-approve.
   const projectRoot = findProjectRoot(cwd) || cwd;
 
-  const markerPath = findPath(projectRoot, '.last-deploy.json');
+  const markerPath = almPath(projectRoot, 'lastDeploy');
 
   // No deploy marker found — not a deploy-pipeline session
-  if (!markerPath) return approve();
+  if (!fs.existsSync(markerPath)) return approve();
 
   let marker;
   try {
     marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
   } catch {
-    return block('.last-deploy.json exists but could not be parsed as JSON.');
+    return block('docs/alm/last-deploy.json exists but could not be parsed as JSON.');
   }
 
   if (!marker.pipelineId) {
-    return block('.last-deploy.json is missing required field: pipelineId');
+    return block('docs/alm/last-deploy.json is missing required field: pipelineId');
   }
   if (!marker.stageRunId) {
-    return block('.last-deploy.json is missing required field: stageRunId');
+    return block('docs/alm/last-deploy.json is missing required field: stageRunId');
   }
   if (!marker.solutionName) {
-    return block('.last-deploy.json is missing required field: solutionName');
+    return block('docs/alm/last-deploy.json is missing required field: solutionName');
   }
   if (!marker.status) {
-    return block('.last-deploy.json is missing required field: status');
+    return block('docs/alm/last-deploy.json is missing required field: status');
   }
   if (!marker.deployedAt) {
-    return block('.last-deploy.json is missing required field: deployedAt');
+    return block('docs/alm/last-deploy.json is missing required field: deployedAt');
   }
 
   if (marker.status === 'Failed') {

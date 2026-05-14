@@ -24,6 +24,10 @@
 //          --envUrl <url>
 //          --publisherPrefix <prefix>      (e.g. "cr5fe" — no trailing _)
 //          --websiteRecordId <guid>        (used to find bound site settings)
+//          [--solutionId <guid>]           (when provided, results are filtered to env vars
+//                                           that belong to this solution — preferred for plans
+//                                           with an existing solution so cross-project env vars
+//                                           sharing the publisher prefix don't bleed in)
 //          [--token <t>]                   (otherwise acquired via az CLI)
 //
 // Output (JSON to stdout):
@@ -79,14 +83,52 @@ function parseArgs(argv) {
     token: null,
     publisherPrefix: null,
     websiteRecordId: null,
+    solutionId: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--publisherPrefix' && args[i + 1]) out.publisherPrefix = args[++i];
     else if (args[i] === '--websiteRecordId' && args[i + 1]) out.websiteRecordId = args[++i];
+    else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
   }
   return out;
+}
+
+// Page size + Prefer header pattern matches estimate-solution-size.js and
+// discover-site-components.js. The previous `$top=2000` plain query silently
+// capped at 2000 results on tenants with more matching definitions; this
+// version paginates via @odata.nextLink until exhausted.
+const ODATA_MAX_PAGE_SIZE = 5000;
+
+async function fetchPaginated(url, token) {
+  const aggregated = [];
+  let next = url;
+  let safety = 100; // ~500K rows; pathological cases bail early
+  while (next && safety > 0) {
+    const res = await helpers.makeRequest({
+      url: next,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'OData-MaxVersion': '4.0',
+        'OData-Version': '4.0',
+        Prefer: `odata.maxpagesize=${ODATA_MAX_PAGE_SIZE}`,
+      },
+      timeout: 20000,
+    });
+    if (!res || res.error || res.statusCode !== 200 || !res.body) return aggregated;
+    let parsed;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      return aggregated;
+    }
+    if (Array.isArray(parsed.value)) aggregated.push(...parsed.value);
+    next = parsed['@odata.nextLink'] || null;
+    safety -= 1;
+  }
+  return aggregated;
 }
 
 async function fetchAllDefinitions(envUrl, publisherPrefix, token) {
@@ -96,24 +138,27 @@ async function fetchAllDefinitions(envUrl, publisherPrefix, token) {
     `${base}/api/data/v9.2/environmentvariabledefinitions` +
     `?$select=environmentvariabledefinitionid,schemaname,displayname,description,type,defaultvalue` +
     `&$filter=startswith(schemaname,'${publisherPrefix}_')` +
-    `&$top=2000`;
-  const res = await helpers.makeRequest({
-    url,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-    },
-    timeout: 20000,
-  });
-  if (!res || res.error || res.statusCode !== 200 || !res.body) return [];
-  try {
-    const parsed = JSON.parse(res.body);
-    return Array.isArray(parsed.value) ? parsed.value : [];
-  } catch {
-    return [];
-  }
+    `&$top=${ODATA_MAX_PAGE_SIZE}`;
+  return fetchPaginated(url, token);
+}
+
+// Returns the set of `objectid` values (lowercased) from `solutioncomponents`
+// for the target solution's Environment Variable Definition rows
+// (componenttype=380). Used to intersect with publisher-prefix-matched env var
+// defs so the result reflects "env vars in THIS solution", not "env vars
+// matching THIS prefix tenant-wide" — important when the publisher prefix is
+// shared across multiple projects in the same tenant.
+async function fetchSolutionEnvVarDefIds(envUrl, solutionId, token) {
+  if (!solutionId) return null;
+  const base = envUrl.replace(/\/+$/, '');
+  // componenttype 380 = Environment Variable Definition (well-known value).
+  const url =
+    `${base}/api/data/v9.2/solutioncomponents` +
+    `?$select=objectid` +
+    `&$filter=_solutionid_value eq ${solutionId} and componenttype eq 380` +
+    `&$top=${ODATA_MAX_PAGE_SIZE}`;
+  const rows = await fetchPaginated(url, token);
+  return new Set(rows.map((r) => (r.objectid || '').toLowerCase()).filter(Boolean));
 }
 
 async function fetchSiteSettingBindings(envUrl, websiteRecordId, token) {
@@ -123,26 +168,10 @@ async function fetchSiteSettingBindings(envUrl, websiteRecordId, token) {
     `${base}/api/data/v9.2/mspp_sitesettings` +
     `?$select=mspp_name,mspp_source,_mspp_environmentvariable_value` +
     `&$filter=_mspp_websiteid_value eq ${websiteRecordId} and mspp_source eq 1` +
-    `&$top=2000`;
-  const res = await helpers.makeRequest({
-    url,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-    },
-    timeout: 20000,
-  });
-  if (!res || res.error || res.statusCode !== 200 || !res.body) return new Map();
-  let parsed;
-  try {
-    parsed = JSON.parse(res.body);
-  } catch {
-    return new Map();
-  }
+    `&$top=${ODATA_MAX_PAGE_SIZE}`;
+  const rows = await fetchPaginated(url, token);
   const map = new Map();
-  for (const row of parsed.value || []) {
+  for (const row of rows) {
     const defId = row._mspp_environmentvariable_value;
     if (!defId) continue;
     // First binding wins. A given env var should be bound to exactly one
@@ -152,26 +181,54 @@ async function fetchSiteSettingBindings(envUrl, websiteRecordId, token) {
   return map;
 }
 
-async function discoverEnvVarDefinitions({ envUrl, token, publisherPrefix, websiteRecordId }) {
+async function discoverEnvVarDefinitions({ envUrl, token, publisherPrefix, websiteRecordId, solutionId }) {
   if (!envUrl) throw new Error('--envUrl is required');
   if (!publisherPrefix) {
     // No prefix → nothing to enumerate. Return empty rather than scanning
     // the whole tenant (would be slow and contaminated by cross-site defs).
-    return { envVars: [], count: 0 };
+    return { envVars: [], count: 0, scope: 'none' };
   }
 
   const resolvedToken = token || getAuthToken(envUrl);
   if (!resolvedToken) {
     // Match the caller-degrades-gracefully contract: empty result, exit 0.
-    return { envVars: [], count: 0 };
+    return { envVars: [], count: 0, scope: 'none' };
   }
 
-  const [definitions, bindings] = await Promise.all([
+  // Pull the three datasets in parallel:
+  //   1. Env var definitions matching the publisher prefix (tenant-wide)
+  //   2. Site setting bindings for this site (env var def ID → site setting name)
+  //   3. (optional) solution membership: env var def IDs in the target solution
+  // The third only fires when solutionId is set; without it we return the
+  // tenant-wide prefix match (the legacy behavior, preserved for fresh
+  // projects that don't yet have a solution).
+  const [definitions, bindings, solutionEnvVarDefIds] = await Promise.all([
     fetchAllDefinitions(envUrl, publisherPrefix, resolvedToken),
     fetchSiteSettingBindings(envUrl, websiteRecordId, resolvedToken),
+    fetchSolutionEnvVarDefIds(envUrl, solutionId, resolvedToken),
   ]);
 
-  const envVars = definitions.map((def) => ({
+  // Solution-scope filter: keep only definitions whose ID appears as an
+  // `objectid` in the target solution's componenttype-380 set. This eliminates
+  // the over-count regression where a publisher prefix shared across projects
+  // (e.g. `new_`, `cr5fe_`) inflated the env-var stat.
+  let scoped = definitions;
+  let scope = 'publisher-prefix';
+  if (solutionEnvVarDefIds && solutionEnvVarDefIds.size > 0) {
+    scoped = definitions.filter((def) => {
+      const id = (def.environmentvariabledefinitionid || '').toLowerCase();
+      return id && solutionEnvVarDefIds.has(id);
+    });
+    scope = 'solution';
+  } else if (solutionId && solutionEnvVarDefIds && solutionEnvVarDefIds.size === 0) {
+    // Caller asked for solution scope and the solution has zero env var defs.
+    // Honor that — return empty rather than falling back to the wider scope
+    // that would suggest the solution contains env vars when it doesn't.
+    scoped = [];
+    scope = 'solution';
+  }
+
+  const envVars = scoped.map((def) => ({
     schemaName: def.schemaname,
     displayName: def.displayname || def.schemaname,
     type: typeLabel(def.type),
@@ -180,7 +237,7 @@ async function discoverEnvVarDefinitions({ envUrl, token, publisherPrefix, websi
     siteSetting: bindings.get(def.environmentvariabledefinitionid) || '',
   }));
 
-  return { envVars, count: envVars.length };
+  return { envVars, count: envVars.length, scope };
 }
 
 if (require.main === module) {

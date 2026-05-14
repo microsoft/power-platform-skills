@@ -62,7 +62,7 @@ Gather all available context:
 2. Check `.powerpages-site/` folder exists
 3. Glob for manifest files: `.powerpages-site/*-manifest.yml` — list all found, note their environment hostnames
 4. Check if `.solution-manifest.json` exists (for solution-related diagnostics)
-5. Check if `.last-import.json` exists (for recent import failures)
+5. Check if `docs/alm/last-import.json` exists (for recent import failures)
 6. Check build output: confirm `{compiledPath}/` exists and is non-empty
 
 Report: "Found project: `{siteName}`. Artifacts collected."

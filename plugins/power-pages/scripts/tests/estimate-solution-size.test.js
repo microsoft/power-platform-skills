@@ -1,7 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { classifyPPCs, estimateTotalSize, BYTES_PER } = require('../lib/estimate-solution-size');
+const helpers = require('../lib/validation-helpers');
+const {
+  classifyPPCs,
+  estimateTotalSize,
+  estimateSolutionSize,
+  BYTES_PER,
+} = require('../lib/estimate-solution-size');
 
 // --- classifyPPCs -----------------------------------------------------------
 
@@ -147,4 +153,333 @@ test('BYTES_PER is frozen and cloud flows are the largest per-component cost', (
   // Cloud flows carry embedded JSON — sanity-check that the calibration reflects that.
   assert.ok(BYTES_PER.cloudflow > BYTES_PER.bot);
   assert.ok(BYTES_PER.cloudflow > BYTES_PER.table);
+});
+
+// --- estimateSolutionSize pagination integration test -----------------------
+//
+// Regression test for the field-reported bug where webFileCount capped at ~500
+// on stress-test sites with 6000+ web files. Root cause: the OData queries in
+// this file lacked `Prefer: odata.maxpagesize=N`, so Dataverse honored `$top=500`
+// but never emitted `@odata.nextLink` — paging silently truncated at one page.
+//
+// This test simulates a 6500-row `powerpagecomponents` response via a mocked
+// `helpers.makeRequest`. The pagination plumbing is asserted end-to-end:
+//   (a) odataGet sends `Prefer: odata.maxpagesize=...` on every page
+//   (b) collectPaginated follows `@odata.nextLink` until exhausted
+//   (c) the resulting `ppcs.length` matches the simulated server total
+//   (d) the truncation canary does NOT fire on correct pagination
+//   (e) `componentCountSiteTotal` reflects the full set
+//
+// And a second case asserts the canary DOES fire when the mock fakes a
+// truncation (returns only the first page despite a higher `@odata.count`).
+
+function withMockedMakeRequest(t, handler) {
+  const original = helpers.makeRequest;
+  helpers.makeRequest = handler;
+  t.after(() => { helpers.makeRequest = original; });
+}
+
+// Build a fake makeRequest that returns paginated OData responses for the
+// powerpagecomponents query and minimal/empty responses for everything else.
+// `totalPpcs` is how many web-file rows the fake server claims to have.
+// `truncate` makes the server return only the first page (no nextLink) even
+// though `@odata.count` reports the full total — simulates the bug.
+function buildFakeServer({ totalPpcs, pageSize = 5000, truncate = false } = {}) {
+  const ppcRows = [];
+  for (let i = 0; i < totalPpcs; i++) {
+    ppcRows.push({
+      powerpagecomponentid: `ppc-${i.toString().padStart(6, '0')}`,
+      name: `webfile-${i}.png`,
+      powerpagecomponenttype: 3, // Web File
+    });
+  }
+  return async function fakeMakeRequest({ url }) {
+    const u = new URL(url);
+    const entity = u.pathname.split('/').slice(-1)[0].split('?')[0];
+
+    // Handle $count=true ground-truth probes (used by truncation canary).
+    if (u.searchParams.get('$count') === 'true') {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          '@odata.count': entity === 'powerpagecomponents' ? totalPpcs : 0,
+          value: [],
+        }),
+      };
+    }
+
+    if (entity === 'powerpagecomponents') {
+      const skipParam = u.searchParams.get('$skiptoken') || u.searchParams.get('skiptoken');
+      const start = skipParam ? Number(skipParam) : 0;
+      const end = Math.min(start + pageSize, totalPpcs);
+      const value = ppcRows.slice(start, end);
+      // Build a nextLink only when there are more rows AND we're not faking truncation
+      const hasMore = end < totalPpcs && !truncate;
+      const body = {
+        value,
+        ...(hasMore ? { '@odata.nextLink': `${u.origin}${u.pathname}?$skiptoken=${end}` } : {}),
+      };
+      return { statusCode: 200, body: JSON.stringify(body) };
+    }
+
+    // powerpagesitelanguages, EntityDefinitions, environmentvariabledefinitions,
+    // bots, botcomponents, etc. — return empty
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  };
+}
+
+test('estimateSolutionSize paginates beyond a single page and reports the full ppc count', async (t) => {
+  // Six pages worth (with page size 5000, this would be impossibly large in
+  // practice — but we want to test that the page loop terminates correctly).
+  const TOTAL = 6500;
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: TOTAL, pageSize: 5000 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.webFileCount, TOTAL, 'webFileCount should reflect all paginated rows');
+  // componentCountSiteTotal = ppcs.length + 1 (root) + 0 (langs) + 0 (tables) + 0 (envvars) + 0 (flows) + 0 (bots) + 0 (botcomps)
+  assert.equal(result.componentCountSiteTotal, TOTAL + 1, 'siteTotal should match ppcs + website root');
+  assert.equal(result.ppcGroundTruthCount, TOTAL, 'ground-truth count should match');
+  assert.equal(result.truncationSuspected, false, 'canary should NOT fire on correct pagination');
+  assert.deepEqual(result.truncationWarnings, [], 'no warnings on correct pagination');
+});
+
+test('estimateSolutionSize canary fires when server reports more rows than the fetch returned', async (t) => {
+  const TOTAL = 6050;
+  // truncate=true makes the fake server return page 1 only despite @odata.count=6050.
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: TOTAL, pageSize: 5000, truncate: true }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  // Fetched 5000 (first page), ground-truth says 6050 → canary fires.
+  assert.equal(result.webFileCount, 5000, 'truncated fetch should return only first page');
+  assert.equal(result.ppcGroundTruthCount, TOTAL);
+  assert.equal(result.truncationSuspected, true, 'canary MUST fire when fetch count diverges from ground truth');
+  assert.ok(
+    result.truncationWarnings.some((w) => /pagination is truncating/i.test(w)),
+    'a truncation warning should call out the pagination issue',
+  );
+});
+
+test('estimateSolutionSize canary flags ppcs.length landing exactly on a page-size multiple', async (t) => {
+  // Server claims exactly 5000 rows and returns all of them (no truncation).
+  // The page-size-multiple canary should fire even though there is no
+  // ground-truth divergence — this is the defensive signal that catches future
+  // regressions where the Prefer header is dropped and the row count happens
+  // to coincide with a paging boundary.
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: 5000, pageSize: 5000 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.webFileCount, 5000);
+  assert.equal(result.truncationSuspected, true, 'page-size-multiple canary should fire');
+  assert.ok(
+    result.truncationWarnings.some((w) => /full page/.test(w)),
+    'page-size-multiple canary message should mention the page boundary',
+  );
+});
+
+test('estimateSolutionSize canary flags legacy paging boundaries (500/1000/2000)', async (t) => {
+  // Simulate the historical regression: response claims 500 rows total AND
+  // ground-truth count also says 500, so the divergence check passes — but
+  // the legacy-boundary canary should still flag this as suspicious because
+  // 500 is the historical $top value that exposed the original bug.
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: 500, pageSize: 5000 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.webFileCount, 500);
+  assert.equal(result.truncationSuspected, true, 'legacy-boundary canary should fire on 500');
+  assert.ok(
+    result.truncationWarnings.some((w) => /historical paging boundary/.test(w)),
+    'legacy-boundary canary message should mention the historical boundary',
+  );
+});
+
+test('estimateSolutionSize odataGet sends the Prefer: odata.maxpagesize header', async (t) => {
+  // Regression guard: the moment somebody removes the Prefer header, this
+  // test fails — because without it the pagination integration test above
+  // would also fail, but this one is a more direct assertion that gives a
+  // clearer failure message.
+  let observedPreferHeader = null;
+  withMockedMakeRequest(t, async ({ url, headers }) => {
+    if (url.includes('powerpagecomponents')) {
+      observedPreferHeader = headers && headers.Prefer;
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.match(
+    observedPreferHeader || '',
+    /odata\.maxpagesize=\d+/,
+    'odataGet MUST send `Prefer: odata.maxpagesize=N` — without it Dataverse silently truncates at $top',
+  );
+});
+
+// --- envVarCount solution-scoping regression test ---------------------------
+//
+// Regression test for "env variable prediction is off" — when the publisher
+// prefix is shared across multiple projects in a tenant, the tenant-wide
+// `startswith(schemaname, '<prefix>_')` filter returns env vars from unrelated
+// projects, inflating envVarCount. After the fix, passing `--solutionId`
+// scopes the count via `inSolution.byComponentType[380]`.
+//
+// Simulates a tenant with 5000 publisher-prefix-matching env var defs (e.g.
+// the `new_` or `cr5fe_` cases), of which only 12 belong to the target
+// solution. Expectation: envVarCount === 12 (solution scope), and
+// envVarCountTenantWide === 5000 (preserved for diagnosability).
+
+test('estimateSolutionSize envVarCount is solution-scoped when --solutionId is passed', async (t) => {
+  const TENANT_PREFIX_ENV_VARS = 5000;
+  const IN_SOLUTION_ENV_VARS = 12;
+
+  // Mock returns 5000 env var defs matching the prefix, and a solution with
+  // 12 componenttype-380 rows (env var defs). All other queries empty.
+  withMockedMakeRequest(t, async ({ url }) => {
+    const u = new URL(url);
+    const entity = u.pathname.split('/').slice(-1)[0].split('?')[0];
+
+    if (entity === 'environmentvariabledefinitions') {
+      // Return all 5000 in one page — no pagination needed for this test
+      const value = [];
+      for (let i = 0; i < TENANT_PREFIX_ENV_VARS; i++) {
+        value.push({
+          environmentvariabledefinitionid: `def-${i.toString().padStart(5, '0')}`,
+          schemaname: `new_Var${i}`,
+          displayname: `Var ${i}`,
+          type: 100000000,
+          defaultvalue: '',
+        });
+      }
+      return { statusCode: 200, body: JSON.stringify({ value }) };
+    }
+
+    if (entity === 'solutioncomponents') {
+      // Return componenttype distribution for the target solution: 12 env var
+      // defs (380), 5 site components, 1 site, etc. Only byComponentType[380]
+      // matters for this test.
+      const rows = [];
+      for (let i = 0; i < IN_SOLUTION_ENV_VARS; i++) {
+        rows.push({ objectid: `def-${i.toString().padStart(5, '0')}`, componenttype: 380 });
+      }
+      // A few other component types so the inSolution block is realistic
+      rows.push({ objectid: 'pp-1', componenttype: 10373 });
+      rows.push({ objectid: 'site-1', componenttype: 10374 });
+      return { statusCode: 200, body: JSON.stringify({ value: rows }) };
+    }
+
+    if (entity === 'powerpagecomponents' && u.searchParams.get('$count') === 'true') {
+      return { statusCode: 200, body: JSON.stringify({ '@odata.count': 0, value: [] }) };
+    }
+
+    // powerpagecomponents (regular fetch), EntityDefinitions, languages, bots, etc.
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    publisherPrefix: 'new',
+    solutionId: '00000000-0000-0000-0000-000000000099',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.envVarCount, IN_SOLUTION_ENV_VARS, 'envVarCount MUST reflect the solution-scoped count, not the tenant-wide prefix match');
+  assert.equal(result.envVarCountScope, 'solution', 'scope field must indicate the solution scoping');
+  assert.equal(result.envVarCountTenantWide, TENANT_PREFIX_ENV_VARS, 'tenant-wide count preserved for diagnosability');
+});
+
+test('estimateSolutionSize envVarCount falls back to publisher-prefix when --solutionId omitted', async (t) => {
+  const TENANT_PREFIX_ENV_VARS = 42;
+  withMockedMakeRequest(t, async ({ url }) => {
+    const u = new URL(url);
+    const entity = u.pathname.split('/').slice(-1)[0].split('?')[0];
+    if (entity === 'environmentvariabledefinitions') {
+      const value = [];
+      for (let i = 0; i < TENANT_PREFIX_ENV_VARS; i++) {
+        value.push({
+          environmentvariabledefinitionid: `def-${i}`,
+          schemaname: `new_Var${i}`,
+          type: 100000000,
+        });
+      }
+      return { statusCode: 200, body: JSON.stringify({ value }) };
+    }
+    if (entity === 'powerpagecomponents' && u.searchParams.get('$count') === 'true') {
+      return { statusCode: 200, body: JSON.stringify({ '@odata.count': 0, value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    publisherPrefix: 'new',
+    // no solutionId
+    token: 'fake-token',
+  });
+
+  assert.equal(result.envVarCount, TENANT_PREFIX_ENV_VARS, 'without --solutionId, falls back to publisher-prefix tenant-wide count');
+  assert.equal(result.envVarCountScope, 'publisher-prefix', 'scope label reflects the wider fallback');
+  assert.equal(result.envVarCountTenantWide, TENANT_PREFIX_ENV_VARS);
+});
+
+test('estimateSolutionSize envVarCount returns 0 (with scope=solution) when target solution has no env var defs', async (t) => {
+  // Tenant has 100 prefix-matching env vars, but the solution has zero
+  // componenttype-380 rows. envVarCount must reflect the solution truth (0),
+  // not silently fall back to the tenant-wide number.
+  withMockedMakeRequest(t, async ({ url }) => {
+    const u = new URL(url);
+    const entity = u.pathname.split('/').slice(-1)[0].split('?')[0];
+    if (entity === 'environmentvariabledefinitions') {
+      const value = [];
+      for (let i = 0; i < 100; i++) value.push({ environmentvariabledefinitionid: `d${i}`, schemaname: `new_X${i}`, type: 100000000 });
+      return { statusCode: 200, body: JSON.stringify({ value }) };
+    }
+    if (entity === 'solutioncomponents') {
+      // Solution exists but has no env var defs — only a site component or two.
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ value: [{ objectid: 'pp-1', componenttype: 10373 }] }),
+      };
+    }
+    if (entity === 'powerpagecomponents' && u.searchParams.get('$count') === 'true') {
+      return { statusCode: 200, body: JSON.stringify({ '@odata.count': 0, value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    publisherPrefix: 'new',
+    solutionId: '00000000-0000-0000-0000-000000000099',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.envVarCount, 0, 'envVarCount must reflect solution truth (zero env var defs)');
+  assert.equal(result.envVarCountScope, 'solution');
+  assert.equal(result.envVarCountTenantWide, 100, 'tenant-wide count preserved');
 });

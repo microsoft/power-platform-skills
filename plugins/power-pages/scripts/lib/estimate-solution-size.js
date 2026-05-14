@@ -26,7 +26,11 @@
 'use strict';
 
 const helpers = require('./validation-helpers');
-const { getAuthToken, makeRequest } = helpers;
+const { getAuthToken } = helpers;
+// `makeRequest` is accessed via `helpers.makeRequest` (not destructured) so
+// tests can inject a mock by mutating `helpers.makeRequest` before calling
+// the top-level `estimateSolutionSize`. See estimate-solution-size.test.js for
+// the pagination integration test that depends on this.
 
 // Approximate bytes-per-component for metadata-based estimation.
 // Calibrated against managed solution exports at typical sizes.
@@ -70,15 +74,33 @@ function parseArgs(argv) {
   return out;
 }
 
+// Page size for paginated OData queries. Dataverse caps `Prefer: odata.maxpagesize`
+// at 5000 — requesting more is silently downgraded. Using the cap minimizes
+// roundtrips for large sites.
+const ODATA_MAX_PAGE_SIZE = 5000;
+
+// Safety upper bound on pagination iterations. At 5000 rows/page this allows up
+// to 500,000 records before we bail — well above any realistic Power Pages site.
+// The cap exists only to prevent runaway loops in pathological response loops
+// where `@odata.nextLink` cycles. Hitting this is the signal of a server bug,
+// not a normal-case truncation.
+const PAGINATION_SAFETY_CAP = 100;
+
 async function odataGet(envUrl, path, token) {
   const url = path.startsWith('http') ? path : `${envUrl}/api/data/v9.2/${path.replace(/^\//, '')}`;
-  const res = await makeRequest({
+  const res = await helpers.makeRequest({
     url,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
       'OData-MaxVersion': '4.0',
       'OData-Version': '4.0',
+      // `Prefer: odata.maxpagesize=N` is what makes Dataverse emit
+      // `@odata.nextLink` when there are more rows than fit in one page.
+      // Without it, a `$top=N` query returns at most N rows AND NO continuation
+      // link — even when more rows exist. That was the cause of webFileCount
+      // capping at 500 on stress-test sites with 6000+ web files.
+      Prefer: `odata.maxpagesize=${ODATA_MAX_PAGE_SIZE}`,
     },
     timeout: 30000,
   });
@@ -94,13 +116,27 @@ async function odataGet(envUrl, path, token) {
   return JSON.parse(res.body);
 }
 
-async function collectPaginated(envUrl, path, token, maxPages = 20) {
+// Follows `@odata.nextLink` until exhausted, aggregating all pages.
+// `maxPages` is a safety cap — leave at the default unless you know the
+// remote endpoint can return more than ~500K rows.
+async function collectPaginated(envUrl, path, token, maxPages = PAGINATION_SAFETY_CAP) {
   let next = path;
   const items = [];
+  let pagesFetched = 0;
   for (let p = 0; p < maxPages && next; p++) {
     const page = await odataGet(envUrl, next, token);
     if (Array.isArray(page.value)) items.push(...page.value);
     next = page['@odata.nextLink'] || null;
+    pagesFetched += 1;
+  }
+  if (next) {
+    // We hit the safety cap with more pages remaining. This is a strong signal
+    // of either a bug in the remote endpoint or an unrealistic dataset size.
+    // Stamp a warning into stderr so the caller can see it; the canary in the
+    // top-level estimator output will also flag the truncation.
+    process.stderr.write(
+      `estimate-solution-size: WARN — collectPaginated hit the safety cap of ${maxPages} pages (~${maxPages * ODATA_MAX_PAGE_SIZE} rows) with more remaining. Path: ${path.slice(0, 200)}\n`,
+    );
   }
   return items;
 }
@@ -124,10 +160,10 @@ async function collectPaginated(envUrl, path, token, maxPages = 20) {
  * closes the siteTotal gap that previously made orphansOnSite look
  * artificially small.
  *
- * Pagination ceilings (from collectPaginated below): bots up to 1,500 records
- * (3 pages × $top=500), botcomponents up to 25,000 (5 × 5,000). Hitting either
- * is so unusual in real tenants that we log a WARN rather than paginating
- * forever; caller can see the warning in stderr and bump the limits if needed.
+ * Pagination: uses the shared `collectPaginated` helper with the default
+ * `PAGINATION_SAFETY_CAP` (100 pages × `ODATA_MAX_PAGE_SIZE` = ~500K rows).
+ * Hitting that cap is so unusual in real tenants that we log a WARN via the
+ * helper rather than paginating forever.
  */
 async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
   if (!botConsumerPpcs || botConsumerPpcs.length === 0) {
@@ -144,10 +180,10 @@ async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
 
   const idFilter = consumerIds.map((id) => `powerpagecomponentid eq ${id}`).join(' or ');
   const withContentPath =
-    `powerpagecomponents?$filter=${idFilter}&$select=powerpagecomponentid,content&$top=500`;
+    `powerpagecomponents?$filter=${idFilter}&$select=powerpagecomponentid,content&$top=${ODATA_MAX_PAGE_SIZE}`;
   let enriched;
   try {
-    enriched = await collectPaginated(envUrl, withContentPath, token, 2);
+    enriched = await collectPaginated(envUrl, withContentPath, token);
   } catch {
     return { bots: [], botComponents: [] };
   }
@@ -171,41 +207,27 @@ async function discoverBotsAndComponents(envUrl, botConsumerPpcs, token) {
   // stays well inside URL-length limits for realistic consumer counts (<50).
   const safeNames = unique.map((n) => n.replace(/'/g, "''"));
   const botFilter = safeNames.map((n) => `schemaname eq '${n}'`).join(' or ');
-  const BOTS_TOP = 500;
-  const BOTS_MAX_PAGES = 3;
   const botsPath =
-    `bots?$filter=${botFilter}&$select=botid,name,schemaname&$top=${BOTS_TOP}`;
+    `bots?$filter=${botFilter}&$select=botid,name,schemaname&$top=${ODATA_MAX_PAGE_SIZE}`;
   let bots = [];
   try {
-    bots = await collectPaginated(envUrl, botsPath, token, BOTS_MAX_PAGES);
+    bots = await collectPaginated(envUrl, botsPath, token);
   } catch {
     // Bots may be unavailable in some tenants (privilege / feature gating).
     // Don't fail the whole estimate — surface as zero and move on.
     return { bots: [], botComponents: [] };
   }
-  if (bots.length >= BOTS_TOP * BOTS_MAX_PAGES) {
-    process.stderr.write(
-      `estimate-solution-size: WARN — bot query returned ${bots.length} rows, at pagination cap (${BOTS_TOP * BOTS_MAX_PAGES}). Counts may be undercounted; raise BOTS_MAX_PAGES if your tenant has more bots referenced by this site.\n`,
-    );
-  }
   if (bots.length === 0) return { bots: [], botComponents: [] };
 
   const botIds = bots.map((b) => b.botid).filter(Boolean);
   const compFilter = botIds.map((id) => `_parentbotid_value eq ${id}`).join(' or ');
-  const COMPS_TOP = 5000;
-  const COMPS_MAX_PAGES = 5;
   const compsPath =
-    `botcomponents?$filter=${compFilter}&$select=botcomponentid&$top=${COMPS_TOP}`;
+    `botcomponents?$filter=${compFilter}&$select=botcomponentid&$top=${ODATA_MAX_PAGE_SIZE}`;
   let botComponents = [];
   try {
-    botComponents = await collectPaginated(envUrl, compsPath, token, COMPS_MAX_PAGES);
+    botComponents = await collectPaginated(envUrl, compsPath, token);
   } catch {
     botComponents = [];
-  }
-  if (botComponents.length >= COMPS_TOP * COMPS_MAX_PAGES) {
-    process.stderr.write(
-      `estimate-solution-size: WARN — bot component query returned ${botComponents.length} rows, at pagination cap (${COMPS_TOP * COMPS_MAX_PAGES}). Counts may be undercounted; raise COMPS_MAX_PAGES if your tenant's bots have more topics.\n`,
-    );
   }
   return { bots, botComponents };
 }
@@ -219,8 +241,25 @@ async function discoverPowerPageComponents(envUrl, websiteRecordId, token) {
     `powerpagecomponents` +
     `?$filter=_powerpagesiteid_value eq '${websiteRecordId}'` +
     `&$select=powerpagecomponentid,name,powerpagecomponenttype` +
-    `&$top=500`;
-  return collectPaginated(envUrl, path, token, 40);
+    `&$top=${ODATA_MAX_PAGE_SIZE}`;
+  return collectPaginated(envUrl, path, token);
+}
+
+// Returns the server's `@odata.count` for an entity + optional filter — cheap
+// ground-truth check (one round-trip; payload is a single row plus the count
+// annotation). Used by the truncation canary: if the row-fetch returned fewer
+// items than `@odata.count` reports, pagination is broken upstream. Returns
+// null on query failure so the canary can degrade gracefully.
+async function countOData(envUrl, entity, filter, token) {
+  try {
+    const filterPart = filter ? `&$filter=${filter}` : '';
+    const countPath = `${entity}?$count=true&$top=1${filterPart}`;
+    const page = await odataGet(envUrl, countPath, token);
+    const n = page['@odata.count'];
+    return typeof n === 'number' ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 async function discoverPowerPageSiteLanguages(envUrl, websiteRecordId, token) {
@@ -235,9 +274,9 @@ async function discoverPowerPageSiteLanguages(envUrl, websiteRecordId, token) {
     `powerpagesitelanguages` +
     `?$filter=_powerpagesiteid_value eq '${websiteRecordId}'` +
     `&$select=powerpagesitelanguageid,name,languagecode` +
-    `&$top=500`;
+    `&$top=${ODATA_MAX_PAGE_SIZE}`;
   try {
-    return await collectPaginated(envUrl, path, token, 5);
+    return await collectPaginated(envUrl, path, token);
   } catch (e) {
     if (/HTTP\s+404\b/.test(String(e && e.message))) return [];
     throw e;
@@ -308,8 +347,8 @@ async function countEnvVarDefinitions(envUrl, publisherPrefix, token) {
     ? `&$filter=startswith(schemaname,'${publisherPrefix}_')`
     : '';
   const path =
-    `environmentvariabledefinitions?$select=schemaname,displayname,type${filter}&$top=2000`;
-  const items = await collectPaginated(envUrl, path, token, 20);
+    `environmentvariabledefinitions?$select=schemaname,displayname,type${filter}&$top=${ODATA_MAX_PAGE_SIZE}`;
+  const items = await collectPaginated(envUrl, path, token);
   return items.length;
 }
 
@@ -395,6 +434,7 @@ function classifyPPCs(ppcs) {
 }
 
 async function measureWebFiles(envUrl, webFiles, token) {
+  // Uses odataGet directly (single-row fetch each, no pagination needed).
   const individual = [];
   let aggregateBytes = 0;
   let imgOrFontBytes = 0;
@@ -464,7 +504,7 @@ function estimateTotalSize({ classified, tables, schemaAttrCount, webFilesAggreg
  */
 async function countSolutionMembership(envUrl, solutionId, token, sitePpcIdSet = null) {
   const url = `${envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq ${solutionId}&$select=objectid,componenttype&$top=5000`;
-  const res = await makeRequest({
+  const res = await helpers.makeRequest({
     url,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -519,6 +559,18 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   const ppcs = await discoverPowerPageComponents(envUrl, websiteRecordId, resolved);
   const classified = classifyPPCs(ppcs);
 
+  // Truncation canary — ask Dataverse for the authoritative row count and
+  // compare against what discoverPowerPageComponents returned. If they disagree
+  // by more than a small margin, pagination is broken (or the data changed
+  // mid-scan, which is rare for code-site inventory). Cheap: one extra
+  // round-trip with `$count=true&$top=1`.
+  const ppcGroundTruthCount = await countOData(
+    envUrl,
+    'powerpagecomponents',
+    `_powerpagesiteid_value eq '${websiteRecordId}'`,
+    resolved,
+  );
+
   // Site-language records are a sibling unified entity, NOT powerpagecomponent
   // rows. Enumerate them so the site total reconciles with the solution total
   // (which includes them under componenttype 10428).
@@ -527,7 +579,14 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   const tables = await discoverTables(envUrl, publisherPrefix, resolved, datamodelManifest);
   const schemaAttrCount = await countAttributesForTables(envUrl, tables, resolved);
 
-  const envVarCount = await countEnvVarDefinitions(envUrl, publisherPrefix, resolved);
+  // Tenant-wide env var defs matching the publisher prefix. This is the
+  // fallback used when no solution is set up yet (fresh project); for sites
+  // with a solution, we refine to in-solution scope below using
+  // `inSolution.byComponentType[380]` (Environment Variable Definition).
+  // Without that refinement, sites whose publisher prefix is shared across
+  // tenants (e.g. `new_`, `cr5fe_`) over-count by including env vars from
+  // unrelated projects. See plan-alm + MEMORY.md for the regression context.
+  const envVarCountTenantWide = await countEnvVarDefinitions(envUrl, publisherPrefix, resolved);
 
   // Bot + bot components — scoped to bots referenced by this site's
   // type-27 bot consumer ppcs so env-wide bots don't inflate the count.
@@ -547,14 +606,6 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
       : 1;
   const webFilesAggregateBytes = webMeasure.aggregateBytes * scaleFactor;
 
-  const totalSizeMB = estimateTotalSize({
-    classified,
-    tables,
-    schemaAttrCount,
-    webFilesAggregateBytes,
-    envVarCount,
-  });
-
   // Optional: when caller passes --solutionId, also report what's actually
   // in the solution vs. site-total. Reported raw — every solutioncomponents
   // row counts, including bundle-chunk ppcs that were explicitly added to the
@@ -566,12 +617,39 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // made it into the solution ship as managed components — they're real
   // members, not noise. Noise-filtering belongs only to the on-site orphan
   // heuristic below, not the in-solution count.
+  //
+  // NOTE: this block was moved BEFORE the estimateTotalSize call so the
+  // refined `envVarCount` below can use `inSolution.byComponentType[380]`
+  // when a solution is set up. estimateTotalSize uses envVarCount in its
+  // size calculation, so the input MUST be the solution-scoped figure
+  // whenever possible — otherwise the size for sites with shared publisher
+  // prefixes is inflated by tenant-wide env var defs.
   const sitePpcIdSet = new Set(
     ppcs.map((p) => (p.powerpagecomponentid || '').toLowerCase()).filter(Boolean),
   );
   const inSolution = solutionId
     ? await countSolutionMembership(envUrl, solutionId, resolved, sitePpcIdSet)
     : null;
+
+  // Refine env var count: prefer solution-scoped membership when available.
+  // `inSolution.byComponentType[380]` is the count of `solutioncomponents`
+  // rows of type 380 (Environment Variable Definition) for the target solution
+  // — exactly what we want for plan-alm's "today's env vars" stat. When no
+  // solution is set up, fall back to the publisher-prefix tenant-wide count
+  // (the only useful number when there's nothing else to scope by).
+  const envVarCountInSolution = inSolution && inSolution.byComponentType
+    ? (inSolution.byComponentType[380] || 0)
+    : null;
+  const envVarCount = envVarCountInSolution != null ? envVarCountInSolution : envVarCountTenantWide;
+  const envVarCountScope = envVarCountInSolution != null ? 'solution' : 'publisher-prefix';
+
+  const totalSizeMB = estimateTotalSize({
+    classified,
+    tables,
+    schemaAttrCount,
+    webFilesAggregateBytes,
+    envVarCount,
+  });
 
   // Tag how many of the solution's ppc rows are bundle-chunk files, purely as
   // metadata — we do NOT subtract this from inSolution.total. Useful for
@@ -658,6 +736,45 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // rows exist in Dataverse".
   const siteActionableComponents = siteTotalComponents - bundleChunkCount;
 
+  // ── Truncation canary ───────────────────────────────────────────────────
+  // Evaluate signals that suggest pagination silently truncated the inventory.
+  // Three independent checks; any one being true sets `truncationSuspected`.
+  //   (a) The Dataverse `@odata.count` for powerpagecomponents disagrees with
+  //       what we actually fetched (>5% gap). Strongest possible signal.
+  //   (b) ppcs.length lands on an exact multiple of the page size (5000/10000/
+  //       15000/...). Could be coincidence but is very rare for real sites.
+  //   (c) ppcs.length is exactly at one of the historical legacy paging
+  //       boundaries (500/1000/2000) — guards against future code that
+  //       accidentally drops the `Prefer: odata.maxpagesize` header again.
+  // Each true signal contributes a string to `truncationWarnings[]` so
+  // compute-split-plan + plan-alm can surface the specific reason.
+  const truncationWarnings = [];
+  if (
+    typeof ppcGroundTruthCount === 'number' &&
+    ppcGroundTruthCount > 0 &&
+    Math.abs(ppcGroundTruthCount - ppcs.length) > Math.max(5, ppcGroundTruthCount * 0.05)
+  ) {
+    truncationWarnings.push(
+      `Dataverse reports ${ppcGroundTruthCount} powerpagecomponent rows for this site, but the discovery query returned ${ppcs.length}. Pagination is truncating — estimator size/component counts WILL be wrong.`,
+    );
+  }
+  const PAGE_SIZE_MULTIPLES = [
+    ODATA_MAX_PAGE_SIZE, ODATA_MAX_PAGE_SIZE * 2, ODATA_MAX_PAGE_SIZE * 3,
+    ODATA_MAX_PAGE_SIZE * 4, ODATA_MAX_PAGE_SIZE * 5,
+  ];
+  if (PAGE_SIZE_MULTIPLES.includes(ppcs.length)) {
+    truncationWarnings.push(
+      `ppcs.length is exactly ${ppcs.length} (= ${ppcs.length / ODATA_MAX_PAGE_SIZE} full page${ppcs.length === ODATA_MAX_PAGE_SIZE ? '' : 's'} of size ${ODATA_MAX_PAGE_SIZE}). Verify the next page wasn't dropped — compare against \`$count=true\` for the same filter.`,
+    );
+  }
+  const LEGACY_BOUNDARIES = [500, 1000, 2000];
+  if (LEGACY_BOUNDARIES.includes(ppcs.length)) {
+    truncationWarnings.push(
+      `ppcs.length is exactly ${ppcs.length} — a historical paging boundary from an older $top value. Suggests the \`Prefer: odata.maxpagesize\` header has regressed; verify odataGet still sends it.`,
+    );
+  }
+  const truncationSuspected = truncationWarnings.length > 0;
+
   return {
     siteName: siteName || null,
     publisherPrefix: publisherPrefix || null,
@@ -711,7 +828,20 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     webFileCount: classified.webFiles.length,
     cloudFlowCount: classified.cloudFlowLinks.length,
     botCount: classified.botConsumers.length,
+    // envVarCount is the count consumers should drive display + decision logic
+    // off of. It reflects the most accurate scope available: solution-scoped
+    // when --solutionId was provided, publisher-prefix tenant-wide otherwise.
     envVarCount,
+    // envVarCountScope explains where the number came from. 'solution' is the
+    // accurate path; 'publisher-prefix' is the fallback for fresh projects
+    // where no solution exists yet and is necessarily a wider scope.
+    envVarCountScope,
+    // envVarCountTenantWide preserves the prefix-wide count for diagnostic
+    // purposes — e.g. flagging cases where the tenant has 500x more env vars
+    // matching the prefix than the solution actually contains (common when
+    // the prefix is shared across projects). Always surfaced regardless of
+    // scope so reviewers can spot the divergence.
+    envVarCountTenantWide,
     mediaRatio: Math.round(webMeasure.mediaRatio * 100) / 100,
     siteType: 'code-site',
     tables: tables.map((t) => ({ logicalName: t.logicalName, attributeCount: t.attributeCount || 0 })),
@@ -735,6 +865,15 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     },
     estimationMethod: 'metadata-based',
     estimationAccuracyPct: 15,
+    // Truncation canary — see the canary block above. Consumers
+    // (compute-split-plan, plan-alm) MUST surface these warnings rather than
+    // silently producing recommendations from possibly-truncated inputs.
+    truncationSuspected,
+    truncationWarnings,
+    // Ground-truth row count from Dataverse — null when the count probe
+    // failed (auth lapse, server transient error). Compute-split-plan uses
+    // this to confirm estimator inputs make sense.
+    ppcGroundTruthCount,
   };
 }
 

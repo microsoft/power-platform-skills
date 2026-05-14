@@ -69,7 +69,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage with the pre-classified `siteSettings` already passed via `.alm-plan-context.json`.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage with the pre-classified `siteSettings` already passed via `docs/alm/alm-plan-context.json`.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -96,7 +96,7 @@ Read project context and query Dataverse to understand what's already configured
 **1.1 Read project files:**
 ```bash
 cat .solution-manifest.json          # get solutionUniqueName, environmentUrl, publisher.prefix
-cat .last-pipeline.json              # get hostEnvUrl, stages[].name
+cat docs/alm/last-pipeline.json              # get hostEnvUrl, stages[].name
 ls .powerpages-site/site-settings/   # list all site setting YAML files
 ```
 
@@ -162,7 +162,7 @@ For each selected setting, ask for:
 2. **Display name** (human-readable)
 3. **Type**: String (default), Boolean, Number, Secret
 4. **Dev/source value** (default = current `mspp_value` from YAML)
-5. **Per-stage values** — for each stage in `.last-pipeline.json`, what should the value be?
+5. **Per-stage values** — for each stage in `docs/alm/last-pipeline.json`, what should the value be?
 
 Example:
 ```
@@ -278,7 +278,7 @@ Write `deployment-settings.json` to the project root. This file stores per-stage
 }
 ```
 
-Stage names must match exactly the `stages[].name` values in `.last-pipeline.json`.
+Stage names must match exactly the `stages[].name` values in `docs/alm/last-pipeline.json`.
 
 For Secret-type env vars: write `"Value": ""` and add a comment instructing the user to populate via Azure Key Vault or pipeline secrets — never store raw secrets in this file.
 

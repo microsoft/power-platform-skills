@@ -19,7 +19,9 @@ function makeTempDir() {
 }
 
 function writeMarker(dir, data) {
-  fs.writeFileSync(path.join(dir, '.last-deploy.json'), JSON.stringify(data), 'utf8');
+  const almDir = path.join(dir, 'docs', 'alm');
+  fs.mkdirSync(almDir, { recursive: true });
+  fs.writeFileSync(path.join(almDir, 'last-deploy.json'), JSON.stringify(data), 'utf8');
 }
 
 function writeHistoryFile(dir, relPath) {
@@ -38,7 +40,7 @@ function runValidator(cwd) {
   return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
-test('validate-deploy-pipeline: exits 0 when no .last-deploy.json found', () => {
+test('validate-deploy-pipeline: exits 0 when no docs/alm/last-deploy.json found', () => {
   const dir = makeTempDir();
   const result = runValidator(dir);
   assert.equal(result.code, 0);

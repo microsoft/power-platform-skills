@@ -402,7 +402,7 @@ validationstatus: 200000002 (Failed)
    - Re-confirm the destructive action via `AskUserQuestion`.
    - Call `POST {newHostEnvUrl}/api/data/v9.0/ManageEnvironmentStamp` with body `{"DeploymentEnvironmentId":"{UPPER-GUID}"}` and headers `clienthost: Browser`, `x-ms-app-name: AppDeploymentConfiguration`.
    - Re-poll `validationstatus` on the record until Succeeded (200000001).
-   - Write `.last-force-link.json` marker.
+   - Write `docs/alm/last-force-link.json` marker.
 4. Verify by re-running the originally-failing operation (typically `setup-pipeline` or `deploy-pipeline`) — the env's `validationstatus` should now be Succeeded on this host.
 
 **Prerequisite**: Caller must have **Deployment Pipeline Administrator** role on the new host. Without it, `ManageEnvironmentStamp` returns 403.

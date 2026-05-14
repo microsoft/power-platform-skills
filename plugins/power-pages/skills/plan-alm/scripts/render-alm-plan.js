@@ -651,7 +651,7 @@ function buildPipelinesTabDesc() {
 function buildPipelineActiveAnnotations(meta, color) {
   // Renders the chips/notes that mark a pipeline as the one currently being
   // used to move configurations — only emitted when planData has a
-  // pipelineMeta block (i.e. .last-pipeline.json exists for this project).
+  // pipelineMeta block (i.e. docs/alm/last-pipeline.json exists for this project).
   if (!meta || !meta.isActive) return { chip: '', wiringNote: '', lastRunFooter: '' };
 
   const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;margin-left:8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;font-family:var(--mono);background:${color}1a;border:1px solid ${color}55;color:${color};">ACTIVE</span>`;
@@ -750,7 +750,7 @@ function buildValidationTab(d) {
   // Renders the full "Site Validation" tab body. One sub-tab per target stage.
   // Each sub-tab shows a summary grid + per-category test cards.
   //
-  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's .last-test-site.json):
+  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's docs/alm/last-test-site.json):
   //   data.validationRuns = {
   //     "<stageName>": null | {
   //       url, runAt, durationSec, runOutcome,
@@ -1194,7 +1194,7 @@ function buildChecklistHtml() {
     // test-site validation substep + import substep below. Detection: step
     // name starts with "Activate site in " (plan-alm Phase 3 schema). Works
     // for both PP and Manual paths — PP path's activation flows through
-    // .last-deploy.json and refreshDeployPipeline, but the Manual-path
+    // docs/alm/last-deploy.json and refreshDeployPipeline, but the Manual-path
     // standalone activate-site invocation is what surfaces here.
     const isActivateStep = /^activate\s+site\s+in\s+/i.test(name);
     let activateLine = '';

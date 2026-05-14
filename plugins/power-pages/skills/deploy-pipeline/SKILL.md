@@ -16,7 +16,7 @@ model: opus
 
 # deploy-pipeline
 
-Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeline configuration from `.last-pipeline.json`, selects a target stage, validates the solution package, and deploys it to the target environment.
+Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeline configuration from `docs/alm/last-pipeline.json`, selects a target stage, validates the solution package, and deploys it to the target environment.
 
 > **Prerequisite**: Run `/power-pages:setup-pipeline` first to create the pipeline configuration.
 
@@ -26,7 +26,7 @@ Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeli
 
 > **Important**: The source (dev) environment must have a Power Platform Pipelines host environment configured. This is set in Power Platform Admin Center (Environments → select env → Pipelines) or via the tenant-level `DefaultCustomPipelinesHostEnvForTenant` setting. Without this configuration, `pac pipeline deploy` will fail. The `setup-pipeline` skill creates the pipeline definition in the host; this admin step connects the dev environment to that host.
 
-- `.last-pipeline.json` exists in the project root (created by `setup-pipeline`)
+- `docs/alm/last-pipeline.json` exists (created by `setup-pipeline`)
 - `.solution-manifest.json` exists
 - Azure CLI logged in (`az account show` succeeds)
 - PAC CLI logged in (`pac env who` succeeds)
@@ -117,9 +117,9 @@ Steps:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
-   Capture output as JSON; extract `.solutionManifest` (store as `solutionManifest`), `.siteName` (store as `siteName`), and `.websiteRecordId`. If `solutionManifest` is null, continue — the manifest is not strictly required at this step (solution info will come from `.last-pipeline.json`).
+   Capture output as JSON; extract `.solutionManifest` (store as `solutionManifest`), `.siteName` (store as `siteName`), and `.websiteRecordId`. If `solutionManifest` is null, continue — the manifest is not strictly required at this step (solution info will come from `docs/alm/last-pipeline.json`).
 
-3. Locate `.last-pipeline.json` in the project root — if not found, stop and advise running `/power-pages:setup-pipeline` first.
+3. Locate `docs/alm/last-pipeline.json` — if not found, stop and advise running `/power-pages:setup-pipeline` first.
 
    **Manifest version check:**
    - If `schemaVersion === 3`, set `MULTI_RUN_MODE = true` and store `deploymentOrder[]` as `DEPLOYMENT_ORDER`. There is a **single pipeline** with a single set of stages; multi-solution is expressed via N stage runs against the same stage, one per solution in `order`. This is the current recommended layout.
@@ -136,7 +136,7 @@ Steps:
    ```
    Where `hostEnvOrigin` = scheme + host of `hostEnvUrl`. Store as `HOST_TOKEN`. If acquisition fails, stop with instructions to check Azure CLI auth.
 
-5. If `solutionManifest` is available, read `solutionManifest.solution.solutionId` and `solutionManifest.solution.uniqueName` from the detected context. Otherwise, use `solutionName` from `.last-pipeline.json`.
+5. If `solutionManifest` is available, read `solutionManifest.solution.solutionId` and `solutionManifest.solution.uniqueName` from the detected context. Otherwise, use `solutionName` from `docs/alm/last-pipeline.json`.
 
 6. Report: "Pipeline: `{pipelineName}`. Solution: `{solutionName}`. Available stages: `{stage names}`."
 
@@ -153,12 +153,12 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 
 ### Phase 2 — Select Target Stage
 
-If the user passed a stage name or environment label as an argument (e.g., `staging`), match it against stages in `.last-pipeline.json` and skip this question.
+If the user passed a stage name or environment label as an argument (e.g., `staging`), match it against stages in `docs/alm/last-pipeline.json` and skip this question.
 
 Otherwise, ask via `AskUserQuestion`:
 
 > "Which environment do you want to deploy to?
-> {numbered list of stages from .last-pipeline.json, e.g.:
+> {numbered list of stages from docs/alm/last-pipeline.json, e.g.:
 > 1. Deploy to Staging → {stagingEnvUrl}
 > 2. Deploy to Production → {prodEnvUrl}}"
 
@@ -167,16 +167,16 @@ Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploym
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
 1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → deploy → poll) against the same pipeline.
 2. If any iteration fails (validation or deployment), halt the loop and report **which solution** failed and which had already landed.
-3. Write one `.last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
+3. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
 
 **In `MULTI_PIPELINE_MODE` (v2 — legacy):** The selected stage label (e.g., "Staging") is matched against each pipeline's `stages[]` — each pipeline has its own `stageId` for the same target environment. All subsequent phases (validate, deploy, poll) are looped over `PIPELINES_LIST` in `order`:
 1. Loop iteration i: use `pipelines[i].stageId` where stage label matches `SELECTED_STAGE.name`, `pipelines[i].solutionName`, etc.
 2. If any iteration fails (validation or deployment), halt the loop and report which pipeline failed and which were already deployed.
-3. Write one `.last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
+3. Write one `docs/alm/last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
 
-> **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-solution (v3) or per-pipeline (v2) `status` in `.last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all entries again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-solution deploy to production.
+> **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-solution (v3) or per-pipeline (v2) `status` in `docs/alm/last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all entries again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-solution deploy to production.
 
-Check `.last-deploy.json` — if the last deployment to this stage failed, warn the user:
+Check `docs/alm/last-deploy.json` — if the last deployment to this stage failed, warn the user:
 > "The last deployment to `{stageName}` had status: **Failed**. Would you like to retry? 1. Yes, retry / 2. No, cancel"
 
 ### Phase 3 — Resolve Pipeline Info
@@ -191,7 +191,7 @@ OData-Version: 4.0
 Accept: application/json
 ```
 
-Where `BAP_SOURCE_ENV_ID` = the BAP GUID of the dev environment (from `pac env list`, stored in `.last-pipeline.json` or available from `pac env who`).
+Where `BAP_SOURCE_ENV_ID` = the BAP GUID of the dev environment (from `pac env list`, stored in `docs/alm/last-pipeline.json` or available from `pac env who`).
 
 Extract:
 - `SourceDeploymentEnvironmentId` — use as the `devdeploymentenvironment` binding in the stage run. Store as `sourceDeploymentEnvironmentId`.
@@ -204,7 +204,7 @@ Use `solutionId` from `.solution-manifest.json` as `ARTIFACT_SOLUTION_ID` and `u
 > ```
 > GET {hostEnvUrl}/api/data/v9.1/deploymentpipelines({pipelineId})/deploymentpipeline_deploymentenvironment?$select=deploymentenvironmentid,name,environmenttype
 > ```
-> Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `.last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
+> Filter for `environmenttype = 200000000` to get the source record. Use `deploymentenvironmentid` as the `sourceDeploymentEnvironmentId`. For the artifact/solution list, use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` and `solutionName` from `.solution-manifest.json` as fallbacks. Set a flag `VALIDATE_PACKAGE_UNAVAILABLE = true` to skip Phase 4.2–4.3 and use the PAC CLI path in Phase 6.
 
 ### Phase 3.5 — Pre-deploy Completeness Check
 
@@ -220,20 +220,52 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --solutionId "{solutionId from .solution-manifest.json}"
 ```
 
-Parse stdout and evaluate `missing.*`:
+Parse stdout and evaluate `missing.*`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
 
-- **All empty** → proceed to Phase 4.
+```
+PRE_SYNC_VERSION = solutionManifest.solution.version   // from .solution-manifest.json read in Phase 1
+PRE_SYNC_MISSING = { siteComponents, siteLanguages, cloudFlows, envVarDefinitions, customTables, ... }   // from the discovery stdout above
+```
+
+Then:
+
+- **All `missing.*` empty** → proceed to Phase 4.
 - **Any non-empty** → report a short summary ("Solution is missing {N} components"). Ask via `AskUserQuestion`:
   > "The source solution appears incomplete relative to the live site. What would you like to do?
-  > 1. **Run `/power-pages:setup-solution` now** (sync mode) — adopts missing components and bumps the version, then resume the deploy (Recommended)
+  > 1. **Run `/power-pages:setup-solution` now** (sync mode) — adopts missing components and bumps the version, then re-confirm with you before deploying (Recommended)
   > 2. **Deploy anyway** — the missing components will not reach the target
   > 3. **Cancel** — I'll investigate first"
 
-  - Option 1: invoke the skill, wait for completion, then re-run the discovery helper to confirm all `missing.*` are empty. If any remain, repeat the prompt.
-  - Option 2: record the deliberate gap in `.last-deploy.json` under a `knownGaps` field so the audit trail is preserved.
-  - Option 3: stop.
+  - **Option 1 — Sync first, then re-confirm before deploy:**
+    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion.
+    2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
+    3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 3.5 prompt above.
+    4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
+    5. **Re-confirm with the user before proceeding to Phase 4** — the solution about to ship is now different from what the user originally saw when they started the deploy. Use `AskUserQuestion`:
 
-> **Why this exists**: the ALM-aware-by-default rule in `AGENTS.md` requires this check at every gate where a solution leaves its source environment.
+       > "Sync complete.
+       >
+       > **{solutionUniqueName}** is now **v{POST_SYNC_VERSION}** (was v{PRE_SYNC_VERSION}) with **{NEWLY_ADOPTED.total} newly-adopted components**:
+       > - {first 3-5 names by category — prefer high-signal categories: cloud flows, server logic, env var definitions, then site components}
+       > - {if more remain: `+ {N} more across {category list}`}
+       >
+       > About to deploy this updated solution to **{SELECTED_STAGE.name}** ({targetEnvUrl}).
+       >
+       > Continue with the deployment?"
+
+       | Question | Header | Options |
+       |---|---|---|
+       | Continue with the deployment? | Post-sync approval | Yes — deploy v{POST_SYNC_VERSION} to {SELECTED_STAGE.name} (Recommended), Pause — I want to review the new solution contents first, Cancel — abort the deploy |
+
+       - **Yes** → proceed to Phase 4 with the post-sync solution.
+       - **Pause** → exit deploy-pipeline cleanly with a short note ("Paused after sync. Re-run `/power-pages:deploy-pipeline` when you're ready to ship v{POST_SYNC_VERSION} to {SELECTED_STAGE.name}.") so the user can inspect the synced manifest / Dataverse state and resume manually. **Do not** write `docs/alm/last-deploy.json` — no deployment happened. Skip the skill-tracking call too.
+       - **Cancel** → stop the skill. Same no-marker / no-tracking rule applies.
+  - **Option 2** — record the deliberate gap in `docs/alm/last-deploy.json` under a `knownGaps` field so the audit trail is preserved.
+  - **Option 3** — stop.
+
+> **Why the post-sync gate exists**: this skill is the gate that *promotes a solution to staging or production* — the moment of staging promotion is the last place to catch surprises. When sync mode runs mid-deploy, it produces a different solution version than the one the user had in mind when they invoked the skill. Re-confirming after sync gives the user an explicit chance to inspect the version bump and the list of newly-adopted components before they reach the target environment. The Phase 3.5 trigger is intentional; the post-sync re-confirmation is the safety on top of it. Same principle applies when this skill is invoked from `plan-alm` orchestration — `plan-alm`'s plan approval (Phase 4) covers the pre-sync state; this gate covers the delta introduced by mid-deploy sync.
+
+> **Why Phase 3.5 exists in the first place**: the ALM-aware-by-default rule in `AGENTS.md` requires the completeness check at every gate where a solution leaves its source environment.
 
 ### Phase 4 — Create Stage Run + Validate Package
 
@@ -393,7 +425,7 @@ Authorization: Bearer {SOURCE_TOKEN}
 ```
 Use the returned `version` as `artifactdevcurrentversion`. Do NOT use the version from `.solution-manifest.json` — that may be stale.
 
-For `artifactversion`, increment the patch number of the source version (e.g., `1.0.0.2` → `1.0.0.3`). This must be strictly greater than the version already deployed in the target stage. If deploying to the same stage multiple times, check `.last-deploy.json` for the last `artifactVersion` and use a higher value.
+For `artifactversion`, increment the patch number of the source version (e.g., `1.0.0.2` → `1.0.0.3`). This must be strictly greater than the version already deployed in the target stage. If deploying to the same stage multiple times, check `docs/alm/last-deploy.json` for the last `artifactVersion` and use a higher value.
 
 Then PATCH (include `deploymentsettingsjson` only if `ENV_VAR_OVERRIDES` is non-empty):
 
@@ -440,7 +472,7 @@ Response is HTTP 204. If the PATCH fails with a version conflict error, check bo
 >
 > If the CLI returns "Resource not found for the segment 'deploymentenvironments'": the dev environment is not connected to a Pipelines host. Advise the user to configure the host in Power Platform Admin Center (Environments → select env → Pipelines), then retry.
 >
-> If CLI succeeds: parse the output for stage run status, write `.last-deploy.json` with `status: "Succeeded"` (or the parsed status), and skip the `DeployPackageAsync` call and polling in 6.1–6.2.
+> If CLI succeeds: parse the output for stage run status, write `docs/alm/last-deploy.json` with `status: "Succeeded"` (or the parsed status), and skip the `DeployPackageAsync` call and polling in 6.1–6.2.
 
 **6.1 Trigger deployment** (skip if `VALIDATE_PACKAGE_UNAVAILABLE = true` — use PAC CLI path above):
 
@@ -525,7 +557,7 @@ If `solutionManifest.botComponents` is absent or empty, skip this warning entire
 
 These warnings are informational only — do not block the summary or use `AskUserQuestion`.
 
-**7.3 Write `.last-deploy.json`** to the project root:
+**7.3 Write `docs/alm/last-deploy.json`** (create the `docs/alm/` directory first if missing — `node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`):
 
 ```json
 {
@@ -553,7 +585,7 @@ Where `{YYYY-MM-DD}` is the date portion of `deployedAt` and `{stageName}` is th
 
 **7.4 Write deployment history entry (HTML):**
 
-Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.html` (same derivation as `.last-deploy.json`'s `deployHistoryFile` field — replace spaces with hyphens, lowercase stage name).
+Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.html` (same derivation as `docs/alm/last-deploy.json`'s `deployHistoryFile` field — replace spaces with hyphens, lowercase stage name).
 
 Create `docs/deploy-history/` if it does not already exist:
 ```bash
@@ -600,7 +632,7 @@ Write the rendered HTML to `docs/deploy-history/{filename}.html`.
 
 Then add to the staging area:
 ```bash
-git add .last-deploy.json docs/deploy-history/{filename}.html
+git add docs/alm/last-deploy.json docs/deploy-history/{filename}.html
 git commit -m "Deploy {solutionUniqueName} v{artifactVersion} to {stageName} ({status})"
 ```
 
@@ -621,7 +653,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-The helper reads the `.last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 This step is what makes the rendered plan stay current after a direct `/power-pages:deploy-pipeline` invocation. plan-alm Phase 7 also runs the same refresh as belt-and-suspenders; running it twice is idempotent (same input → same output).
 
@@ -739,7 +771,7 @@ Then switch PAC CLI back to the source (dev) environment regardless of the resul
 pac env select --environment "{sourceEnvUrl}"
 ```
 
-Evaluate the result and take action based on the outcome. In all cases, **after the outcome is resolved**, update `.last-deploy.json` and the deploy history file (described below).
+Evaluate the result and take action based on the outcome. In all cases, **after the outcome is resolved**, update `docs/alm/last-deploy.json` and the deploy history file (described below).
 
 - **`activated: true`**: Site is already live. Set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{result.websiteUrl}" }`.
 
@@ -754,7 +786,7 @@ Evaluate the result and take action based on the outcome. In all cases, **after 
 
 - **`error` present**: Set `ACTIVATION_OUTCOME = null` — skip the update steps below silently.
 
-**After activation outcome is resolved**, patch `.last-deploy.json` (in-place `Edit`) with the actual values:
+**After activation outcome is resolved**, patch `docs/alm/last-deploy.json` (in-place `Edit`) with the actual values:
 - `"activationStatus": "{ACTIVATION_OUTCOME.status}"` (or keep `null` if `ACTIVATION_OUTCOME` is null)
 - `"siteUrl": "{ACTIVATION_OUTCOME.siteUrl}"` (or keep `null`)
 
@@ -820,17 +852,19 @@ Authorization: Bearer {HOST_TOKEN}
 
 1. **Phase 2**: Target stage selection (which environment to deploy to)
 2. **Phase 2**: Retry confirmation if last deploy to this stage failed
-3. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-4. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
-5. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
-6. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `.last-deploy.json` and the deploy history HTML.
-7. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
+3. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
+4. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
+5. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
+6. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
+7. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
+8. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
+9. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
 
-- No `.last-pipeline.json`: stop, advise `/power-pages:setup-pipeline`
+- No `docs/alm/last-pipeline.json`: stop, advise `/power-pages:setup-pipeline`
 - Host environment token fails: stop with `az login` instructions
-- `RetrieveDeploymentPipelineInfo` fails: use `sourceDeploymentEnvironmentId` from `.last-pipeline.json` as fallback; warn that artifact list could not be retrieved and ask user to confirm solution
+- `RetrieveDeploymentPipelineInfo` fails: use `sourceDeploymentEnvironmentId` from `docs/alm/last-pipeline.json` as fallback; warn that artifact list could not be retrieved and ask user to confirm solution
 - Stage run creation fails (4xx): report full error body — likely a pipeline configuration issue
 - `ValidatePackageAsync` fails: report error — usually means the solution is not ready to deploy
 - Validation `stagerunstatus = 200000003` (Failed): stop with validation details — user must resolve issues before retrying (new stage run required)
@@ -842,10 +876,10 @@ Authorization: Bearer {HOST_TOKEN}
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read .last-pipeline.json for pipelineId/stages; acquire host env token |
-| Select target stage | Selecting target stage | Show available stages from .last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
+| Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
+| Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
 | Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
 | Configure deployment settings | Configuring deployment settings | Check/display deployment-settings.json (5.0a: read or generate template; 5.0b: surface path); query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
-| Write deployment record | Writing deployment record | Write .last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show connection reference warning (if solutionManifest.cloudFlows non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |
+| Write deployment record | Writing deployment record | Write docs/alm/last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show connection reference warning (if solutionManifest.cloudFlows non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |

@@ -100,11 +100,11 @@ Steps:
    Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
 4. Confirm `.powerpages-site/` folder exists (required to find component records)
-5. **Check for ALM plan context** — look for `.alm-plan-context.json` in the project root:
+5. **Check for ALM plan context** — look for `docs/alm/alm-plan-context.json`:
    - If found, ask via `AskUserQuestion`:
      > "An ALM plan was previously generated for this site. It includes a pre-classified list of site settings (keepAsIs, promoteToEnvVar, authNoValue, excluded). Would you like to use those choices, or re-discover and re-classify everything now?"
    - Options: **"Use pre-loaded choices from plan"** / **"Re-discover and re-classify"**
-   - If user chooses pre-loaded: read `.alm-plan-context.json`, store the `siteSettings` object as `preloadedSettings`. When Step 5.3 is reached, **skip the query and classification logic** — use `preloadedSettings` directly.
+   - If user chooses pre-loaded: read `docs/alm/alm-plan-context.json`, store the `siteSettings` object as `preloadedSettings`. When Step 5.3 is reached, **skip the query and classification logic** — use `preloadedSettings` directly.
    - If user chooses re-discover: proceed normally (Steps 5.3–5.4 query Dataverse and reclassify).
 6. **Detect sync mode** — check whether `.solution-manifest.json` exists in the project root.
    - **If present**: read it and verify the `solutionId` still exists in the target environment via `GET {envUrl}/api/data/v9.2/solutions({solutionId})?$select=solutionid,uniquename,version,ismanaged`.
@@ -117,7 +117,7 @@ Steps:
    - `syncMode = true`: "Found existing solution `{uniqueName}` v{version}. Running in **sync mode** — I'll discover the current site inventory, diff against what's already in the solution, and only add missing components."
    - `syncMode = false`: "No existing solution manifest found. Running a **fresh setup** — I'll create a publisher and solution, then add all site components."
 
-8. **Check for split plan (multi-solution mode)** — look for `.alm-split-plan.json` (written by `plan-alm` Phase 1 Step 10):
+8. **Check for split plan (multi-solution mode)** — look for `docs/alm/alm-split-plan.json` (written by `plan-alm` Phase 1 Step 10):
    - If found and `proposedSolutions.length > 1`, set `MULTI_SOLUTION_MODE = true` and store the array as `PROPOSED_SOLUTIONS`.
    - In multi-solution mode:
      - Phase 2 asks for publisher details **once** (shared across all solutions) and presents the proposed solution names/versions for **confirmation** (user can override each before proceeding).
@@ -689,18 +689,19 @@ The script handles token refresh every 20 calls, treats "already in solution" as
 1. Verify components: `GET {envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq '{solutionId}'&$select=objectid,componenttype`
 2. Count components by type, confirm the website record (using `websiteComponentType`) is present
 
-2b. **Capture the post-setup env var snapshot for the rendered ALM plan.** Run the discovery helper and write its output to a sidecar marker file (`.last-env-vars.json`) at the project root. The plan-refresh helper (Phase 7's self-refresh) ingests this sidecar into `planData.envVars` so the rendered plan's Env Variables tab shows the definitions setup-solution just created/adopted (without it the tab stays empty even after Phase 5.4 / 5.4.C / 5.4b created definitions):
+2b. **Capture the post-setup env var snapshot for the rendered ALM plan.** Ensure `docs/alm/` exists, then run the discovery helper and write its output to a sidecar marker file (`docs/alm/last-env-vars.json`). The plan-refresh helper (Phase 7's self-refresh) ingests this sidecar into `planData.envVars` so the rendered plan's Env Variables tab shows the definitions setup-solution just created/adopted (without it the tab stays empty even after Phase 5.4 / 5.4.C / 5.4b created definitions):
 
    ```bash
+   node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
      --envUrl "{envUrl}" \
      --publisherPrefix "{publisherPrefix}" \
      --websiteRecordId "{websiteRecordId}" \
-     --token "{token}" > .last-env-vars.json.tmp \
-     && mv .last-env-vars.json.tmp .last-env-vars.json
+     --token "{token}" > docs/alm/last-env-vars.json.tmp \
+     && mv docs/alm/last-env-vars.json.tmp docs/alm/last-env-vars.json
    ```
 
-   The tmp-file write pattern preserves a prior good `.last-env-vars.json` on a transient discovery failure (parallel to the `.alm-size-estimate.json` pattern in plan-alm Phase 1). If the helper exits non-zero, log the stderr and continue — the existing sidecar (or absence of one) is acceptable; the refresh just won't update env vars this run.
+   The tmp-file write pattern preserves a prior good `docs/alm/last-env-vars.json` on a transient discovery failure (parallel to the `docs/alm/alm-size-estimate.json` pattern in plan-alm Phase 1). If the helper exits non-zero, log the stderr and continue — the existing sidecar (or absence of one) is acceptable; the refresh just won't update env vars this run.
 
    The sidecar's shape mirrors what `discover-env-var-definitions.js` already returns: `{ envVars: [{ schemaName, type, defaultValue, siteSetting }], count }`. Don't transform — the renderer reads these fields directly.
 

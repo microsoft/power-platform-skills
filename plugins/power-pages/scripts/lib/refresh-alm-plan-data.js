@@ -25,14 +25,14 @@
 //   setup-solution:
 //     - plan footer status (no change — stays "In Execution")
 //   setup-pipeline:
-//     - hostResolution from .last-host-check.json
-//     - pipelineMeta from .last-pipeline.json (no lastDeploy yet)
+//     - hostResolution from docs/alm/last-host-check.json
+//     - pipelineMeta from docs/alm/last-pipeline.json (no lastDeploy yet)
 //     - drop pre-run NoHost / *Unbound* warnings from risks[]
 //   deploy-pipeline:
-//     - pipelineMeta.lastDeploy from .last-deploy.json
+//     - pipelineMeta.lastDeploy from docs/alm/last-deploy.json
 //     - drop pre-run "Pipelines host not yet provisioned" warnings (defensive)
 //   test-site:
-//     - validationRuns[stage] from .last-test-site.json (if present)
+//     - validationRuns[stage] from docs/alm/last-test-site.json (if present)
 //   finalize:
 //     - PLAN_STATUS = "Completed"
 //
@@ -44,6 +44,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { almPath } = require('./alm-paths');
 
 const PHASES = new Set([
   'setup-solution',
@@ -91,7 +92,7 @@ function readJson(filePath) {
   }
 }
 
-// Map .last-host-check.json's resolutionStatus to plan-alm's hostResolution.status.
+// Map docs/alm/last-host-check.json's resolutionStatus to plan-alm's hostResolution.status.
 // Pass-through when the value already matches plan-alm's enum; the wrappers
 // emit the same names today, but we keep this map explicit so the SKILL.md
 // contract stays clear. ensure-pipelines-host post-run typically reports
@@ -143,8 +144,8 @@ function dropResolvedRisks(risks, phase) {
 }
 
 function refreshSetupPipeline(planData, projectRoot) {
-  const hostCheckPath = path.join(projectRoot, '.last-host-check.json');
-  const pipelineMarkerPath = path.join(projectRoot, '.last-pipeline.json');
+  const hostCheckPath = almPath(projectRoot, 'lastHostCheck');
+  const pipelineMarkerPath = almPath(projectRoot, 'lastPipeline');
   const hostCheck = readJson(hostCheckPath);
   const pipelineMarker = readJson(pipelineMarkerPath);
 
@@ -174,7 +175,7 @@ function refreshSetupPipeline(planData, projectRoot) {
 }
 
 function refreshDeployPipeline(planData, projectRoot) {
-  const deployMarker = readJson(path.join(projectRoot, '.last-deploy.json'));
+  const deployMarker = readJson(almPath(projectRoot, 'lastDeploy'));
   if (deployMarker) {
     planData.pipelineMeta = planData.pipelineMeta || {};
     planData.pipelineMeta.lastDeploy = {
@@ -200,7 +201,7 @@ function refreshTestSite(planData, projectRoot, stageName) {
   // stage in planData.stages when planData has only one target. Standalone
   // single-stage test-site invocations work without --stageName via the
   // last fallback; multi-stage standalone runs need the explicit arg.
-  const tsMarker = readJson(path.join(projectRoot, '.last-test-site.json'));
+  const tsMarker = readJson(almPath(projectRoot, 'lastTestSite'));
   if (!tsMarker) return planData;
 
   let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;
@@ -234,7 +235,7 @@ function refreshSetupSolution(planData, projectRoot) {
   // tab) needs to flip:
   //   - plannedEnvVarCount → 0 (the planned set was either created or skipped)
   //   - planData.envVars[]  → the freshly-created/adopted definitions
-  // setup-solution Phase 6 step 2b writes .last-env-vars.json by running
+  // setup-solution Phase 6 step 2b writes docs/alm/last-env-vars.json by running
   // discover-env-var-definitions.js with post-setup state — we ingest that
   // sidecar here. Without this, the rendered plan's Env Variables tab stays
   // empty even though setup-solution just created definitions in Dataverse,
@@ -242,7 +243,7 @@ function refreshSetupSolution(planData, projectRoot) {
   if (typeof planData.plannedEnvVarCount === 'number' && planData.plannedEnvVarCount > 0) {
     planData.plannedEnvVarCount = 0;
   }
-  const envVarsMarker = projectRoot ? readJson(path.join(projectRoot, '.last-env-vars.json')) : null;
+  const envVarsMarker = projectRoot ? readJson(almPath(projectRoot, 'lastEnvVars')) : null;
   if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
     // Discovery returns the same { schemaName, type, defaultValue, siteSetting }
     // shape the renderer expects — pass through verbatim. Empty array is a
@@ -257,7 +258,7 @@ function refreshSetupSolution(planData, projectRoot) {
 // Manual-path passthrough refreshes. The agent updates planData.steps[i].status
 // before calling these phases, so the main work each handler does is trigger
 // the re-render. Each may grow to ingest a per-stage marker file (e.g.
-// .last-import.json keyed by target stage) in a future iteration.
+// docs/alm/last-import.json keyed by target stage) in a future iteration.
 
 function refreshExportSolution(planData) {
   // export-solution writes the solution zip to disk + a .solution-manifest.json
@@ -269,16 +270,16 @@ function refreshExportSolution(planData) {
 }
 
 function refreshImportSolution(planData, projectRoot, stageName) {
-  // import-solution writes .last-import.json with { solutionName,
+  // import-solution writes docs/alm/last-import.json with { solutionName,
   // targetEnvironment, importedAt, status, componentResults }. For Manual
   // path with multiple targets, the file reflects the MOST RECENT import —
   // not a per-stage history. We resolve the stage label from --stageName
   // (passed by plan-alm Phase 7's per-target loop) or by matching
-  // .last-import.json's targetEnvironment URL against planData.stages[].envUrl.
+  // docs/alm/last-import.json's targetEnvironment URL against planData.stages[].envUrl.
   // The result writes into planData.manualImports[stageName] (parallel to
   // validationRuns[stageName]) so reviewers see per-target outcome on the
   // rendered plan, not just the most recent.
-  const importMarker = readJson(path.join(projectRoot, '.last-import.json'));
+  const importMarker = readJson(almPath(projectRoot, 'lastImport'));
   if (!importMarker) return planData;
 
   // Resolve the target stage label: explicit --stageName wins; fall back to
@@ -320,18 +321,18 @@ function refreshImportSolution(planData, projectRoot, stageName) {
 }
 
 function refreshActivateSite(planData, projectRoot, stageName) {
-  // activate-site Phase 5.1b writes .last-activate.json with the post-activation
+  // activate-site Phase 5.1b writes docs/alm/last-activate.json with the post-activation
   // state (siteUrl, websiteRecordId, environmentUrl, activatedAt, status). We
   // ingest it into planData.activations[stageName] (parallel to validationRuns
   // and manualImports) so the Manual-path "Activate site in {stage}" checklist
   // step can render an ACTIVATED badge with the live site URL inline.
   //
   // Stage resolution: explicit --stageName wins; falls back to URL matching
-  // .last-activate.json's environmentUrl against planData.stages[].envUrl when
-  // omitted. PP Pipelines path tracks activation in .last-deploy.json instead
+  // docs/alm/last-activate.json's environmentUrl against planData.stages[].envUrl when
+  // omitted. PP Pipelines path tracks activation in docs/alm/last-deploy.json instead
   // (refreshDeployPipeline ingests it); the Manual-path standalone case is
   // what this handler covers.
-  const marker = projectRoot ? readJson(path.join(projectRoot, '.last-activate.json')) : null;
+  const marker = projectRoot ? readJson(almPath(projectRoot, 'lastActivate')) : null;
   if (!marker) return planData;
 
   let resolvedStage = (typeof stageName === 'string' && stageName.length > 0) ? stageName : null;

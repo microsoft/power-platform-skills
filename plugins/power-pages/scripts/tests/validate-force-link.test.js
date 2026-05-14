@@ -25,7 +25,9 @@ function makeTempDir() {
 }
 
 function writeMarker(dir, data) {
-  fs.writeFileSync(path.join(dir, '.last-force-link.json'), JSON.stringify(data), 'utf8');
+  const almDir = path.join(dir, 'docs', 'alm');
+  fs.mkdirSync(almDir, { recursive: true });
+  fs.writeFileSync(path.join(almDir, 'last-force-link.json'), JSON.stringify(data), 'utf8');
 }
 
 function runValidator(cwd) {
@@ -47,7 +49,7 @@ const VALID_MARKER = {
   forcedAt: '2026-05-11T04:22:09.000Z',
 };
 
-test('exits 0 when no .last-force-link.json present (not a force-link session)', () => {
+test('exits 0 when no docs/alm/last-force-link.json present (not a force-link session)', () => {
   const dir = makeTempDir();
   const result = runValidator(dir);
   assert.equal(result.code, 0, result.stderr);
@@ -124,7 +126,9 @@ test('blocks when validationStatus is not a number', () => {
 
 test('blocks when marker is not valid JSON', () => {
   const dir = makeTempDir();
-  fs.writeFileSync(path.join(dir, '.last-force-link.json'), '{ not valid json', 'utf8');
+  const almDir = path.join(dir, 'docs', 'alm');
+  fs.mkdirSync(almDir, { recursive: true });
+  fs.writeFileSync(path.join(almDir, 'last-force-link.json'), '{ not valid json', 'utf8');
   const result = runValidator(dir);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /could not be parsed as JSON/);

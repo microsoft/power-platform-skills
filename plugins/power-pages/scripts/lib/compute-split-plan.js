@@ -522,7 +522,18 @@ function computeSplitPlan({ estimate, config, meta }) {
   proposedSolutions = appendFutureBuffer(proposedSolutions, meta);
 
   const splitWarnings = validateSplits(proposedSolutions, config.thresholds);
-  const recommendations = buildRecommendations(estimate, strategy, config).concat(splitWarnings);
+  // Surface estimator-side truncation warnings as `recommendations[]` entries
+  // so the rendered plan shows them inline. These get the `error` type because
+  // a truncated input is more dangerous than a normal split-decision warning
+  // (the user can't tell anything's wrong from the recommendation alone).
+  const truncationRecs = (Array.isArray(estimate.truncationWarnings) ? estimate.truncationWarnings : [])
+    .map((message) => ({
+      type: 'error',
+      message: `Estimator may be truncated: ${message} The split recommendation below could be wrong — investigate before approving.`,
+    }));
+  const recommendations = truncationRecs
+    .concat(buildRecommendations(estimate, strategy, config))
+    .concat(splitWarnings);
 
   const appliedStrategies = [strategy.primary];
   if (strategy.additive) appliedStrategies.push('strategy-4-config-isolation');
@@ -534,6 +545,10 @@ function computeSplitPlan({ estimate, config, meta }) {
     appliedStrategies,
     proposedSolutions,
     recommendations,
+    // Pass the canary fields through so plan-alm can surface them to the user
+    // and gate the "keep as single anyway" override on whether they're set.
+    truncationSuspected: !!estimate.truncationSuspected,
+    truncationWarnings: Array.isArray(estimate.truncationWarnings) ? estimate.truncationWarnings : [],
   };
 }
 

@@ -351,7 +351,7 @@ Hook validators run after a skill executes (or, badly, every time the assistant 
 | Pattern | Why it's wrong |
 |---|---|
 | **`type: prompt` Stop hooks for skill-completion** | Stop fires on every assistant pause, including user-input waits. LLM-evaluation can't reliably tell "this skill wasn't supposed to run" from "this skill failed", so it returns `ok: false` whenever artifacts are missing — forcing continuation. Combine with multiple skills' hooks all firing per turn, and you have a runaway loop. The plugin removed all of these in commit `e670581`. **Do not re-introduce.** |
-| **`process.exit(2)` (block) for soft "did this complete?" checks** | Blocking exit forces continuation. For "did the skill complete cleanly?" you almost never want forced continuation — you want a one-time advisory the agent acknowledges and moves on. Reserve `block()` for **hard correctness gates** only: malformed marker files, `.last-deploy.json.status === "Failed"`, lint failures, secrets in diffs. |
+| **`process.exit(2)` (block) for soft "did this complete?" checks** | Blocking exit forces continuation. For "did the skill complete cleanly?" you almost never want forced continuation — you want a one-time advisory the agent acknowledges and moves on. Reserve `block()` for **hard correctness gates** only: malformed marker files, `docs/alm/last-deploy.json.status === "Failed"`, lint failures, secrets in diffs. |
 | **Re-deriving completion from ephemeral artifacts** | If a validator checks `docs/foo.html` exists and the user legitimately deletes that file (cleanup, project move), the hook fails forever. Validation should reflect *intent*, not *artifact presence*. Use marker files the skill writes deliberately. |
 | **Stop hooks that duplicate PostToolUse hooks** | If a skill is already validated by `hooks/hooks.json` PostToolUse on the `Skill` tool (which fires once per skill invocation), a Stop hook running the same validator just adds noise — fires too often. Pick one. **Prefer PostToolUse.** |
 
@@ -359,7 +359,7 @@ Hook validators run after a skill executes (or, badly, every time the assistant 
 
 #### 1. Deterministic command validators with marker-file gates
 
-Each skill writes a marker file at completion (`.last-pipeline.json`, `.last-deploy.json`, `docs/alm-plan.html`, `.solution-manifest.json`, etc.). The validator:
+Each skill writes a marker file at completion (`docs/alm/last-pipeline.json`, `docs/alm/last-deploy.json`, `docs/alm-plan.html`, `.solution-manifest.json`, etc.). The validator:
 
 ```js
 const { runValidation, findProjectRoot, approve, block, readDeferralMarker } = require('../../../scripts/lib/validation-helpers');
@@ -429,7 +429,7 @@ Some checks DO warrant blocking — they're not "did the skill complete?" checks
 
 - Marker file exists but is malformed JSON.
 - Marker file's `status === "Failed"` and the agent should investigate before continuing.
-- Required field is missing from a present marker (e.g. `.last-pipeline.json` without `pipelineId`).
+- Required field is missing from a present marker (e.g. `docs/alm/last-pipeline.json` without `pipelineId`).
 - Lint failure on a file the skill just wrote.
 - Secrets detected in a diff the skill is about to commit.
 

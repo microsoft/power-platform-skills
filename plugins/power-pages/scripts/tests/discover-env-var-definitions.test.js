@@ -44,7 +44,7 @@ test('discoverEnvVarDefinitions returns empty when publisherPrefix missing (avoi
     publisherPrefix: null,
     websiteRecordId: 'site-id',
   });
-  assert.deepEqual(result, { envVars: [], count: 0 });
+  assert.deepEqual(result, { envVars: [], count: 0, scope: 'none' });
 });
 
 test('discoverEnvVarDefinitions filters definitions by publisher prefix and uses v9.2 API', async (t) => {
@@ -228,7 +228,11 @@ test('discoverEnvVarDefinitions returns empty when definitions query errors', as
     publisherPrefix: 'cr',
     websiteRecordId: 'site-id',
   });
-  assert.deepEqual(result, { envVars: [], count: 0 });
+  // When the definitions query errors out, helper returns empty and the scope
+  // stays at the legacy fallback label ('publisher-prefix') since solutionId
+  // wasn't passed. The fall-through is deliberate — caller treats the empty
+  // result as "no data" regardless of scope label.
+  assert.deepEqual(result, { envVars: [], count: 0, scope: 'publisher-prefix' });
 });
 
 test('discoverEnvVarDefinitions handles missing defaultvalue and unknown type gracefully', async (t) => {
@@ -261,4 +265,181 @@ test('discoverEnvVarDefinitions handles missing defaultvalue and unknown type gr
   assert.equal(result.envVars[0].type, 'String', 'unknown type code → String fallback');
   assert.equal(result.envVars[1].defaultValue, '', 'null defaultvalue → empty string');
   assert.equal(result.envVars[1].type, 'Secret', 'known type code preserved');
+});
+
+// --- Solution-scoped filtering ----------------------------------------------
+//
+// Regression test for the "env var prediction is off" report: a tenant with 5
+// publisher-prefix-matching env var defs, but only 2 of them in the target
+// solution. With --solutionId, the helper must return just those 2 (and report
+// scope: 'solution'). Without --solutionId, it returns all 5 (the legacy
+// wider-than-intended scope, preserved for fresh projects).
+
+test('discoverEnvVarDefinitions intersects with solution membership when --solutionId is passed', async (t) => {
+  const fiveDefs = [
+    { environmentvariabledefinitionid: 'def-aaaa-1111', schemaname: 'new_FromThisProject', displayname: 'From This Project', type: 100000000, defaultvalue: 'v1', description: '' },
+    { environmentvariabledefinitionid: 'def-bbbb-2222', schemaname: 'new_FromOtherProject1', displayname: 'Foreign 1', type: 100000000, defaultvalue: 'x', description: '' },
+    { environmentvariabledefinitionid: 'def-cccc-3333', schemaname: 'new_FromOtherProject2', displayname: 'Foreign 2', type: 100000000, defaultvalue: 'y', description: '' },
+    { environmentvariabledefinitionid: 'def-dddd-4444', schemaname: 'new_AlsoFromThisProject', displayname: 'Also Ours', type: 100000002, defaultvalue: 'true', description: '' },
+    { environmentvariabledefinitionid: 'def-eeee-5555', schemaname: 'new_FromOtherProject3', displayname: 'Foreign 3', type: 100000000, defaultvalue: 'z', description: '' },
+  ];
+  // Solution owns def-aaaa-1111 + def-dddd-4444 only.
+  const inSolutionRows = [
+    { objectid: 'def-aaaa-1111' },
+    { objectid: 'def-dddd-4444' },
+  ];
+
+  withMockedRequests(t, ({ url }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      return { statusCode: 200, body: JSON.stringify({ value: fiveDefs }) };
+    }
+    if (url.includes('solutioncomponents')) {
+      return { statusCode: 200, body: JSON.stringify({ value: inSolutionRows }) };
+    }
+    if (url.includes('mspp_sitesettings')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'new',
+    websiteRecordId: 'site-id',
+    solutionId: 'sol-9999',
+  });
+
+  assert.equal(result.scope, 'solution', 'scope must reflect solution-membership filtering');
+  assert.equal(result.count, 2, 'only the two solution-owned env vars should be returned');
+  const names = result.envVars.map((e) => e.schemaName).sort();
+  assert.deepEqual(names, ['new_AlsoFromThisProject', 'new_FromThisProject']);
+});
+
+test('discoverEnvVarDefinitions falls back to publisher-prefix when --solutionId omitted', async (t) => {
+  const threeDefs = [
+    { environmentvariabledefinitionid: 'd1', schemaname: 'new_A', displayname: 'A', type: 100000000, defaultvalue: '', description: '' },
+    { environmentvariabledefinitionid: 'd2', schemaname: 'new_B', displayname: 'B', type: 100000000, defaultvalue: '', description: '' },
+    { environmentvariabledefinitionid: 'd3', schemaname: 'new_C', displayname: 'C', type: 100000000, defaultvalue: '', description: '' },
+  ];
+  withMockedRequests(t, ({ url }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      return { statusCode: 200, body: JSON.stringify({ value: threeDefs }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'new',
+    websiteRecordId: 'site-id',
+    // no --solutionId
+  });
+
+  assert.equal(result.scope, 'publisher-prefix', 'scope label must reflect the wider fallback');
+  assert.equal(result.count, 3, 'all three prefix-matching env vars should be returned');
+});
+
+test('discoverEnvVarDefinitions with --solutionId returns empty (with scope=solution) when solution has zero env var defs', async (t) => {
+  // Two env vars match the publisher prefix, but the solution contains NONE.
+  // Without scoping the result would be 2; with scoping the result is 0, and
+  // the scope label must be 'solution' (not 'publisher-prefix') so the
+  // renderer doesn't accidentally fall back to the wider count.
+  withMockedRequests(t, ({ url }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          value: [
+            { environmentvariabledefinitionid: 'd1', schemaname: 'new_A', displayname: 'A', type: 100000000, defaultvalue: '', description: '' },
+            { environmentvariabledefinitionid: 'd2', schemaname: 'new_B', displayname: 'B', type: 100000000, defaultvalue: '', description: '' },
+          ],
+        }),
+      };
+    }
+    if (url.includes('solutioncomponents')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'new',
+    websiteRecordId: 'site-id',
+    solutionId: 'sol-empty',
+  });
+
+  assert.equal(result.scope, 'solution', 'solution scope must be honored even when the result is empty');
+  assert.equal(result.count, 0);
+});
+
+test('discoverEnvVarDefinitions sends Prefer: odata.maxpagesize header (pagination correctness)', async (t) => {
+  let preferOnDefsQuery = null;
+  let preferOnSiteSettingsQuery = null;
+  withMockedRequests(t, ({ url, headers }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      preferOnDefsQuery = headers && headers.Prefer;
+    } else if (url.includes('mspp_sitesettings')) {
+      preferOnSiteSettingsQuery = headers && headers.Prefer;
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'new',
+    websiteRecordId: 'site-id',
+  });
+
+  assert.match(preferOnDefsQuery || '', /odata\.maxpagesize=/, 'definitions query must send Prefer header');
+  assert.match(preferOnSiteSettingsQuery || '', /odata\.maxpagesize=/, 'site-settings query must send Prefer header');
+});
+
+test('discoverEnvVarDefinitions follows @odata.nextLink to aggregate paginated definitions', async (t) => {
+  let callCount = 0;
+  withMockedRequests(t, ({ url }) => {
+    if (url.includes('environmentvariabledefinitions')) {
+      callCount += 1;
+      if (callCount === 1) {
+        // First page: return 3 defs plus a nextLink
+        return {
+          statusCode: 200,
+          body: JSON.stringify({
+            value: [
+              { environmentvariabledefinitionid: 'd1', schemaname: 'new_A', displayname: 'A', type: 100000000, defaultvalue: '', description: '' },
+              { environmentvariabledefinitionid: 'd2', schemaname: 'new_B', displayname: 'B', type: 100000000, defaultvalue: '', description: '' },
+              { environmentvariabledefinitionid: 'd3', schemaname: 'new_C', displayname: 'C', type: 100000000, defaultvalue: '', description: '' },
+            ],
+            '@odata.nextLink': 'https://org.crm.dynamics.com/api/data/v9.2/environmentvariabledefinitions?$skiptoken=page2',
+          }),
+        };
+      }
+      // Second page: 2 more defs, no nextLink
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          value: [
+            { environmentvariabledefinitionid: 'd4', schemaname: 'new_D', displayname: 'D', type: 100000000, defaultvalue: '', description: '' },
+            { environmentvariabledefinitionid: 'd5', schemaname: 'new_E', displayname: 'E', type: 100000000, defaultvalue: '', description: '' },
+          ],
+        }),
+      };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await discoverEnvVarDefinitions({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    publisherPrefix: 'new',
+    websiteRecordId: 'site-id',
+  });
+
+  assert.equal(result.count, 5, 'should aggregate across both pages');
+  const names = result.envVars.map((e) => e.schemaName);
+  assert.deepEqual(names, ['new_A', 'new_B', 'new_C', 'new_D', 'new_E']);
 });

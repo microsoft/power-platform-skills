@@ -130,7 +130,7 @@ Steps:
    ```
    Store output as `ENV_LIST`.
 
-4. **Resolve the Pipelines host via `ensure-pipelines-host-detect.js`** (the same flow `/power-pages:ensure-pipelines-host` runs internally — it reads any cached `.last-host-check.json`, then walks the resolution order: org-setting binding → BAP env GET → tenant default custom host → tenant-wide enumeration. Read-only; never prompts the user):
+4. **Resolve the Pipelines host via `ensure-pipelines-host-detect.js`** (the same flow `/power-pages:ensure-pipelines-host` runs internally — it reads any cached `docs/alm/last-host-check.json`, then walks the resolution order: org-setting binding → BAP env GET → tenant default custom host → tenant-wide enumeration. Read-only; never prompts the user):
 
    ```bash
    BAP_TOKEN=$(az account get-access-token --resource "https://service.powerapps.com/" --query accessToken -o tsv)
@@ -147,25 +147,25 @@ Steps:
    Branch on `resolutionStatus`:
 
    - **`AvailableUsingPlatformHost` / `AvailableUsingCustomHost` / `AvailableUsingCustomHostByAdminDefault`** — host is already established and `ready: true`. Store `HOST_ENV_URL = hostResult.finalHostEnvUrl` and continue. Phase 3 confirms with the user.
-   - **`AvailableUnboundCustomHost` / `MultipleUnboundCustomHosts` / `PlatformHostExistsUnbound` / `NoHost`** — no host bound to the dev env. **Delegate to `/power-pages:ensure-pipelines-host`** so the user can reuse an existing host or provision a new Custom Host (`D365_ProjectHost` template). Tell the user: *"No Pipelines host bound to `{devEnvUrl}`. Invoking `/power-pages:ensure-pipelines-host` to set one up — it will run a tenant-wide search for existing hosts and offer to provision a new Custom Host if none are found."* After the sub-skill completes, re-read `.last-host-check.json`; capture `HOST_ENV_URL = finalHostEnvUrl` only if the new marker has `ready: true`. If the user cancelled the sub-skill, stop this skill — no pipeline can be created without a host.
+   - **`AvailableUnboundCustomHost` / `MultipleUnboundCustomHosts` / `PlatformHostExistsUnbound` / `NoHost`** — no host bound to the dev env. **Delegate to `/power-pages:ensure-pipelines-host`** so the user can reuse an existing host or provision a new Custom Host (`D365_ProjectHost` template). Tell the user: *"No Pipelines host bound to `{devEnvUrl}`. Invoking `/power-pages:ensure-pipelines-host` to set one up — it will run a tenant-wide search for existing hosts and offer to provision a new Custom Host if none are found."* After the sub-skill completes, re-read `docs/alm/last-host-check.json`; capture `HOST_ENV_URL = finalHostEnvUrl` only if the new marker has `ready: true`. If the user cancelled the sub-skill, stop this skill — no pipeline can be created without a host.
    - **`CannotRedirect`** — stop with the specific tenant-misconfiguration error from `hostResult.warnings[0]`. Tell the user: *"This tenant's `DefaultCustomPipelinesHostEnvForTenant` setting and the source env's `ProjectHostEnvironmentId` org setting disagree — only a Power Platform admin can resolve."*
    - **`OrgSettingStale`** — stop and surface the warning: *"`ProjectHostEnvironmentId` on `{devEnvUrl}` points at a host env that is no longer visible (deleted, disabled, or you lack access). Clear the org setting via PPAC or contact the env owner."*
    - **`PermissionDenied`** — stop and surface the warning: *"Caller lacks BAP read access on the env `{devEnvUrl}` is bound to. Contact the host env owner for at least `Deployment Pipeline User` access."*
 
    > **Why this replaces the old `discover-pipelines-host.js` call:** that helper only checked the tenant-level `DefaultCustomPipelinesHostEnvForTenant` setting (one of four resolution signals). `ensure-pipelines-host-detect.js` walks the full resolution order the Power Apps UI uses (mirrors `ProjectHostProvider.tsx`), so we agree with the UI in every case — including the previously-undetected `AvailableUnboundCustomHost` case where a Custom Host exists in the tenant but the source env hasn't been bound yet. See `references/cicd-pipeline-patterns.md` for the full state matrix.
 
-5. Check for existing `.last-pipeline.json` in the project root. If found, read its contents.
+5. Check for existing `docs/alm/last-pipeline.json`. If found, read its contents.
 
 6. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'pending — will be ensured next'}` ({hostResult.resolutionStatus}). Existing pipeline: found/not found."
 
-**If an existing `.last-pipeline.json` is found**, ask via `AskUserQuestion`:
+**If an existing `docs/alm/last-pipeline.json` is found**, ask via `AskUserQuestion`:
 
 > "A pipeline configuration already exists for `{pipelineName}` (created {createdAt}). How would you like to proceed?
 > 1. Overwrite — create a new pipeline, replacing the marker
 > 2. Review existing setup first, then decide
 > 3. Cancel"
 
-- If **Review**: display the existing `.last-pipeline.json` contents, then ask again with the same 3 options.
+- If **Review**: display the existing `docs/alm/last-pipeline.json` contents, then ask again with the same 3 options.
 - If **Cancel**: stop the skill and inform the user no changes were made.
 - If **Overwrite**: proceed.
 
@@ -374,7 +374,7 @@ On failure: the script writes the error to stderr and exits 1 — stop and repor
 > different `artifactname` + `solutionid` on the same `deploymentstages` record.
 > Creating one pipeline per solution was wasteful and cluttered the Pipelines
 > UI. **We now create ONE pipeline + one stage per target env, and record the
-> per-solution deployment order in `.last-pipeline.json`**. `deploy-pipeline`
+> per-solution deployment order in `docs/alm/last-pipeline.json`**. `deploy-pipeline`
 > then loops over the order, creating a stage run per solution against the same
 > stage.
 
@@ -385,7 +385,7 @@ When the manifest is `schemaVersion: 2`, do **not** call `create-deployment-pipe
    - `description` listing the solutions that will deploy through it (e.g. `"Deploys IdeaSphere_Core → IdeaSphere_WebAssets → IdeaSphere_Future in order"`).
    - One `deploymentstages` record per target environment (not per solution).
 2. Build the `deploymentOrder` array from `SOLUTIONS_LIST` sorted by `order`. Each entry has `{ solutionUniqueName, solutionId, order }`. Skip entries where `isFutureBuffer: true` AND `components.length === 0` — an empty Future solution has nothing to deploy; it's created by `setup-solution` but does not participate in the deployment loop until it has content. Keep it in the order array with `status: "skipped-empty"` so the renderer can show the intent.
-3. Collect the single `pipelineId` and its `stages[]`. Persist `deploymentOrder` to `.last-pipeline.json` (see Phase 7).
+3. Collect the single `pipelineId` and its `stages[]`. Persist `deploymentOrder` to `docs/alm/last-pipeline.json` (see Phase 7).
 
 ### Phase 7 — Verify, Write Artifacts, Commit
 
@@ -397,7 +397,7 @@ Authorization: Bearer {HOST_TOKEN}
 
 Confirm `statecode = 0` (Active). If the query fails, report as "verification inconclusive — pipeline may still be valid".
 
-**7.2 Write `.last-pipeline.json`** to the project root:
+**7.2 Write `docs/alm/last-pipeline.json`** (create the `docs/alm/` directory first if missing — `node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`):
 
 ```json
 {
@@ -420,7 +420,7 @@ Confirm `statecode = 0` (Active). If the query fails, report as "verification in
 }
 ```
 
-**Multi-solution marker (manifest v2):** When `MULTI_SOLUTION_MODE = true`, `.last-pipeline.json` uses `schemaVersion: 3` with a **single** pipeline and a `deploymentOrder[]` describing which solutions deploy through it, in what order:
+**Multi-solution marker (manifest v2):** When `MULTI_SOLUTION_MODE = true`, `docs/alm/last-pipeline.json` uses `schemaVersion: 3` with a **single** pipeline and a `deploymentOrder[]` describing which solutions deploy through it, in what order:
 
 ```json
 {
@@ -461,7 +461,7 @@ Contents:
 
 **7.4 Commit:**
 ```bash
-git add .last-pipeline.json docs/pipeline-setup.md
+git add docs/alm/last-pipeline.json docs/pipeline-setup.md
 git commit -m "Add Power Platform Pipeline configuration for {siteName}"
 ```
 
@@ -480,7 +480,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-The helper reads `.last-host-check.json` + `.last-pipeline.json`, refreshes `planData.hostResolution` and `planData.pipelineMeta`, drops pre-setup "no host detected" risks, and re-renders `docs/alm-plan.html`. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper reads `docs/alm/last-host-check.json` + `docs/alm/last-pipeline.json`, refreshes `planData.hostResolution` and `planData.pipelineMeta`, drops pre-setup "no host detected" risks, and re-renders `docs/alm-plan.html`. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 **7.6 Present summary:**
 
@@ -492,7 +492,7 @@ The helper reads `.last-host-check.json` + `.last-pipeline.json`, refreshes `pla
 | Stage: {name} | `{stageId}` → `{targetEnvUrl}` |
 
 **Files written:**
-- `.last-pipeline.json` — pipeline configuration marker
+- `docs/alm/last-pipeline.json` — pipeline configuration marker
 - `docs/pipeline-setup.md` — setup documentation
 
 **Next step:**
@@ -522,7 +522,7 @@ If GitHub/ADO passed as argument: display above message and exit gracefully.
 
 ## Key Decision Points (Wait for User)
 
-0. **Phase 1**: Existing pipeline file — overwrite, review, or cancel (only if `.last-pipeline.json` found)
+0. **Phase 1**: Existing pipeline file — overwrite, review, or cancel (only if `docs/alm/last-pipeline.json` found)
 1. **Phase 2**: Platform selection (Power Platform Pipelines / GitHub coming soon / ADO coming soon)
 2. **Phase 3**: Confirm pipeline configuration — pipeline name, host env URL, target environments
 3. **Phase 4**: Preflight warnings — proceed or cancel
@@ -541,10 +541,10 @@ If GitHub/ADO passed as argument: display above message and exit gracefully.
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Detect project context | Detecting project context | Read powerpages.config.json and .solution-manifest.json; run pac env who and pac env list; call RetrieveSetting to find host env; check for existing .last-pipeline.json |
+| Detect project context | Detecting project context | Read powerpages.config.json and .solution-manifest.json; run pac env who and pac env list; call RetrieveSetting to find host env; check for existing docs/alm/last-pipeline.json |
 | Select CI/CD platform | Selecting CI/CD platform | Ask user: Power Platform Pipelines (full) or GitHub/ADO (coming soon) |
 | Confirm pipeline configuration | Confirming pipeline configuration | Pre-fill pipeline name, source env, host env, solution name from auto-detected values; ask for target environments; get user confirmation |
 | Run preflight checks | Running preflight checks | Verify host env has Pipelines installed; verify solution exists in dev env; check for pipeline name conflict |
 | Create deployment environments | Creating deployment environments | POST deploymentenvironments for source + each target; poll validationstatus for each until Succeeded |
 | Create pipeline and stages | Creating pipeline and stages | POST deploymentpipelines; $ref associate source env; POST deploymentstages for each target (linked via previousdeploymentstageid) |
-| Verify and write artifacts | Verifying and writing artifacts | Query pipeline to confirm active; write .last-pipeline.json; write docs/pipeline-setup.md; commit; present summary with next steps |
+| Verify and write artifacts | Verifying and writing artifacts | Query pipeline to confirm active; write docs/alm/last-pipeline.json; write docs/pipeline-setup.md; commit; present summary with next steps |
