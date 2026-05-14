@@ -752,7 +752,7 @@ Content-Type: application/json
 
 Returns HTTP 204.
 
-> **Version accuracy is critical**: `artifactdevcurrentversion` must match the live `version` field of the solution in the source environment (query it — do not use stale values from `.solution-manifest.json`). `artifactversion` must be strictly greater than the version already in the target stage — check `.last-deploy.json` for the last deployed version and increment from there.
+> **Version accuracy is critical**: `artifactdevcurrentversion` must match the live `version` field of the solution in the source environment (query it — do not use stale values from `.solution-manifest.json`). `artifactversion` must be strictly greater than the version already in the target stage — check `docs/alm/last-deploy.json` for the last deployed version and increment from there.
 
 #### Step 4 — Deploy + Poll
 
@@ -937,7 +937,7 @@ pac pipeline deploy \
 - The dev environment must have a PP Pipelines host configured (via Power Platform Admin Center or `DefaultCustomPipelinesHostEnvForTenant` tenant setting). Without this, the CLI returns "Resource not found for the segment 'deploymentenvironments'".
 - `--currentVersion` and `--newVersion` must be valid semver strings (e.g., `1.0.0.0`, `1.0.0.1`).
 
-### .last-pipeline.json Format
+### docs/alm/last-pipeline.json Format
 
 Written by `setup-pipeline` (PP Pipelines path) after successful pipeline creation:
 
@@ -962,7 +962,7 @@ Written by `setup-pipeline` (PP Pipelines path) after successful pipeline creati
 }
 ```
 
-### .last-deploy.json Format
+### docs/alm/last-deploy.json Format
 
 Written by `deploy-pipeline` after each deployment run:
 

@@ -137,7 +137,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --solutionId "{solutionId}"
 ```
 
-Parse stdout and evaluate `missing`:
+Parse stdout and evaluate `missing`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
+
+```
+PRE_SYNC_VERSION = solutionManifest.solution.version   // from .solution-manifest.json read in Phase 2
+PRE_SYNC_MISSING = { siteComponents, siteLanguages, cloudFlows, envVarDefinitions, customTables, ... }   // from the discovery stdout above
+```
+
+Then:
 
 - **All `missing.*` arrays empty** → report "Solution contents match the site — no gaps detected." Proceed to Phase 3.
 - **Any non-empty `missing.*` array** → present a concise summary:
@@ -150,15 +157,40 @@ Parse stdout and evaluate `missing`:
 
   Then ask via `AskUserQuestion`:
   > "How would you like to proceed?
-  > 1. **Run `/power-pages:setup-solution` in sync mode now** — adopts missing components, bumps the solution version, then resumes this export (Recommended)
+  > 1. **Run `/power-pages:setup-solution` in sync mode now** — adopts missing components, bumps the solution version, then re-confirms with you before exporting (Recommended)
   > 2. **Export as-is** — ship what's currently in the solution; missing components won't travel
   > 3. **Abort** — I want to investigate before exporting"
 
-  - Option 1: invoke `/power-pages:setup-solution` (auto-detects the existing manifest and enters sync mode). After it completes successfully, re-run the discovery helper to confirm `missing.*` are now empty and continue with Phase 3.
-  - Option 2: record the gap in the export manifest (see Phase 7 summary) so the user has an audit trail of what was intentionally left out.
-  - Option 3: stop the skill.
+  - **Option 1 — Sync first, then re-confirm before export:**
+    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion.
+    2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
+    3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 2.5 prompt above.
+    4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
+    5. **Re-confirm with the user before proceeding to Phase 3** — the solution about to be exported is now different from what the user originally saw when they started the export. Use `AskUserQuestion`:
 
-> **Why this exists**: historically, components created after `setup-solution` (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` / `setup-auth`) were silently left out of the export zip and didn't travel to target environments. The ALM-aware-by-default principle in `AGENTS.md` requires this check at every export gate.
+       > "Sync complete.
+       >
+       > **{solutionUniqueName}** is now **v{POST_SYNC_VERSION}** (was v{PRE_SYNC_VERSION}) with **{NEWLY_ADOPTED.total} newly-adopted components**:
+       > - {first 3-5 names by category — prefer high-signal categories: cloud flows, server logic, env var definitions, then site components}
+       > - {if more remain: `+ {N} more across {category list}`}
+       >
+       > About to export this updated solution to a zip file.
+       >
+       > Continue with the export?"
+
+       | Question | Header | Options |
+       |---|---|---|
+       | Continue with the export? | Post-sync approval | Yes — export v{POST_SYNC_VERSION} (Recommended), Pause — I want to review the new solution contents first, Cancel — abort the export |
+
+       - **Yes** → proceed to Phase 3 with the post-sync solution.
+       - **Pause** → exit export-solution cleanly with a short note ("Paused after sync. Re-run `/power-pages:export-solution` when you're ready to export v{POST_SYNC_VERSION}.") so the user can inspect the synced manifest / Dataverse state and resume manually. **Do not** write any export artifacts — no export happened. Skip the skill-tracking call too.
+       - **Cancel** → stop the skill. Same no-artifact / no-tracking rule applies.
+  - **Option 2** — record the gap in the export manifest (see Phase 7 summary) so the user has an audit trail of what was intentionally left out.
+  - **Option 3** — stop the skill.
+
+> **Why the post-sync gate exists**: when sync mode runs mid-export, it produces a different solution version than the one the user had in mind when they invoked the skill. Re-confirming after sync gives the user an explicit chance to inspect the version bump and the list of newly-adopted components before the zip is produced and (typically) shipped onward via `import-solution`. The Phase 2.5 trigger is intentional; the post-sync re-confirmation is the safety on top of it. This mirrors the same gate in `deploy-pipeline` Phase 3.5 — same shape, same options, same audit-trail rules — so users see consistent behavior whether they take the PP Pipelines path or the Manual export/import path.
+
+> **Why Phase 2.5 exists in the first place**: historically, components created after `setup-solution` (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` / `setup-auth`) were silently left out of the export zip and didn't travel to target environments. The ALM-aware-by-default principle in `AGENTS.md` requires this check at every gate where a solution leaves its source environment.
 
 ### Phase 3 — Configure Export
 
@@ -258,7 +290,9 @@ Re-renders `docs/alm-plan.html` so any step-status updates the agent made during
 ## Key Decision Points (Wait for User)
 
 1. **Phase 2**: Solution identification — confirm before triggering export
-2. **Phase 3**: Managed vs unmanaged — affects downstream importability (irreversible choice for this export)
+2. **Phase 2.5**: Completeness-gap prompt (sync-first / export-as-is / abort) when the live site has components missing from the solution
+3. **Phase 2.5**: **Post-sync approval gate** — only fires after a mid-export sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before exporting the zip. Pause exits cleanly; Cancel aborts.
+4. **Phase 3**: Managed vs unmanaged — affects downstream importability (irreversible choice for this export)
 
 ## Error Handling
 

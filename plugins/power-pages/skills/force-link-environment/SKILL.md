@@ -54,7 +54,7 @@ Before any Dataverse call, refresh the agent's grounding by fetching the doc abo
 | 3 | Resolve `deploymentenvironments` record | Either an existing record on the new host, or a freshly created one |
 | 4 | Confirm destructive action | Explicit user consent via `AskUserQuestion` |
 | 5 | Execute Force Link | 204 from `ManageEnvironmentStamp` + post-validation Succeeded |
-| 6 | Write marker + summary | `.last-force-link.json` + human-readable summary |
+| 6 | Write marker + summary | `docs/alm/last-force-link.json` + human-readable summary |
 
 Create all tasks at Phase 1 start with `TaskCreate`. Mark each `in_progress` when starting and `completed` when done.
 
@@ -90,8 +90,8 @@ Confirm the *"Using Force Link…"* section's current warnings before proceeding
 
 Resolution order for `hostEnvUrl`:
 1. `--host <url>` argument, if supplied.
-2. `.last-host-check.json` in the project root (written by `ensure-pipelines-host`) — read `finalHostEnvUrl`.
-3. `.last-pipeline.json` in the project root — read `hostEnvUrl`.
+2. `docs/alm/last-host-check.json` (written by `ensure-pipelines-host`) — read `finalHostEnvUrl`.
+3. `docs/alm/last-pipeline.json` — read `hostEnvUrl`.
 4. Prompt user via `AskUserQuestion`.
 
 Resolution order for the source dev env's BAP env GUID:
@@ -182,7 +182,7 @@ If the helper throws with status 404, the `deploymentenvironments` record doesn'
 
 ## Phase 6 — Write marker + summary
 
-Write `.last-force-link.json` in the project root:
+Ensure the `docs/alm/` directory exists (`node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`), then write `docs/alm/last-force-link.json`:
 
 ```json
 {
@@ -197,7 +197,7 @@ Write `.last-force-link.json` in the project root:
 ```
 
 `previousHostEnvUrl` is best-effort. Derive in this order; leave `null` if none of these yield a value:
-1. **From `.last-host-check.json`** (written by `ensure-pipelines-host`): if `finalHostEnvUrl` is set AND differs from the current `hostEnvUrl`, the discovery flow had already bound this env to that previous host — record it.
+1. **From `docs/alm/last-host-check.json`** (written by `ensure-pipelines-host`): if `finalHostEnvUrl` is set AND differs from the current `hostEnvUrl`, the discovery flow had already bound this env to that previous host — record it.
 2. **From Phase 3's errormessage**: scan the captured `errormessage` for the pattern `https?://[^\s'"]+\.(crm\d*\.dynamics\.com|dynamics-int\.com|crm\.microsoftdynamics\.us)` and pick the first match that is **not** the current `hostEnvUrl`. Microsoft's error wording on the "already associated" path sometimes includes the prior host's URL, sometimes only its display name; treat the regex as opportunistic, not authoritative.
 3. **Otherwise**: leave `null`. The marker schema permits this — validator does not require the field.
 

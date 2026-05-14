@@ -8,7 +8,7 @@
 // want to inspect host state without inviting user prompts.
 //
 // Resolution order (mirrors ProjectHostProvider.tsx):
-//   1. Check .last-host-check.json cache → probe finalHostEnvUrl → reuse if reachable.
+//   1. Check docs/alm/last-host-check.json cache → probe finalHostEnvUrl → reuse if reachable.
 //   2. GetOrgDbOrgSetting('ProjectHostEnvironmentId') on source env.
 //      - If bound → BAP env GET to resolve URL/sku.
 //        - If sku === 'Platform' → check tenant default custom host (discover-pipelines-host).
@@ -30,7 +30,7 @@
 //     [--includeName <substring>] [--maxEnvsToProbe N] [--skus Production,Sandbox]
 //     [--minPipelinesVersion 9.0.0.0]
 //
-// Output (JSON to stdout): matches .last-host-check.json schemaVersion 2.
+// Output (JSON to stdout): matches docs/alm/last-host-check.json schemaVersion 2.
 
 'use strict';
 
@@ -39,6 +39,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const helpers = require('./validation-helpers');
+const { almPath } = require('./alm-paths');
 const { checkEnvHostBinding } = require('./check-env-host-binding');
 const { resolveEnvById } = require('./resolve-env-by-id');
 const { discoverPipelinesHost } = require('./discover-pipelines-host');
@@ -105,7 +106,7 @@ function getDataverseToken(originUrl, getTokenImpl) {
 }
 
 async function tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl }) {
-  const cachePath = path.join(projectRoot, '.last-host-check.json');
+  const cachePath = almPath(projectRoot, 'lastHostCheck');
   if (!fs.existsSync(cachePath)) return null;
   let cached;
   try {

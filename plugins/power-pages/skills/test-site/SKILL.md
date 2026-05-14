@@ -28,7 +28,7 @@ Test a deployed, activated Power Pages site at runtime. Navigate the site in a b
 
 ## Validation Test Categories
 
-Every run produces a categorized test report (`.last-test-site.json` — see Phase 6.7a). Stable category IDs and the source phase that produces each:
+Every run produces a categorized test report (`docs/alm/last-test-site.json` — see Phase 6.7a). Stable category IDs and the source phase that produces each:
 
 | Category `id` | Display Name | Source phase | What it covers |
 |---|---|---|---|
@@ -589,9 +589,9 @@ For each failure, reiterate the specific remediation guidance from Phase 5.4. Gr
 
 - Use `browser_close` to clean up the browser session.
 
-#### 6.7a Write Machine-Readable Report (`.last-test-site.json`)
+#### 6.7a Write Machine-Readable Report (`docs/alm/last-test-site.json`)
 
-Always write a structured JSON report to the project root so other skills (notably `plan-alm`) can ingest the run without re-parsing the markdown summary. The file is overwritten on every run.
+Always write a structured JSON report so other skills (notably `plan-alm`) can ingest the run without re-parsing the markdown summary. The file is overwritten on every run. Ensure the `docs/alm/` directory exists before writing — `node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`.
 
 **Shape:**
 ```json
@@ -674,14 +674,15 @@ Always write a structured JSON report to the project root so other skills (notab
 
 **Write the file** (Node.js, run from the project root):
 ```bash
-node -e "require('fs').writeFileSync('.last-test-site.json', process.argv[1])" "$(cat <<'EOF'
+node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
+node -e "require('fs').writeFileSync('docs/alm/last-test-site.json', process.argv[1])" "$(cat <<'EOF'
 {...the JSON above...}
 EOF
 )"
 ```
-or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `.last-test-site.json` in the project root (sibling to `.last-deploy.json` and `.last-pipeline.json`).
+or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `docs/alm/last-test-site.json` (sibling to `docs/alm/last-deploy.json` and `docs/alm/last-pipeline.json`).
 
-**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — plan-alm Phase 7's per-target loop, `.last-deploy.json`'s `stageName`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
+**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — plan-alm Phase 7's per-target loop, `docs/alm/last-deploy.json`'s `stageName`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
 
 #### 6.7b Refresh the ALM plan (if one exists)
 
@@ -695,7 +696,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
 
 `{stageName}` is the stage label this run tested (e.g. `Staging`, `Production`). Pass an empty string when unknown — `refreshTestSite` falls back to (1) the marker's `stageName` field (set in 6.7a above), then (2) the single target stage in `planData.stages` if there's only one. Multi-stage plans with no explicit stageName + no marker stageName won't be captured (the refresh re-renders without a per-stage validationRun update); always pass it explicitly when you can.
 
-The helper reads `.last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper reads `docs/alm/last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 #### 6.8 Suggest Next Steps
 

@@ -68,7 +68,7 @@ test('buildHostResolutionFromCheck handles null/empty input safely', () => {
   assert.equal(buildHostResolutionFromCheck('not an object'), null);
   // An empty object (e.g. ensure-pipelines-host wrote a partial cache) → returns
   // a result with status defaulted to DetectionFailed. The contract is intentional:
-  // a present-but-empty .last-host-check.json is treated as "we attempted detection
+  // a present-but-empty docs/alm/last-host-check.json is treated as "we attempted detection
   // but got nothing useful" rather than skipped silently. This means the renderer's
   // "Will be ensured" branch won't fire, but neither will "host-card-ok" — the
   // user sees a fall-through state that prompts re-running detection.
@@ -122,7 +122,7 @@ test('refresh validates phase argument', (t) => {
   );
 });
 
-test('refresh setup-pipeline rewrites hostResolution from .last-host-check.json + drops NoHost warning', (t) => {
+test('refresh setup-pipeline rewrites hostResolution from docs/alm/last-host-check.json + drops NoHost warning', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
@@ -137,7 +137,7 @@ test('refresh setup-pipeline rewrites hostResolution from .last-host-check.json 
       { type: 'warning', message: 'This solution has environment variables — you will be prompted for per-stage values during deployment.' },
     ],
   });
-  writeJson(path.join(root, '.last-host-check.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), {
     schemaVersion: 2,
     resolutionStatus: 'AvailableUsingCustomHost',
     finalHostEnvUrl: 'https://newhost.crm.dynamics.com/',
@@ -146,7 +146,7 @@ test('refresh setup-pipeline rewrites hostResolution from .last-host-check.json 
     pipelinesSolutionVersion: '9.1.0.0',
     actionTaken: 'fast-path-custom-d365projecthost',
   });
-  writeJson(path.join(root, '.last-pipeline.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-pipeline.json'), {
     pipelineId: 'pipe-1',
     pipelineName: 'TestSite-Pipeline',
     hostEnvUrl: 'https://newhost.crm.dynamics.com/',
@@ -173,7 +173,7 @@ test('refresh setup-pipeline rewrites hostResolution from .last-host-check.json 
   assert.match(planData.risks[0].message, /environment variables/);
 });
 
-test('refresh deploy-pipeline writes pipelineMeta.lastDeploy from .last-deploy.json', (t) => {
+test('refresh deploy-pipeline writes pipelineMeta.lastDeploy from docs/alm/last-deploy.json', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
@@ -184,7 +184,7 @@ test('refresh deploy-pipeline writes pipelineMeta.lastDeploy from .last-deploy.j
       lastDeploy: null,
     },
   });
-  writeJson(path.join(root, '.last-deploy.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
     stageRunId: 'run-42',
     stageName: 'Staging',
     status: 'Succeeded',
@@ -207,13 +207,13 @@ test('refresh deploy-pipeline writes pipelineMeta.lastDeploy from .last-deploy.j
   assert.equal(planData.pipelineMeta.lastDeploy.stageName, 'Staging');
 });
 
-test('refresh test-site populates validationRuns[stage] from .last-test-site.json', (t) => {
+test('refresh test-site populates validationRuns[stage] from docs/alm/last-test-site.json', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
     validationRuns: { Staging: null },
   });
-  writeJson(path.join(root, '.last-test-site.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), {
     url: 'https://teststaging.powerappsportals.com',
     runAt: '2026-05-05T16:30:00.000Z',
     durationSec: 120,
@@ -236,7 +236,7 @@ test('refresh test-site is a no-op when stageName is omitted', (t) => {
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     validationRuns: { Staging: null },
   });
-  writeJson(path.join(root, '.last-test-site.json'), { runOutcome: 'passed' });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed' });
 
   const result = refresh({ projectRoot: root, phase: 'test-site', render: false });
   assert.equal(result.ok, true);
@@ -262,7 +262,7 @@ test('refresh setup-pipeline preserves prior pipelineMeta.reusedByWiring annotat
       reusedByWiring: { originalName: 'Existing Pipeline', requestedName: 'NewName' },
     },
   });
-  writeJson(path.join(root, '.last-pipeline.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-pipeline.json'), {
     pipelineId: 'pipe-x',
     pipelineName: 'Existing Pipeline',
     stages: [],
@@ -361,7 +361,7 @@ test('refresh export-solution + import-solution + activate-site phases are liste
 
 // ── Per-target import history ─────────────────────────────────────────────────
 //
-// import-solution writes .last-import.json with the most recent import only;
+// import-solution writes docs/alm/last-import.json with the most recent import only;
 // for Manual path with N targets we want a per-target record so the rendered
 // plan can show "Import to Staging: IMPORTED v1.0.4 (288 components)" while
 // "Import to Production" stays in_progress. refreshImportSolution captures
@@ -383,7 +383,7 @@ test('refresh import-solution captures per-target import outcome with stageName'
       { name: 'Import to Production', status: 'pending' },
     ],
   });
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://staging.crm.dynamics.com',
     importedAt: '2026-05-08T16:00:00.000Z',
@@ -430,7 +430,7 @@ test('refresh import-solution falls back to URL match when stageName absent', (t
       { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
     ],
   });
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://prod.crm.dynamics.com/some/path',
     importedAt: '2026-05-08T17:00:00.000Z',
@@ -456,7 +456,7 @@ test('refresh import-solution captures component failures into componentFailureC
     STRATEGY: 'manual',
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://staging.crm.dynamics.com',
     importedAt: '2026-05-08T16:00:00.000Z',
@@ -493,7 +493,7 @@ test('refresh import-solution preserves prior-stage entries across calls', (t) =
     ],
   });
 
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://staging.crm.dynamics.com',
     importedAt: '2026-05-08T16:00:00.000Z',
@@ -502,7 +502,7 @@ test('refresh import-solution preserves prior-stage entries across calls', (t) =
   });
   refresh({ projectRoot: root, phase: 'import-solution', stageName: 'Staging', render: false });
 
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://prod.crm.dynamics.com',
     importedAt: '2026-05-08T17:30:00.000Z',
@@ -526,7 +526,7 @@ test('refresh import-solution writes synthetic key when stage cannot be resolved
       { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' },
     ],
   });
-  writeJson(path.join(root, '.last-import.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
     solutionName: 'cr_TestSolution',
     targetEnvironment: 'https://elsewhere.crm.dynamics.com',
     importedAt: '2026-05-08T16:00:00.000Z',
@@ -541,16 +541,16 @@ test('refresh import-solution writes synthetic key when stage cannot be resolved
   assert.match(keys[0], /^unresolved-/, 'unresolvable stage should land under a synthetic key');
 });
 
-// ── setup-solution: ingest .last-env-vars.json sidecar into planData.envVars ─
+// ── setup-solution: ingest docs/alm/last-env-vars.json sidecar into planData.envVars ─
 
-test('refresh setup-solution ingests .last-env-vars.json into planData.envVars', (t) => {
+test('refresh setup-solution ingests docs/alm/last-env-vars.json into planData.envVars', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
     plannedEnvVarCount: 7,
     envVars: [],  // empty before setup-solution runs
   });
-  writeJson(path.join(root, '.last-env-vars.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-env-vars.json'), {
     envVars: [
       { schemaName: 'ids_authentication_registration_localloginenabled', type: 'String', defaultValue: 'true', siteSetting: 'Authentication/Registration/LocalLoginEnabled' },
       { schemaName: 'ids_authentication_openauth_linkedin_clientsecret', type: 'Secret', defaultValue: null, siteSetting: 'Authentication/OpenAuth/LinkedIn/ClientSecret' },
@@ -579,7 +579,7 @@ test('refresh setup-solution leaves planData.envVars unchanged when sidecar is m
     plannedEnvVarCount: 0,
     envVars: originalEnvVars,
   });
-  // No .last-env-vars.json — refresh should soft-no-op on the env vars side.
+  // No docs/alm/last-env-vars.json — refresh should soft-no-op on the env vars side.
 
   refresh({ projectRoot: root, phase: 'setup-solution', render: false });
 
@@ -598,7 +598,7 @@ test('refresh setup-solution accepts an empty envVars[] sidecar (skip-all path)'
     plannedEnvVarCount: 12,
     envVars: [],
   });
-  writeJson(path.join(root, '.last-env-vars.json'), { envVars: [], count: 0 });
+  writeJson(path.join(root, 'docs', 'alm', 'last-env-vars.json'), { envVars: [], count: 0 });
 
   refresh({ projectRoot: root, phase: 'setup-solution', render: false });
 
@@ -608,7 +608,7 @@ test('refresh setup-solution accepts an empty envVars[] sidecar (skip-all path)'
     'empty sidecar (user skipped all) should leave planData.envVars empty');
 });
 
-// ── activate-site: ingest .last-activate.json into planData.activations ──────
+// ── activate-site: ingest docs/alm/last-activate.json into planData.activations ──────
 
 test('refresh activate-site captures siteUrl + status into planData.activations[stageName]', (t) => {
   const root = makeProject(t);
@@ -618,7 +618,7 @@ test('refresh activate-site captures siteUrl + status into planData.activations[
       { label: 'Staging', envUrl: 'https://staging.crm.dynamics.com', type: 'target' },
     ],
   });
-  writeJson(path.join(root, '.last-activate.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
     stageName: 'Staging',
     siteName: 'TestSite',
     siteUrl: 'https://teststaging.powerappsportals.com',
@@ -647,7 +647,7 @@ test('refresh activate-site falls back to environmentUrl match when stageName ab
       { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
     ],
   });
-  writeJson(path.join(root, '.last-activate.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
     siteName: 'TestSite',
     siteUrl: 'https://testprod.powerappsportals.com',
     environmentUrl: 'https://prod.crm.dynamics.com',
@@ -675,7 +675,7 @@ test('refresh activate-site preserves prior-stage entries across calls', (t) => 
   });
 
   // Activate Staging.
-  writeJson(path.join(root, '.last-activate.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
     stageName: 'Staging',
     siteUrl: 'https://teststaging.powerappsportals.com',
     environmentUrl: 'https://staging.crm.dynamics.com',
@@ -684,8 +684,8 @@ test('refresh activate-site preserves prior-stage entries across calls', (t) => 
   });
   refresh({ projectRoot: root, phase: 'activate-site', stageName: 'Staging', render: false });
 
-  // Activate Production. .last-activate.json gets overwritten by the second activate-site run.
-  writeJson(path.join(root, '.last-activate.json'), {
+  // Activate Production. docs/alm/last-activate.json gets overwritten by the second activate-site run.
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
     stageName: 'Production',
     siteUrl: 'https://testprod.powerappsportals.com',
     environmentUrl: 'https://prod.crm.dynamics.com',
@@ -706,7 +706,7 @@ test('refresh activate-site recognizes AlreadyActivated status', (t) => {
     SITE_NAME: 'TestSite',
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
-  writeJson(path.join(root, '.last-activate.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
     stageName: 'Staging',
     siteUrl: 'https://teststaging.powerappsportals.com',
     environmentUrl: 'https://staging.crm.dynamics.com',
@@ -732,7 +732,7 @@ test('refresh test-site falls back to marker.stageName when --stageName arg abse
       { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
     ],
   });
-  writeJson(path.join(root, '.last-test-site.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), {
     url: 'https://teststaging.powerappsportals.com',
     stageName: 'Staging',
     runAt: '2026-05-08T22:00:00.000Z',
@@ -758,7 +758,7 @@ test('refresh test-site falls back to single target stage when no stageName sign
       { label: 'Production', envUrl: 'https://prod.crm.dynamics.com', type: 'target' },
     ],
   });
-  writeJson(path.join(root, '.last-test-site.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), {
     url: 'https://testprod.powerappsportals.com',
     runAt: '2026-05-08T23:00:00.000Z',
     runOutcome: 'passed',
@@ -784,7 +784,7 @@ test('refresh test-site no-ops when no stageName signal and multiple targets', (
     ],
     validationRuns: {},
   });
-  writeJson(path.join(root, '.last-test-site.json'), {
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), {
     url: 'https://test.powerappsportals.com',
     runOutcome: 'passed',
   });

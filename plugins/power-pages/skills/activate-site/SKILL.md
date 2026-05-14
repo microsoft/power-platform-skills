@@ -257,16 +257,17 @@ Power Pages site activated successfully!
 
 The script already resolves the correct cloud-specific site URL domain, so use the `siteUrl` value directly.
 
-#### 5.1b Write `.last-activate.json` Marker
+#### 5.1b Write `docs/alm/last-activate.json` Marker
 
-For consumers like the rendered ALM plan (Manual path's per-target Activate steps), write a structured marker that captures the post-activation state:
+For consumers like the rendered ALM plan (Manual path's per-target Activate steps), write a structured marker that captures the post-activation state. Ensure the `docs/alm/` directory exists first:
 
 ```bash
+node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
 # Determine the stage label this activation was for. plan-alm orchestration
 # passes it via context (e.g. "Staging", "Production"); standalone invocations
 # may leave it null — refreshActivateSite falls back to env-URL matching
 # against planData.stages[].envUrl.
-node -e "require('fs').writeFileSync('.last-activate.json', JSON.stringify({
+node -e "require('fs').writeFileSync('docs/alm/last-activate.json', JSON.stringify({
   stageName: <stageNameOrNull>,
   siteName: '<siteName>',
   siteUrl: '<siteUrl>',
@@ -297,9 +298,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-`{stageNameOrEmpty}` is the Manual-path target stage label (e.g. `Staging`, `Production`) the agent was activating — usually carried in by plan-alm Phase 7 orchestration. Pass an empty string when unknown; `refreshActivateSite` falls back to URL-matching `.last-activate.json`'s `environmentUrl` against `planData.stages[].envUrl`, so standalone invocations still get captured.
+`{stageNameOrEmpty}` is the Manual-path target stage label (e.g. `Staging`, `Production`) the agent was activating — usually carried in by plan-alm Phase 7 orchestration. Pass an empty string when unknown; `refreshActivateSite` falls back to URL-matching `docs/alm/last-activate.json`'s `environmentUrl` against `planData.stages[].envUrl`, so standalone invocations still get captured.
 
-The helper reads `.last-activate.json`, writes a per-target entry into `planData.activations[stageName]` (siteUrl, status, activatedAt), and re-renders `docs/alm-plan.html` so the matching `Activate site in {stageName}` checklist step shows an `ACTIVATED` badge with the live site URL inline. When `docs/.alm-plan-data.json` is absent (standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op.
+The helper reads `docs/alm/last-activate.json`, writes a per-target entry into `planData.activations[stageName]` (siteUrl, status, activatedAt), and re-renders `docs/alm-plan.html` so the matching `Activate site in {stageName}` checklist step shows an `ACTIVATED` badge with the live site URL inline. When `docs/.alm-plan-data.json` is absent (standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op.
 
 #### 5.3 Suggest Next Steps
 
