@@ -14,7 +14,7 @@ How to evaluate the `genpage` skill. Three layers, run in order.
   - `plugins/model-apps/references/rules.md`
   - `plugins/model-apps/references/plan-schema.md`
   - `plugins/model-apps/references/troubleshooting.md`
-- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `8-responsive-cards.tsx` (data-caching pattern lives in `references/data-caching.md`)
+- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `7-responsive-cards.tsx` (data-caching pattern lives in `references/data-caching.md`)
 
 ## Eval data
 

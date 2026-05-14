@@ -43,7 +43,21 @@ pre-flight. Trim of ~27K tokens on hot-path page-builder runs.
 - `rules.md` trimmed −98 lines: dropped duplicated DataAPI
   type definitions (canonical source is `RuntimeTypes.ts`); tightened usage
   examples.
-- SKILL.md trimmed −21 lines; planner −24.
+- `rules.md` Page Input section trimmed −25 lines: pure prose tighten.
+- Phase 7 (browser verification) extracted to `skills/genpage/verify-flow.md`,
+  loaded only when the user opts in. SKILL.md trimmed an additional −95 lines.
+- Reference docs renamed for consistency:
+  `genpage-rules-reference.md` → `rules.md`,
+  `genpage-plan-schema.md` → `plan-schema.md`,
+  `genpage-localization-reference.md` → `localization.md`,
+  `data-caching-pattern.md` → `data-caching.md`.
+- Removed stale `samples/3-poa-revocation-wizard.tsx` (327 lines, redundant
+  with `2-wizard-multi-step.tsx` for the wizard pattern; the DataGrid /
+  file-upload / multiselect patterns it composed are covered by other
+  samples). Renumbered 4–8 → 3–7 to close the gap.
+- Added scope headers to `rules.md` "Common Errors" (generation-time
+  anti-patterns) and `troubleshooting.md` (deployment/runtime/env) so readers
+  can pick the right one without scanning.
 
 ### Migration from 2.0
 1. `az login` (use the same identity as `pac auth who`).

@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Common issues when building and deploying generative pages.
+Deployment, runtime, and environment issues. For generation-time anti-patterns
+(things the page-builder must not emit), see `references/rules.md` →
+"Common Errors".
 
 ---
 

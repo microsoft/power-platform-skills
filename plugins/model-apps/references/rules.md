@@ -157,85 +157,71 @@ See: `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
 
 ## Page Input
 
-The generated component may receive an optional `pageInput` prop for accepting context from the hosting page (e.g., a selected record or custom data).
+The generated component receives an optional `pageInput` prop from the hosting
+page (selected record context, custom data). Already in `GeneratedComponentProps`
+— destructure with `const { dataApi, pageInput } = props;`.
 
-### PageInput Interface
+### Interface
 
 ```typescript
 export interface PageInput {
-    /** The logical name of the entity associated with the current page context. */
-    entityName?: string;
-    /** The unique identifier (GUID) of the selected record. */
-    recordId?: string;
-    /**
-     * A key-value map of additional data passed from the page.
-     * Keys are strings, values are primitives of unknown type (string, number, boolean, etc.).
-     * No functions are allowed as values.
-     */
-    data?: Record<string, unknown>;
+    entityName?: string;   // logical name (not display name)
+    recordId?: string;     // record GUID
+    data?: Record<string, unknown>;  // custom values — primitives only, type unknown
 }
 ```
 
-`PageInput` is already part of `GeneratedComponentProps` — destructure it from props: `const { dataApi, pageInput } = props;`
-
 ### Rules
 
-- Only use `pageInput` when the user specifically asks for it — do not assume what inputs are needed.
-- **CRITICAL:** Do not give default values for `pageInput` fields if they are not provided.
-- `entityName` is an entity's logical name, not display name.
-- The `data` object values are primitives of unknown type — never assume the type, always cast robustly.
+- Only use `pageInput` when the user explicitly asks — don't speculate on inputs.
+- Never set defaults for missing `pageInput` fields.
+- `data` values are unknown-typed primitives — cast robustly, never assume.
 
-### Rendering Pattern for Pages with pageInput
+### Rendering pattern (avoid double-render flicker)
 
-`pageInput` is available synchronously on the first render when opened via `Xrm.Navigation.navigateTo`. To avoid double-render flicker:
+`pageInput` is available synchronously on the first render via `Xrm.Navigation.navigateTo`:
 
-- **Derive values synchronously from props** — use `const recordId = pageInput?.recordId` (not `useState`). State initialization triggers re-renders; prop derivation doesn't.
-- **Use early returns** — if `recordId` is missing, return immediately. Don't wrap the body in conditional blocks inside a wrapper div.
-- **No artificial delays** — never use `setTimeout` or a `pageInputReady` flag. A 500ms delay causes the platform to show the previous page as a fallback.
-- **Initialize `loading` as `true`** when `recordId` is present — so a spinner shows on frame 0, not a blank page that flips to a spinner after a delay.
+- **Derive synchronously from props**, not `useState`. State init triggers re-renders.
+- **Early-return** if a required field is missing — no conditional wrapper divs.
+- **No `setTimeout` or `pageInputReady` flags** — 500ms delays let the platform fall back to the previous page.
+- **Initialize `loading: true`** when `recordId` is present — spinner on frame 0, not blank-flip-to-spinner.
 
-### Usage Examples
-
-**Using `dataApi` with `pageInput.entityName` and `pageInput.recordId`:**
+### Example — record context
 
 ```typescript
 const { dataApi, pageInput } = props;
 const recordId = pageInput?.recordId;
 const entityName = pageInput?.entityName;
-
-const [selectedRowData, setSelectedRowData] = useState(undefined);
+const [row, setRow] = useState(undefined);
 
 useEffect(() => {
-    // Replace these example logical names with the exact verified names from your RuntimeTypes/TableRegistrations.
     if (entityName === "account" && recordId && dataApi) {
         (async () => {
-            const row = await dataApi.retrieveRow("account", {
+            const r = await dataApi.retrieveRow("account", {
                 id: recordId,
                 select: ["statuscode", "name", "_primarycontactid_value"],
             });
-            setSelectedRowData(row);
+            setRow(r);
         })();
     }
 }, [dataApi, entityName, recordId]);
 ```
 
-**Using `pageInput.data` with safe type casting:**
+### Example — `data` with safe casting
 
 ```typescript
-// IMPORTANT: Never assume the type of data values. Robustly handle type casting.
-function toNumberOrDefault(value: unknown, fallback: number): number {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string") {
-        const parsed = Number(value);
+function toNumberOrDefault(v: unknown, fallback: number): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+        const parsed = Number(v);
         if (Number.isFinite(parsed)) return parsed;
     }
     return fallback;
 }
 
 const { pageInput } = props;
-// Always handle pageInput, pageInput.data, or any value potentially being null or undefined
-const [latitude, setLatitude] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
-const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
+const [lat] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
+const [lng] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
 ```
 
 ---
@@ -519,6 +505,10 @@ paired `..._value@OData.Community.Display.V1.FormattedValue` for the label.
 ---
 
 ## Common Errors
+
+**Scope:** generation-time anti-patterns the page-builder must not emit.
+For deployment / runtime / env issues (PAC CLI failures, auth, browser
+verification, etc.), see `references/troubleshooting.md`.
 
 ### 1. Undefined Identifier
 Every identifier must be defined or imported. Don't assume implicit availability.

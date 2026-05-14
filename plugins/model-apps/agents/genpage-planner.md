@@ -368,7 +368,7 @@ single-visit dashboards, or mock-data pages. The page-builder reads this field
 to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
-from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 8-responsive-cards.tsx for card
+from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
 layouts, 2-wizard-multi-step.tsx for wizards). Do NOT list reference docs as
 samples — only files under `samples/`.
 
