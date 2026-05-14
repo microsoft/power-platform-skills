@@ -35,10 +35,13 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
 references/                    ← Shared reference docs
-  rules.md   ← Full code-gen rules, DataAPI types, layout patterns, common errors
-  plan-schema.md       ← Schema contract for genpage-plan.md
-  troubleshooting.md           ← Common issues and fixes
-samples/                       ← Example .tsx files (8 samples)
+  rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  plan-schema.md               ← Schema contract for genpage-plan.md
+  data-caching.md              ← Rule 15 list/detail caching pattern (loaded conditionally)
+  localization.md              ← Multi-language + RTL pattern (loaded conditionally)
+  troubleshooting.md           ← Deployment/runtime/env issues
+  verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
+samples/                       ← Example .tsx files (10 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
@@ -56,6 +59,8 @@ scripts/
 skills/
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
+    edit-flow.md               ← Edit flow steps (loaded only on edit path)
+    verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
 ```
 
 ## Skills

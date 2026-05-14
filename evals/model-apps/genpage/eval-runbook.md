@@ -68,7 +68,7 @@ To run only a subset, filter by `tier` (e.g., `smoke`-only for quick validation)
 ### Step 2: Layer 1 — Workflow assertions
 
 For each eval, verify:
-- All 7 `common_workflow_assertions` — generic workflow guarantees that every run must satisfy
+- All 15 `common_workflow_assertions` — generic workflow guarantees that every run must satisfy
 - All of the eval's own `expectations` — the eval-specific workflow checks
 
 These are checked against the `workflow-log.md` and the files in the working directory. No browser or deployment needed for this layer.
@@ -77,7 +77,7 @@ These are checked against the `workflow-log.md` and the files in the working dir
 
 ### Step 3: Layer 2 — Code quality
 
-For every generated `.tsx` file, check against the 14 `common_code_assertions`.
+For every generated `.tsx` file, check against the 18 `common_code_assertions`.
 
 These can be verified with grep / regex against the source:
 
