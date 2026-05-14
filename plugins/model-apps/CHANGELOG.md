@@ -55,6 +55,18 @@ pre-flight. Trim of ~27K tokens on hot-path page-builder runs.
   with `2-wizard-multi-step.tsx` for the wizard pattern; the DataGrid /
   file-upload / multiselect patterns it composed are covered by other
   samples). Renumbered 4–8 → 3–7 to close the gap.
+
+### Added (samples)
+- `samples/8-dashboard-with-charts.tsx` — KPI cards + two D3 charts (area +
+  donut) with the animation guard from rules.md. Covers the dashboard page
+  type and the D3 chart pattern that evals 2 and 6 expect.
+- `samples/9-list-with-caching.tsx` — list page using Rule 15's window cache
+  + inline async IIFE pattern. Cross-page navigation to the detail sample via
+  `PAGEREF_` placeholder.
+- `samples/10-detail-with-pageinput.tsx` — detail page paired with the list.
+  Receives `pageInput.recordId` synchronously, initial `loading: true` on
+  frame 0, `Map<recordId, row>` cache on `window`. Demonstrates the
+  formatted-value lookup for `_parentcustomerid_value`.
 - Added scope headers to `rules.md` "Common Errors" (generation-time
   anti-patterns) and `troubleshooting.md` (deployment/runtime/env) so readers
   can pick the right one without scanning.
