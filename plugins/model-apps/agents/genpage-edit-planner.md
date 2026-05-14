@@ -223,9 +223,10 @@ Plan document: <working-dir>/genpage-edit-plan.md
 
 - **Do NOT modify page.tsx.** The orchestrator applies the edit inline using the
   Edit tool after reading your plan document.
-- **Do NOT create or modify entities.** Entity creation requires the Dataverse
-  Skills plugin and the create flow. Stop and inform the user if entity creation
-  is needed.
+- **Do NOT create or modify entities.** Entity creation is handled by the
+  create flow's `genpage-entity-builder` agent (which uses this plugin's own
+  Web API scripts under `scripts/`). Stop and inform the user that adding
+  entities requires running the create flow with a new `/genpage` invocation.
 - **Do NOT deploy.** Deployment is handled by the orchestrating skill.
 - **Do NOT regenerate the entire file.** The orchestrator makes targeted edits.
   Your plan should describe changes, not rewrite the code.

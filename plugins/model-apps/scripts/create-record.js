@@ -143,6 +143,17 @@ async function main() {
     process.exit(1);
   }
   const [envUrl, entitySet] = positional;
+
+  // Sanity-check entitySet — must be a plural entity collection name
+  // (lowercase letters / digits / underscore, starting with a letter). This
+  // prevents an accidental path-segment injection from a malformed input.
+  if (!/^[a-z][a-z0-9_]+$/.test(entitySet)) {
+    process.stderr.write(
+      `<entitySet> must be a Dataverse collection name (lowercase letters, digits, underscores; e.g. "accounts", "cr69c_candidates"). Got "${entitySet}".\n`,
+    );
+    process.exit(1);
+  }
+
   const parsed = readJsonArg(flags.body);
   const batchSize = Math.min(Number(flags['batch-size'] || 100), 1000);
 

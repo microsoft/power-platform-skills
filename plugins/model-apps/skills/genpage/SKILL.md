@@ -287,6 +287,7 @@ For each page, pass a prompt that includes:
 > - Plugin root: ${CLAUDE_PLUGIN_ROOT}
 >
 > Follow the instructions in your agent file. Write [filename].tsx and return your
+> result when done.
 
 **For mock data pages**, omit the RuntimeTypes line and set `Data mode: mock`:
 
@@ -368,8 +369,7 @@ phase substitutes the real GUIDs.
    the format page-builders emit) with `"<page-id-guid>"`.
 4. If a placeholder doesn't match any map key (typo, missing sibling), stop
    and report — never silently ship the literal string.
-
-6. Re-upload only the files that had at least one replacement. Use the update form
+5. Re-upload only the files that had at least one replacement. Use the update form
    of `pac model genpage upload` (`--page-id`, no `--add-to-sitemap`). Per the
    "`--prompt` semantics" rule in Phase 6, this is an **update**, so `--prompt`
    describes the delta only — not the original page description:

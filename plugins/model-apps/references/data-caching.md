@@ -104,14 +104,23 @@ useEffect(() => {
 
 ## Cache invalidation
 
-After a mutation (create/update/delete via `dataApi`), invalidate the relevant
-cache before refetching:
+After a mutation (create/update/delete via `dataApi`), invalidate the
+relevant cache(s) before refetching. Each cache lives at its own `window`
+key — be precise about which one you're clearing:
 
 ```typescript
 await dataApi.updateRow("myentity", recordId, changes);
+
+// 1) Detail cache (Map keyed by recordId) — just evict the one row:
 _detailCache.delete(recordId);
-delete (window as any).__ppMyEntityDetailCache;  // for the list cache
+
+// 2) List cache (whole array) — evict the entire array so the list refetches
+//    next time it mounts. The cache is at __ppMyEntityCache (NOT ...DetailCache):
+delete (window as any).__ppMyEntityCache;
 ```
+
+If the page only has a detail cache (no sibling list), skip step 2. If you
+have a list but no detail page open, skip step 1.
 
 ## When NOT to use this pattern
 

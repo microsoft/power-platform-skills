@@ -88,6 +88,8 @@ test('emitResult: partial-failure object writes JSON to stdout (not [object Obje
   const parsed = JSON.parse(res.stdout.trim());
   assert.equal(parsed.ok, false);
   assert.equal(parsed.errors.length, 1);
+  assert.equal(parsed.errors[0].index, 0);
+  assert.equal(parsed.errors[0].status, 400);
   assert.equal(parsed.errors[0].message, 'bad row');
   assert.match(res.stderr, /Operation completed with 1 error/);
 });

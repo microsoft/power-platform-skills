@@ -41,6 +41,24 @@ function commonFields(schemaName, displayName, flags) {
   };
 }
 
+/**
+ * Coerces a flag value to a finite number, or throws a useful error.
+ * Catches the case where parseArgs treated the next token as boolean=true
+ * because it started with --, leaving the user's intended numeric flag with
+ * value `true` → Number(true) === 1 silently.
+ */
+function numericFlag(name, value, fallback) {
+  if (value === undefined) return fallback;
+  if (value === true || value === false) {
+    throw new Error(`--${name} requires a numeric value (got a flag with no argument — check that the next token isn't another --flag)`);
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new Error(`--${name} must be a finite number (got "${value}")`);
+  }
+  return n;
+}
+
 function buildAttribute(type, schemaName, displayName, flags) {
   const common = commonFields(schemaName, displayName, flags);
 
@@ -50,7 +68,7 @@ function buildAttribute(type, schemaName, displayName, flags) {
         '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata',
         AttributeType: 'String',
         AttributeTypeName: { Value: 'StringType' },
-        MaxLength: Number(flags['max-length'] || 100),
+        MaxLength: numericFlag('max-length', flags['max-length'], 100),
         FormatName: { Value: flags.format || 'Text' },
         ...common,
       };
@@ -59,7 +77,7 @@ function buildAttribute(type, schemaName, displayName, flags) {
         '@odata.type': 'Microsoft.Dynamics.CRM.MemoAttributeMetadata',
         AttributeType: 'Memo',
         AttributeTypeName: { Value: 'MemoType' },
-        MaxLength: Number(flags['max-length'] || 2000),
+        MaxLength: numericFlag('max-length', flags['max-length'], 2000),
         Format: flags.format || 'TextArea',
         ...common,
       };
@@ -69,8 +87,8 @@ function buildAttribute(type, schemaName, displayName, flags) {
         AttributeType: 'Integer',
         AttributeTypeName: { Value: 'IntegerType' },
         Format: flags.format || 'None',
-        MinValue: flags.min !== undefined ? Number(flags.min) : -2147483648,
-        MaxValue: flags.max !== undefined ? Number(flags.max) : 2147483647,
+        MinValue: numericFlag('min', flags.min, -2147483648),
+        MaxValue: numericFlag('max', flags.max, 2147483647),
         ...common,
       };
     case 'decimal':
@@ -78,9 +96,9 @@ function buildAttribute(type, schemaName, displayName, flags) {
         '@odata.type': 'Microsoft.Dynamics.CRM.DecimalAttributeMetadata',
         AttributeType: 'Decimal',
         AttributeTypeName: { Value: 'DecimalType' },
-        Precision: Number(flags.precision || 2),
-        MinValue: flags.min !== undefined ? Number(flags.min) : -100000000000,
-        MaxValue: flags.max !== undefined ? Number(flags.max) : 100000000000,
+        Precision: numericFlag('precision', flags.precision, 2),
+        MinValue: numericFlag('min', flags.min, -100000000000),
+        MaxValue: numericFlag('max', flags.max, 100000000000),
         ...common,
       };
     case 'money':
@@ -89,8 +107,8 @@ function buildAttribute(type, schemaName, displayName, flags) {
         AttributeType: 'Money',
         AttributeTypeName: { Value: 'MoneyType' },
         PrecisionSource: 2,
-        MinValue: flags.min !== undefined ? Number(flags.min) : 0,
-        MaxValue: flags.max !== undefined ? Number(flags.max) : 1000000000000,
+        MinValue: numericFlag('min', flags.min, 0),
+        MaxValue: numericFlag('max', flags.max, 1000000000000),
         ...common,
       };
     case 'datetime':

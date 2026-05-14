@@ -12,7 +12,7 @@ section, not unconditionally.
 
 ### When to Apply
 
-Only apply localization when `pac model list-languages` (run in Step 2) returns **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+Only apply localization when `pac model list-languages` (run by the planner during requirements gathering) returns **multiple languages** or **any non-English language**. English-only environments skip this entire section.
 
 ### Language Detection
 

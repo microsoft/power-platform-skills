@@ -18,7 +18,9 @@ test('create-solution.js binds publisher via @odata.bind', () => {
 
 test('create-solution.js looks up env default publisher when --publisher omitted', () => {
   assert.match(scriptSrc, /findPublisher\(envUrl, flags\.publisher\)/);
-  assert.match(scriptSrc, /Default Publisher for/);
+  // Authoritative lookup: organizations._defaultpublisherid_value -> publisher record
+  assert.match(scriptSrc, /_defaultpublisherid_value/);
+  assert.match(scriptSrc, /publishers\(\$\{defaultPublisherId\}\)/);
 });
 
 test('create-solution.js: missing args exits 1 with usage', () => {

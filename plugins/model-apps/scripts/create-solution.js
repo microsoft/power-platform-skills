@@ -24,26 +24,53 @@ const {
 } = require('./lib/dataverse-auth');
 
 async function findPublisher(envUrl, uniqueName) {
-  const filter = uniqueName
-    ? `uniquename eq '${uniqueName.replace(/'/g, "''")}'`
-    : `friendlyname eq 'Default Publisher for ${envUrl.replace(/^https:\/\//, '').split('.')[0]}'`;
-  const res = await dataverseRequest(
-    envUrl,
-    'GET',
-    `publishers?$select=publisherid,uniquename,customizationprefix&$filter=${encodeURIComponent(filter)}&$top=1`
-  );
-  ensureOk(res, `Lookup publisher${uniqueName ? ` '${uniqueName}'` : ' (env default)'}`);
-  const p = res.data?.value?.[0];
-  if (!p) {
-    // Fallback: any non-readonly publisher (broad, used only when env-default lookup misses)
-    const fb = await dataverseRequest(
+  // Explicit publisher requested → resolve by uniquename.
+  if (uniqueName) {
+    const res = await dataverseRequest(
       envUrl,
       'GET',
-      "publishers?$select=publisherid,uniquename,customizationprefix&$filter=isreadonly eq false&$top=1"
+      `publishers?$select=publisherid,uniquename,customizationprefix&$filter=uniquename eq '${uniqueName.replace(/'/g, "''")}'&$top=1`,
     );
-    return fb.data?.value?.[0] || null;
+    ensureOk(res, `Lookup publisher '${uniqueName}'`);
+    return res.data?.value?.[0] || null;
   }
-  return p;
+
+  // No publisher specified → resolve the env's default publisher via the
+  // organization record (authoritative; doesn't depend on friendly-name format
+  // or env hostname). The organization table has exactly one row.
+  try {
+    const orgRes = await dataverseRequest(
+      envUrl,
+      'GET',
+      "organizations?$select=_defaultpublisherid_value&$top=1",
+    );
+    const defaultPublisherId = orgRes.data?.value?.[0]?._defaultpublisherid_value;
+    if (defaultPublisherId) {
+      const pubRes = await dataverseRequest(
+        envUrl,
+        'GET',
+        `publishers(${defaultPublisherId})?$select=publisherid,uniquename,customizationprefix`,
+      );
+      if (pubRes.status === 200 && pubRes.data?.publisherid) {
+        return {
+          publisherid: pubRes.data.publisherid,
+          uniquename: pubRes.data.uniquename,
+          customizationprefix: pubRes.data.customizationprefix,
+        };
+      }
+    }
+  } catch {
+    // Fall through to the broad fallback below if the organization probe fails.
+  }
+
+  // Last-resort fallback — any non-readonly publisher. Used only if the
+  // authoritative organization lookup above didn't return anything (rare).
+  const fb = await dataverseRequest(
+    envUrl,
+    'GET',
+    "publishers?$select=publisherid,uniquename,customizationprefix&$filter=isreadonly eq false&$top=1",
+  );
+  return fb.data?.value?.[0] || null;
 }
 
 async function main() {
