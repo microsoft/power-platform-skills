@@ -20,6 +20,7 @@ claude --plugin-dir /path/to/plugins/canvas-apps
 
 ```
 .claude-plugin/plugin.json     ← Plugin metadata (name, version, keywords)
+.mcp.json                      ← MCP server config (canvas-authoring, auto-registered)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 references/
@@ -46,7 +47,7 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/canvas-app` | Create or edit a Canvas App — auto-detects whether to generate from scratch or edit existing |
-| `/configure-canvas-mcp` | Register the Canvas Authoring MCP server with Claude Code |
+| `/configure-canvas-mcp` | Configure the Canvas Authoring MCP server for the current coauthoring session |
 | `/add-data-source` | Guide the user to add a data source, connection, or API connector in Studio, then verify it is available |
 
 ## Agents
@@ -64,6 +65,7 @@ The `canvas-authoring` MCP server exposes the following tools:
 
 | Tool | Description |
 |------|-------------|
+| `configure` | Configures the MCP server for a specific coauthoring session (environment ID, app ID, cluster category) |
 | `compile_canvas` | Validates canvas app YAML files in a directory using the Power Apps authoring service |
 | `describe_api` | Gets detailed information about a specific API (connector) including its operations and parameters |
 | `describe_control` | Gets detailed information about a specific Power Apps control including properties, variants, and metadata |

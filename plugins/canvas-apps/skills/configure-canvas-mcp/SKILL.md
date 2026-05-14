@@ -1,21 +1,21 @@
 ---
 name: configure-canvas-mcp
-version: 1.0.0
-description: Configure the Canvas Authoring MCP server for Claude Code, VS Code Copilot, or GitHub Copilot CLI. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
+version: 2.0.0
+description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Bash, AskUserQuestion, Read, Edit, Write
+allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__configure
 ---
 
 # Configure the Canvas Authoring MCP Server
 
-This skill registers the Canvas Authoring MCP server with Claude Code, VS Code Copilot, or GitHub Copilot CLI using the user's Power Platform environment ID.
+This skill configures the Canvas Authoring MCP server for the user's current Power Apps coauthoring session. The MCP server is auto-registered by the plugin — this skill connects it to a specific app session.
 
 ## Instructions
 
 ### 0. Check prerequisites
 
-Verify that .NET 10 SDK or higher is installed
+Verify that .NET 10 SDK or higher is installed:
 
 ```bash
 dotnet --list-sdks
@@ -27,59 +27,7 @@ If a version 10.x.y or higher is not listed, tell the user:
 
 Then wait for the user to install it before continuing. If they say it's installed, run the command again to confirm. If it's still not found, repeat the message until they have it installed.
 
-### 1. Determine which tool to configure
-
-Determine whether the user needs to configure MCP for VS Code Copilot, GitHub Copilot CLI, or Claude Code:
-- If explicitly mentioned in prompt, use that.
-- Otherwise, determine which tool the user is running from the context.
-- Only if choosing based on the context is impossible, ask the user:
-
-> Which tool would you like to configure the Canvas Authoring (canvas-authoring) MCP server for?
-> 1. **VS Code Copilot**
-> 2. **GitHub Copilot CLI**
-> 3. **Claude**
-
-Based on the result, set the `TOOL_TYPE` variable to `vscode-copilot`, `copilot`, or `claude`. Store this for use in all subsequent steps.
-
-### 2. Determine the MCP scope
-
-Choose the configuration scope based on the tool. Use the scope explicitly mentioned by the user, or ask the user to choose.
-
-**If TOOL_TYPE is `vscode-copilot`:**
-
-There is only one configuration path: `.vscode/mcp.json` (relative to the current working directory).
-
-Set `CONFIG_PATH` = `.vscode/mcp.json`. No scope selection is needed.
-
-Store this path for use in steps 4 and 5.
-
-**If TOOL_TYPE is `copilot`:**
-
-The options are:
-1. **Globally** (default, available in all projects)
-2. **Project-only** (available only in this project)
-
-Based on the scope, set the `CONFIG_PATH` variable:
-- **Global**: `~/.copilot/mcp-config.json` (use the user's home directory)
-- **Project**: `.mcp.json` (relative to the current working directory)
-
-Store this path for use in steps 4 and 5.
-
-**If TOOL_TYPE is `claude`:**
-
-The options are:
-1. **User** (available in all projects for this user)
-2. **Project** (default, available only in this project)
-3. **Local** (scoped to current project directory)
-
-Based on the scope, set the `CLAUDE_SCOPE` variable:
-- **User**: `CLAUDE_SCOPE` = `user`
-- **Project**: `CLAUDE_SCOPE` = `project`
-- **Local**: `CLAUDE_SCOPE` = `local`
-
-Store this value for use in step 5.
-
-### 3. Ask for the studio URL
+### 1. Ask for the studio URL
 
 Ask the user:
 
@@ -91,7 +39,10 @@ Ask the user:
 >
 > **Keep this browser tab open for the entire session.** The MCP server communicates with Power Apps through the coauthoring session tied to that tab. Closing the tab ends the coauthoring session, which prevents `compile_canvas` and `sync_canvas` from working and means you can't see or save generated changes.
 
-Then extract from the URL:
+### 2. Extract parameters from the URL
+
+Parse the following from the studio URL:
+
 - **ENV_ID**: the path segment between `/e/` and the next `/` (e.g. `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`).
 - **APP_ID**: URL-decode the `app-id` query parameter value, then take the last segment after the final `/` (e.g. `6fc3e3d1-292b-4281-8826-577f78512e56`)
 - **MAKER_HOSTNAME**: the hostname of the URL (e.g. `make.powerapps.com`)
@@ -118,108 +69,29 @@ Example URL: `https://make.powerapps.com/e/Default-91bee3d9-0c15-4f17-8624-c92bb
 - MAKER_HOSTNAME → `make.powerapps.com`
 - CLUSTER_CATEGORY → `prod`
 
-Store these as `ENV_ID`, `APP_ID`, and `CLUSTER_CATEGORY` for use in step 4.
+### 3. Configure the MCP server
 
-### 4. Register the MCP server
+Call the `configure` MCP tool to connect the server to the user's coauthoring session:
 
-**If TOOL_TYPE is `claude`:**
-Run the following command to register the server with Claude Code:
-
-```bash
-claude mcp add --scope {CLAUDE_SCOPE} canvas-authoring \
-  -e CANVAS_ENVIRONMENT_ID={ENV_ID} \
-  -e CANVAS_APP_ID={APP_ID} \
-  -e CANVAS_CLUSTER_CATEGORY={CLUSTER_CATEGORY} \
-  -- dnx Microsoft.PowerApps.CanvasAuthoring.McpServer --yes --prerelease --source https://api.nuget.org/v3/index.json
+```
+mcp__canvas-authoring__configure(
+  environmentId: ENV_ID,
+  appId: APP_ID,
+  clusterCategory: CLUSTER_CATEGORY
+)
 ```
 
-If the command fails because `canvas-authoring` is already registered, remove it first, then re-add:
+If the call fails, report the error to the user and suggest checking that:
+1. The studio URL is correct and the browser tab is still open
+2. Coauthoring is enabled in the app settings
+3. .NET 10 SDK is correctly installed
 
-```bash
-claude mcp remove canvas-authoring
-claude mcp add --scope {CLAUDE_SCOPE} canvas-authoring \
-  -e CANVAS_ENVIRONMENT_ID={ENV_ID} \
-  -e CANVAS_APP_ID={APP_ID} \
-  -e CANVAS_CLUSTER_CATEGORY={CLUSTER_CATEGORY} \
-  -- dnx Microsoft.PowerApps.CanvasAuthoring.McpServer --yes --prerelease --source https://api.nuget.org/v3/index.json
-```
-
-**If TOOL_TYPE is `vscode-copilot` or `copilot`:**
-1. Ensure the parent directory exists:
-   - If `CONFIG_PATH` is `.vscode/mcp.json`, run: `mkdir -p .vscode`
-   - If `CONFIG_PATH` is the global `~/.copilot/mcp-config.json` or `.mcp.json`, no directory creation is needed.
-
-2. Read the existing configuration file at `CONFIG_PATH`, or create a new empty config if it doesn't exist:
-   ```json
-   {}
-   ```
-
-3. Determine which top-level key to use:
-   - If the config already has `"servers"`, or if the TOOL_TYPE is `vscode-copilot`, use that
-   - Otherwise, use `"mcpServers"`
-
-4. Add or update the server entry:
-   ```json
-   {
-     "mcpServers": {
-       "canvas-authoring": {
-         "type": "stdio",
-         "command": "dnx",
-         "args": [
-           "Microsoft.PowerApps.CanvasAuthoring.McpServer",
-           "--yes",
-           "--prerelease",
-           "--source",
-           "https://api.nuget.org/v3/index.json"
-         ],
-         "env": {
-           "CANVAS_ENVIRONMENT_ID": "{ENV_ID}",
-           "CANVAS_APP_ID": "{APP_ID}",
-           "CANVAS_CLUSTER_CATEGORY": "{CLUSTER_CATEGORY}"
-         }
-       }
-     }
-   }
-   ```
-
-5. Write the updated configuration back to `CONFIG_PATH` with proper JSON formatting (2-space indentation).
-
-**Important notes:**
-- Do NOT overwrite other entries in the configuration file
-- Preserve the existing structure and formatting
-
-### 5. Confirm and provide next steps
-
-If TOOL_TYPE is `claude`:
+### 4. Confirm
 
 Tell the user:
 
-> ✅ Canvas Authoring MCP server configured (`canvas-authoring`, scope: `{CLAUDE_SCOPE}`).
+> ✅ Canvas Authoring MCP server configured for your coauthoring session.
 >
-> **Restart Claude Code to activate it.** Remember to use `claude --continue` to resume this session without losing context.
+> You can now use Canvas App skills like `/canvas-app` to create or edit your app.
 >
-> After restarting, verify the setup:
-> - `canvas-authoring` should appear in the MCP server list
-> - Ask Claude: "List available Canvas App controls" — should invoke `list_controls`
-
-If TOOL_TYPE is `vscode-copilot`:
-
-Tell the user:
-
-> ✅ Canvas Authoring MCP server configured (`canvas-authoring`, configPath: `{CONFIG_PATH}`).
->
-> After saving, verify the setup:
-> - `canvas-authoring` should appear in the MCP server list
-> - Ask Copilot: "List available Canvas App controls" — should invoke `list_controls`
-
-If TOOL_TYPE is `copilot`:
-
-Tell the user:
-
-> ✅ Canvas Authoring MCP server configured (`canvas-authoring`, configPath: `{CONFIG_PATH}`).
->
-> **Restart GitHub Copilot CLI to activate it.**
->
-> After restarting, verify the setup:
-> - `canvas-authoring` should appear in the MCP server list
-> - Ask Copilot: "List available Canvas App controls" — should invoke `list_controls`
+> To verify the setup, try: "List available Canvas App controls" — this should invoke `list_controls`.

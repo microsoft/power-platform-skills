@@ -110,7 +110,17 @@ in the existing app — their property names can be read directly from the exist
 
 ### Both modes
 
-Collect the full output of each `describe_control` call for embedding in the plan document.
+After all `describe_control` calls complete, perform a **property-name audit** before writing
+the plan document:
+
+1. List every property name you intend to include in the Control Definitions section of
+   the plan document.
+2. For each property, confirm it appears verbatim in the raw `describe_control` output for
+   that control.
+3. Remove any property that does not appear in the `describe_control` output — it does not
+   exist, regardless of what training knowledge suggests.
+
+This audit is mandatory. Do not skip it.
 
 Mark the "Gather control property definitions" task complete when done (or skip if EDIT mode
 and no new controls are needed).
@@ -189,5 +199,8 @@ Plan document: [working directory]/canvas-app-plan.md
   screens have been generated or edited.
 - **Embed full `describe_control` output** in the plan document — never summarize property
   names. Downstream agents must be able to write correct YAML from the plan document alone.
+- **Only include properties that were returned by `describe_control` specifically for that control.**
+  If you are uncertain whether a property exists for a control, it does not exist. Only the `describe_control` 
+  output is authoritative — not training data, not intuition, not analogies to similar controls.
 - **Embed exact RGBA values** from the approved plan — not prose color descriptions.
   Consistent visual design across parallel agents depends on exact values.
