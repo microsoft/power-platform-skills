@@ -19,3 +19,38 @@ test("runInstrumented rethrows errors from the fn", async () => {
     /nope/
   );
 });
+
+test("runInstrumented forwards envelopeName from ikey.json event_stream_name", async () => {
+  let captured;
+  const fakeDeps = {
+    withTelemetry: (scriptName, fn, opts) => {
+      captured = opts;
+      return fn();
+    },
+    ikeyCfg: {
+      instrumentationKey: "key-value",
+      collector_url: "https://x",
+      event_stream_name: "PowerPagesPluginEvent",
+    },
+  };
+  await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
+  assert.equal(captured.envelopeName, "PowerPagesPluginEvent");
+});
+
+test("runInstrumented reads iKey from instrumentationKey property (not legacy 'ikey')", async () => {
+  let captured;
+  const fakeDeps = {
+    withTelemetry: (scriptName, fn, opts) => {
+      captured = opts;
+      return fn();
+    },
+    ikeyCfg: {
+      instrumentationKey: "the-real-key",
+      ikey: "DO-NOT-READ-THIS-LEGACY-FIELD",
+      collector_url: "https://x",
+      event_stream_name: "PowerPagesPluginEvent",
+    },
+  };
+  await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
+  assert.equal(captured.spawnOpts.iKey, "the-real-key");
+});

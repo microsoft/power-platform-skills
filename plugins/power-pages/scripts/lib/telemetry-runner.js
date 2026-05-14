@@ -30,17 +30,18 @@ function loadTelemetryDeps() {
   }
 }
 
-async function runInstrumented(scriptName, asyncFn) {
-  const deps = loadTelemetryDeps();
+async function runInstrumented(scriptName, asyncFn, _overrides = {}) {
+  const deps = _overrides.deps || loadTelemetryDeps();
   if (!deps) return asyncFn();
 
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 
   return deps.withTelemetry(scriptName, asyncFn, {
+    envelopeName: deps.ikeyCfg.event_stream_name || "",
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
     spawnOpts: {
-      iKey: deps.ikeyCfg.ikey,
+      iKey: deps.ikeyCfg.instrumentationKey,
       collectorUrl: deps.ikeyCfg.collector_url,
       configDir,
     },
