@@ -242,19 +242,20 @@ See `${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contr
 **If the plan's Pages table contains exactly one row**, do NOT dispatch a Task
 subagent. Inline the page-builder workflow directly in the orchestrator:
 
-1. Read `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt`
-2. Read `${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md`
-3. Read the sample listed in the plan's `## Relevant Samples`
-4. If the plan's Per-Page Specification has `Needs caching: true`, also read
+1. Read `${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md`
+2. Read the sample listed in the plan's `## Relevant Samples`
+3. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${CLAUDE_PLUGIN_ROOT}/references/data-caching-pattern.md`
-5. If the plan's `## Environment` indicates non-English languages, also read
+4. If the plan's `## Environment` indicates non-English languages, also read
    `${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md`
-6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
+5. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
-7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
-8. Grep your own output for every named import from `@fluentui/react-icons` and
-   verify each appears in `verified-icons.txt`; rewrite if any are missing
-9. Proceed to Phase 6
+6. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
+7. After writing, Grep every named import from `@fluentui/react-icons` against
+   `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
+   Rewrite any unverified names with the closest verified alternative; do not
+   load the full icon list into context
+8. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -308,18 +309,16 @@ For each `.tsx` file produced, deploy to Power Apps.
 
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
-#### `--prompt` semantics (important)
+#### `--prompt` semantics
 
-The `--prompt` value must match the upload's role:
+- **First upload** (`--add-to-sitemap`, no `--page-id`): full page description
+  from plan's `## User Requirements`.
+- **Any subsequent upload** (`--page-id`, no `--add-to-sitemap`): delta only —
+  the changes in this upload, written like a commit message, never a
+  re-statement of the original.
 
-| Upload | `--prompt` content |
-|--------|--------------------|
-| **First upload of a new page** (`--add-to-sitemap`, no `--page-id`) | The **full page description** — summary of the plan's `## User Requirements` for this page |
-| **Any subsequent upload** of an existing page (`--page-id`, no `--add-to-sitemap`) | **Only the delta of changes** in this upload — not a re-statement of the full page description |
-
-Sending the full original prompt on every update pollutes the page's prompt
-history and makes downstream diffs noisy. Update prompts must read like commit
-messages, not requirements docs.
+Applies in Phase 6 updates, Phase 6.5 PAGEREF re-uploads, Phase 7.5 fix
+re-deploys, and the entire edit flow.
 
 #### For Dataverse entity pages (first upload — create):
 
@@ -354,41 +353,21 @@ pac model genpage upload `
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
-**Only runs when the plan has 2+ pages** AND any built `.tsx` contains a `PAGEREF_`
-token. Skip entirely for single-page builds.
-
-Page-builders write `"PAGEREF_<filename-without-tsx>"` as a placeholder wherever they
-navigate to a sibling generative page (see Rule 13 / Generative Page Navigation in
-genpage-rules-reference.md) — because GUIDs don't exist until after first upload.
-This phase replaces all placeholders with the real GUIDs returned by Phase 6.
-
-**Why a second pass is required:** Pages are built in parallel before any GUIDs exist.
-The placeholders let code generation proceed correctly; this phase resolves them.
+Runs only when the plan has 2+ pages AND any built `.tsx` contains a `PAGEREF_`
+token. Page-builders emit `pageId: "PAGEREF_<filename-without-tsx>"` as a
+placeholder because GUIDs don't exist until after Phase 6 (see Rule 13). This
+phase substitutes the real GUIDs.
 
 #### Steps
 
-1. Build a map of `filename-without-tsx → page-id` from the Phase 6 upload output:
-   ```
-   pet-gallery  → 3643e240-b589-4862-bf37-8347f388044b
-   pet-detail   → 8dab5cd4-c861-40a8-a970-291e4f047eb7
-   pet          → 12fa8b16-...  (always include — substring of pet-gallery)
-   ```
-
-2. **Sort the map keys by length, descending.** This prevents shorter names from
-   matching inside longer names (e.g., `PAGEREF_pet` partially matching
-   `PAGEREF_pet-gallery`).
-
-3. For each `.tsx` file in `<working-dir>/*.tsx` (top level only — do NOT recurse into
-   subfolders), scan for any quoted `"PAGEREF_<name>"` token. **The placeholder
-   MUST be inside double quotes** (page-builders emit `pageId: "PAGEREF_pet"`).
-
-4. For each match, perform an exact-string replacement of `"PAGEREF_<name>"` with
-   `"<page-id-guid>"`. Use word-boundary-safe substitution: match the full token
-   `"PAGEREF_<name>"` including surrounding quotes, not a substring of it.
-
-5. If a placeholder is found that does NOT match any key in the map (e.g., a typo),
-   surface this to the user explicitly — do NOT silently leave the literal string
-   in the deployed code. Stop and report which file and which placeholder.
+1. Build `filename-without-tsx → page-id` map from Phase 6 upload output.
+2. **Sort keys by length descending** so `PAGEREF_pet` can't match inside
+   `PAGEREF_pet-gallery`.
+3. For each `.tsx` in `<working-dir>/*.tsx` (top level only, no recursion),
+   replace every quoted `"PAGEREF_<name>"` (must be in double quotes — that's
+   the format page-builders emit) with `"<page-id-guid>"`.
+4. If a placeholder doesn't match any map key (typo, missing sibling), stop
+   and report — never silently ship the literal string.
 
 6. Re-upload only the files that had at least one replacement. Use the update form
    of `pac model genpage upload` (`--page-id`, no `--add-to-sitemap`). Per the

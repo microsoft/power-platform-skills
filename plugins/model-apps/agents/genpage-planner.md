@@ -241,71 +241,47 @@ Use `AskUserQuestion`. Order options so the **matching-prefix** choice is first
 5. Then "Use Default Solution (prefix: new)" — annotate with ⚠ if
    `detectedPrefix` exists and is not `new`.
 
-**Example question when `detectedPrefix = crb2b`:**
+**Example with `detectedPrefix = crb2b`:**
 
-> "Which solution should the new tables / app go in? I see your env has
-> 12 existing custom tables using prefix `crb2b` — keeping the new ones in
-> the same publisher means a consistent prefix and a single export story.
+> "Your env has 12 existing custom tables using prefix `crb2b`. Where should
+> the new tables / app go?
 >
-> - **Continue in 'Crdec34' (prefix: crb2b)** — matches your existing custom tables [RECOMMENDED]
-> - **Create new 'genpage-<app>' solution under crb2b publisher** — clean container, same prefix
+> - **Continue in 'Crdec34' (prefix: crb2b)** — matches existing work [RECOMMENDED]
+> - **Create new 'genpage-<app>' solution under crb2b publisher**
 > - **Use existing 'LandscapeBusiness' (prefix: lndscp)**
-> - **Use Default Solution (prefix: new)** ⚠ different from your existing custom tables"
+> - **Use Default Solution (prefix: new)** ⚠ different prefix from existing work"
 
-**Example when no `detectedPrefix` (fresh env):**
+**Example when no `detectedPrefix`:**
 
 > "Which solution should the new tables / app go in?
 >
-> - **Create a new 'genpage-<app>' solution (prefix: new)** — clean container for this build [RECOMMENDED]
-> - **Use Default Solution (prefix: new)** — fastest, but mixed with everything else"
+> - **Create new 'genpage-<app>' solution (prefix: new)** [RECOMMENDED]
+> - **Use Default Solution (prefix: new)**"
 
 #### 4. Act on the answer
 
-- **Existing solution chosen:** Record `Solution: <uniquename>` and
-  `Publisher Prefix: <prefix>` in the plan's `## Environment`.
+For each option, record `Solution: <uniquename>` + `Publisher Prefix: <prefix>`
+in the plan's `## Environment`. Specifics:
 
-- **Create new under a specific publisher (matching `detectedPrefix`):**
-  First, resolve the publisher's unique name from its prefix:
-
+- **Existing solution** → use it directly; capture its prefix from the Step 2 query.
+- **Create new under publisher `<prefix>`** → resolve publisher uniquename, then create:
   ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
-    "publishers?\$select=uniquename&\$filter=customizationprefix eq '<detectedPrefix>'&\$top=1"
-  ```
-
-  Then create the solution with that publisher:
-
-  ```bash
+  PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+    "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
   node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
-    "<UniqueName>" "<Friendly Name>" \
-    --publisher "<publisherUniqueName>" \
-    --description "Solution for the <app> generative pages"
+    "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
+  Omit `--publisher` to use the env's Default Publisher (prefix `new`).
+  If the uniqueName collides, retry once with a numeric suffix.
+- **Default Solution** → `Solution: Default`, `Publisher Prefix: new`. Note: this
+  is mandatory because `pac model create` errors out with
+  `"The given solution name is not valid: ()"` if `--solution` is omitted.
 
-  Record the returned `uniqueName` + `publisherPrefix` (should equal
-  `detectedPrefix`) in the plan.
+If the chosen prefix differs from `detectedPrefix`, log a one-line warning to
+the user before continuing:
 
-- **Create new under Default Publisher:** Same as above but omit `--publisher`.
-  The returned `publisherPrefix` will be `new`.
-
-- **Default Solution chosen:** Record `Solution: Default` and
-  `Publisher Prefix: new`.
-
-In every case, if the user picked a solution whose prefix differs from
-`detectedPrefix` AND `detectedPrefix` exists, surface a one-line warning before
-proceeding:
-
-> "Heads up — your env has existing custom tables with prefix `<detectedPrefix>`,
-> but you chose a solution with prefix `<chosenPrefix>`. The new tables will
-> not visually match your existing work. Proceeding anyway."
-
-If the script returns an error on solution creation (typically because the
-uniqueName already exists), retry once with a numeric suffix
-(`PetTrackerSolution2`).
-
-Why `Default` rather than omitting: `pac model create` errors out with
-`"The given solution name is not valid: ()"` when called without `--solution`,
-so the orchestrator's Phase 3 always passes the field. Writing `Default`
-unconditionally makes the contract uniform.
+> "Heads up — env has `<detectedPrefix>_*` tables but you chose `<chosenPrefix>`.
+> New tables won't match the prefix of your existing work."
 
 ## Step 5 — Present Plan for Approval
 

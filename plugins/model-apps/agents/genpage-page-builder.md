@@ -67,24 +67,29 @@ assume column names exist. Custom entities have unpredictable column names
 
 For **mock data pages:** Skip this step. Generate realistic sample data inline.
 
-## Step 2.5 — Read Verified Icon List
+## Step 2.5 — Icon-name validation (Grep-based)
 
-**Mandatory.** Read the pre-generated verified icon list:
+The plugin ships a verified icon list at
+`${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt` (~5000 names from
+`@fluentui/react-icons`). **Do NOT load the full file into context** — it's
+~26K tokens of dead weight. Instead, use `Grep` to validate names on demand.
 
-```
-${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt
-```
+Approach:
+1. In Step 5, generate the `.tsx` using your knowledge of Fluent UI naming
+   (`AddRegular`, `EditRegular`, `DismissFilled`, etc.). Pick unsized
+   `Regular` or `Filled` variants only.
+2. After writing the file, extract every named import from
+   `@fluentui/react-icons` and `Grep` each against `verified-icons.txt`:
+   ```
+   Grep pattern: `^<IconName>$` path: verified-icons.txt
+   ```
+3. For any name with zero matches, substitute the closest verified semantic
+   alternative (use `Grep` with a partial pattern like `^Search.*Regular$` to
+   find candidates) and rewrite. Repeat until every import is verified.
 
-This file ships with the plugin and lists every valid icon name from
-`@fluentui/react-icons` (5000+ entries, one per line). Keep the list in context
-for Step 5. Before finalising any icon import, confirm the name appears in this
-list. If a name you want is not in the list, substitute the closest semantic
-alternative that IS in the list. **Never guess an icon name.**
-
-After writing the `.tsx` file in Step 5, Grep your own output for every named
-import from `@fluentui/react-icons`. For each name, verify it appears in the
-verified-icons.txt list. If any name is missing, rewrite the file to substitute
-a verified name. Repeat until every icon import is verified.
+This pattern saves ~26K tokens per page-builder run vs. loading the full list,
+while keeping the same correctness guarantee: nothing ships unless every icon
+import has been Grep-validated against the verified list.
 
 ## Step 3 — Read References and Samples
 

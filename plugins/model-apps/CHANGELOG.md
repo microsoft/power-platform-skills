@@ -8,6 +8,30 @@ Replaces the Dataverse MCP server + Python SDK fallback in `genpage-entity-build
 with a set of plain Node.js scripts that hit the Dataverse Web API directly using
 Azure CLI (`az`) for auth. Same approach `power-pages` uses.
 
+### Performance
+
+- **Page-builder no longer loads `verified-icons.txt` (~26K tokens) upfront.**
+  The 5000-line icon list was being read into context by every page-builder
+  run "in case" the agent needed to pick names from it. In practice the agent
+  generates icon names from training and the post-write `Grep` validation is
+  the real safety net. Step 2.5 is now Grep-only: validate each named import
+  against `verified-icons.txt` after writing the `.tsx`; rewrite any unverified
+  names. Same correctness guarantee, ~26K tokens saved per page-builder run
+  (~130K tokens saved on a 5-page parallel build).
+- **`## DataAPI Type Definitions` removed from `genpage-rules-reference.md`
+  (~80 lines).** The full TypeScript type signatures were a stale-prone copy
+  of what `RuntimeTypes.ts` ships as a generated artifact per build. Replaced
+  with a short pointer that names the symbols you can rely on. Page-builder
+  already reads `RuntimeTypes.ts` in Step 2 anyway.
+- **`## DataAPI Usage Examples` tightened from 65 → ~20 lines.** Kept the
+  essential CRUD + formatted-value patterns; cut the redundant type-declaration
+  preamble and `loadMoreRows` example.
+- **SKILL.md `--prompt semantics` and Phase 6.5 PAGEREF docs compressed**
+  from ~30 + ~30 lines to ~10 + ~20 lines, no semantic change.
+- **Planner Solution Selection consolidated** — the "Act on the answer"
+  branches were duplicating the create-solution call boilerplate. Single
+  bullet list, shared example block.
+
 ### Fixed
 
 - **Prefix drift in plans is now structurally impossible.** Previously the plan
