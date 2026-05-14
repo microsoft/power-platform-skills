@@ -20,7 +20,7 @@ Exit codes:
   1  Other failure
 
 Example:
-  node delete-rules.js --portalId <guid> --names BlockBotTraffic,RateLimitPerIP
+  node delete-rules.js --portalId <portal-id> --names <RuleName1>,<RuleName2>
 `);
   process.exit(0);
 }

@@ -18,7 +18,7 @@ Exit codes:
   1  Other failure
 
 Example:
-  node start-deep-scan.js --portalId <guid>
+  node start-deep-scan.js --portalId <portal-id>
 `);
   process.exit(0);
 }

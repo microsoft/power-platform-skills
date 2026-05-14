@@ -185,16 +185,15 @@ After completion, re-run status and rules calls to verify the new state.
 
 ### 5.1 Review mode
 
-Write `<REVIEW_DIR>/manage-firewall.json`:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js"  --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" \
+  --statusFile "<REVIEW_DIR>/firewall-status.json" \
+  --rulesFile  "<REVIEW_DIR>/firewall-rules.json"
+```
 
-- `REPORT_TITLE` — `"Web Application Firewall"`
-- `REPORT_DESC` — short description naming the site
-- `SITE_NAME` — site display name
-- `SUMMARY` — 2–3 sentences: is the firewall on, how many rules, what is missing
-- `FINDINGS_DATA` — array of findings. Assess severity from context — do not use hardcoded mappings. A configuration that looks like a gap may be intentional by design; only flag it if the surrounding state suggests it is unintended.
-- `DETAILS_DATA` — `{ label: 'Rules', kind: 'table', columns: ['Name', 'Type', 'Action', 'Priority', 'Enabled'], rows: [...] }`
-
-Then stop — the orchestrating skill handles presentation.
+Write the transform stdout to `<REVIEW_DIR>/manage-firewall.json` and stop. The transform emits `{ status, findings }`; the orchestrating skill handles presentation.
 
 ### 5.2 Present summary
 

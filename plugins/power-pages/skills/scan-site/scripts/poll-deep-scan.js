@@ -23,9 +23,9 @@ Exit codes:
   1  Other failure
 
 Example:
-  node poll-deep-scan.js --portalId <guid>
-  node poll-deep-scan.js --portalId <guid> --once
-  node poll-deep-scan.js --portalId <guid> --timeoutMinutes 30
+  node poll-deep-scan.js --portalId <portal-id>
+  node poll-deep-scan.js --portalId <portal-id> --once
+  node poll-deep-scan.js --portalId <portal-id> --timeoutMinutes <minutes>
 `);
   process.exit(0);
 }

@@ -18,7 +18,7 @@ Exit codes:
   1  Other failure
 
 Example:
-  node get-status.js --portalId <guid>
+  node get-status.js --portalId <portal-id>
 `);
   process.exit(0);
 }

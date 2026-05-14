@@ -56,7 +56,7 @@ Put detail in the report, not in the chat.
 
 ## Step 6 — Findings and remediation
 
-When the user opens the report (Step 5), they see the consolidated view: totals, top findings, then per-section sections. Each finding card has the same structure (title, severity, location, why this matters, suggested fix).
+When the user opens the report (Step 5), they see the consolidated view: totals followed by per-section sections that list **all** findings. Each finding card has the same structure (title, severity, location, why this matters, suggested fix).
 
 After they have had a moment to look, offer the next action with one question: walk through the criticals now, re-run after changes, or stop here. Pick the option that makes sense based on the current state — if there are zero criticals, the offer to "walk through criticals" should not be the first option.
 

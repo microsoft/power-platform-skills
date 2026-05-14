@@ -21,7 +21,7 @@ Exit codes:
   1  Other failure
 
 Example:
-  node disable.js --portalId <guid>
+  node disable.js --portalId <portal-id>
 `);
   process.exit(0);
 }

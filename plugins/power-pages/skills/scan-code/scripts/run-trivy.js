@@ -5,7 +5,7 @@ const fs = require('fs');
 const { spawnSync, execSync } = require('child_process');
 
 if (process.argv.includes('--help')) {
-  process.stdout.write(`run-trivy.js — Runs trivy against the project and outputs normalized findings.
+  process.stdout.write(`run-trivy.js — Runs trivy and emits the raw JSON output.
 
 Scans for vulnerabilities in dependencies, hard-coded secrets in source
 files, and license compliance issues in packages.
@@ -24,14 +24,14 @@ Flags:
   --help            Show this help message
 
 Exit codes:
-  0  Success (JSON on stdout, even if findings is empty)
+  0  Success (raw trivy JSON on stdout)
   1  Invocation error
 
-Example:
-  node run-trivy.js --projectRoot /path/to/site
-  node run-trivy.js --projectRoot /path/to/site --severity LOW,MEDIUM,HIGH,CRITICAL
-  node run-trivy.js --projectRoot /path/to/site --secretConfig /path/to/trivy-secret.yaml
-  node run-trivy.js --projectRoot /path/to/site --ignoreFile /path/to/.trivyignore.yaml
+Examples:
+  node run-trivy.js --projectRoot <project-root>
+  node run-trivy.js --projectRoot <project-root> --severity <comma-separated-severities>
+  node run-trivy.js --projectRoot <project-root> --secretConfig <secret-config-file>
+  node run-trivy.js --projectRoot <project-root> --ignoreFile <ignore-file>
 `);
   process.exit(0);
 }
@@ -55,11 +55,9 @@ function autoDetect(filename) {
 
 const severity = getArg('severity', 'LOW,MEDIUM,HIGH,CRITICAL');
 const scanners = getArg('scanners', 'vuln,secret,license');
-// Auto-detect config files from project root; CLI flags override.
 const trivyConfig = getArg('trivyConfig') || autoDetect('trivy.yaml');
 const secretConfig = getArg('secretConfig') || autoDetect('trivy-secret.yaml');
 const ignoreFile = getArg('ignoreFile') || autoDetect('.trivyignore.yaml') || autoDetect('.trivyignore');
-// Default true — scan source headers and LICENSE files. Pass --no-licenseFull to disable.
 const licenseFull = !hasFlag('no-licenseFull');
 
 if (!projectRoot) {
@@ -72,10 +70,9 @@ if (!fs.existsSync(projectRoot)) {
   process.exit(1);
 }
 
-let version = null;
 try {
   // 60s timeout — first invocation can be slow
-  version = execSync('trivy --version', { encoding: 'utf8', timeout: 60000 }).match(/Version:\s*([\d.]+)/i)?.[1] || null;
+  execSync('trivy --version', { encoding: 'utf8', timeout: 60000 });
 } catch {
   process.stderr.write('trivy is not installed or not on PATH.\n');
   process.exit(1);
@@ -110,64 +107,4 @@ if (proc.status !== 0) {
   process.exit(1);
 }
 
-let parsed;
-try {
-  parsed = JSON.parse(proc.stdout || '{}');
-} catch (err) {
-  process.stderr.write(`Failed to parse trivy JSON: ${err.message}\n`);
-  process.exit(1);
-}
-
-const findings = [];
-let counter = 1;
-for (const target of parsed.Results || []) {
-  const targetPath = path.relative(projectRoot, target.Target || '').replace(/\\/g, '/') || target.Target || 'unknown';
-
-  for (const v of target.Vulnerabilities || []) {
-    findings.push({
-      id: `trivy-${counter++}`,
-      severity: (v.Severity || 'UNKNOWN').toUpperCase(),
-      category: 'vulnerability',
-      title: `${v.PkgName || 'package'}@${v.InstalledVersion || '?'}`,
-      tag: v.VulnerabilityID || null,
-      location: targetPath,
-      details: (v.Title || v.Description || '').split('\n')[0].slice(0, 240) || null,
-      fix: v.FixedVersion ? `Upgrade ${v.PkgName} to ${v.FixedVersion}` : null,
-    });
-  }
-
-  for (const s of target.Secrets || []) {
-    findings.push({
-      id: `trivy-${counter++}`,
-      severity: (s.Severity || 'HIGH').toUpperCase(),
-      category: 'secret',
-      title: s.Title || s.RuleID || 'Hard-coded secret',
-      tag: s.RuleID || null,
-      location: targetPath + (s.StartLine ? `:${s.StartLine}` : ''),
-      details: s.Category || null,
-      fix: 'Remove the secret from source code and rotate it immediately',
-    });
-  }
-
-  for (const l of target.Licenses || []) {
-    findings.push({
-      id: `trivy-${counter++}`,
-      severity: (l.Severity || 'LOW').toUpperCase(),
-      category: 'license',
-      title: `${l.PkgName || 'package'}: ${l.Name || 'unknown license'}`,
-      tag: l.Name || null,
-      location: targetPath,
-      details: l.Category ? `Category: ${l.Category}` : null,
-      fix: l.Category === 'restricted' ? 'Replace this package with one using a permissive license' : null,
-    });
-  }
-}
-
-process.stdout.write(JSON.stringify({
-  status: 'ok',
-  tool: 'trivy',
-  version,
-  scanners,
-  severity,
-  findings,
-}) + '\n');
+process.stdout.write(proc.stdout || '{}');

@@ -21,8 +21,8 @@ Exit codes:
   1  Other failure
 
 Example:
-  node enable.js --portalId <guid>
-  node enable.js --portalId <guid> --timeoutMinutes 20
+  node enable.js --portalId <portal-id>
+  node enable.js --portalId <portal-id> --timeoutMinutes <minutes>
 `);
   process.exit(0);
 }

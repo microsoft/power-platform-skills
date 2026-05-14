@@ -19,8 +19,8 @@ Exit codes:
   1  Other failure
 
 Example:
-  node get-rules.js --portalId <guid>
-  node get-rules.js --portalId <guid> --ruleType Custom
+  node get-rules.js --portalId <portal-id>
+  node get-rules.js --portalId <portal-id> --ruleType <Custom|Managed>
 `);
   process.exit(0);
 }

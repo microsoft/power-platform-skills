@@ -21,7 +21,7 @@ Exit codes:
   1  Other failure
 
 Example:
-  node set-rules.js --portalId <guid> --data-inline '{"CustomRules":[...]}'
+  node set-rules.js --portalId <portal-id> --data-inline '<json-payload>'
 `);
   process.exit(0);
 }
@@ -31,7 +31,7 @@ const portalId = args.portalId;
 const dataInline = args['data-inline'] || args.dataInline;
 
 if (!portalId || !dataInline) {
-  fail('Usage: node set-rules.js --portalId <guid> --data-inline \'<json>\'', 1);
+  fail('Usage: node set-rules.js --portalId <portal-id> --data-inline \'<json-payload>\'', 1);
 }
 
 let payload;
