@@ -11,7 +11,7 @@
     "Phase 1 (Planner): The solution selection question is asked via AskUserQuestion ONLY when the build needs metadata work (new entities OR new app); for code-only flows the question is skipped but the Default values are still written",
     "Phase 1 (Planner): When the solution question runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
-    "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/genpage-plan-schema.md",
+    "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md",
     "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts",
     "Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan's ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description",
     "Prefix discipline — plan format: Every name in `## Entity Creation Required` (table headings, column Suffix values, choice column suffixes, relationship Lookup Suffix values) is a bare suffix matching `^[a-z][a-z0-9]+$`. No value contains an underscore or a prefix. The prefix lives only in `## Environment` → `Publisher Prefix:`.",
@@ -35,7 +35,7 @@
     "Generated .tsx for lookup display names uses `@OData.Community.Display.V1.FormattedValue` annotations, not lookup-name fields in $select",
     "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components` and configures column sizing (columnSizingOptions or resizableColumns)",
     "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
-    "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching-pattern.md is used (Rule 15); no useCallback for data-fetching functions",
+    "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions",
     "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs"
   ],
   "evals": [
@@ -113,7 +113,7 @@
         "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
         "Edit Phase 4: edit-planner reads page.tsx, config.json, and prompt.txt from the <page-id>/ folder",
         "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)",
-        "Edit Phase 5: Orchestrator reads genpage-edit-plan.md, genpage-rules-reference.md, RuntimeTypes.ts, and page.tsx",
+        "Edit Phase 5: Orchestrator reads genpage-edit-plan.md, rules.md, RuntimeTypes.ts, and page.tsx",
         "Edit Phase 5: Orchestrator applies edits inline using Edit tool on <working-dir>/<page-id>/page.tsx",
         "Edit Phase 5: Search implementation uses Fluent UI V9 SearchBox or Input; sort uses column header handlers",
         "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints",
@@ -429,7 +429,7 @@
         "app_selection": "user selects an existing app"
       },
       "expectations": [
-        "Phase 1 (Planner): genpage-plan.md is written and conforms to references/genpage-plan-schema.md",
+        "Phase 1 (Planner): genpage-plan.md is written and conforms to references/plan-schema.md",
         "Phase 1 (Planner): genpage-plan.md contains ALL required sections with exact headings: # Genpage Plan, ## User Requirements, ## Working Directory, ## Plugin Root, ## Environment, ## Pages, ## Entity Creation Required, ## Existing Entities, ## Design Preferences, ## Relevant Samples, ## Per-Page Specifications",
         "Phase 1 (Planner): ## Pages table has at least one row with columns Page, File, Purpose, Entities",
         "Phase 1 (Planner): ## Per-Page Specifications has one ### <Page Name> subsection for each row in ## Pages",

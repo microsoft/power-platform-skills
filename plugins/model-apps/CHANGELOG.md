@@ -40,7 +40,7 @@ pre-flight. Trim of ~27K tokens on hot-path page-builder runs.
 ### Performance
 - Page-builder no longer loads `verified-icons.txt` upfront (~26K tokens
   saved per run). Validation switched to post-write `Grep` only.
-- `genpage-rules-reference.md` trimmed −98 lines: dropped duplicated DataAPI
+- `rules.md` trimmed −98 lines: dropped duplicated DataAPI
   type definitions (canonical source is `RuntimeTypes.ts`); tightened usage
   examples.
 - SKILL.md trimmed −21 lines; planner −24.
@@ -68,7 +68,7 @@ Major refactor of `/genpage` into an agent-orchestrated architecture.
 - Multi-page parallel generation; cross-page navigation via `PAGEREF_<filename>`
   placeholders resolved in Phase 6.5.
 - `pac model create` inline app provisioning.
-- Plan schema contract at `references/genpage-plan-schema.md`.
+- Plan schema contract at `references/plan-schema.md`.
 - Verified Fluent icon list at `references/verified-icons.txt` (~5000 names).
 - Eval suite: 16 evals across smoke/full/stress tiers + runbook.
 

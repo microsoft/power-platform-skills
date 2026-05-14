@@ -39,7 +39,7 @@ The **Data mode** flag is authoritative — use it to decide whether to perform 
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contract.
+`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
 Locate and extract:
 
@@ -96,7 +96,7 @@ import has been Grep-validated against the verified list.
 Read the code generation rules reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md
+${CLAUDE_PLUGIN_ROOT}/references/rules.md
 ```
 
 Read the relevant sample file identified in the plan:
@@ -110,7 +110,7 @@ the user navigates back to" profile (per the plan's Per-Page Specification),
 also read the data caching reference:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/data-caching-pattern.md
+${CLAUDE_PLUGIN_ROOT}/references/data-caching.md
 ```
 
 Skip the caching reference for forms, single-visit dashboards, mock-data pages,
@@ -118,7 +118,7 @@ or any page where the user is not expected to navigate away and return.
 
 Use the sample as a structural reference — follow its patterns for component
 organization, DataAPI usage, and styling approach. For pages that need caching,
-the data-caching-pattern reference is authoritative for the inline IIFE + cache
+the data-caching reference is authoritative for the inline IIFE + cache
 guard + batched state pattern.
 
 ## Step 4 — Create a Task
@@ -130,7 +130,7 @@ Mark it as in_progress immediately.
 ## Step 5 — Generate the Complete .tsx File
 
 Generate a complete, production-ready TypeScript file following ALL rules from
-genpage-rules-reference.md:
+rules.md:
 
 ### Component Structure
 
@@ -241,7 +241,7 @@ pattern (translation dictionary, RTL support, formatting helpers, usersettings
 fetch):
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md
+${CLAUDE_PLUGIN_ROOT}/references/localization.md
 ```
 
 For English-only environments, skip this entirely — do not load the reference

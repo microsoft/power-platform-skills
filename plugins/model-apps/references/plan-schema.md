@@ -121,7 +121,7 @@ validation rejects values that look like `crb2b_playername` or even
 - **Needs caching:** true / false — set true for list pages, detail pages, or any
   page where the user is likely to navigate away and return; false for forms,
   single-visit dashboards, mock-data pages. When true, the page-builder reads
-  `references/data-caching-pattern.md`.
+  `references/data-caching.md`.
 - **Key Features:** [what this specific page should do]
 - **Components:** [Fluent UI V9 components to use]
 - **Layout:** [responsive design approach]

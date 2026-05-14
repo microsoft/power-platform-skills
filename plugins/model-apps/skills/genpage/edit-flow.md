@@ -114,7 +114,7 @@ Read `<working-dir>/genpage-edit-plan.md` for the approved change list and
 preservation constraints.
 
 Also read:
-- `${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md` — all code-gen
+- `${CLAUDE_PLUGIN_ROOT}/references/rules.md` — all code-gen
   rules still apply to edits (Fluent UI V9 only, makeStyles with tokens, WCAG AA,
   no `100vh`/`100vw`, etc.)
 - `<working-dir>/RuntimeTypes.ts` — if generated in Edit Phase 3, for verified

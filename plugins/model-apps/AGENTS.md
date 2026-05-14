@@ -35,8 +35,8 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
 references/                    ← Shared reference docs
-  genpage-rules-reference.md   ← Full code-gen rules, DataAPI types, layout patterns, common errors
-  genpage-plan-schema.md       ← Schema contract for genpage-plan.md
+  rules.md   ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  plan-schema.md       ← Schema contract for genpage-plan.md
   troubleshooting.md           ← Common issues and fixes
 samples/                       ← Example .tsx files (8 samples)
 scripts/

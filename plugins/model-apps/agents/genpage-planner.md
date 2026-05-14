@@ -334,7 +334,7 @@ of truth** for all downstream agents. It must be fully self-contained.
 downstream agents parse by name. See:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md
+${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
@@ -365,7 +365,7 @@ For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
 (exact key, with space) per page: `true` for list pages, detail pages, or any
 page where the user is likely to navigate away and return; `false` for forms,
 single-visit dashboards, or mock-data pages. The page-builder reads this field
-to decide whether to load `references/data-caching-pattern.md`.
+to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 8-responsive-cards.tsx for card

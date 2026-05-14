@@ -37,7 +37,7 @@ deployment, browser verification, and the inline application of planned edits.
 
 ## References
 
-- **Code generation rules**: [genpage-rules-reference.md](../../references/genpage-rules-reference.md)
+- **Code generation rules**: [rules.md](../../references/rules.md)
 - **Troubleshooting**: [troubleshooting.md](../../references/troubleshooting.md)
 - **Sample pages**: [samples/](../../samples/)
 
@@ -235,19 +235,19 @@ Before invoking any builders, verify:
   rewrite the plan appending `-1`, `-2`, etc. before dispatch. Duplicate filenames
   cause silent last-writer-wins data loss under parallel execution.
 
-See `${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contract.
+See `${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
 #### 5b. Single-page fast path (skip Task dispatch when N=1)
 
 **If the plan's Pages table contains exactly one row**, do NOT dispatch a Task
 subagent. Inline the page-builder workflow directly in the orchestrator:
 
-1. Read `${CLAUDE_PLUGIN_ROOT}/references/genpage-rules-reference.md`
+1. Read `${CLAUDE_PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
 3. If the plan's Per-Page Specification has `Needs caching: true`, also read
-   `${CLAUDE_PLUGIN_ROOT}/references/data-caching-pattern.md`
+   `${CLAUDE_PLUGIN_ROOT}/references/data-caching.md`
 4. If the plan's `## Environment` indicates non-English languages, also read
-   `${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md`
+   `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
 5. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
 6. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules

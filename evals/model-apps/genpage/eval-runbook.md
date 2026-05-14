@@ -11,10 +11,10 @@ How to evaluate the `genpage` skill. Three layers, run in order.
   - `plugins/model-apps/agents/genpage-page-builder.md`
   - `plugins/model-apps/agents/genpage-edit-planner.md`
 - **References:**
-  - `plugins/model-apps/references/genpage-rules-reference.md`
-  - `plugins/model-apps/references/genpage-plan-schema.md`
+  - `plugins/model-apps/references/rules.md`
+  - `plugins/model-apps/references/plan-schema.md`
   - `plugins/model-apps/references/troubleshooting.md`
-- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `8-responsive-cards.tsx` (data-caching pattern lives in `references/data-caching-pattern.md`)
+- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `8-responsive-cards.tsx` (data-caching pattern lives in `references/data-caching.md`)
 
 ## Eval data
 
@@ -127,9 +127,9 @@ An eval run fails if any layer's criteria is not met. Failures should be filed a
 | Failure type | Likely owner |
 |--------------|--------------|
 | Missed agent invocation, wrong phase order | Orchestrator (`SKILL.md`) |
-| Plan document missing sections or wrong structure | `genpage-planner.md` or `genpage-plan-schema.md` |
+| Plan document missing sections or wrong structure | `genpage-planner.md` or `plan-schema.md` |
 | Entity created in wrong order or missing columns | `genpage-entity-builder.md` |
-| Generated code violates a common_code_assertion | `genpage-page-builder.md` or `genpage-rules-reference.md` |
+| Generated code violates a common_code_assertion | `genpage-page-builder.md` or `rules.md` |
 | Edit modified the wrong thing or broke existing behavior | `genpage-edit-planner.md` or orchestrator edit flow |
 
 ## When to run evals

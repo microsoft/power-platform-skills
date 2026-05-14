@@ -48,7 +48,7 @@ is no Dataverse Skills plugin dependency.**
 Read `genpage-plan.md` at the path provided in your invocation prompt.
 
 The plan document follows a strict schema. See
-`${CLAUDE_PLUGIN_ROOT}/references/genpage-plan-schema.md` for the full contract,
+`${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md` for the full contract,
 especially the `## Entity Creation Required` section.
 
 Extract from the **`## Environment`** section:

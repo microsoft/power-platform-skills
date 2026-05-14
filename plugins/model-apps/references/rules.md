@@ -20,7 +20,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
-15. **Data fetching — inline IIFE + cache guard (Dataverse list/detail pages)**: For pages where the user navigates away and returns (list paired with detail, tabbed UIs), use the module-level `window` cache + inline async IIFE pattern documented in `references/data-caching-pattern.md`. Never use `useCallback` for data-fetching functions — `dataApi` gets a new object reference after the initial render, so a `useCallback` recreates, re-fires the effect, and any `setData(loading: true)` call resets the spinner causing flicker. The cache guard (`if (cache.has(key)) return`) is the fix. **Do NOT apply this pattern to forms, single-visit dashboards, or mock-data pages.** See the reference for the full pattern.
+15. **Data fetching — inline IIFE + cache guard (Dataverse list/detail pages)**: For pages where the user navigates away and returns (list paired with detail, tabbed UIs), use the module-level `window` cache + inline async IIFE pattern documented in `references/data-caching.md`. Never use `useCallback` for data-fetching functions — `dataApi` gets a new object reference after the initial render, so a `useCallback` recreates, re-fires the effect, and any `setData(loading: true)` call resets the spinner causing flicker. The cache guard (`if (cache.has(key)) return`) is the fix. **Do NOT apply this pattern to forms, single-visit dashboards, or mock-data pages.** See the reference for the full pattern.
 
 ---
 
@@ -150,7 +150,7 @@ Localization guidance has been moved to a separate reference that is loaded
 configured languages OR any non-English language. For English-only environments,
 skip this entirely.
 
-See: `${CLAUDE_PLUGIN_ROOT}/references/genpage-localization-reference.md`
+See: `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
 
 
 ---
@@ -349,7 +349,7 @@ Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions wi
 
 **When to apply:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit shows a spinner; return visits render instantly.
 
-See [`references/data-caching-pattern.md`](./data-caching-pattern.md) for complete list-page and detail-page caching examples.
+See [`references/data-caching.md`](./data-caching.md) for complete list-page and detail-page caching examples.
 
 ### Charts and Visualization
 - Use D3.js for all charts
