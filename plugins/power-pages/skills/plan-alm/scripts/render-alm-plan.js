@@ -62,6 +62,36 @@ const sizeAnalysis = data.sizeAnalysis || null;
 const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
 const breakdown = data.breakdown || {};
 
+// Disk-measurement cross-check. Top-level keys are the contract path (per
+// SKILL.md "Disk-measurement cross-check" section). The rawDiscovery fallback
+// exists for older plan files written before the hoist was specified — it
+// keeps the signal-card display intact without forcing a re-render. All three
+// fields are null when --projectRoot wasn't passed or no build-output dir
+// was found.
+const diskMeasuredMB =
+  data.webFilesDiskMeasuredMB != null
+    ? Number(data.webFilesDiskMeasuredMB)
+    : (data.rawDiscovery?.estimate?.webFilesDiskMeasuredMB != null
+        ? Number(data.rawDiscovery.estimate.webFilesDiskMeasuredMB)
+        : null);
+const diskMeasuredPath =
+  data.webFilesDiskMeasuredPath || data.rawDiscovery?.estimate?.webFilesDiskMeasuredPath || null;
+// Stratified-sample count surfaced under the Web Files signal so reviewers can
+// see how aggressively the aggregate was extrapolated. Same hoist-then-fallback
+// pattern as the disk-measurement fields above.
+const webFileSampleSize =
+  Number.isFinite(data.webFileSampleSize)
+    ? Number(data.webFileSampleSize)
+    : (Number.isFinite(data.rawDiscovery?.estimate?.webFileSampleSize)
+        ? Number(data.rawDiscovery.estimate.webFileSampleSize)
+        : null);
+const webFileCount =
+  Number.isFinite(data.webFileCount)
+    ? Number(data.webFileCount)
+    : (Number.isFinite(data.rawDiscovery?.estimate?.webFileCount)
+        ? Number(data.rawDiscovery.estimate.webFileCount)
+        : null);
+
 // Three-number semantics when the estimator ran with --solutionId:
 //   componentCountSiteTotal      — RAW Dataverse rows on the site. What the
 //                                  Maker UI would show if the entire site
@@ -113,7 +143,7 @@ function buildOverviewSummary() {
   let msg = `<strong>${escapeHtml(data.SITE_NAME)}</strong> &mdash; `;
   msg += `estimated at <strong>${totalSizeMB.toFixed(1)} MB</strong> with <strong>${componentCount.toLocaleString()}</strong> components. `;
   if (solCount > 1) {
-    msg += `Recommendation: <strong>${solCount} solutions</strong> (${strat}). Each solution gets its own pipeline.`;
+    msg += `Recommendation: <strong>${solCount} solutions</strong> (${strat}). All ship through the same pipeline as per-solution stage runs (see <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>).`;
   } else {
     msg += 'Recommendation: <strong>single solution</strong>. Within thresholds across all signals.';
   }
@@ -165,15 +195,30 @@ function buildRisksHtml() {
 }
 
 function buildStrategyRationale() {
+  // All multi-solution strategies ship through ONE pipeline with one stage
+  // per target environment. setup-pipeline Phase 6b records per-solution
+  // `deploymentOrder[]` in `docs/alm/last-pipeline.json`; deploy-pipeline
+  // loops the order, creating a stage run per solution against the same
+  // stage. Earlier rationale text said "each solution gets its own pipeline"
+  // — that described the pre-v1.3.x layout that was reverted because it
+  // cluttered the Pipelines UI.
   const strat = data.splitStrategy || 'single';
   const map = {
     'single': `All components packaged in a single managed solution. Estimated size is within the ${ALM_THRESHOLDS.maxSolutionSizeMB} MB split-decision threshold (platform hard cap is 95 MB) and component count is within tested bounds. One pipeline, one approval chain.`,
-    'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.',
-    'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. Each solution has its own pipeline so low-churn layers don\'t re-import when content changes.',
-    'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
+    'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Both ship through the same pipeline as separate stage runs (per the <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>) — WebAssets can be re-deployed independently when only frontend files change.',
+    'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. All four ship through the same pipeline in that order, so low-churn layers don\'t re-import when only content changes.',
+    'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. All solutions ship through the same pipeline in domain order. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
     'strategy-4-config-isolation': 'Environment variable definitions isolated into their own solution so value changes don\'t require re-importing everything else.',
   };
   let rationale = map[strat] || map.single;
+  if (data.compositeSubPartitioned === true) {
+    // Composite path: Layer split fired AND Core busted a cap, so Core was
+    // sub-partitioned into Foundation/Config/Content (+ Integration when
+    // flows or bots exist). Without this sentence the rationale describes
+    // Core + WebAssets but the Solutions tab shows 4+ entries, which reads
+    // like the rationale and the table disagree.
+    rationale += ' <strong>Core was further sub-partitioned</strong> because it still exceeded the size or component-count cap after Web Assets were peeled off &mdash; it now ships as separate <strong>Foundation</strong>, <strong>Config</strong>, and <strong>Content</strong> solutions (plus <strong>Integration</strong> when the parent had flows or bots). All sub-solutions deploy through the same pipeline as separate stage runs.';
+  }
   if (data.appliedStrategies?.includes('strategy-4-config-isolation') && strat !== 'strategy-4-config-isolation') {
     rationale += ' Additionally, env var definitions are isolated into a dedicated EnvVars solution (additive Strategy 4).';
   }
@@ -263,13 +308,41 @@ function buildSignalCards() {
     } else {
       valueDisplay = s.fmt(a.value || 0);
     }
+    // Web Files signal annotations:
+    //   (a) disk-compare note — fires when --projectRoot was passed and the
+    //       disk-measured number disagrees materially with Dataverse (same
+    //       condition as the estimator's undercount canary). Surfaces the
+    //       actual MB delta + the disk path so a reviewer can see at a glance
+    //       which to trust. The canary's warning is also in the risks list,
+    //       but inline is much more discoverable.
+    //   (b) sample-extrapolation note — fires when the stratified sampler
+    //       measured fewer files than the total count (>150). Tells the
+    //       reviewer how aggressively the aggregate was scaled up.
+    let signalExtras = '';
+    if (s.key === 'webFilesAggregateMB') {
+      if (diskMeasuredMB != null && diskMeasuredMB > 5) {
+        const dv = Number(a.value || 0);
+        if (dv < 0.5 * diskMeasuredMB) {
+          const pathAttr = diskMeasuredPath ? ` title="${escapeHtml(diskMeasuredPath)}"` : '';
+          signalExtras += `<div class="signal-disk-compare" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);"${pathAttr}><strong style="color:var(--high);">Disk: ${diskMeasuredMB.toFixed(1)} MB</strong> &mdash; Dataverse-measured is &lt; 50% of the local build output. File-typed columns may be holding bytes <code>$select=content</code> can't return. <strong>Trust the disk number.</strong>${diskMeasuredPath ? ` <span style="opacity:0.7;">(measured from <code>${escapeHtml(diskMeasuredPath)}</code>)</span>` : ''}</div>`;
+        }
+      }
+      if (
+        webFileSampleSize != null &&
+        webFileCount != null &&
+        webFileSampleSize > 0 &&
+        webFileCount > webFileSampleSize
+      ) {
+        signalExtras += `<div class="signal-sample-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">Aggregate extrapolated from a stratified sample of <strong>${webFileSampleSize}</strong> of <strong>${webFileCount.toLocaleString()}</strong> web files.</div>`;
+      }
+    }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
   <div class="signal-value" style="color:${color};">${valueDisplay}</div>
   <div class="signal-footer">
     <span class="tier tier-${tier}">${tier}</span>
     <span>${s.threshold}</span>
-  </div>
+  </div>${signalExtras}
 </div>`;
   }).join('\n');
 }

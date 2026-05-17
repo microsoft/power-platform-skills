@@ -7,7 +7,7 @@
 // `make.powerapps.com → Pipelines` makes when a user clicks "Get started".
 // Used by ensure-pipelines-host Phase 4.0.
 //
-//   POST {bapBase}/providers/Microsoft.BusinessAppPlatform/getOrCreate?api-version=2021-04-01
+//   POST {bapBase}/providers/Microsoft.BusinessAppPlatform/environments/getOrCreate?api-version=2021-04-01
 //   Headers:
 //     Authorization: Bearer {bapToken}
 //     Content-Type: application/json
@@ -157,7 +157,12 @@ async function provisionPlatformHost(opts = {}) {
     },
   });
 
-  const postUrl = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/getOrCreate?api-version=${encodeURIComponent(apiVersion)}`;
+  // Endpoint is `/environments/getOrCreate`, NOT `/getOrCreate`. The latter
+  // returns 404 from BAP. Confirmed against a live tenant where the existing
+  // Platform Host (envId 8916a7c4-8c4c-e041-ad42-aa9980ff6810,
+  // `PlatformEnv-unitedstates`) was only reachable via the `/environments/`
+  // prefix. Same shape as the rest of the BAP environments RP.
+  const postUrl = `${cleanBase}/providers/Microsoft.BusinessAppPlatform/environments/getOrCreate?api-version=${encodeURIComponent(apiVersion)}`;
   const postHeaders = {
     Authorization: `Bearer ${bapToken}`,
     'Content-Type': 'application/json',

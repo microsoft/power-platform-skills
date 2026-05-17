@@ -44,7 +44,14 @@ test('throws when bapToken is missing', async () => {
   );
 });
 
-test('endpoint URL ends in /getOrCreate (not /environments)', async (t) => {
+test('endpoint URL targets /environments/getOrCreate (BAP environments RP)', async (t) => {
+  // Regression guard: the prior test asserted `/getOrCreate` (no `/environments/`
+  // prefix) — that path returns 404 from BAP. The correct endpoint is
+  // `/providers/Microsoft.BusinessAppPlatform/environments/getOrCreate`, same
+  // base as the rest of the BAP environments RP. Confirmed live against a
+  // tenant where the existing PE (`PlatformEnv-unitedstates`,
+  // envId 8916a7c4-8c4c-e041-ad42-aa9980ff6810) was only reachable via the
+  // `/environments/` prefix.
   let capturedUrl = null;
   withMockedHttp(t, [
     {
@@ -70,8 +77,8 @@ test('endpoint URL ends in /getOrCreate (not /environments)', async (t) => {
   await provisionPlatformHost({ bapToken: 'fake', sleepImpl: noSleep });
 
   assert.ok(capturedUrl, 'URL should be captured');
-  assert.match(capturedUrl, /\/providers\/Microsoft\.BusinessAppPlatform\/getOrCreate\?api-version=2021-04-01$/,
-    'endpoint must target /getOrCreate, not /environments');
+  assert.match(capturedUrl, /\/providers\/Microsoft\.BusinessAppPlatform\/environments\/getOrCreate\?api-version=2021-04-01$/,
+    'endpoint must target /environments/getOrCreate — BAP returns 404 without the /environments/ prefix');
 });
 
 test('200 + Succeeded — idempotent existing PE returns alreadyExisted=true', async (t) => {

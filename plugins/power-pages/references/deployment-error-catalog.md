@@ -276,6 +276,8 @@ Method: InitializeFileBlocksUpload
 
 **Auto-fix available**: Yes (with explicit user permission)
 
+**Primary mitigation — pre-flight detection** (added 2026-05-15 after a real-world case where a Content solution failed at 3,909 rejected `.js` files on Staging 50-75 minutes into the import, even though Dev had been pre-fixed): the `deploy-pipeline` skill runs a pre-flight check in **Phase 2.5** for any Power Pages project. It queries the target env's `blockedattachments` setting via `fix-blocked-attachments.js --dry-run` and, if any relevant extensions are blocked, prompts the user immediately via `AskUserQuestion` to unblock + continue, proceed anyway (Phase 7.6 reactive path catches failure), or cancel. This catches the issue in ~10 seconds instead of after the full import attempt. The procedure below is the reactive path the **Phase 7.6** handler invokes when the pre-flight was skipped or declined.
+
 **Fix procedure**:
 1. Retrieve the current blocked attachments list:
    ```bash
