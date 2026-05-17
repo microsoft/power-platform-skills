@@ -179,6 +179,55 @@ Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploym
 Check `docs/alm/last-deploy.json` — if the last deployment to this stage failed, warn the user:
 > "The last deployment to `{stageName}` had status: **Failed**. Would you like to retry? 1. Yes, retry / 2. No, cancel"
 
+### Phase 2.5 — Pre-flight: target env blocked-attachments check
+
+Power Pages code-site solutions almost always contain `.js` bundle chunks (Vite/Rollup output) as `Web File` components. If the target env's `blockedattachments` setting includes `.js`, `ImportSolutionAsync` will reject every web-file write — typically 50-75 minutes into an import for sites with thousands of bundle chunks (real-world: a Content solution failed at 3,909 rejected `.js` files on Staging after the same issue had already been fixed on Dev). The reactive Phase 7.6 handler will detect this and offer unblock-and-retry, but the user has already burned an hour. This pre-flight catches it in 10 seconds.
+
+**Skip rule.** This check is for Power Pages projects only. Skip when `powerpages.config.json` has no `websiteRecordId` (non-Power-Pages ALM run — pure data-model solution, etc.). Skip when the user's plan/manifest indicates no solution being deployed has `Web File` componentType (rare in code-site projects but possible for back-end-only solutions).
+
+**Detection signal.** In MULTI_RUN_MODE / MULTI_PIPELINE_MODE: read `.solution-manifest.json` and check whether any entry in `solutions[]` has `componentTypes` including `"Web File"`. In single-solution mode: assume `true` for any Power Pages project (the umbrella solution carries web files).
+
+**Steps:**
+
+1. Switch PAC CLI context to the **target** environment so `fix-blocked-attachments.js` queries the right env:
+   ```bash
+   pac env select --environment "{SELECTED_STAGE.targetEnvironmentUrl}"
+   ```
+
+2. Run the helper in dry-run mode to detect the current state:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
+     --envUrl "{SELECTED_STAGE.targetEnvironmentUrl}" \
+     --extensions js,css \
+     --dry-run
+   ```
+
+3. Capture the output as JSON. Inspect `wasBlocked[]`:
+
+   - **`wasBlocked: []`** → target env doesn't block the relevant extensions. Switch PAC CLI back to source (`pac env select --environment "{sourceEnvUrl}"`) and proceed to Phase 3. No prompt, no noise.
+
+   - **`wasBlocked: ["js"]` or includes other media-relevant extensions** → the deployment WILL fail mid-import. Prompt the user immediately via `AskUserQuestion` (do NOT bury this in chat — it MUST gate Phase 3 progression):
+
+     > **Pre-flight detected an issue.** The target environment **`{targetEnvName}`** currently blocks file types that this solution needs: **`{wasBlocked.join(', ')}`**. Power Pages code sites ship `.js` bundle chunks as web files — if you proceed without unblocking, the deployment will run for ~50-75 minutes and then fail (the failure is recoverable via Phase 7.6's retry path, but the wasted time is not). The block can be removed in 10 seconds.
+     >
+     > **Note**: this modifies an environment-level security setting that affects all users of `{targetEnvName}`. Reversible from PPAC → Environments → `{targetEnvName}` → Settings → Product → Features → Blocked Attachments.
+
+     | Question | Header | Options |
+     |---|---|---|
+     | Allow removing the block on `{wasBlocked.join(', ')}` for the `{targetEnvName}` environment so the deployment can proceed? | Unblock attachments | Yes — unblock these types and continue, No — proceed anyway (Phase 7.6 will catch the failure after deploy and prompt again), Cancel deploy |
+
+4. Branch on the answer:
+
+   - **Yes — unblock and continue**: invoke `fix-blocked-attachments.js` **without** `--dry-run` (same `--extensions`). Read the result and confirm `changed: true` + `removed[]` is non-empty. Switch PAC CLI back to source (`pac env select --environment "{sourceEnvUrl}"`). Proceed to Phase 3. Record the unblock action in the eventual `docs/alm/last-deploy.json` `preflightActions[]` block so the deploy summary has an audit trail.
+
+   - **No — proceed anyway**: leave the setting unchanged. Switch PAC CLI back to source. Proceed to Phase 3. Tell the user clearly: *"Continuing without unblocking. If the deployment fails on `AttachmentBlocked`, Phase 7.6 will offer the same unblock prompt — but you'll have spent ~50-75 minutes getting there."*
+
+   - **Cancel deploy**: stop cleanly. Do not modify any environment setting. Do not create the stage run. Tell the user how to re-invoke when ready.
+
+5. **Always** switch PAC CLI back to the source environment before exiting this phase. Subsequent phases assume PAC points at the source unless they explicitly switch to the target.
+
+> **Why pre-flight + reactive both exist.** The reactive Phase 7.6 handler stays in place because (a) the pre-flight only inspects the env-level `blockedattachments` setting — there are other rare blocked-attachment causes (per-table file column attachment policies) that only surface during the actual import; (b) the env's blocklist could change between pre-flight and import (rare but possible if another admin edits it concurrently); (c) backward compatibility with existing flows where the user invoked `deploy-pipeline` directly and skipped Phase 2.5 via legacy SKILL.md. The two paths are complementary, not redundant.
+
 ### Phase 3 — Resolve Pipeline Info
 
 Call `RetrieveDeploymentPipelineInfo` to get the authoritative source environment ID and available solution artifacts:

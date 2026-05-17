@@ -115,7 +115,7 @@ Steps:
    Capture output as JSON; extract `.siteName` (store as `siteName`), `.websiteRecordId`, `.environmentUrl` (store as `devEnvUrl`), and `.solutionManifest` (store as `solutionManifest`). If `siteName` is absent (no `powerpages.config.json`), stop and advise running `/power-pages:create-site` first. If `solutionManifest` is null (no `.solution-manifest.json`), stop and advise running `/power-pages:setup-solution` first.
 
    **Manifest version check:**
-   - If `solutionManifest.schemaVersion === 2` (multi-solution layout), set `MULTI_SOLUTION_MODE = true` and store `solutionManifest.solutions[]` as `SOLUTIONS_LIST`. One pipeline will be created per solution.
+   - If `solutionManifest.schemaVersion === 2` (multi-solution layout), set `MULTI_SOLUTION_MODE = true` and store `solutionManifest.solutions[]` as `SOLUTIONS_LIST`. See Phase 6b — a SINGLE pipeline ships all solutions through per-solution stage runs (the pre-v1.3.x "one pipeline per solution" layout was reverted because it cluttered the Pipelines UI).
    - If `schemaVersion` is absent or `1` (single solution), read `solutionManifest.solution.uniqueName` and `solutionManifest.solution.solutionId`. One pipeline will be created (existing flow).
 
 2. Run `verify-alm-prerequisites.js` to confirm PAC CLI auth, acquire a token, and verify API access:
@@ -178,7 +178,7 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines setup OData API host environment deploymentenvironments`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup or pipeline creation) in parallel via `microsoft_docs_fetch`.
 3. Extract a one-paragraph summary of what Microsoft Learn currently says about Pipelines host resolution, `deploymentenvironments` / `deploymentpipelines` / `deploymentstages` schema, and pipeline lifecycle. Compare against `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md` and flag any divergence (new fields, deprecated APIs, changed validation status codes).
-4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 5 (Create Deployment Environments).
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 5 (Register Environments with the Pipelines Host).
 
 ### Phase 2 — Select CI/CD Platform
 
@@ -281,9 +281,9 @@ If approved, re-run **without** `--dry-run` to apply the change. If the user dec
 
 Report preflight results. If any critical check failed, stop with clear instructions. If warnings only, ask user to confirm before proceeding.
 
-### Phase 5 — Create Deployment Environments
+### Phase 5 — Register Environments with the Pipelines Host
 
-Create Dataverse `deploymentenvironment` records for each environment. Process source env first, then targets.
+Register each environment (source + targets) with the Pipelines host by creating a `deploymentenvironments` row in the host's Dataverse. This is a **metadata-only registration** — the row is a pointer to an existing BAP environment, not a provisioning call. The environments themselves must already exist in BAP. The host validates that the referenced env is reachable and the caller has the right access (`validationstatus` flips Pending → Succeeded). Process source env first, then targets.
 
 Use `create-deployment-environment.js` for each environment (dev source + each target):
 
@@ -305,7 +305,7 @@ Required args (per `scripts/lib/create-deployment-environment.js`):
 Capture stdout as JSON: `const envResult = JSON.parse(output)`.
 Store `envResult.deploymentEnvironmentId` as `SOURCE_DEPLOYMENT_ENV_ID` (for the dev source env) or append to `TARGET_DEPLOYMENT_ENV_IDs` (for each target). Also retain the `bapEnvId` value used for each call — Phase 5a's force-link auto-fix needs it if creation lands in a Failed state.
 
-> **Note**: The script POSTs to `deploymentenvironments` with `msdyn_name`, `msdyn_url`, and `msdyn_type`, extracts the GUID from the `OData-EntityId` header, then polls `msdyn_validationstatus` every 3 seconds (max 20 attempts) until status `192350001` (Succeeded) or `192350002` (Failed). On failure the script writes the error details to stderr and exits 1 — stop and report the error to the user.
+> **Note**: The script POSTs to `deploymentenvironments` with **unprefixed** fields (`name`, `environmentid`, `environmenttype`), extracts the `deploymentenvironmentid` GUID from the `OData-EntityId` header, then polls `validationstatus` every 3 seconds (max 20 attempts) until status `200000001` (Succeeded) or `200000002` (Failed). On failure the script writes the error details to stderr and exits 1 — stop and report the error to the user. (The earlier `msdyn_`-prefixed field shape and `192350001`/`192350002` status codes were from an early-preview HAR; the shipped Pipelines schema rejects `msdyn_`-prefixed properties and uses the `2000000XX` codes.)
 
 On failure: stop with the error — deployment environment creation is mandatory.
 
@@ -360,10 +360,10 @@ Extract:
 - `pipelineResult.pipelineId` → store as `PIPELINE_ID`
 - `pipelineResult.stages` → array of `{ stageId, name, targetDeploymentEnvironmentId }`
 
-> **What the script does internally:**
-> 1. POSTs `{ msdyn_name, msdyn_description }` to `deploymentpipelines` (v9.2) — extracts `pipelineId` from `OData-EntityId` header
-> 2. PUTs a `$ref` body to `deploymentpipelines({pipelineId})/msdyn_sourceenvironment/$ref` using the relative-path `@odata.id` format (HAR-confirmed — no leading `/` or full URL)
-> 3. For each stage: POSTs `{ msdyn_name, msdyn_order, msdyn_pipelineid@odata.bind, msdyn_targetenvironmentid@odata.bind }` to `deploymentstages` — extracts `stageId` from `OData-EntityId` header
+> **What the script does internally** (uses the **unprefixed** field schema — the earlier `msdyn_`-prefixed body was rejected by the shipped Pipelines schema; see the comment block at the top of `create-deployment-pipeline.js` for the full migration map):
+> 1. POSTs `{ name, description }` to `deploymentpipelines` (v9.1) — extracts `deploymentpipelineid` from `OData-EntityId` header
+> 2. POSTs a relative-path `@odata.id` body to `deploymentpipelines({pipelineId})/deploymentpipeline_deploymentenvironment/$ref` to associate the source environment (HAR-confirmed — no leading `/` or full URL)
+> 3. For each stage: POSTs `{ name, deploymentpipelineid@odata.bind, targetdeploymentenvironmentid@odata.bind }` to `deploymentstages` — extracts `deploymentstagesid` from `OData-EntityId` header
 
 On failure: the script writes the error to stderr and exits 1 — stop and report the error to the user.
 

@@ -428,6 +428,8 @@ function round(n) {
 function validateSplits(solutions, thresholds) {
   const warnings = [];
   for (const sol of solutions) {
+    // Future buffer is a reserved 0/0 slot — never warn on it.
+    if (sol.isFutureBuffer === true) continue;
     if (sol.sizeMB > thresholds.maxSolutionSizeMB) {
       warnings.push({
         type: 'warning',
@@ -436,8 +438,161 @@ function validateSplits(solutions, thresholds) {
         )} MB — consider tree-shaking, WebP conversion, or removing sourcemaps.`,
       });
     }
+    if (sol.componentCount > thresholds.maxComponentCount) {
+      warnings.push({
+        type: 'warning',
+        message: `Solution ${sol.uniqueName} is still estimated at ${sol.componentCount.toLocaleString()} components — exceeds the recommended ${thresholds.maxComponentCount.toLocaleString()}-component cap. Consider sub-partitioning or archiving unused components.`,
+      });
+    }
   }
   return warnings;
+}
+
+// --- Sub-partition oversized children of the primary partition --------------
+//
+// Runs ONCE after the primary partition is built. For each child that still
+// busts either the size or component-count cap, replace it with 3 (or 4)
+// change-frequency-shaped sub-solutions. Single-component-type slices
+// (WebAssets, EnvVars, future buffer) are left alone — sub-partitioning them
+// makes no sense; validateSplits will flag them instead. The intent is to
+// catch the Strategy-1 (Layer) case where Core inherits flows/bots/tables and
+// stays over cap even after Web Assets are peeled off.
+
+function subPartitionIfOverCap(solutions, estimate, thresholds, opts = {}) {
+  if (!Array.isArray(solutions)) return { solutions, modified: false };
+  let modified = false;
+  const out = [];
+  let nextOrder = 1;
+
+  for (const sol of solutions) {
+    const overSize = sol.sizeMB > thresholds.maxSolutionSizeMB;
+    const overCount = sol.componentCount > thresholds.maxComponentCount;
+
+    // Single-type slices and the future buffer are never sub-partitioned.
+    // We pattern-match on componentTypes rather than uniqueName so renamed
+    // splits (`Test_WebAssets` vs `MySite_WebAssets`) still hit the guard.
+    const types = Array.isArray(sol.componentTypes) ? sol.componentTypes : [];
+    const isSingleTypeSlice =
+      sol.isFutureBuffer === true ||
+      (types.length === 1 &&
+        (types[0] === 'Web File' ||
+          types[0] === 'Environment Variable' ||
+          types[0] === 'Any'));
+
+    if ((overSize || overCount) && !isSingleTypeSlice) {
+      modified = true;
+      const children = buildSubChildren(sol, estimate, thresholds, nextOrder, opts);
+      for (const c of children) {
+        out.push(c);
+        nextOrder++;
+      }
+    } else {
+      out.push({ ...sol, order: nextOrder });
+      nextOrder++;
+    }
+  }
+
+  return { solutions: out, modified };
+}
+
+function buildSubChildren(parent, estimate, thresholds, startOrder, opts = {}) {
+  const parentCount = parent.componentCount || 0;
+  const parentSize = parent.sizeMB || 0;
+  const flows = (estimate.cloudFlowCount || 0) + (estimate.botCount || 0);
+  // Always emit `_Integration` when the parent carries flows or bots — even
+  // below `changeFreqMinFlows`. Without it, downstream setup-solution Phase 5
+  // routing can't place Cloud Flow / Bot Component records (they fall to the
+  // Default solution). The `changeFreqMinFlows` threshold governs whether
+  // change-frequency is the right TOP-LEVEL split strategy; once we've
+  // committed to sub-partitioning, coverage takes priority over heuristic.
+  const parentTypes = Array.isArray(parent.componentTypes) ? parent.componentTypes : [];
+  const parentHasIntegrationTypes =
+    parentTypes.includes('Cloud Flow') ||
+    parentTypes.includes('Bot Component') ||
+    parentTypes.includes('Connection Reference');
+  const includeIntegration = flows > 0 || parentHasIntegrationTypes;
+
+  // additiveStrategy4 flips the _Config componentTypes: when the top-level
+  // _EnvVars solution will own env vars, we drop 'Environment Variable' from
+  // _Config to prevent double-claiming. When it WON'T (envVarCount under cap
+  // OR additive not firing), _Config absorbs env vars so they have an owner.
+  const additiveStrategy4 = opts.additiveStrategy4 === true;
+
+  // Proportional shares — foundation 20%, config 15%, content 65% when no
+  // integration slice; otherwise foundation 20%, integration = actual flow+bot
+  // count, config 15%, content = remainder. Sizes derive from the count share
+  // so size and count stay self-consistent (same pattern as
+  // partitionByChangeFrequency).
+  const foundation = Math.max(1, Math.round(parentCount * 0.20));
+  const config = Math.max(1, Math.round(parentCount * 0.15));
+  const integration = includeIntegration ? Math.max(flows, 1) : 0;
+  const content = Math.max(parentCount - foundation - config - integration, 0);
+
+  const totalAlloc = foundation + config + integration + content;
+  const sizePerCount = totalAlloc > 0 ? parentSize / totalAlloc : 0;
+  const sizeFor = (n) => round(n * sizePerCount);
+
+  const children = [
+    {
+      uniqueName: `${parent.uniqueName}_Foundation`,
+      displayName: `${parent.displayName} — Foundation`,
+      order: startOrder,
+      componentTypes: ['Table', 'Web Role', 'Table Permission'],
+      description: `Sub-partition of ${parent.uniqueName}: schema and security. Created automatically because the parent exceeded the recommended caps.`,
+      sizeMB: sizeFor(foundation),
+      componentCount: foundation,
+      components: [],
+    },
+  ];
+
+  let order = startOrder + 1;
+  if (includeIntegration) {
+    children.push({
+      uniqueName: `${parent.uniqueName}_Integration`,
+      displayName: `${parent.displayName} — Integration`,
+      order: order++,
+      componentTypes: ['Cloud Flow', 'Bot Component', 'Connection Reference'],
+      description: `Sub-partition of ${parent.uniqueName}: cloud flows, bots, connection references.`,
+      sizeMB: sizeFor(integration),
+      componentCount: integration,
+      components: [],
+    });
+  }
+
+  // Env vars: included in _Config UNLESS the top-level additive _EnvVars
+  // solution will own them. Double-claim would break setup-solution Phase 5
+  // routing (one component type owned by two solutions). The original
+  // partitionByChangeFrequency Config block doesn't list env vars because
+  // change-frequency mode never combines with additive Strategy 4 (selectStrategy
+  // sets additive=true only for strategies 1/3); here additive can fire so we
+  // condition on it explicitly.
+  const configTypes = ['Site Setting', 'Site Marker', 'Publishing State'];
+  if (!additiveStrategy4) configTypes.push('Environment Variable');
+  children.push({
+    uniqueName: `${parent.uniqueName}_Config`,
+    displayName: `${parent.displayName} — Config`,
+    order: order++,
+    componentTypes: configTypes,
+    description: additiveStrategy4
+      ? `Sub-partition of ${parent.uniqueName}: site settings, markers, publishing states.`
+      : `Sub-partition of ${parent.uniqueName}: site settings, markers, publishing states, env vars.`,
+    sizeMB: sizeFor(config),
+    componentCount: config,
+    components: [],
+  });
+
+  children.push({
+    uniqueName: `${parent.uniqueName}_Content`,
+    displayName: `${parent.displayName} — Content`,
+    order: order++,
+    componentTypes: ['Web Page', 'Web Template', 'Page Template', 'Content Snippet'],
+    description: `Sub-partition of ${parent.uniqueName}: pages, templates, content snippets.`,
+    sizeMB: sizeFor(content),
+    componentCount: content,
+    components: [],
+  });
+
+  return children;
 }
 
 // --- Recommendations --------------------------------------------------------
@@ -512,6 +667,33 @@ function computeSplitPlan({ estimate, config, meta }) {
       break;
   }
 
+  // Sub-partition any oversized children of the primary partition. Only runs
+  // for strategy-1-layer (Core often inherits flows/bots/tables and stays
+  // over cap after Web Assets are peeled off). Skip for:
+  //   - single (no partition to sub-divide)
+  //   - strategy-2-change-frequency (children are already a change-frequency
+  //     slice — re-splitting by change-frequency would produce the same shape)
+  //   - strategy-3-schema-segmentation (children are domain-scoped Table
+  //     slices; change-frequency re-splitting doesn't fit the domain model)
+  //   - strategy-4-config-isolation (primary): the all-in-one child is by
+  //     definition not partitioned; sub-partitioning it would silently
+  //     promote it to a multi-solution split the user didn't opt into.
+  // Runs ONCE; if children still bust caps validateSplits will surface a
+  // manual-archival warning.
+  let compositeSubPartitioned = false;
+  if (strategy.primary === 'strategy-1-layer') {
+    // Pass `additiveStrategy4` so `_Config` knows whether the top-level
+    // `_EnvVars` solution will claim env vars (in which case _Config drops
+    // 'Environment Variable' from its componentTypes to avoid double-claim).
+    const sub = subPartitionIfOverCap(proposedSolutions, estimate, config.thresholds, {
+      additiveStrategy4: strategy.additive === true,
+    });
+    if (sub.modified) {
+      proposedSolutions = sub.solutions;
+      compositeSubPartitioned = true;
+    }
+  }
+
   if (strategy.additive) {
     proposedSolutions = applyConfigIsolation(proposedSolutions, estimate, meta);
   }
@@ -537,12 +719,14 @@ function computeSplitPlan({ estimate, config, meta }) {
 
   const appliedStrategies = [strategy.primary];
   if (strategy.additive) appliedStrategies.push('strategy-4-config-isolation');
+  if (compositeSubPartitioned) appliedStrategies.push('composite-sub-partition');
 
   return {
     sizeAnalysis,
     assetAdvisory,
     splitStrategy: strategy.primary,
     appliedStrategies,
+    compositeSubPartitioned,
     proposedSolutions,
     recommendations,
     // Pass the canary fields through so plan-alm can surface them to the user
@@ -594,4 +778,5 @@ module.exports = {
   appendFutureBuffer,
   validateSplits,
   buildRecommendations,
+  subPartitionIfOverCap,
 };

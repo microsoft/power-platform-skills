@@ -116,6 +116,135 @@ function buildHostResolutionFromCheck(check) {
   };
 }
 
+// Reads `deployment-settings.json` from the project root. Returns null when
+// missing or malformed — callers degrade to "no per-stage backfill" rather
+// than throwing. deploy-pipeline Phase 5 writes/reads this file; the user
+// can also hand-edit it. The file is the source of truth for per-stage env
+// var override values.
+function readDeploymentSettings(projectRoot) {
+  if (!projectRoot) return null;
+  try {
+    const filePath = path.join(projectRoot, 'deployment-settings.json');
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// Pivot deployment-settings.json into `{ schemaName: { stageName: value, ... } }`.
+// Accepts two shapes observed in the wild:
+//   - top-level stage keys: `{ "Staging": { "EnvironmentVariables": [...] }, "Production": {...} }`
+//     (deploy-pipeline SKILL.md Phase 5.0a template)
+//   - nested under `stages`:  `{ "stages": { "Staging": {...} } }`
+//     (deploy-pipeline SKILL.md Phase 5.1 read path)
+// Also accepts both casings on inner keys: `SchemaName`/`Value` (per the
+// platform's deploymentsettingsjson schema) and `schemaName`/`value` (camelCase
+// for parity with planData). Empty-string values are skipped so a template
+// row that the user hasn't filled in yet doesn't clobber a real value
+// already on `ev.values[stageName]`.
+function extractPerStageValues(deploymentSettings) {
+  if (!deploymentSettings || typeof deploymentSettings !== 'object') return null;
+  const stagesContainer = deploymentSettings.stages && typeof deploymentSettings.stages === 'object'
+    ? deploymentSettings.stages
+    : deploymentSettings;
+
+  const bySchema = {};
+  for (const [stageName, stageBlock] of Object.entries(stagesContainer)) {
+    if (!stageBlock || typeof stageBlock !== 'object') continue;
+    // Guard against the user mixing the two shapes — if the value at the
+    // root is itself the inner `EnvironmentVariables` array (rare but
+    // possible from a hand-edit), skip; we only walk stage-shaped values.
+    if (Array.isArray(stageBlock)) continue;
+    if (stageName === 'stages' || stageName === 'EnvironmentVariables' ||
+        stageName === 'ConnectionReferences') continue;
+
+    const envVars = stageBlock.EnvironmentVariables || stageBlock.environmentVariables;
+    if (!Array.isArray(envVars)) continue;
+    for (const ev of envVars) {
+      if (!ev || typeof ev !== 'object') continue;
+      const schemaName = ev.SchemaName || ev.schemaName;
+      const rawValue = ev.Value != null ? ev.Value : ev.value;
+      if (!schemaName) continue;
+      if (rawValue == null || rawValue === '') continue;
+      const strValue = String(rawValue);
+      bySchema[schemaName] = bySchema[schemaName] || {};
+      bySchema[schemaName][stageName] = strValue;
+    }
+  }
+  return bySchema;
+}
+
+// Backfill planData.envVars[i].values{} from deployment-settings.json so
+// the rendered plan's "Values by Environment" matrix auto-populates after
+// deploy-pipeline runs. Idempotent: an existing non-empty value on
+// ev.values[stageName] is preserved (manual overrides win). Returns the
+// number of cells filled in this call.
+//
+// TODO(follow-up): also query the live `environmentvariablevalues` table
+// per target env so values set in Power Platform Admin Center (bypassing
+// the file) show up. Needs per-stage tokens + env var definition GUIDs,
+// neither of which the helper currently has — deferring until those
+// inputs are wired through the refresh contract.
+function backfillEnvVarValuesFromSettings(planData, projectRoot) {
+  if (!Array.isArray(planData.envVars) || planData.envVars.length === 0) return 0;
+  const settings = readDeploymentSettings(projectRoot);
+  if (!settings) return 0;
+  const bySchema = extractPerStageValues(settings);
+  if (!bySchema || Object.keys(bySchema).length === 0) return 0;
+
+  let filled = 0;
+  for (const ev of planData.envVars) {
+    if (!ev || typeof ev.schemaName !== 'string') continue;
+    const matches = bySchema[ev.schemaName];
+    if (!matches) continue;
+    ev.values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
+    for (const [stageName, value] of Object.entries(matches)) {
+      // Manual override / prior call wins — never overwrite a populated cell.
+      const existing = ev.values[stageName];
+      if (existing != null && existing !== '') continue;
+      ev.values[stageName] = value;
+      filled += 1;
+    }
+  }
+  return filled;
+}
+
+// Flip a matching entry in planData.steps[] to the given status. Each phase
+// owns a "what step does this complete?" rule, captured at the bottom of the
+// per-phase refresh function. The agent used to flip steps[i].status by hand
+// via Edit tool between phases; in multi-phase orchestration that consistently
+// got missed, so the rendered checklist drifted from reality. This helper
+// closes the gap. Rules:
+//   - Match `step.name` case-insensitively against `keyword` (regex).
+//   - When `stage` is set, also require that lower-cased stage substring in
+//     `step.name` — needed for "Deploy via pipeline to Staging" vs
+//     "...Production" disambiguation.
+//   - Skip steps with `skip: true` (user opted out — never auto-mark).
+//   - Skip steps already in a terminal state UNLESS we're setting `failed`
+//     (a retry that succeeded after a failure is recorded as completed by a
+//     subsequent invocation; a fresh failure overrides any prior status).
+function setStepStatus(planData, { keyword, stage, status }) {
+  if (!Array.isArray(planData.steps)) return 0;
+  if (!keyword) return 0;
+  const targetStage = (typeof stage === 'string' && stage.length > 0) ? stage.toLowerCase() : null;
+  let flipped = 0;
+  for (const step of planData.steps) {
+    if (!step || typeof step.name !== 'string') continue;
+    if (step.skip === true) continue;
+    const name = step.name.toLowerCase();
+    if (!keyword.test(name)) continue;
+    if (targetStage && !name.includes(targetStage)) continue;
+    // Don't regress a completed step to anything other than `failed`. A retry
+    // that succeeded should NOT downgrade to `in_progress`, but a `failed`
+    // signal from a fresh failure must override a stale `completed`.
+    if (step.status === 'completed' && status !== 'failed') continue;
+    if (step.status === status) continue;
+    step.status = status;
+    flipped += 1;
+  }
+  return flipped;
+}
+
 // Drop risk entries that are no longer applicable after a phase completes.
 // We match by canonical leading-text fragments because the risks list is
 // authored as free text in Phase 3 — exact-text matching is brittle but
@@ -171,6 +300,11 @@ function refreshSetupPipeline(planData, projectRoot) {
   }
 
   planData.risks = dropResolvedRisks(planData.risks, 'setup-pipeline');
+  // Step-sync: a successful invocation of --phase setup-pipeline completes
+  // the "Setup pipeline" checklist entry. Marker presence is not required
+  // because the agent invokes this helper only after the phase finished; the
+  // invocation itself is the proof of completion.
+  setStepStatus(planData, { keyword: /\bsetup\s+pipeline\b/i, status: 'completed' });
   return planData;
 }
 
@@ -191,6 +325,28 @@ function refreshDeployPipeline(planData, projectRoot) {
     planData.pipelineMeta.isActive = true;
   }
   planData.risks = dropResolvedRisks(planData.risks, 'deploy-pipeline');
+  // Env var values matrix: backfill from deployment-settings.json (the same
+  // file deploy-pipeline Phase 5 reads to build `deploymentsettingsjson`).
+  // Without this the renderer's "Values by Environment" matrix stays empty
+  // even though the deploy already shipped those values to the target env,
+  // because the planData.envVars[].values map only gets populated if the
+  // agent manually edits the JSON. Runs unconditionally — independent of
+  // deployMarker presence, since the values are user-authored and may exist
+  // for stages that haven't been deployed yet.
+  backfillEnvVarValuesFromSettings(planData, projectRoot);
+  // Step-sync: complete the "Deploy via pipeline to {stage}" step. Outcome
+  // comes from the marker — a failed deploy marks the step `failed` so the
+  // checklist surfaces what actually happened. Without a marker we don't
+  // know the stage, so we leave steps[] alone (rare — deploy-pipeline always
+  // writes one).
+  if (deployMarker && deployMarker.stageName) {
+    const failed = /fail/i.test(String(deployMarker.status || ''));
+    setStepStatus(planData, {
+      keyword: /\bdeploy\b/i,
+      stage: deployMarker.stageName,
+      status: failed ? 'failed' : 'completed',
+    });
+  }
   return planData;
 }
 
@@ -221,11 +377,22 @@ function refreshTestSite(planData, projectRoot, stageName) {
     summary: tsMarker.summary || null,
     categories: Array.isArray(tsMarker.categories) ? tsMarker.categories : null,
   };
+  // Step-sync: test-site is intentionally non-blocking — a "failed" runOutcome
+  // does NOT abort the plan. The corresponding checklist step still marks
+  // `completed` because the test ran; per-test pass/fail detail lives in
+  // validationRuns[stage], which the renderer surfaces alongside the step.
+  setStepStatus(planData, {
+    keyword: /\btest\s+site\b/i,
+    stage: resolvedStage,
+    status: 'completed',
+  });
   return planData;
 }
 
 function refreshFinalize(planData) {
   planData.PLAN_STATUS = 'Completed';
+  // Step-sync: complete the "Finalize" checklist entry.
+  setStepStatus(planData, { keyword: /\bfinalize\b/i, status: 'completed' });
   return planData;
 }
 
@@ -252,6 +419,8 @@ function refreshSetupSolution(planData, projectRoot) {
     // the empty existing state instead of carrying stale planned counts.
     planData.envVars = envVarsMarker.envVars;
   }
+  // Step-sync: complete the "Setup solution" checklist entry.
+  setStepStatus(planData, { keyword: /\bsetup\s+solution\b/i, status: 'completed' });
   return planData;
 }
 
@@ -266,6 +435,11 @@ function refreshExportSolution(planData) {
   // the agent's step.status updates. If a future commit introduces
   // .last-export.json (zipPath / exportedAt / version / managed flag), expand
   // this handler to populate planData.manualMeta.lastExport from it.
+  //
+  // Step-sync: a successful invocation of --phase export-solution completes
+  // the "Export solution" checklist entry. There's no marker to read; the
+  // invocation itself is the proof.
+  setStepStatus(planData, { keyword: /\bexport\b/i, status: 'completed' });
   return planData;
 }
 
@@ -317,6 +491,18 @@ function refreshImportSolution(planData, projectRoot, stageName) {
       : null,
     importJobId: importMarker.importJobId || null,
   };
+  // Step-sync: complete the "Import to {stage}" step unless the marker
+  // indicates failure. `resolvedStage` defended above; if it ended up as
+  // `unresolved-...` we still won't match a real step entry, so the call is
+  // safely a no-op in that branch.
+  if (!/^unresolved-/.test(resolvedStage)) {
+    const failed = /fail/i.test(String(importMarker.status || ''));
+    setStepStatus(planData, {
+      keyword: /\bimport\b/i,
+      stage: resolvedStage,
+      status: failed ? 'failed' : 'completed',
+    });
+  }
   return planData;
 }
 
@@ -360,6 +546,17 @@ function refreshActivateSite(planData, projectRoot, stageName) {
     activatedAt: marker.activatedAt || null,
     status: marker.status || null,
   };
+  // Step-sync: complete the "Activate site in {stage}" step. Activate-site
+  // is treated as success when the marker exists at all — activation failures
+  // halt the upstream skill before the marker writes, so a marker present
+  // means activation succeeded.
+  if (!/^unresolved-/.test(resolvedStage)) {
+    setStepStatus(planData, {
+      keyword: /\bactivate\b/i,
+      stage: resolvedStage,
+      status: 'completed',
+    });
+  }
   return planData;
 }
 
@@ -443,5 +640,8 @@ module.exports = {
   refresh,
   buildHostResolutionFromCheck,
   dropResolvedRisks,
+  setStepStatus,
+  backfillEnvVarValuesFromSettings,
+  extractPerStageValues,
   PHASES,
 };

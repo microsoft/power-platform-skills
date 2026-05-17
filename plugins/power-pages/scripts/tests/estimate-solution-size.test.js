@@ -184,7 +184,13 @@ function withMockedMakeRequest(t, handler) {
 // `totalPpcs` is how many web-file rows the fake server claims to have.
 // `truncate` makes the server return only the first page (no nextLink) even
 // though `@odata.count` reports the full total — simulates the bug.
-function buildFakeServer({ totalPpcs, pageSize = 5000, truncate = false } = {}) {
+function buildFakeServer({
+  totalPpcs,
+  pageSize = 5000,
+  truncate = false,
+  contentBytesPerFile = 0,
+  onSingleFetch = null,
+} = {}) {
   const ppcRows = [];
   for (let i = 0; i < totalPpcs; i++) {
     ppcRows.push({
@@ -193,9 +199,32 @@ function buildFakeServer({ totalPpcs, pageSize = 5000, truncate = false } = {}) 
       powerpagecomponenttype: 3, // Web File
     });
   }
+  // Build a base64 content payload of approximately `contentBytesPerFile`
+  // when decoded — base64 expands ~4/3, so encoded length ≈ ceil(bytes*4/3).
+  const fakeContent =
+    contentBytesPerFile > 0
+      ? 'A'.repeat(Math.ceil((contentBytesPerFile * 4) / 3))
+      : '';
   return async function fakeMakeRequest({ url }) {
     const u = new URL(url);
-    const entity = u.pathname.split('/').slice(-1)[0].split('?')[0];
+    const segments = u.pathname.split('/').filter(Boolean);
+    const lastSeg = segments[segments.length - 1] || '';
+    // Single-row fetch path: `powerpagecomponents(<id>)`. Detect via paren.
+    const singleFetchMatch = lastSeg.match(/^powerpagecomponents\(([^)]+)\)$/);
+    if (singleFetchMatch) {
+      const id = singleFetchMatch[1];
+      if (onSingleFetch) onSingleFetch(id);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          powerpagecomponentid: id,
+          name: `webfile-${id}.png`,
+          content: fakeContent,
+        }),
+      };
+    }
+
+    const entity = lastSeg.split('?')[0];
 
     // Handle $count=true ground-truth probes (used by truncation canary).
     if (u.searchParams.get('$count') === 'true') {
@@ -232,7 +261,10 @@ test('estimateSolutionSize paginates beyond a single page and reports the full p
   // Six pages worth (with page size 5000, this would be impossibly large in
   // practice — but we want to test that the page loop terminates correctly).
   const TOTAL = 6500;
-  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: TOTAL, pageSize: 5000 }));
+  // Give each sampled file enough decoded content (>1 KB) so the
+  // suspiciously-small-bytes canary doesn't fire — we want this test to
+  // exercise pagination, not the undercount canary.
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: TOTAL, pageSize: 5000, contentBytesPerFile: 4096 }));
 
   const result = await estimateSolutionSize({
     envUrl: 'https://test.crm.dynamics.com',
@@ -482,4 +514,194 @@ test('estimateSolutionSize envVarCount returns 0 (with scope=solution) when targ
   assert.equal(result.envVarCount, 0, 'envVarCount must reflect solution truth (zero env var defs)');
   assert.equal(result.envVarCountScope, 'solution');
   assert.equal(result.envVarCountTenantWide, 100, 'tenant-wide count preserved');
+});
+
+// --- Web-file size sampling & disk cross-check ------------------------------
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+function mkTmpProjectWithDist(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'est-size-'));
+  const dist = path.join(root, 'dist');
+  fs.mkdirSync(dist, { recursive: true });
+  for (const [name, bytes] of files) {
+    fs.writeFileSync(path.join(dist, name), Buffer.alloc(bytes, 'a'));
+  }
+  return { root, dist };
+}
+
+test('measureWebFiles uses stratified sampling for >150 files', async (t) => {
+  const TOTAL = 500;
+  const fetchedIds = [];
+  withMockedMakeRequest(t, buildFakeServer({
+    totalPpcs: TOTAL,
+    pageSize: 5000,
+    contentBytesPerFile: 1024 * 1024, // 1 MB decoded per file
+    onSingleFetch: (id) => fetchedIds.push(id),
+  }));
+
+  await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  const unique = new Set(fetchedIds);
+  assert.equal(unique.size, 150, 'stratified sample should fetch exactly 150 unique ids');
+  // Map ppc-XXXXXX ids back to integer indices; the rows were generated with
+  // i.toString().padStart(6, '0') so this is unambiguous.
+  const indices = [...unique].map((id) => Number(id.replace(/^ppc-/, '')));
+  const min = Math.min(...indices);
+  const max = Math.max(...indices);
+  assert.equal(min, 0, 'sample should include the very first row (first-50 region)');
+  assert.equal(max, TOTAL - 1, 'sample should include the very last row (last-50 region)');
+  // Spread check: the middle 50 must land in (50, len-50). We assert at least
+  // 5 sampled indices fall strictly between 100 and TOTAL-100 to confirm
+  // we're not just hitting both ends.
+  const middleHits = indices.filter((i) => i > 100 && i < TOTAL - 100);
+  assert.ok(middleHits.length >= 5, `expected meaningful middle coverage, got ${middleHits.length}`);
+});
+
+test('measureWebFiles measures all files when count <= 150', async (t) => {
+  const TOTAL = 100;
+  const fetchedIds = [];
+  withMockedMakeRequest(t, buildFakeServer({
+    totalPpcs: TOTAL,
+    pageSize: 5000,
+    contentBytesPerFile: 1024,
+    onSingleFetch: (id) => fetchedIds.push(id),
+  }));
+
+  await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  const unique = new Set(fetchedIds);
+  assert.equal(unique.size, TOTAL, 'every file should be fetched when total <= 150');
+});
+
+test('disk-measurement fallback walks projectRoot/dist and sums bytes', async (t) => {
+  const { root, dist } = mkTmpProjectWithDist([
+    ['a.png', 100],
+    ['b.png', 200],
+    ['c.png', 5000],
+  ]);
+  t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
+
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: 0, pageSize: 5000 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+    projectRoot: root,
+  });
+
+  const expectedMB = Math.round((5300 / (1024 * 1024)) * 10) / 10;
+  assert.equal(result.webFilesDiskMeasuredMB, expectedMB);
+  assert.equal(result.webFilesDiskFileCount, 3);
+  assert.ok(result.webFilesDiskMeasuredPath && result.webFilesDiskMeasuredPath.endsWith('dist'),
+    `expected disk path to end with 'dist', got ${result.webFilesDiskMeasuredPath}`);
+});
+
+test('undercount canary fires when disk is much larger than Dataverse-measured', async (t) => {
+  // Fake disk: ~50 MB. Dataverse: 30 files × 1 KB content = 30 KB total
+  // (well under 50% of the disk number). Disk threshold (>5 MB) satisfied.
+  const { root } = mkTmpProjectWithDist([
+    ['big.bin', 50 * 1024 * 1024],
+  ]);
+  t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
+
+  withMockedMakeRequest(t, buildFakeServer({
+    totalPpcs: 30,
+    pageSize: 5000,
+    contentBytesPerFile: 1024, // 1 KB decoded per file
+  }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+    projectRoot: root,
+  });
+
+  assert.equal(result.truncationSuspected, true, 'undercount canary must fire');
+  assert.ok(
+    result.truncationWarnings.some((w) => /file-typed column/.test(w)),
+    `expected a file-typed-column warning, got: ${JSON.stringify(result.truncationWarnings)}`,
+  );
+});
+
+test('undercount canary fires when average sampled bytes per file < 1 KB and webFileCount > 20', async (t) => {
+  // 30 web files, each fetch returns content of ~100 chars (decoded ~75 bytes).
+  // Average is well under 1 KB/file, and count > 20 → canary fires.
+  withMockedMakeRequest(t, buildFakeServer({
+    totalPpcs: 30,
+    pageSize: 5000,
+    contentBytesPerFile: 75,
+  }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.truncationSuspected, true, 'suspiciously-small canary must fire');
+  assert.ok(
+    result.truncationWarnings.some((w) => /suspiciously small/.test(w)),
+    `expected suspiciously-small warning, got: ${JSON.stringify(result.truncationWarnings)}`,
+  );
+});
+
+test('disk-measurement gracefully no-ops when projectRoot is absent', async (t) => {
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: 10, pageSize: 5000, contentBytesPerFile: 1024 * 1024 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+  });
+
+  assert.equal(result.webFilesDiskMeasuredMB, null);
+  assert.equal(result.webFilesDiskMeasuredPath, null);
+  assert.equal(result.webFilesDiskFileCount, null);
+  assert.equal(result.webFileCount, 10);
+});
+
+test('disk-measurement gracefully no-ops when projectRoot has no build-output directory', async (t) => {
+  // Create a tmp dir with content unrelated to build output — `src/`, `node_modules/`.
+  // The detector walks `dist`, `public-output`, `build`, `.output` in that order;
+  // none exist here, so the disk-measurement path must skip and return null fields
+  // without throwing.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'est-size-no-build-'));
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'index.ts'), 'export {};');
+  fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', 'placeholder.txt'), 'x');
+  t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
+
+  withMockedMakeRequest(t, buildFakeServer({ totalPpcs: 5, pageSize: 5000, contentBytesPerFile: 1024 * 1024 }));
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    token: 'fake-token',
+    projectRoot: root,
+  });
+
+  assert.equal(result.webFilesDiskMeasuredMB, null, 'disk MB should be null when no build dir found');
+  assert.equal(result.webFilesDiskMeasuredPath, null, 'disk path should be null when no build dir found');
+  assert.equal(result.webFilesDiskFileCount, null, 'disk file count should be null when no build dir found');
+  // Estimator should still complete with the usual webFileCount.
+  assert.equal(result.webFileCount, 5);
+  // And the disk-vs-Dataverse canary must NOT fire when no disk number is available.
+  assert.ok(
+    !result.truncationWarnings.some((w) => /local build output/.test(w)),
+    'disk-vs-dataverse canary must not fire when no build dir found',
+  );
 });

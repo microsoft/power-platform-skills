@@ -285,7 +285,7 @@ test('refresh setup-pipeline preserves prior pipelineMeta.reusedByWiring annotat
 // that the helper accepts the phase, runs the (no-op) handler, and writes the
 // planData back to disk without corruption.
 
-test('refresh export-solution accepts the phase and returns ok:true', (t) => {
+test('refresh export-solution flips the "Export solution" step to completed (step-sync)', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
@@ -299,11 +299,11 @@ test('refresh export-solution accepts the phase and returns ok:true', (t) => {
   const result = refresh({ projectRoot: root, phase: 'export-solution', render: false });
   assert.equal(result.ok, true);
   assert.equal(result.phase, 'export-solution');
-  // Passthrough handler — planData should round-trip unchanged.
   const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
   assert.equal(planData.STRATEGY, 'manual');
-  assert.equal(planData.steps[1].status, 'in_progress',
-    'agent-set step status must round-trip through the passthrough handler');
+  assert.equal(planData.steps[0].status, 'completed', 'unrelated steps must be untouched');
+  assert.equal(planData.steps[1].status, 'completed',
+    'invoking --phase export-solution is proof the phase ran — step must flip from in_progress to completed without the agent doing a manual Edit');
 });
 
 test('refresh import-solution accepts the phase and round-trips planData', (t) => {
@@ -794,4 +794,452 @@ test('refresh test-site no-ops when no stageName signal and multiple targets', (
   const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
   assert.deepEqual(planData.validationRuns, {},
     'multi-target ambiguous case must not silently pick a stage');
+});
+
+// ── Step-sync ────────────────────────────────────────────────────────────
+//
+// refresh-alm-plan-data used to leave planData.steps[i].status updates to
+// the agent (via Edit). In multi-phase orchestration that consistently got
+// missed, so the rendered checklist drifted from reality. The helper now
+// flips the matching step for every phase. Coverage:
+
+test('step-sync: setup-solution flips "Setup solution" to completed', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    plannedEnvVarCount: 3,
+    steps: [
+      { name: 'Setup solution', status: 'pending' },
+      { name: 'Setup pipeline', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed', 'Setup solution must flip');
+  assert.equal(planData.steps[1].status, 'pending', 'Setup pipeline must NOT flip — different phase');
+});
+
+test('step-sync: setup-pipeline flips "Setup pipeline" to completed even without a marker', (t) => {
+  // Invocation of --phase X is the proof, not the marker. Marker absence is
+  // a soft no-op for the data-ingest path but step-sync still fires so the
+  // checklist tracks orchestration progress.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup pipeline', status: 'in_progress' },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'setup-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'pending', 'deploy step is a later phase — must not flip');
+});
+
+test('step-sync: deploy-pipeline flips ONLY the matching stage step to completed on success', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-1',
+    stageName: 'Staging',
+    status: 'Succeeded',
+    deployedAt: '2026-05-17T10:00:00Z',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Deploy via pipeline to Production', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed', 'Staging deploy step must flip');
+  assert.equal(planData.steps[1].status, 'pending',
+    'Production deploy step must stay pending — stage filter disambiguates "Deploy" steps');
+});
+
+test('step-sync: deploy-pipeline records "failed" status when marker shows failure', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-2',
+    stageName: 'Staging',
+    status: 'Failed',
+    deployedAt: '2026-05-17T10:30:00Z',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'failed',
+    'a failed deploy marker must be reflected as failed in the checklist');
+});
+
+test('step-sync: import-solution flips the right stage step on success', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-import.json'), {
+    solutionName: 'Foo',
+    targetEnvironment: 'https://staging.crm.dynamics.com/',
+    importedAt: '2026-05-17T11:00:00Z',
+    status: 'Succeeded',
+    componentResults: [],
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Import to Staging', status: 'pending' },
+      { name: 'Import to Production', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'import-solution', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'pending');
+});
+
+test('step-sync: activate-site flips "Activate site in {stage}" only when marker present', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-activate.json'), {
+    siteName: 'TestSite',
+    siteUrl: 'https://test.powerappsportals.com/',
+    environmentUrl: 'https://staging.crm.dynamics.com/',
+    activatedAt: '2026-05-17T11:30:00Z',
+    status: 'Activated',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Activate site in Staging', status: 'pending' },
+      { name: 'Activate site in Production', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'activate-site', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'pending');
+});
+
+test('step-sync: test-site is non-blocking — always completes the step regardless of runOutcome', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), {
+    stageName: 'Staging',
+    url: 'https://test.powerappsportals.com/',
+    runAt: '2026-05-17T12:00:00Z',
+    runOutcome: 'failed',  // tests had failures
+    summary: { critical: 1, high: 0, medium: 0, low: 0, total: 1 },
+    categories: [],
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Test site in Staging', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed',
+    'test-site step must be marked completed even when runOutcome === failed — test failures live in validationRuns[stage], not in the step status');
+});
+
+test('step-sync: finalize flips "Finalize" + sets PLAN_STATUS', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    PLAN_STATUS: 'In Execution',
+    steps: [
+      { name: 'Test site in Production', status: 'completed' },
+      { name: 'Finalize ALM plan', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'finalize', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.PLAN_STATUS, 'Completed');
+  assert.equal(planData.steps[1].status, 'completed', 'Finalize step must flip');
+});
+
+test('step-sync: skip:true steps are NEVER auto-flipped', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'pending', skip: true },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'pending',
+    'skip:true means the user opted out — auto-flip must respect that');
+});
+
+test('step-sync: already-completed steps are NOT regressed (idempotent re-run)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed', 'completed must stay completed');
+});
+
+test('step-sync: a fresh failed marker overrides a stale completed status (retry-then-fail)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-3',
+    stageName: 'Production',
+    status: 'Failed',
+    deployedAt: '2026-05-17T13:00:00Z',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      // Already-completed step from a prior successful run; the new deploy
+      // attempt to the same stage failed and the step must reflect that.
+      { name: 'Deploy via pipeline to Production', status: 'completed' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'failed',
+    'a fresh failure must override a prior completed — the only direction completed can regress in');
+});
+
+test('setStepStatus: exported helper handles missing or malformed planData gracefully', () => {
+  const { setStepStatus } = require('../lib/refresh-alm-plan-data');
+  assert.equal(setStepStatus({}, { keyword: /test/i, status: 'completed' }), 0);
+  assert.equal(setStepStatus({ steps: null }, { keyword: /test/i, status: 'completed' }), 0);
+  assert.equal(setStepStatus({ steps: 'not-an-array' }, { keyword: /test/i, status: 'completed' }), 0);
+  assert.equal(setStepStatus({ steps: [{ name: 'Test step', status: 'pending' }] }, { keyword: null, status: 'completed' }), 0);
+});
+
+// ── Env var values backfill from deployment-settings.json ────────────────
+//
+// deploy-pipeline Phase 5 reads/writes deployment-settings.json to drive the
+// `deploymentsettingsjson` PATCH on each stage run. The plan refresh now
+// reaches back to that same file so the rendered plan's "Values by
+// Environment" matrix populates automatically — no agent Edit required.
+
+test('backfill: deploy-pipeline backfills per-stage values from top-level-stage deployment-settings.json', (t) => {
+  const root = makeProject(t);
+  // Top-level-stage shape (deploy-pipeline SKILL.md Phase 5.0a template).
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_localLoginEnabled', Value: 'true' },
+        { SchemaName: 'cr5fe_apiBaseUrl', Value: 'https://staging.api.example.com' },
+      ],
+      ConnectionReferences: [],
+    },
+    Production: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_localLoginEnabled', Value: 'false' },
+        { SchemaName: 'cr5fe_apiBaseUrl', Value: 'https://api.example.com' },
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-1', stageName: 'Staging', status: 'Succeeded',
+    deployedAt: '2026-05-17T10:00:00Z',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [
+      { schemaName: 'cr5fe_localLoginEnabled', displayName: 'Local Login', type: 'Boolean', defaultValue: 'true' },
+      { schemaName: 'cr5fe_apiBaseUrl', displayName: 'API Base URL', type: 'String', defaultValue: '' },
+    ],
+    steps: [{ name: 'Deploy via pipeline to Staging', status: 'pending' }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, {
+    Staging: 'true',
+    Production: 'false',
+  }, 'localLoginEnabled values must be backfilled for both Staging and Production');
+  assert.deepEqual(planData.envVars[1].values, {
+    Staging: 'https://staging.api.example.com',
+    Production: 'https://api.example.com',
+  });
+});
+
+test('backfill: deploy-pipeline accepts the nested `stages` shape too', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    stages: {
+      Staging: {
+        EnvironmentVariables: [
+          { SchemaName: 'cr5fe_flag', Value: 'on' },
+        ],
+      },
+    },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{ schemaName: 'cr5fe_flag', type: 'String' }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'on' });
+});
+
+test('backfill: deploy-pipeline accepts camelCase inner keys (schemaName/value) for parity with planData', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      environmentVariables: [
+        { schemaName: 'cr5fe_x', value: 'staging-value' },
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{ schemaName: 'cr5fe_x', type: 'String' }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'staging-value' });
+});
+
+test('backfill: empty/missing values in deployment-settings.json do NOT clobber existing values{}', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_x', Value: '' },  // template placeholder
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{
+      schemaName: 'cr5fe_x',
+      type: 'String',
+      values: { Staging: 'previously-set-by-agent' },  // existing value must survive
+    }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.envVars[0].values.Staging, 'previously-set-by-agent',
+    'empty template value must not clobber a real value already on values{}');
+});
+
+test('backfill: an existing populated value cell is never overwritten by file values (manual override wins)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_x', Value: 'file-value' },
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{
+      schemaName: 'cr5fe_x',
+      values: { Staging: 'manually-overridden' },
+    }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.envVars[0].values.Staging, 'manually-overridden',
+    'pre-existing populated cell wins; the file only fills empty slots');
+});
+
+test('backfill: missing deployment-settings.json is a silent no-op (no crash, envVars unchanged)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{ schemaName: 'cr5fe_x', type: 'String' }],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  // No values map should have been created — the renderer treats the absence
+  // of values as "single defaultValue" rather than rendering an empty matrix.
+  assert.equal(planData.envVars[0].values, undefined);
+});
+
+test('backfill: malformed deployment-settings.json does not throw — degrade gracefully', (t) => {
+  const root = makeProject(t);
+  fs.writeFileSync(path.join(root, 'deployment-settings.json'), '{ this is not valid json ', 'utf8');
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [{ schemaName: 'cr5fe_x', type: 'String' }],
+  });
+
+  assert.doesNotThrow(() => refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false }));
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.envVars[0].values, undefined);
+});
+
+test('backfill: envVars not in deployment-settings.json are left alone (no spurious empty values map)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_a', Value: 'aaa' },
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    envVars: [
+      { schemaName: 'cr5fe_a', type: 'String' },
+      { schemaName: 'cr5fe_b', type: 'String' },  // not in deployment-settings
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'aaa' });
+  assert.equal(planData.envVars[1].values, undefined,
+    'env vars not referenced in deployment-settings.json must not get an empty values{} map');
+});
+
+test('extractPerStageValues: defensive against null / wrong-type inputs', () => {
+  const { extractPerStageValues } = require('../lib/refresh-alm-plan-data');
+  assert.equal(extractPerStageValues(null), null);
+  assert.equal(extractPerStageValues('not an object'), null);
+  assert.deepEqual(extractPerStageValues({}), {});
+  // Stage with no EnvironmentVariables array → empty entry, but no crash
+  assert.deepEqual(extractPerStageValues({ Staging: { ConnectionReferences: [] } }), {});
+  // Stage with malformed array entries → those entries are skipped
+  const result = extractPerStageValues({
+    Staging: { EnvironmentVariables: [null, { SchemaName: 'x' }, { SchemaName: 'y', Value: 'v' }] },
+  });
+  assert.deepEqual(result, { y: { Staging: 'v' } });
 });

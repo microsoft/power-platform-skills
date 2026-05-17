@@ -9,6 +9,8 @@ const {
   partitionByLayer,
   partitionByChangeFrequency,
   partitionBySchema,
+  validateSplits,
+  subPartitionIfOverCap,
 } = require('../lib/compute-split-plan');
 const { DEFAULT_CONFIG, DEFAULTS } = require('../lib/alm-thresholds');
 
@@ -283,6 +285,207 @@ test('appendFutureBuffer exported and idempotent-safe on single-entry arrays', (
   // Empty/invalid input shape: return as-is.
   assert.deepEqual(appendFutureBuffer([], { baseName: 'X', siteName: 'X' }), []);
   assert.deepEqual(appendFutureBuffer(null, { baseName: 'X', siteName: 'X' }), null);
+});
+
+// --- Size + count composite enforcement ------------------------------------
+
+test('Scenario F: size red + count red, web-heavy → Layer split sub-partitions Core when Core still over count cap', () => {
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      totalSizeMB: 200,
+      webFilesAggregateMB: 110,
+      componentCountSiteTotal: 8000,
+      webFileCount: 400,
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-1-layer');
+  assert.equal(result.compositeSubPartitioned, true);
+  assert.ok(result.appliedStrategies.includes('composite-sub-partition'));
+  const names = result.proposedSolutions.map((s) => s.uniqueName);
+  // Core was sub-partitioned; WebAssets and Future stayed.
+  assert.ok(names.includes('Test_Core_Foundation'), `expected Test_Core_Foundation in ${names.join(',')}`);
+  assert.ok(names.includes('Test_Core_Content'), `expected Test_Core_Content in ${names.join(',')}`);
+  assert.ok(names.includes('Test_WebAssets'), `expected Test_WebAssets in ${names.join(',')}`);
+  assert.ok(names.includes('Test_Future'), `expected Test_Future in ${names.join(',')}`);
+  // The original Core entry should NOT survive — it was replaced.
+  assert.ok(!names.includes('Test_Core'), `Test_Core should be replaced by sub-children, got ${names.join(',')}`);
+});
+
+test('Scenario G: size red + count red, NOT web-heavy → primary is Strategy 2 and already partitions appropriately', () => {
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      totalSizeMB: 120,
+      webFilesAggregateMB: 10,
+      componentCountSiteTotal: 6000,
+      cloudFlowCount: 10,
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-2-change-frequency');
+  // Change-frequency already split counts — no sub-partition pass.
+  assert.ok(!result.compositeSubPartitioned, 'expected compositeSubPartitioned to be falsy');
+  assert.ok(
+    !result.appliedStrategies.includes('composite-sub-partition'),
+    'composite-sub-partition should not be in appliedStrategies',
+  );
+});
+
+test('validateSplits emits a count warning when a split exceeds maxComponentCount', () => {
+  const t = { ...DEFAULTS };
+  const overCount = validateSplits(
+    [{ uniqueName: 'X', sizeMB: 50, componentCount: 5000 }],
+    t,
+  );
+  assert.equal(overCount.length, 1);
+  assert.match(overCount[0].message, /components/);
+
+  const futureBuffer = validateSplits(
+    [{ uniqueName: 'X_Future', sizeMB: 0, componentCount: 0, isFutureBuffer: true }],
+    t,
+  );
+  assert.equal(futureBuffer.length, 0, 'future buffer must never produce a warning');
+
+  // Defensive: even if a future buffer somehow had high counts, still no warning.
+  const futureWithHighCount = validateSplits(
+    [{ uniqueName: 'X_Future', sizeMB: 99, componentCount: 9000, isFutureBuffer: true }],
+    t,
+  );
+  assert.equal(futureWithHighCount.length, 0);
+});
+
+test('Future buffer is not sub-partitioned even when over cap (defensive — should never happen)', () => {
+  const t = { ...DEFAULTS };
+  const input = [
+    {
+      uniqueName: 'X_Future',
+      displayName: 'X — Future Growth',
+      order: 1,
+      componentTypes: ['Any'],
+      sizeMB: 99,
+      componentCount: 9000,
+      components: [],
+      isFutureBuffer: true,
+    },
+  ];
+  const { solutions, modified } = subPartitionIfOverCap(input, baseEstimate(), t);
+  assert.equal(modified, false, 'future buffer should never trigger a sub-partition');
+  assert.equal(solutions.length, 1);
+  assert.equal(solutions[0].uniqueName, 'X_Future');
+});
+
+test('sub-partition path tags appliedStrategies and compositeSubPartitioned correctly', () => {
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      totalSizeMB: 200,
+      webFilesAggregateMB: 110,
+      componentCountSiteTotal: 8000,
+      webFileCount: 400,
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.compositeSubPartitioned, true);
+  assert.ok(result.appliedStrategies.includes('strategy-1-layer'));
+  assert.ok(result.appliedStrategies.includes('composite-sub-partition'));
+});
+
+test('sub-partition preserves componentTypes coverage: every type the parent claimed has a child claimer', () => {
+  // Regression guard: an earlier buildSubChildren dropped Cloud Flow / Bot
+  // Component / Environment Variable from the union of sub-child
+  // componentTypes when flows < changeFreqMinFlows AND additive Strategy 4
+  // wasn't firing. Those types existed on the site but had no owner solution
+  // after sub-partition — setup-solution Phase 5 routing fell them to Default.
+  //
+  // This scenario: web-heavy + count-heavy → Layer + sub-partition. NO additive
+  // Strategy 4 (envVarCount under cap). cloudFlowCount=2, botCount=0 — under
+  // the changeFreqMinFlows threshold (5). Pre-fix: _Integration not emitted,
+  // Cloud Flow / Bot Component / Environment Variable missing from union.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      totalSizeMB: 200,
+      webFilesAggregateMB: 110,
+      componentCountSiteTotal: 8000,
+      webFileCount: 400,
+      cloudFlowCount: 2,
+      botCount: 0,
+      envVarCount: 10,  // under maxEnvVarCount, no additive Strategy 4
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.compositeSubPartitioned, true, 'sub-partition must have fired');
+  assert.ok(!result.appliedStrategies.includes('strategy-4-config-isolation'), 'additive Strategy 4 must NOT fire for this scenario');
+
+  // Build the union of all componentTypes claimed by all non-buffer solutions.
+  const claimedTypes = new Set();
+  for (const s of result.proposedSolutions) {
+    if (s.isFutureBuffer) continue;
+    for (const t of (s.componentTypes || [])) claimedTypes.add(t);
+  }
+
+  // Parent Strategy 1 Core claimed these — every one needs a claimer post-sub.
+  const requiredTypes = [
+    'Table', 'Site Setting', 'Web Role', 'Table Permission',
+    'Cloud Flow', 'Environment Variable', 'Bot Component',
+  ];
+  for (const t of requiredTypes) {
+    assert.ok(
+      claimedTypes.has(t),
+      `componentType '${t}' must have an owner solution after sub-partition. Claimed: ${[...claimedTypes].join(', ')}`,
+    );
+  }
+
+  // _Integration MUST exist when flows + bots > 0, even below changeFreqMinFlows.
+  const integrationSol = result.proposedSolutions.find((s) => /_Integration$/.test(s.uniqueName));
+  assert.ok(integrationSol, 'Test_Core_Integration must be emitted when flows + bots > 0');
+  assert.ok(integrationSol.componentTypes.includes('Cloud Flow'));
+});
+
+test('Layer + sub-partition + additive Strategy 4: env vars are NOT double-claimed across solutions', () => {
+  // Stress case: web-heavy (triggers Layer), count-heavy (triggers sub-partition
+  // of Core), AND env-var-heavy (triggers additive Strategy 4). Without the fix
+  // for buildSubChildren's Config componentTypes, both `_EnvVars` (additive)
+  // AND `_Core_Config` (sub-partition) would list 'Environment Variable',
+  // creating a double-claim that breaks setup-solution's componentType routing.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      totalSizeMB: 200,
+      webFilesAggregateMB: 110,
+      componentCountSiteTotal: 8000,
+      webFileCount: 400,
+      envVarCount: 800,
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+
+  // All three strategies should be applied.
+  assert.ok(result.appliedStrategies.includes('strategy-1-layer'));
+  assert.ok(result.appliedStrategies.includes('composite-sub-partition'));
+  assert.ok(result.appliedStrategies.includes('strategy-4-config-isolation'));
+  assert.equal(result.compositeSubPartitioned, true);
+
+  // Find the env-var-claiming solutions. Exactly one should claim env vars.
+  const envVarClaimers = result.proposedSolutions.filter((s) =>
+    Array.isArray(s.componentTypes) && s.componentTypes.includes('Environment Variable'),
+  );
+  assert.equal(
+    envVarClaimers.length,
+    1,
+    `exactly one solution should claim 'Environment Variable' in componentTypes, got ${envVarClaimers.length}: ${envVarClaimers.map((s) => s.uniqueName).join(', ')}`,
+  );
+  assert.match(envVarClaimers[0].uniqueName, /_EnvVars$/, 'the env-var claimer should be the additive _EnvVars solution');
+
+  // Sub-partition's _Config must exist (proves sub-partition fired) but not own env vars.
+  const subConfig = result.proposedSolutions.find((s) => s.uniqueName === 'Test_Core_Config');
+  assert.ok(subConfig, 'expected sub-partition _Core_Config solution');
+  assert.ok(
+    !subConfig.componentTypes.includes('Environment Variable'),
+    `_Core_Config must not claim 'Environment Variable', got componentTypes=${JSON.stringify(subConfig.componentTypes)}`,
+  );
 });
 
 // --- Asset advisory ---------------------------------------------------------

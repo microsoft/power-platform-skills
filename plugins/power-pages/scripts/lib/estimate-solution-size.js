@@ -61,6 +61,7 @@ function parseArgs(argv) {
     siteName: null,
     datamodelManifest: null,
     solutionId: null,
+    projectRoot: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
@@ -70,6 +71,7 @@ function parseArgs(argv) {
     else if (args[i] === '--siteName' && args[i + 1]) out.siteName = args[++i];
     else if (args[i] === '--datamodelManifest' && args[i + 1]) out.datamodelManifest = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
+    else if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
   }
   return out;
 }
@@ -469,8 +471,142 @@ async function measureWebFiles(envUrl, webFiles, token) {
   return {
     aggregateBytes,
     individual,
+    sampleSize: webFiles.length,
     mediaRatio: aggregateBytes > 0 ? imgOrFontBytes / aggregateBytes : 0,
   };
+}
+
+// Stratified sample over a list of web files. The goal: cover the full id-range
+// so a hot spot of large files in the long tail can't dominate or get missed.
+// - <= cap → measure everything
+// - > cap  → take first 50 + last 50 + 50 evenly-spaced middles (deterministic)
+// `WEB_FILE_SAMPLE_CAP` is the upper bound; bumped from 80 to 150 after field
+// reports of underestimated size on sites with large media biased to one end of
+// the ppc id range.
+const WEB_FILE_SAMPLE_CAP = 150;
+function stratifiedWebFileSample(webFiles) {
+  const len = webFiles.length;
+  if (len <= WEB_FILE_SAMPLE_CAP) return webFiles.slice();
+  const first = webFiles.slice(0, 50);
+  const last = webFiles.slice(len - 50, len);
+  const middle = [];
+  for (let i = 0; i < 50; i++) {
+    // Map i ∈ [0,50) to an index in the middle region (50, len-50).
+    const idx = Math.floor((i * (len - 100)) / 50) + 50;
+    middle.push(webFiles[idx]);
+  }
+  // Dedupe by id in the rare edge case where regions overlap on small bumps.
+  const seen = new Set();
+  const out = [];
+  for (const wf of [...first, ...middle, ...last]) {
+    const key = wf && wf.powerpagecomponentid;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(wf);
+  }
+  return out;
+}
+
+// Walks a directory recursively and sums file byte sizes. Skips node_modules,
+// .git, and any hidden directory (name starts with `.`). Synchronous on
+// purpose — small directories complete instantly; for larger directories we'd
+// rather block briefly than juggle async state inside the estimator's main
+// flow. Returns null on any error (permission, missing path) so callers can
+// degrade gracefully.
+//
+// Symlink-loop protection: tracks visited inode-device pairs in `seenInodes`.
+// A symlink that points back into the walked tree (or into the project root
+// itself) would otherwise recurse forever. We use `lstatSync` to NOT follow
+// the link, then conditionally `statSync` to read the target's size — so we
+// always count the bytes once and never re-walk the same physical directory.
+function walkDirectoryBytes(rootPath) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const st = fs.statSync(rootPath);
+    if (!st.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  let totalBytes = 0;
+  let fileCount = 0;
+  const seenInodes = new Set();
+  const stack = [rootPath];
+  while (stack.length) {
+    const dir = stack.pop();
+    try {
+      const dst = fs.statSync(dir);
+      const key = `${dst.dev}:${dst.ino}`;
+      if (seenInodes.has(key)) continue;  // already walked (cycle or hard link)
+      seenInodes.add(key);
+    } catch {
+      continue;
+    }
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      const name = ent.name;
+      if (!name) continue;
+      const full = path.join(dir, name);
+      // Use lstatSync to NOT follow the link itself — we only follow when the
+      // target is a real directory we haven't visited.
+      let lst;
+      try { lst = fs.lstatSync(full); } catch { continue; }
+      if (lst.isSymbolicLink()) {
+        try {
+          const target = fs.statSync(full);  // resolves the symlink
+          if (target.isDirectory()) {
+            if (name === 'node_modules' || name.startsWith('.')) continue;
+            stack.push(full);
+          } else if (target.isFile()) {
+            totalBytes += target.size;
+            fileCount += 1;
+          }
+        } catch {
+          // broken symlink — skip
+        }
+        continue;
+      }
+      if (ent.isDirectory()) {
+        if (name === 'node_modules' || name.startsWith('.')) continue;
+        stack.push(full);
+      } else if (ent.isFile()) {
+        try {
+          const s = fs.statSync(full);
+          totalBytes += s.size;
+          fileCount += 1;
+        } catch {
+          // skip unreadable file
+        }
+      }
+    }
+  }
+  return { totalBytes, fileCount };
+}
+
+// Detects the build-output directory for a Power Pages code site. Order
+// matches the conventional outputs across supported frameworks (Vite, Astro,
+// Angular CLI, Nuxt-static fallback). Returns null if none of the candidates
+// exist as directories.
+function detectBuildOutputDir(projectRoot) {
+  if (!projectRoot) return null;
+  const fs = require('fs');
+  const path = require('path');
+  const candidates = ['dist', 'public-output', 'build', '.output'];
+  for (const name of candidates) {
+    const full = path.join(projectRoot, name);
+    try {
+      const st = fs.statSync(full);
+      if (st.isDirectory()) return full;
+    } catch {
+      // try next
+    }
+  }
+  return null;
 }
 
 function estimateTotalSize({ classified, tables, schemaAttrCount, webFilesAggregateBytes, envVarCount }) {
@@ -547,7 +683,7 @@ async function countSolutionMembership(envUrl, solutionId, token, sitePpcIdSet =
   };
 }
 
-async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest, solutionId }) {
+async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherPrefix, siteName, datamodelManifest, solutionId, projectRoot }) {
   if (!envUrl || !websiteRecordId) {
     throw new Error('--envUrl and --websiteRecordId are required');
   }
@@ -596,8 +732,13 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     resolved,
   );
 
-  const webFileSample = classified.webFiles.slice(0, 80); // sample up to 80 web files for sizing
+  // Stratified sample over the full web-file list — cap at 150 (bumped from
+  // an earlier 80). Field reports showed the old `slice(0, 80)` undercount
+  // when large media lived in the long tail of the powerpagecomponentid range.
+  // See `stratifiedWebFileSample` for the first-50 + middle-50 + last-50 layout.
+  const webFileSample = stratifiedWebFileSample(classified.webFiles);
   const webMeasure = await measureWebFiles(envUrl, webFileSample, resolved);
+  const sampleSize = webMeasure.sampleSize;
 
   // Scale measured bytes to full web file count if we sampled
   const scaleFactor =
@@ -605,6 +746,30 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
       ? classified.webFiles.length / webFileSample.length
       : 1;
   const webFilesAggregateBytes = webMeasure.aggregateBytes * scaleFactor;
+
+  // Optional disk-measurement cross-check. When the caller passes
+  // `--projectRoot`, walk the build-output directory and sum file bytes. We
+  // never replace `webFilesAggregateBytes` with this — the Dataverse-measured
+  // bytes are what will actually ship in the solution zip — but the disk
+  // total is useful as a sanity check for the undercount canary below.
+  let webFilesDiskMeasuredMB = null;
+  let webFilesDiskMeasuredPath = null;
+  let webFilesDiskFileCount = null;
+  if (projectRoot) {
+    const buildDir = detectBuildOutputDir(projectRoot);
+    if (buildDir) {
+      const walk = walkDirectoryBytes(buildDir);
+      if (walk) {
+        webFilesDiskMeasuredMB = round1(walk.totalBytes / (1024 * 1024));
+        webFilesDiskMeasuredPath = buildDir;
+        webFilesDiskFileCount = walk.fileCount;
+      } else {
+        process.stderr.write(
+          `estimate-solution-size: WARN — disk-measurement walk of ${buildDir} failed; webFilesDiskMeasuredMB unavailable.\n`,
+        );
+      }
+    }
+  }
 
   // Optional: when caller passes --solutionId, also report what's actually
   // in the solution vs. site-total. Reported raw — every solutioncomponents
@@ -773,6 +938,43 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
       `ppcs.length is exactly ${ppcs.length} — a historical paging boundary from an older $top value. Suggests the \`Prefer: odata.maxpagesize\` header has regressed; verify odataGet still sends it.`,
     );
   }
+
+  // ── Web-file undercount canaries ────────────────────────────────────────
+  // Two independent signals that the Dataverse-measured web-file size is
+  // likely an undercount. The classic failure mode: `mspp_webfile` payload
+  // bytes live in a file-typed column (e.g. `documentbody`) whose contents
+  // are NOT returned by `$select=content`. The estimator scales up a
+  // metadata-only response and reports a number much smaller than reality.
+  const webFilesAggregateMB = webFilesAggregateBytes / (1024 * 1024);
+  const webFileCount = classified.webFiles.length;
+  if (
+    webFilesDiskMeasuredMB != null &&
+    webFilesDiskMeasuredMB > 5 &&
+    webFilesAggregateMB < 0.5 * webFilesDiskMeasuredMB
+  ) {
+    // The disk total is the byte sum of EVERY file under the build output dir —
+    // including HTML pages, source maps, and other artifacts that Power Pages
+    // doesn't ship as `powerpagecomponents` type-3 web files (HTML uploads as
+    // type-2 web pages instead). For HTML-dominated code sites, the disk total
+    // can legitimately exceed the Dataverse web-files total without indicating
+    // an undercount. The strong signal is when disk ≫ Dataverse AND the
+    // dominant disk content is media/assets (image/font/binary extensions),
+    // which is the file-typed-column case. The warning copy below reflects the
+    // dominant-case interpretation but reviewers should sanity-check by
+    // inspecting `webFilesDiskMeasuredPath` for HTML-heavy content.
+    truncationWarnings.push(
+      `Web-file content from Dataverse (${webFilesAggregateMB.toFixed(1)} MB across ${webFileCount} files) is much smaller than the local build output (${webFilesDiskMeasuredMB.toFixed(1)} MB at ${webFilesDiskMeasuredPath}). Most likely cause: the site's web file payloads live in a file-typed column whose bytes are not returned via $select=content — solution size is under-estimated and you should trust the disk-measured number. Alternate explanation if the disk content is HTML-dominated: HTML files are uploaded as type-2 web pages (not type-3 web files), so disk > Dataverse can be legitimate; inspect the directory if the disk total looks higher than expected for your media assets.`,
+    );
+  }
+  if (
+    classified.webFiles.length > 20 &&
+    sampleSize > 0 &&
+    (webMeasure.aggregateBytes / sampleSize) < 1024
+  ) {
+    truncationWarnings.push(
+      `Sampled ${sampleSize} of ${webFileCount} web files, but the average measured size is suspiciously small (<1 KB/file). The site's web file payloads may live in file-typed columns whose bytes are not returned via $select=content. The estimator's webFilesAggregateMB is likely an undercount.`,
+    );
+  }
   const truncationSuspected = truncationWarnings.length > 0;
 
   return {
@@ -826,6 +1028,18 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     webFilesAggregateMB: round1(webFilesAggregateBytes / (1024 * 1024)),
     webFilesIndividual: webMeasure.individual,
     webFileCount: classified.webFiles.length,
+    // Stratified sample bookkeeping — surfaces how many ppcs the per-file
+    // content fetch actually visited. Compared with webFileCount this tells
+    // callers how aggressively the aggregate-bytes number was extrapolated.
+    webFileSampleSize: sampleSize,
+    // Disk-measurement cross-check fields. Null unless `--projectRoot` was
+    // passed AND a build-output directory was found. Surfaced for callers to
+    // sanity-check `webFilesAggregateMB`; we intentionally do NOT substitute
+    // this value into `webFilesAggregateMB` because the Dataverse-measured
+    // number is still the authoritative size for what ships in the solution.
+    webFilesDiskMeasuredMB,
+    webFilesDiskMeasuredPath,
+    webFilesDiskFileCount,
     cloudFlowCount: classified.cloudFlowLinks.length,
     botCount: classified.botConsumers.length,
     // envVarCount is the count consumers should drive display + decision logic

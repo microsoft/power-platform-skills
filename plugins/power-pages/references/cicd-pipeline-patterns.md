@@ -863,7 +863,7 @@ GET {hostEnvUrl}/api/data/v9.0/deploymentartifacts({artifactId})/artifactfileunm
 
 The platform host is auto-provisioned on demand via the BAP RP API (not the Dataverse OData API):
 ```
-POST {BapRpEndpoint}/getOrCreate?api-version=2021-04-01
+POST {BapRpEndpoint}/environments/getOrCreate?api-version=2021-04-01
 Content-Type: application/json
 
 {

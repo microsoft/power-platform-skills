@@ -160,10 +160,11 @@ Steps:
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
       {if SOLUTION_DONE: --solutionId "{solutionManifest.solution.solutionId}"} \
+      --projectRoot "." \
       --datamodelManifest "./.datamodel-manifest.json" > ./docs/alm/alm-size-estimate.json.tmp \
       && mv ./docs/alm/alm-size-estimate.json.tmp ./docs/alm/alm-size-estimate.json
     ```
-    When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution.
+    When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution. `--projectRoot "."` enables the disk cross-check — the estimator walks the local build output (`dist/`, `public-output/`, `build/`, `.output/`) and surfaces `webFilesDiskMeasuredMB`. When that number is much larger than the Dataverse-measured `webFilesAggregateMB`, the estimator flips `truncationSuspected: true` with a warning — file-typed columns whose bytes aren't returned by `$select=content` are the usual cause and the plan should trust the disk number.
     Then run the decision tree (same tmp-file pattern):
     ```bash
     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
@@ -611,7 +612,8 @@ Build a `planData` object with all gathered strategy inputs:
   "sizeAnalysis": { /* tier-classified signals from SPLIT_PLAN.sizeAnalysis */ },
   "assetAdvisory": { /* candidates + recommendation from SPLIT_PLAN.assetAdvisory */ },
   "splitStrategy": "single | strategy-1-layer | strategy-2-change-frequency | strategy-3-schema-segmentation | strategy-4-config-isolation",
-  "appliedStrategies": ["strategy-1-layer"],
+  "appliedStrategies": ["strategy-1-layer"],            // may include "composite-sub-partition" when a Layer-split child still exceeded the size or count cap and was sub-divided
+  "compositeSubPartitioned": false,                     // mirrors SPLIT_PLAN.compositeSubPartitioned — true when the renderer's strategy rationale should mention sub-partitioning
   "proposedSolutions": [ /* from SPLIT_PLAN.proposedSolutions — ALWAYS at least 1 entry */ ],
   "recommendations": [ /* from SPLIT_PLAN.recommendations */ ],
   "envVars": [ /* from ENV_VARS_DETAILS (Phase 1 Step 10b) — { schemaName, type, defaultValue, siteSetting } per definition; empty array when DEV_TOKEN unavailable */ ],
@@ -621,6 +623,9 @@ Build a `planData` object with all gathered strategy inputs:
   "estimationAccuracyPct": 15,
   "truncationSuspected": false,             // true when the estimator's truncation canary fired — surfaced as a red banner on the rendered plan and gates the "keep as single solution anyway" override in Phase 2 Q1b
   "truncationWarnings": [],                 // specific category-level reasons the canary fired (e.g. "Dataverse reports 6050 powerpagecomponent rows but discovery returned 500")
+  "webFilesDiskMeasuredMB": null,           // disk-measured total when `--projectRoot` was passed to estimate-solution-size.js and a build-output dir (dist/public-output/build/.output) was found; null otherwise. Renderer surfaces this under the Web Files signal when it disagrees materially with `webFilesAggregateMB` — useful when file-typed columns hold bytes that $select=content can't return.
+  "webFilesDiskMeasuredPath": null,         // the build-output directory that produced webFilesDiskMeasuredMB; null when not measured.
+  "webFileSampleSize": 0,                   // how many web-file rows the stratified sampler actually read for size measurement. Compared with webFileCount this tells reviewers how aggressively the aggregate was extrapolated.
 
   // --- Raw discovery snapshot — embedded verbatim for diagnosability ---
   // The mapped fields above (sizeAnalysis, splitStrategy, hostResolution, …)
@@ -749,11 +754,13 @@ process.stdout.write(JSON.stringify(meta));
 ```
 Embed the result as `planData.pipelineMeta`.
 
-**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `proposedSolutions`, `recommendations`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer. **`envVars`** comes from `ENV_VARS_DETAILS` populated in Phase 1 Step 10b — pass it through unchanged. When the array is empty, the renderer's count-aware fallback uses `sizeAnalysis.envVarCount.value` so the Env Variables tab still shows a count-summary note.
+**v2 fields** (`sizeAnalysis`, `assetAdvisory`, `splitStrategy`, `appliedStrategies`, `compositeSubPartitioned`, `proposedSolutions`, `recommendations`, `breakdown`) come straight from `SPLIT_PLAN` computed in Phase 1 Step 10, mutated by Q1b user choices. Pass them through unchanged to the renderer. **`envVars`** comes from `ENV_VARS_DETAILS` populated in Phase 1 Step 10b — pass it through unchanged. When the array is empty, the renderer's count-aware fallback uses `sizeAnalysis.envVarCount.value` so the Env Variables tab still shows a count-summary note.
 
-**Truncation canary** (`truncationSuspected`, `truncationWarnings`) — pass through verbatim from `SPLIT_PLAN.truncationSuspected` / `SPLIT_PLAN.truncationWarnings` (which `compute-split-plan.js` itself reads from the estimate). When `truncationSuspected === true`, the rendered plan shows a red banner above the size analysis, and the Phase 2 Q1b "keep as single anyway" override is gated by an extra confirmation step (see Phase 2 Q1b). The most common cause is a Dataverse pagination regression in `estimate-solution-size.js`; the warnings array names the specific signal that fired.
+**Disk-measurement cross-check** (`webFilesDiskMeasuredMB`, `webFilesDiskMeasuredPath`, `webFileSampleSize`) — hoist these from the estimator output (`rawDiscovery.estimate.webFilesDiskMeasuredMB`, etc.) onto the top level of `planData`. They're only populated when `--projectRoot "."` was passed to `estimate-solution-size.js` AND a build-output directory was detected. The renderer surfaces `webFilesDiskMeasuredMB` next to the Dataverse-measured Web Files signal when the two numbers disagree materially (the same condition that flips `truncationSuspected`), so reviewers can see at a glance which number to trust. Pass `null` for all three when the estimator didn't measure disk.
 
-**`rawDiscovery` block** — embed the full estimator + split-plan + host-resolution outputs verbatim, before any field mapping. This is a diagnostic envelope: never reference its contents from the renderer's display paths. It exists so a reviewer (or a future agent debugging a wrong plan) can read `docs/.alm-plan-data.json` and see what the discovery scripts actually produced, side-by-side with the mapped fields the renderer used. Read each source file once and assign:
+**Truncation canary** (`truncationSuspected`, `truncationWarnings`) — pass through verbatim from `SPLIT_PLAN.truncationSuspected` / `SPLIT_PLAN.truncationWarnings` (which `compute-split-plan.js` itself reads from the estimate). When `truncationSuspected === true`, the rendered plan shows a red banner above the size analysis, and the Phase 2 Q1b "keep as single anyway" override is gated by an extra confirmation step (see Phase 2 Q1b). Common causes: Dataverse pagination regression in `estimate-solution-size.js` OR a web-file undercount (file-typed columns whose bytes aren't returned via `$select=content`) — the disk cross-check (when enabled) flags the latter explicitly.
+
+**`rawDiscovery` block** — embed the full estimator + split-plan + host-resolution outputs verbatim, before any field mapping. This is a diagnostic envelope: in general, the renderer must not reference its contents from display paths. **Narrow exception**: the renderer's `webFilesDiskMeasured*` / `webFileSampleSize` read paths fall back to `rawDiscovery.estimate.*` if the top-level hoist is missing, so older plan files (written before the hoist was specified) still render the disk-compare note. The right fix when you see that fallback fire is to re-build planData with the hoist populated, not to keep the fallback path active. Otherwise the principle stands: `rawDiscovery` exists so a reviewer (or a future agent debugging a wrong plan) can read `docs/.alm-plan-data.json` and see what the discovery scripts actually produced, side-by-side with the mapped fields the renderer used. Read each source file once and assign:
 
 ```js
 planData.rawDiscovery = {

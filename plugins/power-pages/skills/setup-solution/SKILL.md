@@ -121,7 +121,7 @@ Steps:
    - If found and `proposedSolutions.length > 1`, set `MULTI_SOLUTION_MODE = true` and store the array as `PROPOSED_SOLUTIONS`.
    - In multi-solution mode:
      - Phase 2 asks for publisher details **once** (shared across all solutions) and presents the proposed solution names/versions for **confirmation** (user can override each before proceeding).
-     - Phase 4 creates each solution in `PROPOSED_SOLUTIONS` in `order`, reusing the same publisher.
+     - Phase 4 creates the publisher first (single serial step — every solution binds to it), then creates the solutions in `PROPOSED_SOLUTIONS` **in parallel**. The `order` field is data for downstream pipeline-stage ordering — it does NOT constrain creation order, since each solution is independent (distinct `uniqueName`, shared `publisherId`, no inter-solution dependency).
      - Phase 5 partitions `AddSolutionComponent` calls per solution based on `proposedSolutions[i].componentTypes` and `tableLogicalNames` (for Strategy 3).
      - Phase 6 writes manifest v2 (see below).
    - If not found or `proposedSolutions.length === 1`, proceed in single-solution mode (existing flow).
@@ -196,12 +196,14 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
    - `POST {envUrl}/api/data/v9.2/publishers` with publisher body
    - Extract `publisherId` from `OData-EntityId` response header
    - On failure: report error, stop (do not proceed to solution creation)
+   - This step **must complete before any solution creation** — every solution body binds `publisherid@odata.bind`. Single serial step, no parallelization.
 
-2. **Create solution** (if not existing) using `create-solution.js`:
+2. **Create solution(s)**:
+
+   **Single-solution mode** (`MULTI_SOLUTION_MODE = false`) — call `create-solution.js`. Omit `--token` so the helper refreshes via `getAuthToken(envUrl)` at call time (passing a possibly-stale cached token would surface as a 401 the helper doesn't retry):
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-solution.js" \
      --envUrl "{envUrl}" \
-     --token "{token}" \
      --uniqueName "{solutionUniqueName}" \
      --friendlyName "{solutionFriendlyName}" \
      --version "{version}" \
@@ -210,7 +212,20 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact r
    ```
    Capture output as JSON; extract `.solutionId` (store as `solutionId`). On failure (non-zero exit or `created: false`): report error, stop.
 
-3. Report: "Publisher `{name}` and solution `{name}` are ready."
+   **Multi-solution mode** (`MULTI_SOLUTION_MODE = true`) — call `create-solutions-batch.js`, which fans out all `PROPOSED_SOLUTIONS` in parallel via `Promise.allSettled` (typical 5-6 solution splits complete in ~2s vs ~10s serial). The helper skips `isFutureBuffer: true` entries automatically (the reserved buffer is created later when the user actually adds new components) and handles 409 races idempotently via `verify-solution-exists.js`. Write the specs to a tmp JSON file, then invoke:
+   ```bash
+   node -e "require('fs').writeFileSync('./docs/alm/.solutions-batch.json', JSON.stringify({{PROPOSED_SOLUTIONS_AS_SPECS}}))"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-solutions-batch.js" \
+     --envUrl "{envUrl}" \
+     --token "{token}" \
+     --publisherId "{publisherId}" \
+     --solutionsFile ./docs/alm/.solutions-batch.json
+   ```
+   Where `{{PROPOSED_SOLUTIONS_AS_SPECS}}` is `PROPOSED_SOLUTIONS` mapped to `{ uniqueName, friendlyName: displayName, version: "1.0.0.0", description, isFutureBuffer }` per entry (carry the `isFutureBuffer` flag through so the helper can skip it). Capture the output as JSON; build `SOLUTIONS_BY_NAME = { uniqueName → { solutionId, created } }` from `result.results` (entries with `skipped: true` are not added — `Future` buffer solutions don't exist in Dataverse yet). If `result.failed > 0`, surface the per-entry `error` strings and stop — successfully-created solutions remain in Dataverse and the user can re-run setup-solution in sync mode to recover. Delete the tmp file after the call (`./docs/alm/.solutions-batch.json`).
+
+   Token must be fresh before the batch — `create-solutions-batch.js` refreshes once at start via `getAuthToken(envUrl)` if no `--token` is passed, so prefer omitting `--token` over passing a stale one.
+
+3. Report: "Publisher `{name}` is ready. Created `{N}` solution(s): `{name1}`, `{name2}`, …" (single-solution mode: report just the one).
 
 ### Phase 5 — Add Site Components
 
@@ -674,7 +689,7 @@ The components array should be built in this order:
 8. **Connection references used by the confirmed cloud flows** (from Step 5.2 Query G) — one entry per reference: `{ componentId: connectionReferenceId, componentType: connectionReferenceComponentType, addRequired: false }`. Skip if `connectionReferences = []`. Use the **runtime-resolved** `connectionReferenceComponentType` — do **not** hardcode (observed values across tenants include `10137` and `10160`; the value is env-specific). Without these entries, the solution exports cleanly but the target import fails with a `MissingDependency` error — `deploy-pipeline` Phase 6.6.1 will surface it as a "missing connection reference" validation failure.
 9. **Adopted orphan ppcs** (from Step 5.4c) — `{ componentId: ppc.id, componentType: subComponentType, addRequired: false }`. Use the `subComponentType` value resolved by `discover-component-types.js` in Step 5.1 — do **not** hardcode. Do **not** set `DoNotIncludeSubcomponents: true` — Dataverse rejects that flag on non-Entity components (HTTP 400 `0x80040216`).
 
-Write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
+**Single-solution mode** (`MULTI_SOLUTION_MODE = false`): write the array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-to-add.json`), then run:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
   --envUrl "{envUrl}" \
@@ -682,7 +697,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
   --solutionUniqueName "{solutionUniqueName}"
 ```
 
-The script handles token refresh every 20 calls, treats "already in solution" as success, and outputs a JSON summary `{ total, success, skipped, failed, failures }`. Delete the temp file after completion.
+**Multi-solution mode** (`MULTI_SOLUTION_MODE = true`): partition the unified component list across `PROPOSED_SOLUTIONS` based on each solution's `componentTypes` (and `tableLogicalNames` for Strategy 3), then run `add-components-to-solution.js` once per solution. The per-solution loop SHOULD run serially across solutions (each helper call already batches + refreshes tokens internally; running solutions in parallel multiplies the token-refresh load with no real wall-clock win since the bottleneck is per-component Dataverse calls inside each batch). For each entry in `PROPOSED_SOLUTIONS` (skip `isFutureBuffer: true`):
+1. Filter the unified component array down to components whose Dataverse type-name maps into this solution's `componentTypes` array. The mapping from numeric `componentType` → name is the same one `discover-component-types.js` and `discover-site-components.js` use (`PPC_TYPE_LABELS`). Tables route to the solution whose `tableLogicalNames` includes the table's logical name (Strategy 3) or to whichever solution claims `'Table'` (Strategies 1 and 2).
+2. Write the per-solution sub-array to a temp file (e.g., `.../components-{uniqueName}.json`), invoke `add-components-to-solution.js --solutionUniqueName "{proposedSolutions[i].uniqueName}"`, capture the JSON summary keyed by `uniqueName`, delete the temp file.
+3. If a component's type doesn't match any solution's `componentTypes`, surface a per-component warning and STOP — the partitioning lost a component. This usually means the split plan dropped a type (regression in `compute-split-plan.js`); the user needs to re-plan rather than silently leaking components into `Default`.
+
+Use `SOLUTIONS_BY_NAME` from Phase 4 to resolve each `uniqueName → solutionId` if the helper's resolution by name isn't sufficient.
+
+The script handles token refresh every 20 calls, treats "already in solution" as success, and outputs a JSON summary `{ total, success, skipped, failed, failures }`. Delete the temp file(s) after completion.
 
 ### Phase 6 — Verify and Write Manifest
 
