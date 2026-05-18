@@ -60,15 +60,21 @@
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
 
-// Reverse map of the option-set codes the create helper exports.
-// Keep in sync with create-env-var-definition.js ENV_VAR_TYPES.
+// Canonical Dataverse option-set values for environmentvariabledefinition.type
+// (verified against live tenant data — a Secret env var created via the Power
+// Platform UI returns 100000005, not 100000003). Earlier revisions of this
+// map (and create-env-var-definition.js) had 100000003 ↔ 100000005 swapped —
+// the symptom was a Secret env var rendering as "Json" in the plan, and
+// create-env-var-definition.js silently producing JSON-typed records when
+// callers asked for Secret. Keep in sync with create-env-var-definition.js
+// ENV_VAR_TYPES.
 const TYPE_LABELS = {
   100000000: 'String',
   100000001: 'Number',
   100000002: 'Boolean',
-  100000003: 'Secret',
+  100000003: 'JSON',
   100000004: 'DataSource',
-  100000005: 'Json',
+  100000005: 'Secret',
 };
 
 function typeLabel(code) {

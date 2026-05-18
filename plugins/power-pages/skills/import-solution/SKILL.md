@@ -325,7 +325,7 @@ POST {envUrl}/api/data/v9.2/environmentvariablevalues
 }
 ```
 
-> **Note on Secret type (type 100000003):** Secret values are stored encrypted. The POST behaves the same but the value will be masked in the UI. The user should provide the actual secret value for the target environment (e.g. the OAuth client secret for the production tenant's app registration — different from the dev value).
+> **Note on Secret type (type 100000005):** Secret values are stored encrypted. The POST behaves the same but the value will be masked in the UI. The user should provide the actual secret value for the target environment (e.g. the OAuth client secret for the production tenant's app registration — different from the dev value).
 
 If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
 `https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`

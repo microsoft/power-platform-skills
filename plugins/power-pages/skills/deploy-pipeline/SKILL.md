@@ -503,6 +503,8 @@ If `ENV_VAR_OVERRIDES` is empty and there are no connection references, omit `de
 
 Response is HTTP 204. If the PATCH fails with a version conflict error, check both version values and retry.
 
+> **Caveat — `deploymentsettingsjson` does NOT always write `environmentvariablevalues` records on the target post-deploy.** Observed live: a Power Pages site with env var definitions that are **not yet linked to an `mspp_sitesetting`** record can complete a successful deploy with a populated `deploymentsettingsjson`, and the target environment's `environmentvariablevalues` table still ends up empty for those entries. The Power Platform Pipelines handler appears to write values only for definitions that have an existing site-setting binding (or another consumer the platform recognizes). This may be a platform bug or by-design pending a separate Power Pages Management UI step. If you ship Secret env vars or any other type that the user expects to land in the target before `setup-auth`/`configure-env-variables` runs there, **verify in Phase 7 below that `environmentvariablevalues` records exist on the target after the deploy completes**, and surface a clear prompt if they don't. Workaround: invoke `configure-env-variables` (or run `link-site-setting-to-env-var.js` per definition) on the target after the deploy to create the values explicitly. Track this in the next PR if it becomes a recurring blocker.
+
 ### Phase 6 — Deploy and Monitor
 
 > **If `ValidatePackageAsync` was unavailable (`VALIDATE_PACKAGE_UNAVAILABLE = true`)**: use the PAC CLI as the primary deployment mechanism instead of 6.1:
@@ -792,6 +794,27 @@ Authorization: Bearer {HOST_TOKEN}
 Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
+
+**7.6.5 Verify `environmentvariablevalues` landed on the target** (only if deployment **Succeeded** AND `ENV_VAR_OVERRIDES` was non-empty AND `deploymentsettingsjson` was PATCHed in Phase 5.2):
+
+Even when the stage run reports success, the Power Platform Pipelines handler does not always write `environmentvariablevalues` records for every env var definition in `deploymentsettingsjson` — definitions that aren't bound to an `mspp_sitesetting` (or another consumer the platform recognizes) can land as zero-value on the target. See the caveat note above Phase 6 for the live evidence. This step closes the gap.
+
+For each `SchemaName` in `ENV_VAR_OVERRIDES`:
+
+1. Look up the definition GUID on the target:
+   ```
+   GET {targetEnvUrl}/api/data/v9.2/environmentvariabledefinitions?$filter=schemaname eq '{schemaName}'&$select=environmentvariabledefinitionid
+   ```
+2. Query for a current value record:
+   ```
+   GET {targetEnvUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{definitionId}'&$select=value
+   ```
+3. If `value.length === 0` for ANY of the entries that should have landed:
+   - Log a structured warning into `docs/alm/last-deploy.json` under a new `envVarLandingWarnings[]` array — one entry per missed schemaName.
+   - Surface to the user via the deploy summary: *"`{N}` environment variable values from `deploymentsettingsjson` did not land on `{targetEnvName}`. Most likely cause: the definition isn't yet linked to a site setting on the target. Run `/power-pages:configure-env-variables` against `{targetEnvName}` to create the missing values, then re-deploy or set values via Power Platform Admin Center."*
+4. If `value.length >= 1` for all entries: deploy is fully landed; no warning.
+
+This check uses target-env credentials — PAC CLI is still pointing at the source from the prior phases, so temporarily switch (`pac env select --environment "{targetEnvUrl}"`) then switch back at the end of 7.6.5 so subsequent phases run against the source env by default.
 
 **7.7 Check site activation** (only if deployment **Succeeded** and this is a Power Pages project):
 

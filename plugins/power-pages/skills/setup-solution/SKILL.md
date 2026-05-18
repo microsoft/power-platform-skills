@@ -438,7 +438,7 @@ Call `autoClassifyCredential(name)` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/clas
 
 | Default | Matcher in helper | When it fires |
 |---|---|---|
-| **Secret env var** (`type: 100000003`) | `CREDENTIAL_SECRET_REGEX` (`Secret\|Password\|ApiKey\|AppKey`) | Names with these substrings — `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey` |
+| **Secret env var** (`type: 100000005`) | `CREDENTIAL_SECRET_REGEX` (`Secret\|Password\|ApiKey\|AppKey`) | Names with these substrings — `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey` |
 | **String env var** (`type: 100000000`) | `CREDENTIAL_STRING_REGEX` (`Id\|ConsumerKey`) AND not Secret | Names like `*ClientId`, `*ConsumerKey`, `*TenantId`, `*AppId` |
 | **Secret env var** (fallback) | (helper's defensive default when neither matches) | Anything else — defensive: credential names are sensitive by default |
 
@@ -461,8 +461,8 @@ Options:
 
 Branching logic:
 
-- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000003`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
-- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000003`.
+- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000005`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
+- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000005`.
 - **Option 3 (All String)**: Treat all N as String. Same loop with `--type 100000000`.
 - **Option 4 (Skip all)**: Move all N into a `userOptedOutOfSolution` bucket. Surface in Step 5.5: *"The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."*
 - **Option 5 (Pick per credential)**: For each setting, run a 3-option `AskUserQuestion` (Secret env var / String env var / Skip). The auto-classification informs the per-prompt default but the user can override.
@@ -485,7 +485,7 @@ For each setting routed to env-var-backed handling:
      --token "{token}" \
      --schemaName "{schemaName from step 1}" \
      --displayName "{friendlyName}" \
-     --type "{100000003 for Secret, 100000000 for String}"
+     --type "{100000005 for Secret, 100000000 for String}"
    ```
    For Secret env vars, do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars, capture the dev value as the default.
 3. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
