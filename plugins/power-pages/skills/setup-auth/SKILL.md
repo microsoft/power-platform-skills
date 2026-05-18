@@ -270,6 +270,30 @@ All values below come from the Microsoft Entra admin center — **App registrati
 
 This choice determines the `Authentication/Registration/LocalLoginByEmail` site setting (`true` for email, `false` for username) and affects every form field in the login, registration, and auth service code. When **email** is chosen, the login and registration forms show an `Email` field (type `email`). When **username** is chosen, the forms show a `Username` field (type `text`) and `Email` becomes a separate required field on the registration form (the server needs it for the contact record). Store this choice — it will be used in Phase 3 (auth service), Phase 5 (sign-in and registration pages), and Phase 8.1 (site settings).
 
+**For "Local Authentication"** — also ask which registration mode the site should use:
+
+| Question | Options |
+|----------|---------|
+| How should users be able to register on your site? | Open registration only (Recommended) — Anyone can sign up freely with a username/password, Invitation-only — Only users with a valid invitation code can register; direct registration is blocked, Both — Users can self-register OR redeem an invitation link, Registration disabled — No new accounts can be created (only existing users can log in) |
+
+**Why this matters** — the server enforces the following gating rules in `RegistrationManager` (see `crm.solutions.portal/Samples/MasterPortal/Areas/Account/Models/RegistrationManager.cs`):
+
+| Mode | `Enabled` | `OpenRegistrationEnabled` | `InvitationEnabled` | Behavior |
+|---|---|---|---|---|
+| Open registration only | `true` | `true` | `false` | Direct `/registration` works. Invitation links return 404. |
+| Invitation-only | `true` | `false` | `true` | Direct `/registration` returns 404. Users must arrive via invitation link → `/redeem-invitation` → `/registration?invitationCode=...`. |
+| Both | `true` | `true` | `true` | Both paths work. Invitation pre-fills email; direct registration is fully open. |
+| Registration disabled | `false` | (moot) | (moot) | All registration endpoints return 404. Existing users can still log in. |
+
+> **Note:** The `Authentication/Registration/RequireInvitationCode` setting is NOT a real server setting — the server doesn't read it. The "require invitation" behavior is enforced solely by `OpenRegistrationEnabled = false` + `InvitationEnabled = true`. Do not create that setting.
+
+Store this choice as `REGISTRATION_MODE` — it drives:
+- Whether to create the `/registration` page (always, unless `Registration disabled`)
+- Whether to create the `/redeem-invitation` page (only when `InvitationEnabled` is true, i.e., `Invitation-only` or `Both`)
+- Whether the `/registration` page calls `fetchInvitationDetails()` to pre-fill the email (only when `InvitationEnabled` is true)
+- The deterministic set of site settings written in Phase 8.1
+- Whether to default CAPTCHA on (open / both) or off (invitation-only — invitations already filter users)
+
 **For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
@@ -284,11 +308,30 @@ Then ask about optional features:
 
 | Question | Options |
 |----------|---------|
-| Would you like to enable any of these optional features? | None (Recommended), Terms and Conditions — require users to accept terms before accessing the site, Two-factor authentication (2FA) — users verify with a code after login, Invitation-based registration — only users with invitation codes can register |
+| Would you like to enable any of these optional features? | None (Recommended), Terms and Conditions — require users to accept terms before accessing the site, Two-factor authentication (2FA) — users verify with a code after login |
 
-> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select invitation-based registration, Phase 8.1 will create `InvitationEnabled`, `RequireInvitationCode`, and `OpenRegistrationEnabled` site settings. If they select Terms and Conditions, follow the Terms flow below.
+> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select Terms and Conditions, follow the Terms flow below.
+>
+> **Invitation-based registration is NOT in this list anymore** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
 
-**If "Terms and Conditions" is selected**, collect the terms content. The server uses 4 content snippets — the skill hardcodes these values into the SPA Terms page component. Ask the user:
+**If "Terms and Conditions" is selected**, first surface the GDPR prerequisite **before** collecting content — terms only function if the underlying solution is installed:
+
+> **GDPR prerequisite**: Terms require ALL THREE of these to be in place for the server to actually enforce them:
+> 1. `Authentication/Registration/TermsAgreementEnabled = true` (site setting we will create)
+> 2. The `msdynce_PortalPrivacyExtensions` solution must be installed in your Dataverse environment (`IsGdprEnabled` is portal-level)
+> 3. The `Account/Signin/TermsAndConditionsCopy` content snippet must have non-empty text (we will create this)
+>
+> Without the Privacy Extensions solution, the server silently ignores `TermsAgreementEnabled`. The setup-auth skill will still write all three pieces — but unless the solution is installed in Dataverse, the terms gate won't be enforced server-side.
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Do you have the GDPR/Privacy Extensions solution installed, or are you okay with terms being a no-op until you install it? | Privacy solution | Yes — solution installed (or I'll install it), Continue anyway — set up terms; I understand they won't be enforced until I install the solution, Cancel — I don't want terms |
+
+**If "Cancel"**: skip the Terms branch entirely, do not set `TermsAgreementEnabled`, do not create the Terms page or snippets.
+
+Otherwise, collect the terms content. The server uses 4 content snippets — the skill hardcodes these values into the SPA Terms page component. Ask the user:
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -307,8 +350,6 @@ Store these 4 values — they'll be hardcoded into the Terms page component in P
 - `TERMS_CONTENT` (default: generic terms HTML)
 - `TERMS_AGREEMENT_TEXT` (default: "I agree to these terms and conditions.")
 - `TERMS_BUTTON_TEXT` (default: "Confirm")
-
-> **GDPR prerequisite**: Terms require the `msdynce_PortalPrivacyExtensions` solution installed in Dataverse. Inform the user: "Terms and Conditions requires the GDPR/Privacy Extensions solution to be installed in your Dataverse environment. Without it, the server will not enforce terms even if the setting is enabled."
 
 Optionally ask about `TermsPublicationDate`:
 
@@ -725,7 +766,7 @@ When the `/login` page exists, the "Sign In" button in the nav bar should naviga
 
 #### 5.1.2 Create Registration Page (Local Auth Only)
 
-**If local authentication is configured AND `OpenRegistrationEnabled` is `true`**, create a dedicated `/registration` page for self-service user registration. This is essential — without it, users have no way to create a local account.
+**Always create the `/registration` page when local authentication is configured AND `REGISTRATION_MODE` is not `Registration disabled`** — regardless of whether the mode is `Open registration only`, `Invitation-only`, or `Both`. In invitation-only mode the page is reached via the `/redeem-invitation` flow (Phase 5.1.7), not direct navigation — but the SPA route must still exist so React Router can render it.
 
 > **Important architectural note:** The server-side registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action. This means it requires `__VIEWSTATE` and uses fully-qualified control names (e.g., `ctl00$...$EmailTextBox`). The `register()` function in authService handles this by first fetching the server page (GET), parsing the ViewState and control names, then POSTing with the correct payload. This is different from login, which is a simple MVC form POST.
 
@@ -743,6 +784,23 @@ The registration page must:
 - **Skip the auth redirect in development mode** — in dev mode the mock user is always "authenticated", which would block testing the registration form. Add: `const isDev = window.location.hostname === 'localhost'` and only redirect if `isAuthenticated && !isDev`.
 - Be styled to match the site's existing sign-in page design (centered card layout)
 
+**Pre-fill email from invitation (when `InvitationEnabled` is true — i.e., Invitation-only or Both modes):**
+
+When the user arrives at `/registration?invitationCode=X`, the email field should pre-fill with the invited contact's email (matching the server-rendered page's behavior). Implement by calling `fetchInvitationDetails(invitationCode)` on mount:
+
+```typescript
+useEffect(() => {
+  if (!invitationCode) return
+  fetchInvitationDetails(invitationCode).then(details => {
+    if (details.email) setEmail(details.email)
+  }).catch(() => { /* silent — user can enter email manually */ })
+}, [invitationCode])
+```
+
+The `fetchInvitationDetails()` function (in `authService.ts`) GETs `/Account/Login/Register?invitationCode={code}` and parses the email from the rendered HTML's `#EmailTextBox` input value attribute. See `authentication-reference.md` for the implementation.
+
+The email input must be **controlled** (`value={email}`) and editable — the user can change it if needed (this matches server behavior).
+
 **Framework-specific implementation:**
 
 - **React**: Create `src/pages/Registration.tsx` and add `<Route path="/registration" element={<Registration />} />` to the router. See the `RegisterForm` component in `authentication-reference.md` for the implementation pattern — adapt it to match the site's existing styling patterns (inline styles, CSS variables, etc.)
@@ -750,7 +808,7 @@ The registration page must:
 - **Angular**: Create `src/app/pages/registration/registration.component.ts` and add the route to the router config
 - **Astro**: Create `src/pages/registration.astro`
 
-**If `OpenRegistrationEnabled` is `false`** (invitation-only registration), skip the registration page — users register via invitation links (`{site-url}/Account/Login/RedeemInvitation?InvitationCode={code}`) handled entirely server-side.
+**If `REGISTRATION_MODE` is `Registration disabled`**, skip creating the `/registration` page entirely — there's no flow that should land users there.
 
 #### 5.1.3 Create Forgot Password Page (Local Auth Only)
 
@@ -859,8 +917,12 @@ name: Code-Site-Shell-Header
     var path = window.location.pathname.toLowerCase();
     var search = window.location.search;
     var spaBase = window.location.origin;
+    // Add an entry here for each server-rendered auth page that has a SPA equivalent.
+    // Only include entries the site actually needs (e.g., omit /redeeminvitation when
+    // InvitationEnabled is false).
     var redirects = {
-      '/account/login/resetpassword': '/reset-password'
+      '/account/login/resetpassword': '/reset-password',
+      '/account/login/redeeminvitation': '/redeem-invitation'
     };
     for (var serverPath in redirects) {
       if (path === serverPath) {
@@ -871,6 +933,13 @@ name: Code-Site-Shell-Header
   })();
 </script>
 ```
+
+**Conditional entries** — only include redirect entries for pages that exist in the SPA:
+
+| Redirect | Include when |
+|---|---|
+| `'/account/login/resetpassword': '/reset-password'` | Local auth + `ResetPasswordEnabled = true` (Phase 5.1.6) |
+| `'/account/login/redeeminvitation': '/redeem-invitation'` | `REGISTRATION_MODE` is `Invitation-only` or `Both` (Phase 5.1.7) |
 
 Then update **`website.yml`** to point `headerwebtemplateid` to the new template's ID:
 
@@ -899,6 +968,56 @@ The `resetPassword()` function is an MVC form POST (no ViewState) to `/Account/L
 
 **Framework-specific implementation:**
 - **React**: Create `src/pages/ResetPassword.tsx` and add `<Route path="/reset-password" element={<ResetPassword />} />` to the router
+
+#### 5.1.7 Create Redeem Invitation Page (Invitation Modes Only)
+
+**If `REGISTRATION_MODE` is `Invitation-only` or `Both`**, create a `/redeem-invitation` SPA page. This is the landing page users hit when they click an invitation email link. The link format is `{site-url}/Account/Login/RedeemInvitation?invitation={code}` — the Code-Site-Shell-Header redirect (Phase 5.1.6) catches it and forwards to the SPA route.
+
+**Server flow this replaces:** The server's `LoginController.RedeemInvitation` action (`crm.solutions.portal/Samples/MasterPortal/Areas/Account/Controllers/LoginController.cs` lines 3232-3310) validates the invitation code and branches:
+
+- **RedeemByLogin = false** (new user) → 302 redirect to `/Account/Login/Register?invitationCode={code}` — server expects registration with the code
+- **RedeemByLogin = true** (existing user) → 200 OK with Login view, invitation code embedded in the form action URL — server expects sign-in, then redeems invitation in `RedirectOnPostAuthenticate` after auth
+- **Invalid / expired / already-redeemed code** → 200 OK with form re-rendered, error in `#redeemInvitation-validation-summary` (all three conditions surface the same `Invalid_Invitation_Code_Exception`)
+
+**SPA design — fully replaces the server-rendered page:**
+
+The SPA page calls `redeemInvitation(code, redeemByLogin)` from authService, which uses `fetch()` with `redirect: 'manual'` to intercept the server's 302 redirect. Based on the response:
+
+- `response.type === 'opaqueredirect'` → server validated code + would have redirected to Register → SPA navigates to `/registration?invitationCode={code}` (existing page from Phase 5.1.2)
+- 200 OK with Login form markers in HTML → user wanted login flow → SPA navigates to `/login?invitationCode={code}` (existing page — must also be updated, see below)
+- 200 OK with validation summary in HTML → invalid code → throw parsed server error (use existing `parseServerErrors()` helper)
+
+> **DevTools artifact**: After the POST, the browser's network panel will show the 302 Location target (e.g., `/Account/Login/Register`) as an aborted (`net::ERR_ABORTED`) request. This is expected — it's the redirect we intentionally chose not to follow via `redirect: 'manual'`. The flow uses `response.type === 'opaqueredirect'` to detect the redirect occurred without actually following it.
+
+The redeem invitation page must:
+
+- Read `invitation` or `InvitationCode` from the URL query (handle both casings — emails may use either)
+- Pre-fill the invitation code input but keep it editable (in case user types it in manually with no email link)
+- Show a checkbox: **"Sign in with an existing account instead of registering"** (this controls `RedeemByLogin`)
+- Validate-on-blur: invitation code required and non-empty
+- On submit, call `redeemInvitation()` and navigate based on the returned `nextStep`
+- Display server errors inline (parsed via existing `parseServerErrors`)
+- Include a "Back to sign in" link to `/login`
+- Be styled to match the rest of the auth pages
+
+**Login page update (required):**
+
+The Login page (Phase 5.1.1) must also be updated when invitation mode is enabled:
+
+1. Read `invitationCode` from URL query params on mount
+2. If present, show an info banner: `"Sign in to redeem invitation {code}. The invitation will be linked to your account after you sign in."`
+3. Pass `invitationCode` to `loginLocal()` as the new 5th parameter — the auth service appends it as `?InvitationCode={code}` on the `/SignIn` POST URL. The server's `Login(model, returnUrl, invitationCode)` handler reads this and redeems the invitation in `RedirectOnPostAuthenticate` after successful authentication.
+
+**Framework-specific implementation:**
+
+- **React**: Create `src/pages/RedeemInvitation.tsx` and add `<Route path="/redeem-invitation" element={<RedeemInvitation />} />` to the router. See the `RedeemInvitation` component in `authentication-reference.md` for the implementation pattern.
+- **Vue / Angular / Astro**: Mirror the React pattern in the framework's idioms.
+
+**Auth service additions** (required when invitation mode is enabled):
+
+- `redeemInvitation(invitationCode, redeemByLogin, returnUrl)` — see Phase 3.2 for the function inventory; full code in `authentication-reference.md`
+- `fetchInvitationDetails(invitationCode)` — already covered in Phase 5.1.2 for email pre-fill
+- `loginLocal()` updated to accept optional `invitationCode` parameter (5th arg) — appends `?InvitationCode={code}` to the `/SignIn` URL
 
 #### 5.2 Integrate into Navigation
 
@@ -1008,19 +1127,21 @@ Confirm the following files were created:
 - `src/utils/authorization.ts` — Role-checking utilities
 - Framework-specific authorization components (e.g., `RequireAuth.tsx`, `RequireRole.tsx` for React)
 - Auth button component (e.g., `src/components/AuthButton.tsx` for React)
-- Registration page (e.g., `src/pages/Registration.tsx` for React) — only when local auth with open registration is configured
+- Registration page (e.g., `src/pages/Registration.tsx` for React) — when local auth AND `REGISTRATION_MODE` is not `Registration disabled` (always created in Open, Invitation-only, and Both modes)
 - Forgot password page (e.g., `src/pages/ForgotPassword.tsx` for React) — only when local auth with reset password is configured
 - Session keepalive hook (e.g., `src/hooks/useSessionKeepAlive.ts` for React) — integrated into Layout
 - Terms page (e.g., `src/pages/Terms.tsx` for React) — only when terms are enabled
 - Reset password page (e.g., `src/pages/ResetPassword.tsx` for React) — only when local auth with reset password is configured
-- Code-Site-Shell-Header template (`.powerpages-site/web-templates/code-site-shell-header/`) with redirect script
+- **Redeem invitation page (e.g., `src/pages/RedeemInvitation.tsx` for React) — only when `REGISTRATION_MODE` is `Invitation-only` or `Both`**
+- Code-Site-Shell-Header template (`.powerpages-site/web-templates/code-site-shell-header/`) with redirect script — entries depend on enabled features (resetpassword, redeeminvitation)
 - `website.yml` updated to point `headerwebtemplateid` to Code-Site-Shell-Header
 
 Read each file and verify it contains the expected exports and functions:
 
-- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, `register`, `forgotPassword` (when local auth), `TermsRequiredError`, `acceptTerms` (when terms enabled)
+- Auth service: `login`, `logout`, `getCurrentUser`, `isAuthenticated`, `fetchAntiForgeryToken`, `parseServerErrors`, `register`, `forgotPassword` (when local auth), `TermsRequiredError`, `acceptTerms` (when terms enabled), `redeemInvitation` and `fetchInvitationDetails` (when invitation modes), `loginLocal` accepts `invitationCode` parameter (when invitation modes)
 - Authorization utils: `hasRole`, `hasAnyRole`, `hasAllRoles`, `getUserRoles`
-- Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper. Both must catch `TermsRequiredError` and navigate to `/terms` (when terms enabled).
+- Login and registration pages: validate-on-blur pattern with `touched` state, `handleBlur`, `handleChange`, `showError` helper. Both must catch `TermsRequiredError` and navigate to `/terms` (when terms enabled). Login page must read `invitationCode` from URL and show info banner + pass through (when invitation modes). Registration page must call `fetchInvitationDetails()` to pre-fill email (when invitation modes).
+- Redeem invitation page (when invitation modes): pre-fills code from URL, has "Sign in with an existing account instead of registering" checkbox, branches to `/registration` or `/login` based on `redeemInvitation()` result
 - Session keepalive: integrated in Layout, pings `/_layout/tokenhtml`, tracks activity, detects expiry
 
 #### 7.2 Verify Build
@@ -1321,7 +1442,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Note:** The `AuthenticationType` value must match what `resolveProviderIdentifier()` returns in the auth service.
 
-**Local Authentication** — use the user's email-vs-username choice from Phase 2.1 for the `LocalLoginByEmail` value:
+**Local Authentication** — write these settings based on the user's choices from Phase 2.1.
+
+**Settings always written (regardless of registration mode):**
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -1341,32 +1464,78 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/OpenRegistrationEnabled" \
-  --value "true" \
-  --description "Allow self-registration for local accounts" \
-  --type boolean
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/ResetPasswordEnabled" \
   --value "true" \
   --description "Enable forgot password flow for local accounts" \
   --type boolean
+```
 
-# Disable CAPTCHA — required for code sites because the SPA registration form cannot render
-# the server-side CAPTCHA widget. Without this, registration silently fails.
+**Registration mode settings** — deterministic mapping from `REGISTRATION_MODE`:
+
+| `REGISTRATION_MODE` | `Authentication/Registration/Enabled` | `Authentication/Registration/OpenRegistrationEnabled` | `Authentication/Registration/InvitationEnabled` |
+|---|---|---|---|
+| Open registration only | `true` | `true` | `false` |
+| Invitation-only | `true` | `false` | `true` |
+| Both | `true` | `true` | `true` |
+| Registration disabled | `false` | (skip — moot) | (skip — moot) |
+
+> **Do NOT create the `Authentication/Registration/RequireInvitationCode` setting.** It does not exist on the server (the server never reads it). The invitation-only behavior is enforced entirely by `OpenRegistrationEnabled = false` + `InvitationEnabled = true`. Earlier versions of this skill wrote this setting — if you find it in the project's site settings (`.powerpages-site/site-settings/Authentication-Registration-RequireInvitationCode.sitesetting.yml`), **delete the file** as part of the setup.
+
+Example (write each setting that applies — skip Enabled/OpenReg/Invitation when mode is `Registration disabled` except `Enabled=false`):
+
+```powershell
+# For all modes EXCEPT "Registration disabled":
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/Enabled" \
+  --value "true" \
+  --description "Master switch: registration is enabled" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/OpenRegistrationEnabled" \
+  --value "<true-or-false-from-mode>" \
+  --description "Allow self-registration without an invitation" \
+  --type boolean
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/InvitationEnabled" \
+  --value "<true-or-false-from-mode>" \
+  --description "Enable invitation-based registration" \
+  --type boolean
+
+# For "Registration disabled" mode ONLY:
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/Registration/Enabled" \
+  --value "false" \
+  --description "Disable all registration (only existing users can sign in)" \
+  --type boolean
+```
+
+**CAPTCHA settings** — conditional on mode:
+
+| `REGISTRATION_MODE` | `CaptchaEnabled` / `IsCaptchaEnabledForRegistration` | Reason |
+|---|---|---|
+| Open registration only / Both | `false` (with note) | The SPA registration form cannot render the server-side CAPTCHA widget — leaving it on causes registration to silently fail. For production, the site owner should add their own client-side CAPTCHA solution and re-enable the server setting. |
+| Invitation-only | `false` | Invitations already filter users — CAPTCHA adds friction without security value. |
+| Registration disabled | (skip — registration is off) | — |
+
+```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/CaptchaEnabled" \
   --value "false" \
-  --description "Disable CAPTCHA for SPA registration" \
+  --description "Disable server-rendered CAPTCHA — SPA cannot render the widget" \
   --type boolean
 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/IsCaptchaEnabledForRegistration" \
   --value "false" \
-  --description "Disable CAPTCHA for SPA registration form" \
+  --description "Disable server-rendered CAPTCHA on registration form" \
   --type boolean
 ```
 
@@ -1527,33 +1696,6 @@ Tell the user to update each placeholder via:
 
 Present the list of environment variables that need updating (display name and schema name for each).
 
-**Invitation-Based Registration** — when invitation-based registration is requested:
-
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/InvitationEnabled" \
-  --value "true" \
-  --description "Enable invitation-based registration" \
-  --type boolean
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/RequireInvitationCode" \
-  --value "true" \
-  --description "Require invitation code to register" \
-  --type boolean
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/OpenRegistrationEnabled" \
-  --value "false" \
-  --description "Disable open registration (invitation-only)" \
-  --type boolean
-```
-
-> **Note:** Setting `RequireInvitationCode` to `true` and `OpenRegistrationEnabled` to `false` enforces invitation-only registration.
-
 **Two-Factor Authentication** — when 2FA is requested:
 
 ```powershell
@@ -1629,14 +1771,15 @@ Present a summary of everything created:
 | Authorization Utils | `src/utils/authorization.ts` | Created |
 | Auth Components | `RequireAuth`, `RequireRole` (or framework equivalent) | Created |
 | Auth Button | `src/components/AuthButton.tsx` (or framework equivalent) | Created |
-| Registration Page | `src/pages/Registration.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| Registration Page | `src/pages/Registration.tsx` (or framework equivalent) — local auth, not disabled | Created (if applicable) |
+| Redeem Invitation Page | `src/pages/RedeemInvitation.tsx` (or framework equivalent) — `Invitation-only` or `Both` modes | Created (if applicable) |
 | Forgot Password Page | `src/pages/ForgotPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Session KeepAlive | `src/hooks/useSessionKeepAlive.ts` (or framework equivalent) — integrated in Layout | Created |
 | Terms Page | `src/pages/Terms.tsx` (or framework equivalent) — when terms enabled | Created (if applicable) |
 | Terms Snippet | `Account/Signin/TermsAndConditionsCopy` content snippet | Created (if applicable) |
 | Reset Password Page | `src/pages/ResetPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
 | Shell Header | `Code-Site-Shell-Header` web template — redirects server auth pages to SPA | Created (survives uploads) |
-| Site Setting | `ProfileRedirectEnabled = false` | Created |
+| Site Setting | `ProfileRedirectEnabled = false`, `Enabled`, `OpenRegistrationEnabled`, `InvitationEnabled` per registration mode | Created |
 
 #### 8.4 Ask to Deploy
 
@@ -1670,7 +1813,7 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
 - **Auth failure handling (keep users in SPA)**: When OIDC/SAML2/WS-Fed auth fails, the server redirects to `/Account/Login/ExternalAuthenticationFailed` — a server-rendered page that breaks the SPA. To keep users in the SPA on failure, edit the Dataverse content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied` in the Power Pages admin center to inject a `<script>` that redirects to `/login?message={error-code}`. The SPA's `getAuthError()` will then display the error inline. See authentication-reference.md for the exact script.
 - **User profile display**: After login, the auth service's `getUserDisplayName()` falls back through `firstName + lastName` → `firstName` → `userName` → `email` → `'User'`. Power Pages populates `firstName`/`lastName`/`email` from standard OIDC claims (`given_name`, `family_name`, `email`) by default — no explicit `RegistrationClaimsMapping` is needed for these standard claims. If the IdP doesn't emit a claim, the corresponding field remains empty and the display name falls back to `userName`.
 - **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
-- **Invitation-based registration**: If invitations are enabled (`Authentication/Registration/InvitationEnabled = true`), share invitation links in the format `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl=/`. The invitation code is threaded through the entire auth flow including 2FA
+- **Invitation-based registration**: If invitations are enabled (`REGISTRATION_MODE` is `Invitation-only` or `Both`), generate invitation codes by creating Invitation records in Dataverse (`adx_invitation` table) — the `adx_invitationcode` field is the value to use in the URL. Share invitation links in the format `{site-url}/Account/Login/RedeemInvitation?invitation={code}` — the Code-Site-Shell-Header script redirects this to the SPA `/redeem-invitation?invitation={code}` route automatically. After redemption, the invitation is linked to the user's contact (single-redemption invitations are marked redeemed; group invitations track redeemed contacts in a collection). 2FA, terms, and external login flows all preserve the invitation code through the auth flow.
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
 - **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production

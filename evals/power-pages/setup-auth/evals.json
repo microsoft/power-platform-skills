@@ -410,6 +410,80 @@
         "Mentions getSessionExpiredMessage() for ?sessionExpired=true handling",
         "Does NOT suggest redirecting to server-rendered error pages"
       ]
+    },
+    {
+      "id": 21,
+      "prompt": "Set up local authentication for my Power Pages React site in invitation-only mode. Users should only be able to register if they have a valid invitation code emailed by an admin. Direct self-registration should be blocked.",
+      "expected_output": "Local auth setup for a React site with invitation-only registration mode. Creates registration mode site settings (Enabled=true, OpenRegistrationEnabled=false, InvitationEnabled=true), creates the SPA redeem-invitation page, extends the Code-Site-Shell-Header redirect map with /account/login/redeeminvitation, adds redeemInvitation() and fetchInvitationDetails() to auth service, updates loginLocal() to accept invitationCode, updates Login page to read invitationCode from URL and show banner, Registration page pre-fills email via fetchInvitationDetails. Does NOT create the RequireInvitationCode site setting (phantom setting that the server does not read).",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks the registration mode question and user selects Invitation-only",
+        "Creates an auth service with AUTH_PROVIDER configured for local type",
+        "Adds redeemInvitation(invitationCode, redeemByLogin, returnUrl) function to authService",
+        "redeemInvitation uses fetch() with redirect:'manual' to intercept the server 302",
+        "redeemInvitation returns { nextStep: 'register' } when response.type === 'opaqueredirect'",
+        "redeemInvitation returns { nextStep: 'login' } when the response HTML contains login form markers",
+        "redeemInvitation throws parsed errors when the response HTML contains validation summary errors",
+        "Adds fetchInvitationDetails(invitationCode) function to authService that parses email from #EmailTextBox",
+        "Updates loginLocal() to accept an invitationCode 5th parameter and append it as ?InvitationCode= on /SignIn URL",
+        "Creates a /redeem-invitation SPA page that pre-fills code from the URL and shows a 'Sign in with an existing account instead of registering' checkbox",
+        "RedeemInvitation page navigates to /registration?invitationCode= or /login?invitationCode= based on redeemInvitation result",
+        "Creates a /registration SPA page (still created in invitation-only mode — reached via redeem-invitation flow)",
+        "Registration page calls fetchInvitationDetails(invitationCode) on mount when invitationCode is in URL and pre-fills the email input",
+        "Updates Login page to read invitationCode from URL, show an info banner, and pass invitationCode through to loginLocal()",
+        "Extends Code-Site-Shell-Header template redirect map to include '/account/login/redeeminvitation': '/redeem-invitation'",
+        "Creates site setting Authentication/Registration/Enabled = true",
+        "Creates site setting Authentication/Registration/OpenRegistrationEnabled = false",
+        "Creates site setting Authentication/Registration/InvitationEnabled = true",
+        "Does NOT create the Authentication/Registration/RequireInvitationCode site setting (phantom — server never reads it)",
+        "Creates site settings for LocalLoginEnabled, LocalLoginByEmail, ResetPasswordEnabled",
+        "Creates CAPTCHA-disabled site settings (CaptchaEnabled=false, IsCaptchaEnabledForRegistration=false)",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Post-deploy notes show the correct invitation link format: {site-url}/Account/Login/RedeemInvitation?invitation={code}",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Set up local authentication for my Power Pages React site with both open registration AND invitation-based registration enabled. Users should be able to self-register OR redeem an invitation link.",
+      "expected_output": "Local auth setup for a React site with both open and invitation modes enabled. Creates registration mode site settings (Enabled=true, OpenRegistrationEnabled=true, InvitationEnabled=true). Creates both the /registration and /redeem-invitation SPA pages. Registration page accepts direct navigation AND invitation links (pre-fills email when invitationCode is present).",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks the registration mode question and user selects Both",
+        "Creates site setting Authentication/Registration/Enabled = true",
+        "Creates site setting Authentication/Registration/OpenRegistrationEnabled = true",
+        "Creates site setting Authentication/Registration/InvitationEnabled = true",
+        "Does NOT create the RequireInvitationCode site setting",
+        "Creates a /registration SPA page accessible both directly and via invitation flow",
+        "Registration page pre-fills email via fetchInvitationDetails() when invitationCode is in URL, blank otherwise",
+        "Creates a /redeem-invitation SPA page",
+        "Extends Code-Site-Shell-Header redirect map with /account/login/redeeminvitation -> /redeem-invitation",
+        "Adds redeemInvitation() and fetchInvitationDetails() to auth service",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Set up local authentication for my Power Pages React site but DISABLE new user registration entirely. Only existing users should be able to log in — no one should be able to create new accounts via the site.",
+      "expected_output": "Local auth setup for a React site with registration disabled mode. Creates the Authentication/Registration/Enabled = false site setting. Does NOT create /registration page, /redeem-invitation page, or invitation/open-registration settings. Login, forgot password, reset password pages still created for existing users.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks the registration mode question and user selects Registration disabled",
+        "Creates site setting Authentication/Registration/Enabled = false",
+        "Does NOT create site settings for OpenRegistrationEnabled or InvitationEnabled (they are moot when Enabled=false)",
+        "Does NOT create the RequireInvitationCode site setting",
+        "Does NOT create a /registration SPA page",
+        "Does NOT create a /redeem-invitation SPA page",
+        "Does NOT include /account/login/redeeminvitation in the Code-Site-Shell-Header redirects",
+        "Still creates the /login page for existing users",
+        "Still creates /forgot-password and /reset-password pages (existing users may still need password resets)",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
     }
   ]
 }

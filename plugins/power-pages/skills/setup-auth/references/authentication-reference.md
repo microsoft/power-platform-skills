@@ -1850,27 +1850,24 @@ Power Pages supports invitation code-based registration where users receive an i
 
 | Setting | Value | Description |
 |---------|-------|-------------|
-| `Authentication/Registration/InvitationEnabled` | `true`/`false` | Enable invitation-based registration |
-| `Authentication/Registration/RequireInvitationCode` | `true`/`false` | Require an invitation code to register |
+| `Authentication/Registration/Enabled` | `true` | Master switch; must be true for any registration path |
+| `Authentication/Registration/OpenRegistrationEnabled` | `true`/`false` | `false` for invitation-only, `true` for open or both |
+| `Authentication/Registration/InvitationEnabled` | `true` | Required for invitation flow |
 
-### Invitation Flow
+> **`Authentication/Registration/RequireInvitationCode` is NOT a real server setting.** The Power Pages server (`crm.solutions.portal/Samples/MasterPortal/Areas/Account/Models/RegistrationManager.cs`) never reads this name. The "require invitation" behavior is enforced entirely by the combination `OpenRegistrationEnabled = false` + `InvitationEnabled = true` (the server's gating rule: if `OpenRegistrationEnabled=false` AND no invitation code is provided on the registration POST, return 404).
 
-The invitation code is threaded through all authentication endpoints as a query parameter:
+### Invitation Flow (SPA)
 
-1. User receives an invitation link: `{site-url}/Account/Login/Login?invitationCode={code}&returnUrl={url}`
-2. The `invitationCode` parameter is preserved through the entire login flow:
-   - Local login: `POST /Account/Login/Login` includes `invitationCode`
-   - External login: `POST /Account/Login/ExternalLogin` includes `invitationCode` as a query parameter
-   - 2FA flow: `invitationCode` is threaded through `SendCode` and `VerifyCode` actions
-3. After authentication, the server validates the invitation code via `InvitationManager`
-4. If valid, the user is linked to the pre-created contact record associated with the invitation
+The full SPA invitation flow is documented in the **"Redeem Invitation Flow for SPA Sites"** section above. Summary:
 
-### Invitation Client-Side Support
-
-The canonical `login()` function in the auth service already supports invitation codes as the third parameter. When an `invitationCode` is provided:
-
-- **Local login**: The invitation code is included as a hidden `InvitationCode` field in the form POST to `/Account/Login/Login`
-- **External login**: The invitation code is appended as a query parameter to `/Account/Login/ExternalLogin?InvitationCode={code}`
+1. User receives an invitation link: `{site-url}/Account/Login/RedeemInvitation?invitation={code}`
+2. Code-Site-Shell-Header script redirects to SPA `/redeem-invitation?invitation={code}`
+3. SPA RedeemInvitation page calls `redeemInvitation(code, redeemByLogin)`:
+   - Server returns 302 (caught as `opaqueredirect`) → SPA navigates to `/registration?invitationCode={code}`
+   - Server returns 200 with Login view → SPA navigates to `/login?invitationCode={code}`
+   - Server returns 200 with validation summary → throw parsed error
+4. The destination page (Registration or Login) accepts `invitationCode` from URL and passes it through to the final POST
+5. Server's `InvitationManager.RedeemAsync()` links the invitation to the user's contact during registration or in `RedirectOnPostAuthenticate` after login
 
 To pass an invitation code from a URL (e.g., `?invitationCode=abc123`):
 
@@ -2211,6 +2208,268 @@ When `emailSent` is true, replace the form with a success confirmation: green ch
 5. SPA loads → ResetPassword page reads params → shows new password form
 6. User submits → `resetPassword()` POSTs to server → redirect to `/login?message=password_reset_success`
 7. Login page shows green "Password has been reset" banner
+
+---
+
+## Redeem Invitation Flow for SPA Sites
+
+When `Authentication/Registration/InvitationEnabled = true`, invitation emails contain a link to `{site-url}/Account/Login/RedeemInvitation?invitation={code}`. To keep users in the SPA, we follow the same pattern as Reset Password: a header-template redirect + a dedicated SPA page + a service function that intercepts the server's 302 redirect.
+
+### The redirect chain
+
+```
+Email link → /Account/Login/RedeemInvitation?invitation=ABC
+  ↓ (Code-Site-Shell-Header script catches this URL)
+/redeem-invitation?invitation=ABC           ← SPA page mounts
+  ↓ (User clicks Continue)
+POST /Account/Login/RedeemInvitation        ← fetch with redirect:'manual'
+  ↓ (server validates, returns 302 OR 200)
+  ├── 302 Location:/Account/Login/Register  → response.type === 'opaqueredirect'
+  │     ↓ (SPA detects redirect, navigates)
+  │     /registration?invitationCode=ABC    ← existing page (Phase 5.1.2)
+  │
+  ├── 200 OK with Login view markers        → server expects sign-in
+  │     ↓ (SPA detects login HTML, navigates)
+  │     /login?invitationCode=ABC           ← existing page (Phase 5.1.1)
+  │
+  └── 200 OK with validation-summary errors → throw parsed error
+        (invalid / expired / already-redeemed code)
+```
+
+### Header template entry
+
+Extend the existing `Code-Site-Shell-Header` template's redirect map:
+
+```js
+var redirects = {
+  '/account/login/resetpassword': '/reset-password',
+  '/account/login/redeeminvitation': '/redeem-invitation'  // ← add this
+};
+```
+
+Only include the redeeminvitation entry when `REGISTRATION_MODE` is `Invitation-only` or `Both`. The path comparison is lowercased, so the script catches both `/Account/Login/RedeemInvitation` (server URL casing) and `/account/login/redeeminvitation`.
+
+### Auth service additions
+
+#### `redeemInvitation()` — the core function
+
+Add to `src/services/authService.ts`:
+
+```typescript
+export interface RedeemInvitationResult {
+  nextStep: 'register' | 'login';
+}
+
+export async function redeemInvitation(
+  invitationCode: string,
+  redeemByLogin: boolean,
+  returnUrl: string = '/'
+): Promise<RedeemInvitationResult> {
+  if (!invitationCode) {
+    throw new Error('Invitation code is required.');
+  }
+
+  if (isDevelopment) {
+    return { nextStep: redeemByLogin ? 'login' : 'register' };
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', token);
+  body.set('InvitationCode', invitationCode);
+  body.set('RedeemByLogin', redeemByLogin ? 'true' : 'false');
+  body.set('returnUrl', returnUrl);
+
+  const response = await fetch('/Account/Login/RedeemInvitation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'manual',
+  });
+
+  // Branch 1: server returned a 302 redirect (caught by redirect:'manual').
+  // Code is valid AND RedeemByLogin was false → server would have sent us to
+  // /Account/Login/Register. We don't follow it — we navigate to our SPA /registration.
+  if (response.type === 'opaqueredirect') {
+    return { nextStep: 'register' };
+  }
+
+  // Branch 2: 200 OK — could be Login view (RedeemByLogin=true) or validation error.
+  if (response.ok) {
+    const html = await response.text();
+
+    // 2a: Validation error (invalid/expired/already-redeemed code)
+    const errors = parseServerErrors(html);
+    if (errors.length > 0) {
+      throw new Error(errors.join(' '));
+    }
+
+    // 2b: Login view returned — server expects user to sign in with existing account
+    if (html.includes('name="PasswordValue"') || html.includes('LoginLocal')) {
+      return { nextStep: 'login' };
+    }
+
+    throw new Error('Unable to process invitation. Please try again.');
+  }
+
+  throw new Error(`Failed to redeem invitation (status ${response.status}).`);
+}
+```
+
+> **DevTools note**: After the POST resolves with `opaqueredirect`, Chrome's network panel will show the 302 Location target (e.g., `/Account/Login/Register`) as an aborted request with `net::ERR_ABORTED`. This is **expected** and not an actual error — it's the redirect we intentionally chose not to follow. The fast (~0.3ms) timing and the matching URL confirm it's the redirect target, not a network failure.
+
+#### `fetchInvitationDetails()` — for email pre-fill on Registration page
+
+Add to `src/services/authService.ts`:
+
+```typescript
+export interface InvitationDetails {
+  email: string;
+}
+
+export async function fetchInvitationDetails(invitationCode: string): Promise<InvitationDetails> {
+  if (!invitationCode) return { email: '' };
+
+  if (isDevelopment) {
+    return { email: 'invited.user@contoso.com' };
+  }
+
+  const regUrl = `/Account/Login/Register?invitationCode=${encodeURIComponent(invitationCode)}`;
+  const response = await fetch(regUrl, { credentials: 'same-origin' });
+  if (!response.ok) return { email: '' };
+
+  const html = await response.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  const emailInput = doc.getElementById('EmailTextBox') as HTMLInputElement | null;
+  const email = emailInput?.getAttribute('value') || '';
+
+  return { email };
+}
+```
+
+#### `loginLocal()` update — accept invitationCode
+
+Update the existing `loginLocal()` signature to accept an optional invitation code as the 5th parameter. Append it as `?InvitationCode={code}` on the `/SignIn` POST URL — the server's `Login(model, returnUrl, invitationCode)` reads it from the URL, not the body.
+
+```typescript
+export async function loginLocal(
+  credential: string,
+  password: string,
+  rememberMe = false,
+  returnUrl?: string,
+  invitationCode?: string  // ← new
+): Promise<void> {
+  // ... existing dev/token setup ...
+
+  const signInUrl = invitationCode
+    ? `/SignIn?InvitationCode=${encodeURIComponent(invitationCode)}`
+    : '/SignIn';
+
+  const response = await fetch(signInUrl, {
+    method: 'POST',
+    // ... rest unchanged ...
+  });
+  // ... rest unchanged ...
+}
+```
+
+After successful authentication, the server's `RedirectOnPostAuthenticate` (LoginController.cs line 3665) calls `InvitationManager.RedeemAsync(invitation, user, ...)` to link the invitation to the now-signed-in user's contact.
+
+### React: RedeemInvitation page
+
+Create `src/pages/RedeemInvitation.tsx`:
+
+```typescript
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { redeemInvitation } from '../services/authService'
+
+const validateCode = (v: string) => {
+  if (!v || !v.trim()) return 'Invitation code is required'
+  return ''
+}
+
+export default function RedeemInvitation() {
+  const navigate = useNavigate()
+
+  const initialCode = (() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('invitation') || params.get('InvitationCode') || params.get('code') || ''
+  })()
+
+  const [code, setCode] = useState(initialCode)
+  const [redeemByLogin, setRedeemByLogin] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [serverError, setServerError] = useState<string | undefined>()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => { document.title = 'Redeem Invitation' }, [])
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setTouched({ code: true })
+    const error = validateCode(code)
+    setErrors(error ? { code: error } : {})
+    if (error) return
+
+    setIsSubmitting(true)
+    setServerError(undefined)
+
+    redeemInvitation(code.trim(), redeemByLogin).then(result => {
+      const target = result.nextStep === 'register' ? '/registration' : '/login'
+      navigate(`${target}?invitationCode=${encodeURIComponent(code.trim())}`)
+    }).catch(err => {
+      setServerError(err instanceof Error ? err.message : 'Unable to verify invitation.')
+      setIsSubmitting(false)
+    })
+  }
+
+  // ... render form with invitation code input + "Sign in with an existing account
+  // instead of registering" checkbox + Continue button (see contoso-portal site for
+  // a complete styled example) ...
+}
+```
+
+### Login page update
+
+When `REGISTRATION_MODE` is `Invitation-only` or `Both`, update Login.tsx to:
+
+1. Read `invitationCode` from URL on mount:
+   ```typescript
+   const invitationCode = new URLSearchParams(window.location.search)
+     .get('invitationCode') || undefined
+   ```
+2. Show an info banner when present: `"Sign in to redeem invitation {code}. The invitation will be linked to your account after you sign in."`
+3. Pass `invitationCode` to `loginLocal(email, password, rememberMe, '/', invitationCode)` on submit.
+
+### Registration page update — email pre-fill
+
+When `REGISTRATION_MODE` is `Invitation-only` or `Both`, update Registration.tsx to call `fetchInvitationDetails(invitationCode)` on mount and pre-fill the email input. The input must be controlled (`value={email}`) and editable.
+
+```typescript
+useEffect(() => {
+  if (!invitationCode) return
+  fetchInvitationDetails(invitationCode).then(details => {
+    if (details.email) setEmail(details.email)
+  }).catch(() => { /* silent — user can enter email manually */ })
+}, [invitationCode])
+```
+
+### End-to-end flow summary
+
+1. Admin creates an Invitation record in Dataverse (`adx_invitation` table) for an invited contact → captures `adx_invitationcode`
+2. Admin sends user a link: `{site-url}/Account/Login/RedeemInvitation?invitation={code}`
+3. User clicks → browser loads server page → header template script redirects to SPA `/redeem-invitation?invitation={code}`
+4. SPA RedeemInvitation page mounts → code pre-filled → user picks register vs. login → submits
+5. `redeemInvitation()` POSTs → server validates code → returns 302 (register) or 200 (login)
+6. SPA detects branch and navigates to `/registration?invitationCode={code}` or `/login?invitationCode={code}`
+7. **Register path**: Registration page pre-fills email via `fetchInvitationDetails()` → user completes form → POST creates account AND redeems invitation in one server call
+8. **Login path**: Login page shows info banner → user signs in → server redeems invitation in `RedirectOnPostAuthenticate` after auth
 
 ---
 
