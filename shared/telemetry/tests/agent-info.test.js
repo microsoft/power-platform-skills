@@ -61,6 +61,41 @@ test("readAiAgent: explicit AI_AGENT_NAME wins over CLAUDECODE", () => {
   assert.deepEqual(result, { aiAgentName: "Custom Agent", aiAgentVersion: "9.9.9" });
 });
 
+test("readAiAgent returns Copilot CLI + version when COPILOT_CLI=1", () => {
+  const result = agentInfo.readAiAgent({
+    COPILOT_CLI: "1",
+    COPILOT_CLI_BINARY_VERSION: "1.0.48-2",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "Copilot CLI",
+    aiAgentVersion: "1.0.48-2",
+  });
+});
+
+test("readAiAgent returns Copilot CLI with empty version when COPILOT_CLI_BINARY_VERSION missing", () => {
+  const result = agentInfo.readAiAgent({ COPILOT_CLI: "1" });
+  assert.deepEqual(result, { aiAgentName: "Copilot CLI", aiAgentVersion: "" });
+});
+
+test("readAiAgent: explicit AI_AGENT_NAME wins over COPILOT_CLI", () => {
+  const result = agentInfo.readAiAgent({
+    COPILOT_CLI: "1",
+    COPILOT_CLI_BINARY_VERSION: "1.0.48-2",
+    AI_AGENT_NAME: "Custom Agent",
+    AI_AGENT_VERSION: "9.9.9",
+  });
+  assert.deepEqual(result, { aiAgentName: "Custom Agent", aiAgentVersion: "9.9.9" });
+});
+
+test("readAiAgent: CLAUDECODE wins over COPILOT_CLI when both set", () => {
+  const result = agentInfo.readAiAgent({
+    CLAUDECODE: "1",
+    COPILOT_CLI: "1",
+    COPILOT_CLI_BINARY_VERSION: "1.0.48-2",
+  });
+  assert.equal(result.aiAgentName, "Claude Code");
+});
+
 test("readPacCliVersion parses semver from pac --version output", () => {
   agentInfo._resetCache();
   const result = agentInfo.readPacCliVersion({

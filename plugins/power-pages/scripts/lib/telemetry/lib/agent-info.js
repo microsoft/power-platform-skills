@@ -35,8 +35,9 @@ function _resetCache() {
   pacCliVersionCache = undefined;
 }
 
-// Detects the AI agent host. Prefers explicit env vars; falls back to the
-// Claude Code package.json version when CLAUDECODE=1.
+// Detects the AI agent host. Prefers explicit env vars; falls back to
+// built-in detection for Claude Code (CLAUDECODE=1) and GitHub Copilot
+// CLI (COPILOT_CLI=1).
 function readAiAgent(env = process.env) {
   const explicitName = env.AI_AGENT_NAME;
   const explicitVersion = env.AI_AGENT_VERSION;
@@ -59,6 +60,12 @@ function readAiAgent(env = process.env) {
       }
     }
     return { aiAgentName: "Claude Code", aiAgentVersion: version };
+  }
+  if (env.COPILOT_CLI === "1") {
+    return {
+      aiAgentName: "Copilot CLI",
+      aiAgentVersion: env.COPILOT_CLI_BINARY_VERSION || "",
+    };
   }
   return { aiAgentName: "", aiAgentVersion: "" };
 }
