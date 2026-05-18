@@ -339,6 +339,47 @@ All values below come from the Microsoft Entra admin center — **App registrati
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/ws-federation-settings
 
+**Profile mapping (for every external provider — OIDC, Entra External ID, SAML2, WS-Federation, social)**
+
+After collecting the provider's basic details, ask what user profile info should flow from the IdP to the Dataverse contact. **Don't skip this** — without it, contact records have empty `firstname`/`lastname` and the SPA falls back to displaying the email or username everywhere.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| What profile info should be copied from your identity provider into the Dataverse contact record? | Profile mapping | Standard (Recommended) — copy first name, last name, and email on first sign-in, Standard + phone — also copy mobile phone, Custom — let me pick which contact fields and claims to map, None — leave contact fields empty (the server will still populate emailaddress1 from the email claim) |
+
+Store as `PROFILE_MAPPING_CHOICE`. Then ask:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Should profile info be updated on every login, or only once at first sign-in? | Sync frequency | Both — sync on first sign-in AND every login (Recommended for IdPs as source of truth), First sign-in only — let users edit their profile after registration without it being overwritten |
+
+Store as `PROFILE_SYNC_FREQUENCY`. This determines whether to write `LoginClaimsMapping` (every login) in addition to `RegistrationClaimsMapping` (first sign-in only).
+
+**Claim type values** — the mapping format is comma-separated `contactfield=claimtype` (NOT JSON). For OIDC providers like Entra External ID, use OIDC short names:
+
+| Choice | Generated mapping |
+|---|---|
+| Standard | `firstname=given_name,lastname=family_name,emailaddress1=email` |
+| Standard + phone | `firstname=given_name,lastname=family_name,emailaddress1=email,mobilephone=phone_number` |
+| Custom | Loop: ask the user for each `contactfield=claimtype` pair until they say done. Suggest OIDC short names (`given_name`, `family_name`, `email`, `phone_number`, `preferred_username`, custom claim names). Validate that `contactfield` is a known Dataverse contact column. |
+| None | Don't write `RegistrationClaimsMapping` or `LoginClaimsMapping` settings. |
+
+For **SAML2 / WS-Federation**, the claim types are URIs (e.g., `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname`). Adjust the "Standard" generated mapping accordingly. For **social** providers, the claim types are provider-specific (Google: `given_name`, Facebook: `name`).
+
+**Contact linking (for every external provider)**
+
+Ask whether to auto-link external sign-ins to existing contacts by email.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| If a user signs in with an external provider and their email matches an existing Dataverse contact, what should happen? | Contact linking | Create a new contact (Recommended for security) — always create a fresh contact, never auto-link, Link to the existing contact — auto-link by email match (single-tenant providers only — see warning below) |
+
+Store as `CONTACT_LINKING_CHOICE`. This drives `AllowContactMappingWithEmail` (`true` for "link", `false` for "create new").
+
+> **⚠ Multi-tenant safety**: For **multi-tenant Entra External ID** (Authority uses `/organizations/` or `/common/`, or `IssuerFilter` is a wildcard), the Power Pages server **forcibly disables** `AllowContactMappingWithEmail` regardless of the site setting (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`). Reason: email claims can't be trusted across tenants. If the user selects "Link to the existing contact" but the Authority is multi-tenant, warn them that linking won't work and recommend single-tenant Authority.
+>
+> **⚠ Security**: When `AllowContactMappingWithEmail = true`, an attacker who can sign into the configured IdP using a victim's email can take over the victim's contact. Enable only when the IdP verifies emails (Entra External ID with single tenant verifies; arbitrary OIDC may not).
+
 **For "Local Authentication"** (only if user explicitly requested it): Ask the user how they want users to identify themselves when logging in:
 
 | Question | Options |
@@ -480,11 +521,11 @@ After collecting the required provider details, ask if the user wants to configu
 | `PostLogoutRedirectUri` | URL to redirect to after external logout | Site root |
 | `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, `ExternalLogoutEnabled` is forced to `false` by the server. | `false` |
 | `Caption` | Display name shown on the login button | Provider name |
-| `RegistrationClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on registration (e.g., `{"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": "firstname"}`) | None |
-| `LoginClaimsMapping` | JSON mapping of OIDC claims to Dataverse contact fields on every login | None |
+| `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied **once** at first sign-in, before the contact is created. Example for Entra External ID: `firstname=given_name,lastname=family_name,emailaddress1=email`. The server silently skips malformed pairs — verify in Application Insights if claims aren't populating. | None |
+| `LoginClaimsMapping` | Same format as `RegistrationClaimsMapping`. Applied **every login** (overwrites contact fields). Use sparingly — it overwrites manual edits the user makes to their profile. | None |
 | `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out (legacy — prefer `RPInitiatedLogout` for OIDC) | `true` |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
-| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `AllowContactMappingWithEmail` | **Auto-link an external sign-in to an existing Dataverse contact by matching the `email` claim against `emailaddress1`.** Default `false` (a new contact is always created). **⚠ Multi-tenant Entra External ID: the server forcibly disables this** (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`) — email claims can't be trusted across tenants. If you want contact linking, use single-tenant Authority. **⚠ Security**: When `true`, anyone who can sign into this provider with a victim's email gains access to the victim's contact. Enable only when the provider is trusted to verify emails. | `false` |
 | `RequireUniqueEmail` | Enforce unique email addresses during registration | `false` |
 | `UseTokenLifetime` | Use the IdP token lifetime for the session cookie | Not set |
 | `BackchannelTimeout` | Timeout for backchannel HTTP calls to the IdP (e.g., `00:01:00`) | `00:01:00` |
@@ -509,11 +550,11 @@ After collecting the required provider details, ask if the user wants to configu
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `AssertionConsumerServiceUrl` | ACS URL (typically `{site-url}/signin-{provider}`) | Derived from site URL |
-| `RegistrationClaimsMapping` | JSON mapping of SAML assertions to contact fields on registration | None |
-| `LoginClaimsMapping` | JSON mapping of SAML assertions to contact fields on every login | None |
+| `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. SAML assertion types are URIs (e.g., `firstname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname,lastname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname`). Applied once at first sign-in. | None |
+| `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
 | `ExternalLogoutEnabled` | Enable SAML Single Logout (SLO) | `true` |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
-| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `AllowContactMappingWithEmail` | **Auto-link an external sign-in to an existing Dataverse contact by matching the `email` claim against `emailaddress1`.** Default `false` (a new contact is always created). **⚠ Multi-tenant Entra External ID: the server forcibly disables this** (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`) — email claims can't be trusted across tenants. If you want contact linking, use single-tenant Authority. **⚠ Security**: When `true`, anyone who can sign into this provider with a victim's email gains access to the victim's contact. Enable only when the provider is trusted to verify emails. | `false` |
 | `AllowCreateNameIdPolicy` | Include AllowCreate in NameIdPolicy | `true` |
 | `DefaultSignatureAlgorithm` | Signature algorithm for SAML requests | Provider default |
 | `SigningCertificateFindType` | X509 certificate find type for signing requests | None |
@@ -534,11 +575,11 @@ After collecting the required provider details, ask if the user wants to configu
 | `Wreply` | Reply URL for the WS-Fed response | Same as Wtrealm |
 | `Whr` | Home realm discovery hint (e.g., a domain name) | None |
 | `SignOutWreply` | URL for post-logout redirect | Site root |
-| `RegistrationClaimsMapping` | JSON mapping of WS-Fed claims to contact fields on registration | None |
-| `LoginClaimsMapping` | JSON mapping of WS-Fed claims to contact fields on every login | None |
+| `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. WS-Fed claim types are typically SAML URIs (e.g., `firstname=http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname`). Applied once at first sign-in. | None |
+| `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
 | `ExternalLogoutEnabled` | Enable federated sign-out | `true` |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
-| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `AllowContactMappingWithEmail` | **Auto-link an external sign-in to an existing Dataverse contact by matching the `email` claim against `emailaddress1`.** Default `false` (a new contact is always created). **⚠ Multi-tenant Entra External ID: the server forcibly disables this** (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`) — email claims can't be trusted across tenants. If you want contact linking, use single-tenant Authority. **⚠ Security**: When `true`, anyone who can sign into this provider with a victim's email gains access to the victim's contact. Enable only when the provider is trusted to verify emails. | `false` |
 | `BackchannelTimeout` | Timeout for metadata retrieval | `00:01:00` |
 | `UseTokenLifetime` | Use IdP token lifetime for session | Not set |
 | `IssuerFilter` | Wildcard pattern for multi-tenant issuer matching | None |
@@ -549,11 +590,11 @@ After collecting the required provider details, ask if the user wants to configu
 |---------|-------------|---------|
 | `Caption` | Display name on the login button | Provider name |
 | `Scope` | OAuth scopes to request (space-separated) | Provider defaults |
-| `RegistrationClaimsMapping` | JSON mapping of social claims to contact fields on registration | None |
-| `LoginClaimsMapping` | JSON mapping of social claims to contact fields on every login | None |
+| `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs**. Social provider claim types vary — Facebook uses `name`/`email`, Google uses `given_name`/`family_name`/`email`. Example: `firstname=given_name,emailaddress1=email`. Applied once at first sign-in. | None |
+| `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). | None |
 | `ExternalLogoutEnabled` | Sign out of social provider on logout | `true` |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
-| `AllowContactMappingWithEmail` | Map external users to existing contacts by email | `false` |
+| `AllowContactMappingWithEmail` | **Auto-link an external sign-in to an existing Dataverse contact by matching the `email` claim against `emailaddress1`.** Default `false` (a new contact is always created). **⚠ Multi-tenant Entra External ID: the server forcibly disables this** (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`) — email claims can't be trusted across tenants. If you want contact linking, use single-tenant Authority. **⚠ Security**: When `true`, anyone who can sign into this provider with a victim's email gains access to the victim's contact. Enable only when the provider is trusted to verify emails. | `false` |
 | `BackchannelTimeout` | Timeout for OAuth token exchange | `00:01:00` |
 
 **Local Authentication optional settings:**
@@ -1045,7 +1086,8 @@ name: Code-Site-Shell-Header
     // InvitationEnabled is false).
     var redirects = {
       '/account/login/resetpassword': '/reset-password',
-      '/account/login/redeeminvitation': '/redeem-invitation'
+      '/account/login/redeeminvitation': '/redeem-invitation',
+      '/account/login/externallogincallback': '/external-login-confirmation'
     };
     for (var serverPath in redirects) {
       if (path === serverPath) {
@@ -1063,6 +1105,7 @@ name: Code-Site-Shell-Header
 |---|---|
 | `'/account/login/resetpassword': '/reset-password'` | Local auth + `ResetPasswordEnabled = true` (Phase 5.1.6) |
 | `'/account/login/redeeminvitation': '/redeem-invitation'` | `REGISTRATION_MODE` is `Invitation-only` or `Both` (Phase 5.1.7) |
+| `'/account/login/externallogincallback': '/external-login-confirmation'` | Any external provider is configured (Phase 5.1.8) — captures first-time external sign-in into the SPA |
 
 Then update **`website.yml`** to point `headerwebtemplateid` to the new template's ID:
 
@@ -1141,6 +1184,97 @@ The Login page (Phase 5.1.1) must also be updated when invitation mode is enable
 - `redeemInvitation(invitationCode, redeemByLogin, returnUrl)` — see Phase 3.2 for the function inventory; full code in `authentication-reference.md`
 - `fetchInvitationDetails(invitationCode)` — already covered in Phase 5.1.2 for email pre-fill
 - `loginLocal()` updated to accept optional `invitationCode` parameter (5th arg) — appends `?InvitationCode={code}` to the `/SignIn` URL
+
+#### 5.1.8 Create External Login Confirmation Page (External Providers Only)
+
+**If any external provider is configured** (OIDC, Entra External ID, SAML2, WS-Federation, social), create a `/external-login-confirmation` SPA page. This captures the first-time external sign-in flow that the server would otherwise render as `ExternalLoginConfirmation.aspx`.
+
+**Server flow this replaces:** When a user signs in externally for the first time and no Dataverse contact exists, the server's `LoginController.ExternalLoginCallback` action (`crm.solutions.portal/Samples/MasterPortal/Areas/Account/Controllers/LoginController.cs` ~line 761) renders the `ExternalLoginConfirmation` view AT the callback URL (`/Account/Login/ExternalLoginCallback`). The view shows an editable email field plus hidden firstName/lastName/username from claims, and POSTs to `/Account/Login/ExternalLoginConfirmation`.
+
+**Why this can be SPA-ified (same pattern as Reset Password and Redeem Invitation):**
+
+- The `__External` cookie (5-minute TTL, `AuthenticationMode = Passive`, `Secure = Always`) stores the claims between the IdP callback and the form POST. It's auto-sent on `same-origin` fetches.
+- The SPA fetches the server URL, parses the rendered HTML to extract pre-fill values + anti-forgery token, shows its own form, and POSTs back. The server processes the form unchanged.
+
+**Skip conditions** — server skips this page entirely when:
+- The user's email claim matches an existing contact AND `AllowContactMappingWithEmail = true` → server auto-signs in
+- The user has an invitation code AND it resolves to an existing contact in the ESS system → server auto-signs in
+- Registration is disabled or the user isn't allowed to register
+
+In those cases the user goes straight to home after IdP callback — the SPA page never mounts.
+
+### Redirect chain
+
+```
+Email link / "Sign in with Entra External ID" button
+   ↓
+POST /Account/Login/ExternalLogin → server redirects to IdP
+   ↓
+User authenticates at IdP → IdP callback to /signin-{providername}
+   ↓
+OIDC middleware processes callback (sets __External cookie with claims)
+   ↓
+Forward to /Account/Login/ExternalLoginCallback
+   ↓
+ExternalLoginCallback action: new user, no existing contact
+   → returns ExternalLoginConfirmation view at the callback URL
+   ↓
+┌─ Code-Site-Shell-Header script catches /account/login/externallogincallback ─┐
+│  → window.location.replace('/external-login-confirmation' + query)            │
+└────────────────────────────────────────────────────────────────────────────────┘
+   ↓
+SPA /external-login-confirmation page mounts
+   → calls fetchExternalLoginDetails()
+     → GET /Account/Login/ExternalLoginCallback (__External cookie auto-sent)
+     → server returns the same rendered HTML
+     → SPA parses #Email, #FirstName, #LastName, #Username, #InvitationCode,
+       __RequestVerificationToken, and the form's action URL for ReturnUrl
+   ↓
+SPA renders own form, email pre-filled and editable
+   ↓
+User clicks "Create my account"
+   → confirmExternalLogin() POST /Account/Login/ExternalLoginConfirmation
+     (form fields + anti-forgery token, redirect:'manual')
+   ↓
+   ├── response.type === 'opaqueredirect' → window.location.href = returnUrl
+   │     (server sets ApplicationCookie BEFORE returning 302 — user is signed in)
+   ├── 200 OK with validation-summary → throw parsed error (e.g., duplicate email
+   │     when RequireUniqueEmail is true and user typed an existing email)
+   └── 200 OK with TermsAndConditions markers → throw TermsRequiredError →
+         SPA navigates to /terms
+```
+
+### Auth service additions (when any external provider is configured)
+
+Add three things to `src/services/authService.ts` — full code in `authentication-reference.md`:
+
+- `ExternalLoginCookieExpiredError` class — thrown when the `__External` cookie has expired (5-minute TTL exceeded). The page navigates to `/login` with an expired-session message.
+- `fetchExternalLoginDetails()` — fetches `/Account/Login/ExternalLoginCallback`, parses HTML for pre-fill values and anti-forgery token. Throws `ExternalLoginCookieExpiredError` if the form isn't present.
+- `confirmExternalLogin(details)` — POSTs to `/Account/Login/ExternalLoginConfirmation` with `redirect:'manual'`. Branches on response type to navigate or throw.
+
+### SPA page
+
+Create `src/pages/ExternalLoginConfirmation.tsx`:
+
+- On mount, calls `fetchExternalLoginDetails()`. Three states: loading, cookie-expired, ready.
+- When cookie expired: shows "Sign-in session expired" with a "Back to sign in" link to `/login`.
+- When ready: shows the user's full name read-only (from claims), an editable email input (default = email claim), and an "invitation banner" if `invitationCode` is non-empty.
+- On submit, calls `confirmExternalLogin(details)`. Handles `TermsRequiredError` → navigate to `/terms`. Handles `ExternalLoginCookieExpiredError` (mid-session expiry) → switch UI to the expired state.
+- Server-side validation errors shown inline via `parseServerErrors`.
+
+### Routing
+
+Add `<Route path="/external-login-confirmation" element={<ExternalLoginConfirmation />} />`.
+
+### DevTools artifact
+
+After the POST, the network panel may show the 302 Location target (e.g., the returnUrl path) as an aborted (`net::ERR_ABORTED`) request — same as the RedeemInvitation pattern. Expected behavior from `redirect:'manual'`, not an error.
+
+### Edge cases
+
+- **2FA**: If the user has 2FA enabled, the challenge happens AFTER `SignInAsync` completes (during the 302 redirect). The SPA-ified flow doesn't interfere — the 2FA challenge (`SendCode`/`VerifyCode`) is its own server-rendered flow that cannot be intercepted.
+- **`SameSite=Strict`**: If the `__External` cookie is configured with `SameSite=Strict`, the SPA's fetch won't include it and `fetchExternalLoginDetails` throws `ExternalLoginCookieExpiredError` immediately. Default is `Lax` (set via `SameSiteCookieHelper.GetOwinSameSiteFromSiteSettings`) — works fine.
+- **Invited user via external login**: Invitation code is captured from the form action URL by `fetchExternalLoginDetails` and re-sent on the POST. The server redeems the invitation as part of contact creation.
 
 #### 5.2 Integrate into Navigation
 
@@ -1380,6 +1514,58 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable external identity provider login" \
   --type boolean
 ```
+
+**Profile mapping settings** — for **every** external provider (OIDC, SAML2, WS-Federation, social), write `RegistrationClaimsMapping` based on `PROFILE_MAPPING_CHOICE` from Phase 2.1, and `LoginClaimsMapping` when `PROFILE_SYNC_FREQUENCY = "Both"`:
+
+```powershell
+# Skip if PROFILE_MAPPING_CHOICE = "None"
+# Generate the value based on PROFILE_MAPPING_CHOICE:
+#   "Standard"           → firstname=given_name,lastname=family_name,emailaddress1=email
+#   "Standard + phone"   → firstname=given_name,lastname=family_name,emailaddress1=email,mobilephone=phone_number
+#   "Custom"             → user-provided comma-separated pairs
+# For SAML2/WsFed, use the claim URI form instead of OIDC short names.
+
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/{Type}/{ProviderName}/RegistrationClaimsMapping" \
+  --value "firstname=given_name,lastname=family_name,emailaddress1=email" \
+  --description "Map IdP claims to contact fields on first sign-in"
+
+# Only write if PROFILE_SYNC_FREQUENCY = "Both"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/{Type}/{ProviderName}/LoginClaimsMapping" \
+  --value "firstname=given_name,lastname=family_name,emailaddress1=email" \
+  --description "Map IdP claims to contact fields on every login"
+```
+
+**Contact linking setting** — write `AllowContactMappingWithEmail` based on `CONTACT_LINKING_CHOICE`:
+
+```powershell
+# CONTACT_LINKING_CHOICE = "Link to existing"  → value "true"
+# CONTACT_LINKING_CHOICE = "Create new"        → value "false" (or skip — false is the server default)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/{Type}/{ProviderName}/AllowContactMappingWithEmail" \
+  --value "<true-or-false-from-choice>" \
+  --description "Auto-link external sign-in to existing contact by email match" \
+  --type boolean
+```
+
+> **Multi-tenant guard**: Before writing `AllowContactMappingWithEmail=true` for an OIDC provider, check the Authority URL. If it contains `/organizations/`, `/common/`, or if `IssuerFilter` is set to a wildcard pattern, **override the user's choice to `false`** and tell the user: "Multi-tenant Entra External ID configurations cannot use contact mapping for security reasons (the server forcibly disables it). To enable contact mapping, use a single-tenant Authority URL with a specific tenant GUID."
+
+**Per-provider `RegistrationEnabled` setting** — for **every** external provider (OIDC, SAML2, WS-Federation, social), also write:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/{Type}/{ProviderName}/RegistrationEnabled" \
+  --value "true" \
+  --description "Allow new users to register via this specific provider" \
+  --type boolean
+```
+
+Where `{Type}` is `OpenIdConnect`, `SAML2`, `WsFederation`, or `OpenAuth`. This is a **per-provider toggle** that's distinct from the global `Authentication/Registration/ExternalLoginEnabled` — set both to `true` for registration to work. Use case for setting one provider's `RegistrationEnabled=false`: temporarily block new users from a given IdP while still letting existing users sign in.
 
 **Provider-specific settings** — create site settings for **EACH** provider selected in Phase 2.1. If the user selected multiple providers (e.g., Entra External ID + Local Authentication), create settings for ALL of them:
 

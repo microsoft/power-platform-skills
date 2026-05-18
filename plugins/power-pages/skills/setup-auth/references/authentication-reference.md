@@ -1767,8 +1767,8 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 | `Caption` | Display name shown on the login button |
 | `ExternalLogoutEnabled` | `true` to sign out of the IdP on logout |
 | `PostLogoutRedirectUri` | URL to redirect to after external logout |
-| `RegistrationClaimsMapping` | JSON mapping of OIDC claims to contact fields on registration |
-| `LoginClaimsMapping` | JSON mapping of OIDC claims to contact fields on login |
+| `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied once at first sign-in. Example: `firstname=given_name,lastname=family_name,emailaddress1=email`. |
+| `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). Use sparingly to avoid overwriting manual edits. |
 
 ### Entra External ID Provider Settings
 
@@ -2569,6 +2569,237 @@ useEffect(() => {
 6. SPA detects branch and navigates to `/registration?invitationCode={code}` or `/login?invitationCode={code}`
 7. **Register path**: Registration page pre-fills email via `fetchInvitationDetails()` → user completes form → POST creates account AND redeems invitation in one server call
 8. **Login path**: Login page shows info banner → user signs in → server redeems invitation in `RedirectOnPostAuthenticate` after auth
+
+---
+
+## External Login Confirmation Flow for SPA Sites
+
+When a user signs in with an external provider (Entra External ID, OIDC, SAML2, etc.) for the first time and no Dataverse contact exists, the server renders `ExternalLoginConfirmation.aspx` at the OIDC callback URL (`/Account/Login/ExternalLoginCallback`). The user confirms/edits their email and the server creates the contact + signs them in. We SPA-ify this with the same pattern as Reset Password and Redeem Invitation.
+
+### State storage that makes this work
+
+The IdP's claims are stored in the `__External` cookie set by the OIDC middleware (see `Samples/MasterPortal/App_Start/Startup.Auth.cs:50-59`):
+
+- `AuthenticationType = DefaultAuthenticationTypes.ExternalCookie` (`__External`)
+- `ExpireTimeSpan = TimeSpan.FromMinutes(5)`
+- `CookieSecure = CookieSecureOption.Always`
+- `AuthenticationMode = AuthenticationMode.Passive` — auto-sent on same-origin requests
+- `CookieSameSite` derived from site settings (typically `Lax`)
+
+The SPA's fetch with `credentials: 'same-origin'` includes this cookie automatically, so the server returns the claim-populated form.
+
+### Header template entry
+
+Extend the `Code-Site-Shell-Header` redirect map:
+
+```js
+var redirects = {
+  '/account/login/resetpassword': '/reset-password',
+  '/account/login/redeeminvitation': '/redeem-invitation',
+  '/account/login/externallogincallback': '/external-login-confirmation'  // ← add this
+};
+```
+
+### Auth service additions
+
+#### Types and error class
+
+```typescript
+export interface ExternalLoginDetails {
+  email: string;
+  firstName: string;
+  lastName: string;
+  username: string;
+  invitationCode: string;
+  returnUrl: string;
+  antiForgeryToken: string;
+}
+
+export class ExternalLoginCookieExpiredError extends Error {
+  constructor() {
+    super('External login session expired. Please sign in again.');
+    this.name = 'ExternalLoginCookieExpiredError';
+  }
+}
+```
+
+#### `fetchExternalLoginDetails()` — pre-fetch claim-populated form
+
+```typescript
+export async function fetchExternalLoginDetails(): Promise<ExternalLoginDetails> {
+  if (isDevelopment) {
+    return {
+      email: 'invited.user@contoso.com',
+      firstName: 'Invited',
+      lastName: 'User',
+      username: 'invited.user',
+      invitationCode: '',
+      returnUrl: '/',
+      antiForgeryToken: 'dev-token',
+    };
+  }
+
+  const response = await fetch('/Account/Login/ExternalLoginCallback', {
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch external login details (status ${response.status}).`);
+  }
+
+  const html = await response.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  // ExternalLoginFailure.aspx is returned when the __External cookie has expired.
+  // Detect by the absence of the confirmation form.
+  if (!doc.querySelector('input[name="Email"]')) {
+    throw new ExternalLoginCookieExpiredError();
+  }
+
+  const getValue = (selector: string): string =>
+    (doc.querySelector(selector) as HTMLInputElement | null)?.value || '';
+
+  const formAction = doc.querySelector('form')?.getAttribute('action') || '';
+  const actionParams = new URLSearchParams(formAction.split('?')[1] || '');
+
+  return {
+    email: getValue('input[name="Email"]'),
+    firstName: getValue('input[name="FirstName"]'),
+    lastName: getValue('input[name="LastName"]'),
+    username: getValue('input[name="Username"]'),
+    invitationCode: getValue('input[name="InvitationCode"]') || actionParams.get('InvitationCode') || '',
+    returnUrl: actionParams.get('ReturnUrl') || '/',
+    antiForgeryToken: getValue('input[name="__RequestVerificationToken"]'),
+  };
+}
+```
+
+#### `confirmExternalLogin()` — POST with redirect detection
+
+```typescript
+export async function confirmExternalLogin(details: ExternalLoginDetails): Promise<void> {
+  if (isDevelopment) {
+    window.location.href = details.returnUrl || '/';
+    return;
+  }
+
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', details.antiForgeryToken);
+  body.set('Email', details.email);
+  body.set('FirstName', details.firstName);
+  body.set('LastName', details.lastName);
+  body.set('Username', details.username);
+
+  // Server reads ReturnUrl and InvitationCode from the form action URL query string.
+  const params = new URLSearchParams();
+  if (details.returnUrl) params.set('ReturnUrl', details.returnUrl);
+  if (details.invitationCode) params.set('InvitationCode', details.invitationCode);
+  const qs = params.toString();
+  const postUrl = `/Account/Login/ExternalLoginConfirmation${qs ? `?${qs}` : ''}`;
+
+  const response = await fetch(postUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    credentials: 'same-origin',
+    redirect: 'manual',
+  });
+
+  // Server sets ApplicationCookie BEFORE returning the 302 — user is signed in.
+  if (response.type === 'opaqueredirect') {
+    window.location.href = details.returnUrl || '/';
+    return;
+  }
+
+  if (response.ok) {
+    const html = await response.text();
+    const errors = parseServerErrors(html);
+    if (errors.length > 0) throw new Error(errors.join(' '));
+
+    // Server may render TermsAndConditions instead of redirecting to it.
+    if (html.includes('TermsAndConditions') || html.includes('IsTermsAndConditionsAccepted')) {
+      throw new TermsRequiredError();
+    }
+
+    throw new Error('Unable to complete external login. Please try again.');
+  }
+
+  throw new Error(`Failed to confirm external login (status ${response.status}).`);
+}
+```
+
+### Page component (React)
+
+```tsx
+import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import {
+  fetchExternalLoginDetails,
+  confirmExternalLogin,
+  ExternalLoginCookieExpiredError,
+  TermsRequiredError,
+  type ExternalLoginDetails,
+} from '../services/authService'
+
+export default function ExternalLoginConfirmation() {
+  const navigate = useNavigate()
+  const [details, setDetails] = useState<ExternalLoginDetails | null>(null)
+  const [email, setEmail] = useState('')
+  const [cookieExpired, setCookieExpired] = useState(false)
+  // ... isLoading, isSubmitting, serverError state, validation, etc.
+
+  useEffect(() => {
+    fetchExternalLoginDetails()
+      .then(d => { setDetails(d); setEmail(d.email) })
+      .catch(err => {
+        if (err instanceof ExternalLoginCookieExpiredError) setCookieExpired(true)
+        // else show serverError
+      })
+  }, [])
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!details) return
+    confirmExternalLogin({ ...details, email }).catch(err => {
+      if (err instanceof TermsRequiredError) return navigate('/terms')
+      if (err instanceof ExternalLoginCookieExpiredError) return setCookieExpired(true)
+      // else show serverError
+    })
+  }
+
+  if (cookieExpired) return <ExpiredCard />
+  if (!details) return <LoadingCard />
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <h1>Almost done!</h1>
+      {details.invitationCode && <Banner>Redeeming invitation {details.invitationCode}</Banner>}
+      <ReadOnlyRow label="Name" value={`${details.firstName} ${details.lastName}`} />
+      <input type="email" value={email} onChange={e => setEmail(e.target.value)} />
+      <button type="submit">Create my account</button>
+    </form>
+  )
+}
+```
+
+### Routing
+
+Add `<Route path="/external-login-confirmation" element={<ExternalLoginConfirmation />} />` to the React Router config.
+
+### Cookie expiry handling
+
+The `__External` cookie has a **5-minute TTL**. If the user lingers between IdP callback and form submission, the cookie expires and the server returns `ExternalLoginFailure.aspx` instead of the confirmation form. The SPA detects this (no `input[name="Email"]` in the HTML) and shows an "expired" state with a link back to `/login`.
+
+### Edge cases summary
+
+| Case | Behavior |
+|---|---|
+| User has 2FA enabled | 2FA challenge happens AFTER `SignInAsync` completes (during the 302 navigation). SPA-ified confirmation doesn't interfere — 2FA challenge pages are server-rendered, separate flow. |
+| `SameSite=Strict` cookie config | Fetch won't send `__External` cookie → `fetchExternalLoginDetails` throws `ExternalLoginCookieExpiredError` immediately. Default is `Lax` — works. |
+| Invited user via external login | Invitation code captured from form action URL → preserved through POST → server redeems as part of contact creation. |
+| Email mismatch with existing contact + `RequireUniqueEmail=true` | Server returns 200 with validation summary; SPA shows error inline. User can edit email and retry. |
+| `AllowContactMappingWithEmail=true` and email matches existing contact | Server SKIPS the ExternalLoginConfirmation page entirely — user is signed in via the existing contact and lands at the return URL. The SPA page never mounts. |
 
 ---
 
