@@ -920,48 +920,73 @@ const AUTH_PROVIDER: AuthProviderConfig = {
 };
 ```
 
-### Multiple Providers (Any Combination)
+### Multiple Providers — Canonical `AUTH_PROVIDERS` Array Pattern
 
-When the user selects multiple providers (e.g., Google + Facebook, or Entra External ID + Local Auth), use the `AUTH_PROVIDERS` array pattern. This works for **any combination** of provider types — social, external, or mixed with local.
+**Always use the array pattern, even with one entry.** This is the canonical shape — single-provider sites can grow to multi-provider without restructuring.
 
 ```typescript
-export interface ProviderConfig {
+export type AuthProviderType =
+  | 'local'
+  | 'oidc'
+  | 'entra-id'
+  | 'saml2'
+  | 'ws-federation'
+  | 'social';
+
+export interface AuthProviderConfig {
+  /** Stable identifier — used as React key and to distinguish multiple instances of same type */
+  id: string;
   type: AuthProviderType;
-  providerIdentifier?: string;
+  /** Button label shown on the Login page */
   displayName: string;
-  loginByEmail?: boolean; // Only for local providers
+  /**
+   * Provider identifier the server expects in the ExternalLogin form POST.
+   * For OIDC: the Authority URL (matches the AuthenticationType site setting).
+   * For SAML2/WS-Fed/social: the provider identifier from the site settings.
+   * Not used for local.
+   */
+  providerIdentifier?: string;
+  /** Local-only: send Email field (true) or Username field (false) */
+  loginByEmail?: boolean;
 }
 
-/**
- * Multiple providers configuration.
- * Each entry maps to a login method — external providers use ExternalLogin,
- * local providers use the credential form.
- */
-export const AUTH_PROVIDERS: ProviderConfig[] = [
-  { type: 'entra-external-id', providerIdentifier: 'https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/', displayName: 'Sign in with External ID' },
-  { type: 'local', displayName: 'Sign in with Email', loginByEmail: true },
+export const AUTH_PROVIDERS: AuthProviderConfig[] = [
+  // Each provider gets a stable id — use the ProviderName slug from site settings.
+  // For multiple instances of the same type (e.g., 2 Entra External ID tenants), use
+  // distinct ids: 'entra-external-id-customer', 'entra-external-id-employee'.
+  {
+    id: 'entra-external-id',
+    type: 'oidc',
+    displayName: 'Sign in with Entra External ID',
+    providerIdentifier: 'https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/',
+  },
+  {
+    id: 'local',
+    type: 'local',
+    displayName: 'Sign in with email',
+    loginByEmail: true,
+  },
 ];
 
-// Default AUTH_PROVIDER for single-provider code paths — uses first provider
 if (AUTH_PROVIDERS.length === 0) {
   throw new Error('AUTH_PROVIDERS array is empty. Configure at least one authentication provider.');
 }
-const AUTH_PROVIDER: AuthProviderConfig = {
-  type: AUTH_PROVIDERS[0].type,
-  providerIdentifier: AUTH_PROVIDERS[0].providerIdentifier,
-  displayName: AUTH_PROVIDERS[0].displayName,
-  loginByEmail: AUTH_PROVIDERS[0].loginByEmail,
-};
 
-/**
- * Initiates login with a specific provider from the AUTH_PROVIDERS array.
- * Handles both external providers (ExternalLogin) and local providers (Login).
- * Use this instead of login() when multiple providers are configured.
- */
-export async function loginWithProvider(
+// Exported helpers for the Login page to filter providers cleanly:
+export const LOCAL_PROVIDER = AUTH_PROVIDERS.find(p => p.type === 'local');
+export const EXTERNAL_PROVIDERS = AUTH_PROVIDERS.filter(p => p.type !== 'local');
+
+// Backward-compat for any code that still imports AUTH_PROVIDER:
+const AUTH_PROVIDER: AuthProviderConfig =
+  AUTH_PROVIDERS.find(p => p.type === 'local') ?? AUTH_PROVIDERS[0];
+```
+
+### `loginExternal()` — external provider form POST
+
+```typescript
+export async function loginExternal(
   providerIdentifier: string,
   returnUrl?: string,
-  credentials?: { username: string; password: string; rememberMe?: boolean },
   invitationCode?: string
 ): Promise<void> {
   if (isDevelopment) {
@@ -972,47 +997,6 @@ export async function loginWithProvider(
 
   const token = await fetchAntiForgeryToken();
 
-  // Find the provider config to determine if it's local or external
-  const providerConfig = AUTH_PROVIDERS.find(p =>
-    p.type === 'local' ? providerIdentifier === 'local' : p.providerIdentifier === providerIdentifier
-  );
-
-  // Local provider: POST credentials to /Account/Login/Login
-  if (providerConfig?.type === 'local') {
-    if (!credentials) {
-      throw new Error('Local login requires username and password credentials.');
-    }
-    // Use fetch() to stay in the SPA and parse server errors
-    const credentialFieldName = providerConfig.loginByEmail ? 'Email' : 'Username';
-    const body = new URLSearchParams();
-    body.set('__RequestVerificationToken', token);
-    body.set(credentialFieldName, credentials.username);
-    body.set('PasswordValue', credentials.password);
-    body.set('ReturnUrl', returnUrl || '/');
-    if (credentials.rememberMe) body.set('RememberMe', 'true');
-    if (invitationCode) body.set('InvitationCode', invitationCode);
-
-    const response = await fetch('/SignIn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      credentials: 'same-origin',
-      redirect: 'follow',
-    });
-
-    if (response.redirected || response.url.endsWith(returnUrl || '/')) {
-      window.location.href = returnUrl || '/';
-      return;
-    }
-
-    const html = await response.text();
-    const errors = parseServerErrors(html);
-    if (errors.length > 0) throw new Error(errors.join(' '));
-    throw new Error('Invalid credentials. Please try again.');
-    return;
-  }
-
-  // External provider: POST to /Account/Login/ExternalLogin
   const form = document.createElement('form');
   form.method = 'POST';
   form.action = invitationCode
@@ -1022,7 +1006,7 @@ export async function loginWithProvider(
   const fields: Record<string, string> = {
     __RequestVerificationToken: token,
     provider: providerIdentifier,
-    returnUrl: returnUrl || window.location.pathname,
+    returnUrl: returnUrl || '/',
   };
 
   for (const [name, value] of Object.entries(fields)) {
@@ -1038,108 +1022,223 @@ export async function loginWithProvider(
 }
 ```
 
-**Multi-Provider Login Page Component (React):**
+### `loginWithProvider()` — router that dispatches to local or external
 
-When multiple providers are configured (including mixed external + local), all providers appear as buttons. External providers redirect immediately on click. The local provider button expands an inline credential form for username/email and password input.
+This is the **only function the Login UI should call**. It takes a provider config object and routes correctly based on `type`.
 
-```tsx
-import { useState, useEffect } from 'react';
-import { AUTH_PROVIDERS, loginWithProvider, getAuthError } from '../services/authService';
-import { useAuth } from '../hooks/useAuth';
-import './AuthButton.css';
-
-export function AuthButton() {
-  const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth();
-  const [showLocalForm, setShowLocalForm] = useState(false);
-  const [credential, setCredential] = useState('');
-  const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
-  const [error, setError] = useState('');
-
-  // Check for server-side auth errors (e.g., after failed external login redirect)
-  useEffect(() => {
-    const serverError = getAuthError();
-    if (serverError) setError(serverError);
-  }, []);
-
-  if (isLoading) {
-    return <div className="auth-button auth-loading"><span className="auth-spinner" /></div>;
-  }
-
-  if (isAuthenticated) {
-    return (
-      <div className="auth-button auth-signed-in">
-        <span className="auth-avatar">{initials}</span>
-        <span className="auth-name">{displayName}</span>
-        <button className="auth-sign-out" onClick={() => logout()}>Sign Out</button>
-      </div>
+```typescript
+export async function loginWithProvider(
+  provider: AuthProviderConfig,
+  options: {
+    returnUrl?: string;
+    invitationCode?: string;
+    /** Local-only: credentials are required when provider.type === 'local' */
+    credentials?: { credential: string; password: string; rememberMe?: boolean };
+  } = {}
+): Promise<void> {
+  if (provider.type === 'local') {
+    if (!options.credentials) {
+      throw new Error('Local login requires credentials.');
+    }
+    return loginLocal(
+      options.credentials.credential,
+      options.credentials.password,
+      options.credentials.rememberMe ?? false,
+      options.returnUrl,
+      options.invitationCode
     );
   }
 
-  const externalProviders = AUTH_PROVIDERS.filter(p => p.type !== 'local');
-  const localProvider = AUTH_PROVIDERS.find(p => p.type === 'local');
-
-  return (
-    <div className="auth-button auth-providers">
-      {/* Server-side auth error display */}
-      {error && <div className="form-error" role="alert">{error}</div>}
-
-      {/* External provider buttons — clicking redirects to the identity provider */}
-      {externalProviders.map((provider) => (
-        <button
-          key={provider.providerIdentifier}
-          className="auth-sign-in auth-external-btn"
-          onClick={() => loginWithProvider(provider.providerIdentifier!)}
-        >
-          {provider.displayName}
-        </button>
-      ))}
-
-      {/* Local login — button that expands to show credential form on click */}
-      {localProvider && !showLocalForm && (
-        <button
-          className="auth-sign-in auth-local-btn"
-          onClick={() => setShowLocalForm(true)}
-        >
-          {localProvider.displayName}
-        </button>
-      )}
-
-      {localProvider && showLocalForm && (
-        <form className="auth-local-form" onSubmit={async (e) => {
-          e.preventDefault();
-          await loginWithProvider('local', undefined, { username: credential, password, rememberMe });
-        }}>
-          <input
-            type={localProvider.loginByEmail ? 'email' : 'text'}
-            placeholder={localProvider.loginByEmail ? 'Email' : 'Username'}
-            value={credential} onChange={(e) => setCredential(e.target.value)} required
-            autoFocus
-          />
-          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          <label><input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember me</label>
-          <div className="auth-local-actions">
-            <button type="submit">{localProvider.displayName}</button>
-            <button type="button" className="auth-back-btn" onClick={() => setShowLocalForm(false)}>Back</button>
-          </div>
-          <a href="/Account/Login/ForgotPassword" className="auth-forgot-password">Forgot password?</a>
-          {/* Only show registration link when OpenRegistrationEnabled is true */}
-        </form>
-      )}
-    </div>
-  );
+  if (!provider.providerIdentifier) {
+    throw new Error(`Provider ${provider.id} is missing providerIdentifier.`);
+  }
+  return loginExternal(provider.providerIdentifier, options.returnUrl, options.invitationCode);
 }
 ```
 
-### Entra External ID
+`loginLocal()` retains its existing signature (`credential, password, rememberMe, returnUrl, invitationCode`) — see "Local Login" section above. The router just delegates.
 
-```typescript
-const AUTH_PROVIDER: AuthProviderConfig = {
-  type: 'entra-external-id',
-  providerIdentifier: 'https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/', // Must match AuthenticationType site setting
-  displayName: 'Sign in with External ID',
-};
+### Login Page — Layout Patterns
+
+The Login page renders providers from `EXTERNAL_PROVIDERS` and (optionally) the local form. The structural skeleton is shared across all 4 layouts; only the provider section differs.
+
+**Shared skeleton (all layouts):**
+
+```tsx
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import {
+  loginWithProvider,
+  AUTH_PROVIDERS,
+  LOCAL_PROVIDER,
+  EXTERNAL_PROVIDERS,
+  getAuthError,
+  getSessionExpiredMessage,
+  TermsRequiredError,
+} from '../services/authService'
+
+export default function Login() {
+  const navigate = useNavigate()
+  // ... state: errors, touched, serverError, successMessage, infoMessage,
+  //     isSubmitting, externalSubmittingId, plus invitationCode parsing ...
+
+  function handleExternalSignIn(providerId: string) {
+    const provider = AUTH_PROVIDERS.find(p => p.id === providerId)
+    if (!provider) return
+    setExternalSubmittingId(providerId)
+    loginWithProvider(provider, { returnUrl: '/', invitationCode })
+      .catch(err => { setServerError(err.message); setExternalSubmittingId(undefined) })
+  }
+
+  function handleLocalSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!LOCAL_PROVIDER) return
+    // validate, then:
+    loginWithProvider(LOCAL_PROVIDER, {
+      returnUrl: '/',
+      invitationCode,
+      credentials: { credential: email, password, rememberMe: false },
+    }).catch(err => {
+      if (err instanceof TermsRequiredError) return navigate('/terms')
+      setServerError(err.message)
+    })
+  }
+
+  // ...render based on LOGIN_LAYOUT (see patterns below)...
+}
 ```
+
+#### Layout 1: Horizontal row (default)
+
+External provider buttons in a wrapping flex row at the top. Local form below an "OR SIGN IN WITH EMAIL" divider.
+
+```tsx
+{EXTERNAL_PROVIDERS.length > 0 && (
+  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+    {EXTERNAL_PROVIDERS.map(p => (
+      <button key={p.id} type="button"
+        style={{ flex: '1 1 0', minWidth: 0, padding: '10px 16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        disabled={!!externalSubmittingId || isSubmitting}
+        onClick={() => handleExternalSignIn(p.id)}>
+        {externalSubmittingId === p.id ? 'Redirecting...' : p.displayName}
+      </button>
+    ))}
+  </div>
+)}
+{EXTERNAL_PROVIDERS.length > 0 && LOCAL_PROVIDER && <Divider label="OR SIGN IN WITH EMAIL" />}
+{LOCAL_PROVIDER && <LocalForm onSubmit={handleLocalSubmit} loginByEmail={LOCAL_PROVIDER.loginByEmail} />}
+```
+
+#### Layout 2: Vertical stack
+
+External provider buttons stacked full-width vertically. Same divider + local form below.
+
+```tsx
+{EXTERNAL_PROVIDERS.length > 0 && (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
+    {EXTERNAL_PROVIDERS.map(p => (
+      <button key={p.id} type="button"
+        style={{ width: '100%', padding: '12px 16px' }}
+        disabled={!!externalSubmittingId || isSubmitting}
+        onClick={() => handleExternalSignIn(p.id)}>
+        {externalSubmittingId === p.id ? 'Redirecting...' : p.displayName}
+      </button>
+    ))}
+  </div>
+)}
+{/* divider + LocalForm — same as horizontal layout */}
+```
+
+#### Layout 3: Primary spotlight
+
+One featured provider (matching `PRIMARY_PROVIDER_ID`) shown as a large primary CTA. Other external providers tucked under a `<details>` disclosure. Local form below.
+
+```tsx
+const primary = EXTERNAL_PROVIDERS.find(p => p.id === PRIMARY_PROVIDER_ID) ?? EXTERNAL_PROVIDERS[0]
+const others = EXTERNAL_PROVIDERS.filter(p => p.id !== primary?.id)
+
+{primary && (
+  <button type="button" className="btn-primary"
+    style={{ width: '100%', padding: '14px 20px', fontSize: '1rem', marginBottom: 12 }}
+    disabled={!!externalSubmittingId || isSubmitting}
+    onClick={() => handleExternalSignIn(primary.id)}>
+    {externalSubmittingId === primary.id ? 'Redirecting...' : primary.displayName}
+  </button>
+)}
+{others.length > 0 && (
+  <details style={{ marginBottom: 24 }}>
+    <summary style={{ cursor: 'pointer', fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
+      More sign-in options
+    </summary>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      {others.map(p => (
+        <button key={p.id} type="button"
+          style={{ width: '100%', padding: '10px 16px' }}
+          onClick={() => handleExternalSignIn(p.id)}>
+          {p.displayName}
+        </button>
+      ))}
+    </div>
+  </details>
+)}
+{/* divider + LocalForm — same as horizontal layout */}
+```
+
+#### Layout 4: Tabbed
+
+Tabs across the top — one tab per external provider, plus a "Email & password" tab when local exists. The selected tab's UI renders below.
+
+```tsx
+const [activeTab, setActiveTab] = useState<string>(
+  EXTERNAL_PROVIDERS[0]?.id ?? LOCAL_PROVIDER?.id ?? ''
+)
+
+const allTabs: { id: string; label: string }[] = [
+  ...EXTERNAL_PROVIDERS.map(p => ({ id: p.id, label: p.displayName })),
+  ...(LOCAL_PROVIDER ? [{ id: LOCAL_PROVIDER.id, label: 'Email & password' }] : []),
+]
+
+return (
+  <>
+    <div role="tablist" style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--color-border)', marginBottom: 24 }}>
+      {allTabs.map(tab => (
+        <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
+          style={{
+            padding: '10px 16px', border: 'none', background: 'none',
+            borderBottom: activeTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent',
+            cursor: 'pointer', fontWeight: activeTab === tab.id ? 600 : 400,
+          }}
+          onClick={() => setActiveTab(tab.id)}>
+          {tab.label}
+        </button>
+      ))}
+    </div>
+
+    {/* Render the active tab's UI */}
+    {(() => {
+      const external = EXTERNAL_PROVIDERS.find(p => p.id === activeTab)
+      if (external) {
+        return (
+          <button type="button" className="btn-primary"
+            style={{ width: '100%' }}
+            disabled={!!externalSubmittingId}
+            onClick={() => handleExternalSignIn(external.id)}>
+            {externalSubmittingId === external.id ? 'Redirecting...' : external.displayName}
+          </button>
+        )
+      }
+      if (LOCAL_PROVIDER && activeTab === LOCAL_PROVIDER.id) {
+        return <LocalForm onSubmit={handleLocalSubmit} loginByEmail={LOCAL_PROVIDER.loginByEmail} />
+      }
+      return null
+    })()}
+  </>
+)
+```
+
+#### Single-provider sites
+
+When `AUTH_PROVIDERS.length === 1`, all layouts collapse to a single button (external) or a single form (local). The layout choice doesn't visually matter — pick `horizontal-row` as the no-op default.
 
 ---
 

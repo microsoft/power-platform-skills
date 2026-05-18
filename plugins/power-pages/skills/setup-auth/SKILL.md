@@ -119,16 +119,79 @@ Read each file and compile a list of existing web roles (name, id, flags).
 
 **If "Skip"**: Continue — auth service and login/logout will still work, but role-based authorization will need roles created later.
 
-#### 1.5 Check for Existing Auth Code
+#### 1.5 Discover Existing Auth Configuration
 
-Search for existing auth files to avoid duplicating work:
+**Always run this discovery step, even on a first invocation** — the site may have site settings from a prior run, or from hand-editing the YAML files, even if no SPA auth code exists yet. The goal is to make sure we never silently drop a provider that's already configured server-side.
 
-- `src/services/authService.ts` or `src/services/authService.js`
-- `src/types/powerPages.d.ts`
-- `src/utils/authorization.ts` or `src/utils/authorization.js`
-- Auth components (e.g., `AuthButton.tsx`, `AuthButton.vue`)
+**Step 1 — Scan `.powerpages-site/site-settings/` for already-configured providers.**
 
-If auth files already exist, present them to the user and ask whether to overwrite or skip.
+Detect existing providers by matching site-setting filenames against these patterns:
+
+| Pattern | Maps to provider type |
+|---|---|
+| `Authentication-OpenIdConnect-{Name}-AuthenticationType.sitesetting.yml` | OIDC (Entra External ID, Okta, Auth0, generic OIDC, B2C — all share the OIDC path) |
+| `Authentication-SAML2-{Name}-AuthenticationType.sitesetting.yml` | SAML2 |
+| `Authentication-WsFederation-{Name}-AuthenticationType.sitesetting.yml` | WS-Federation |
+| `Authentication-OpenAuth-{Microsoft\|Facebook\|Google}-{ClientId\|AppId}.sitesetting.yml` | Social OAuth |
+| `Authentication-Registration-LocalLoginEnabled.sitesetting.yml` with value `true` | Local Authentication |
+
+For each detected provider, read its full set of `.sitesetting.yml` files to extract: `Authority` / `MetadataAddress`, `ClientId` / `AppId`, `AuthenticationType` (the providerIdentifier), `Caption` or display name (if present), and the `{Name}` slug used in the keys (e.g., `OpenIdConnect_1`, `EntraExternalId`).
+
+Also distinguish **Entra External ID** from generic **OIDC** by looking at the Authority URL pattern:
+- `*.ciamlogin.com/*` or `login.microsoftonline.com/{guid}/*` with a `RPInitiatedLogout=true` setting → **Entra External ID**
+- Any other OIDC authority → **OIDC (Generic)**
+
+**Step 2 — Scan for existing SPA auth code.**
+
+Check for these files and read their key markers:
+
+- `src/services/authService.ts` or `.js` — look for `AUTH_PROVIDERS` array (current pattern) vs single `AUTH_PROVIDER` constant (legacy)
+- `src/types/powerPages.d.ts` — exists or not
+- `src/utils/authorization.ts` — exists or not
+- Auth components (`AuthButton.*`, `Login.*`, `Registration.*`, `RedeemInvitation.*`, etc.) — list which exist
+- `src/pages/Login.tsx` — extract which providers it currently renders (via `AUTH_PROVIDERS` import or inline)
+
+**Step 3 — Present findings to the user.**
+
+If providers were detected from site settings, present them with their config:
+
+```
+I found these existing auth providers on your site:
+
+  ✓ Entra External ID
+    - ProviderName: OpenIdConnect_1
+    - Tenant: ba275000-98c8-404d-a6f0-c5450f2aa668
+    - ClientId: e728d63e-1190-495a-ae29-663e9cc10877
+    - Configured in site settings: yes
+    - Surfaced in SPA UI: NO (authService.ts has no entry for this provider)
+
+  ✓ Local Authentication
+    - LoginByEmail: true
+    - Surfaced in SPA UI: yes
+```
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| I found existing auth providers on your site. What would you like to do? | Existing auth | Keep all existing providers and add a new one (Recommended) — preserves what's there, adds what you ask for next, Keep all existing providers (no new provider this run) — re-generates SPA code to surface what's already in site settings, Replace everything with a new configuration — wipes existing site settings and SPA code, starts fresh |
+
+**"Keep all existing providers and add a new one"** (default path):
+- Store the discovered providers as `EXISTING_PROVIDERS` — these will be merged into the `AUTH_PROVIDERS` array generated in Phase 3.2
+- Phase 2.1 will prompt for the NEW provider being added; the existing ones are kept untouched
+- For **local auth specifically** — if `Local Authentication` is in `EXISTING_PROVIDERS`, **always regenerate the local auth SPA code** (login flow, registration page, forgot/reset password, redeem invitation) from the user's Phase 2.1 answers. Don't try to preserve hand-edited local-auth code — the local flows are complex enough that partial updates introduce more bugs than they avoid.
+
+**"Keep all existing providers (no new provider this run)"**:
+- Skip the Phase 2.1 provider selection question entirely
+- Re-derive `AUTH_PROVIDERS` from `EXISTING_PROVIDERS` only
+- Useful for: fixing a site where the SPA UI is missing a provider that's already in site settings (the exact bug this branch was created to fix)
+
+**"Replace everything with a new configuration"**:
+- Set `EXISTING_PROVIDERS = []`
+- Delete existing OIDC/SAML2/WsFed/OpenAuth site-setting YAMLs as part of Phase 8.1
+- Run Phase 2.1 as if no providers existed
+
+> **DO NOT** offer a "skip / no changes" option. If the user invokes setup-auth, they want auth set up — silently doing nothing is worse than asking.
 
 ### Output
 
@@ -136,7 +199,9 @@ If auth files already exist, present them to the user and ask whether to overwri
 - Framework identified (React, Vue, Angular, or Astro)
 - Deployment status verified
 - Web roles inventory compiled
-- Existing auth code conflicts identified (if any)
+- **`EXISTING_PROVIDERS` list compiled from site settings, with provider type, ProviderName slug, ClientId/Authority/etc. for each**
+- **`MERGE_MODE` chosen: `keep-and-add` (default) | `keep-only` | `replace-all`**
+- SPA auth file inventory recorded (which files exist, whether they use `AUTH_PROVIDERS` array or legacy single-provider pattern)
 
 ---
 
@@ -177,6 +242,18 @@ Before asking the user which providers they want, analyze the site context from 
 **If "No"** or **if you cannot infer with confidence**: Fall back to Phase 2.1 below.
 
 #### 2.1 Gather Requirements
+
+**Re-run handling — when Phase 1.5 detected existing providers:**
+
+The behavior depends on the `MERGE_MODE` chosen in Phase 1.5:
+
+- **`keep-only`** (user chose "keep all existing, no new provider this run") → Skip the new-provider selection question entirely. Proceed to the "Local Authentication" follow-ups only if local was detected. Phase 3.2 will generate `AUTH_PROVIDERS` from `EXISTING_PROVIDERS` only.
+- **`keep-and-add`** (default — user wants to add one more) → Ask the user what to add. The provider selection question below should still be multi-select (the user could be adding multiple new providers in one go), but the existing providers are NOT in the list (they're already configured — the question is asking what's *new*). Common patterns:
+  - User has Entra External ID, wants to add Local Auth → user selects "Local Authentication" → ask local follow-ups → Phase 3.2 merges
+  - User has Entra External ID + Local, wants to add a *second* Entra External ID tenant → user selects "Entra External ID" → after collecting Authority/ClientId, ask: `"You already have an Entra External ID provider configured for tenant {existing-tenant}. This new one is a separate instance — give it a distinct ProviderName slug (used in site setting keys like Authentication/OpenIdConnect/{ProviderName}/* and in code as the provider id)."` Let the user pick a slug (default to the next incrementing number, e.g., `OpenIdConnect_2`) or pick a custom name (e.g., `EntraExternalId_Employee`).
+- **`replace-all`** (user chose to wipe everything) → Run the provider selection question as on a first invocation.
+
+**Do NOT proactively ask "do you want to configure multiple instances?"** at the start. Walk the user through configuring ONE provider at a time. When they finish configuring one and want another, they can re-run setup-auth → Phase 1.5 detects what's there → Phase 2.1 in `keep-and-add` mode asks "what do you want to add now?". This keeps the question count low for the common case (configure one provider) while still supporting the advanced case (multiple tenants).
 
 **IMPORTANT: Multiple providers are supported.** The user may want more than one identity provider (e.g., Entra External ID + Google). If the user's initial prompt mentions specific providers, skip the provider selection question and proceed directly to collecting details for each mentioned provider.
 
@@ -297,6 +374,22 @@ Store this choice as `REGISTRATION_MODE` — it drives:
 **For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
+
+**Login page layout** — when more than one auth provider is configured (including local + 1 external, or 2+ providers), the Login page renders all of them. Ask the user how they want providers laid out:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| How should sign-in options be laid out on the Login page? | Layout | Horizontal row (Recommended) — provider buttons side-by-side in a wrapping row, local form below a divider, Vertical stack — provider buttons stacked full-width, local form below a divider, Primary spotlight — one provider featured as the primary CTA, others under a "More sign-in options" toggle, local form below, Tabbed — tabs to switch between provider modes (good for 3+ providers, feels heavy for 2) |
+
+Store this choice as `LOGIN_LAYOUT` — Phase 5.1.1 renders the Login page based on it. If only one provider is configured (e.g., `Entra External ID` only with no local), `LOGIN_LAYOUT` is moot: the AuthButton's "Sign In" calls `login()` directly, no Login page is needed.
+
+For the **Primary spotlight** layout, ask a follow-up:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Which provider should be featured as the primary sign-in option? | Primary provider | *(List the configured providers as options. The first external provider is a sensible default.)* |
+
+Store as `PRIMARY_PROVIDER_ID`.
 
 Then determine the scope:
 
@@ -550,15 +643,30 @@ Create `src/types/powerPages.d.ts` with type definitions for the Power Pages por
 
 #### 3.2 Create Auth Service
 
-Create the auth service file based on the detected framework and selected identity provider.
+Create the auth service file based on the detected framework and selected identity provider(s).
 
-**All frameworks**: Create `src/services/authService.ts` with these functions:
+> **ALWAYS use the `AUTH_PROVIDERS` array pattern, even with one entry.** Never generate a single `AUTH_PROVIDER` constant. The array pattern means adding a second provider later (e.g., a second Entra External ID tenant, or local + an external provider) is just appending to the array — no restructuring needed. This avoids the bug class where a re-run silently drops previously-configured providers because the single-constant pattern can't represent more than one.
+>
+> The array MUST include:
+> - Every provider in `EXISTING_PROVIDERS` from Phase 1.5 (merged in based on the user's `MERGE_MODE` choice)
+> - Any new provider the user added via Phase 2.1
+>
+> Use a stable `id` for each provider (e.g., `entra-external-id-customer`, `entra-external-id-employee`, `local`) so React keys and switch statements remain stable across re-runs.
 
+**All frameworks**: Create `src/services/authService.ts` with these functions and types:
+
+- `AuthProviderType` — string union: `'local' | 'oidc' | 'entra-id' | 'saml2' | 'ws-federation' | 'social'`
+- `AuthProviderConfig` — interface with `id`, `type`, `displayName`, optional `providerIdentifier` (required for non-local), optional `loginByEmail` (local-only)
+- `AUTH_PROVIDERS: AuthProviderConfig[]` — the array (one entry per configured provider, in the order they should appear on the Login page)
+- `LOCAL_PROVIDER` — exported helper: `AUTH_PROVIDERS.find(p => p.type === 'local')` (`undefined` if no local)
+- `EXTERNAL_PROVIDERS` — exported helper: `AUTH_PROVIDERS.filter(p => p.type !== 'local')`
 - `getCurrentUser()` — reads from `window.Microsoft.Dynamic365.Portal.User`
 - `isAuthenticated()` — checks if user exists and has `userName`
-- `getAuthProvider()` — returns the configured provider type and identifier
+- `getAuthProvider()` — DEPRECATED. For backward compat, returns the first local provider or the first provider overall. Prefer reading `AUTH_PROVIDERS` directly.
 - `fetchAntiForgeryToken()` — fetches from `/_layout/tokenhtml` and parses HTML response
-- `login(returnUrl?)` — initiates login based on the configured provider (see below)
+- `loginExternal(providerIdentifier, returnUrl?, invitationCode?)` — Form POST to `/Account/Login/ExternalLogin` for external providers
+- `loginLocal(credential, password, rememberMe?, returnUrl?, invitationCode?)` — fetch POST to `/SignIn` for local
+- `loginWithProvider(provider, { returnUrl?, invitationCode?, credentials? })` — **router**: dispatches to `loginLocal()` or `loginExternal()` based on `provider.type`. This is what UI components should call.
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
 - `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message
@@ -747,22 +855,37 @@ The component should:
 - Include a loading state while checking auth status
 - Be styled to match the site's existing design (read existing CSS variables/theme)
 
-#### 5.1.1 Create Sign-In Page (Multi-Provider Only)
+#### 5.1.1 Create Sign-In Page
 
 > **Route naming — avoid server conflicts:** Power Pages reserves `/SignIn`, `/Register`, and all `/Account/Login/*` paths for server-rendered auth pages. SPA routes MUST NOT collide with these. Use `/login` for the sign-in page and `/registration` for the registration page.
 
-**If more than one auth provider is configured**, create a dedicated `/login` page that shows all provider options. This page:
+**Always create the `/login` page when `AUTH_PROVIDERS.length > 1`.** When only one provider is configured (single external OR single local), the AuthButton's "Sign In" can call `login()` directly and no Login page is strictly needed — but creating one is still recommended since it gives a stable place to surface auth errors, the password reset link, the invitation banner, etc.
 
-- Lists all external provider buttons (e.g., "Sign in with External ID", "Sign in with Google")
-- If local auth is also configured, shows a local login form (expand on click) with the appropriate credential field — an `Email` field (type `email`) when `LocalLoginByEmail` is `true`, or a `Username` field (type `text`) when `false`. Include a "Forgot password?" link pointing to `/Account/Login/ForgotPassword` and a "Create an account" link (the "Create an account" link should point to `/registration` and should only be shown when `OpenRegistrationEnabled` is `true` — omit it for invitation-only registration)
-- Displays server-side auth errors parsed from `?message=` query params (via `getAuthError()`) and session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`). Both should be checked on mount and displayed at the top of the page.
-- Is styled to match the site's design (centered card layout with provider buttons)
+The Login page must:
 
-See the multi-provider AuthButton component pattern in `authentication-reference.md` for the implementation.
+- Import `AUTH_PROVIDERS`, `LOCAL_PROVIDER`, `EXTERNAL_PROVIDERS`, and `loginWithProvider` from authService
+- Render every external provider as a button (loop `EXTERNAL_PROVIDERS`) — each button calls `loginWithProvider(provider, { returnUrl, invitationCode })`
+- Render the local email/password form when `LOCAL_PROVIDER` exists. On submit, call `loginWithProvider(LOCAL_PROVIDER, { returnUrl, invitationCode, credentials: { credential, password, rememberMe } })`
+- Use the credential field based on `LOCAL_PROVIDER.loginByEmail` — `Email` (type `email`) when `true`, `Username` (type `text`) when `false`
+- Disable all buttons while any submission is in flight (an `isSubmitting` flag for local + `externalSubmittingId` for external)
+- Catch `TermsRequiredError` from `loginWithProvider` and navigate to `/terms`
+- Show the invitation banner when `invitationCode` is in the URL: "Sign in to redeem invitation {code}. The invitation will be linked to your account after you sign in."
+- Show server-side auth errors parsed from `?message=` query params (via `getAuthError()`) and session-expired messages from `?sessionExpired=true` (via `getSessionExpiredMessage()`)
+- Include a "Forgot password?" link to `/forgot-password` (SPA route) when `LOCAL_PROVIDER` exists and `ResetPasswordEnabled` is true
+- Include a "Create an account" link to `/registration` when `REGISTRATION_MODE` is `Open registration only` or `Both` (omit for `Invitation-only` and `Registration disabled`)
 
-For single-provider sites, the AuthButton component in the nav bar is sufficient — no separate page needed.
+**Render layout based on `LOGIN_LAYOUT` from Phase 2.1:**
 
-When the `/login` page exists, the "Sign In" button in the nav bar should navigate to `/login` instead of directly calling `login()`.
+| `LOGIN_LAYOUT` | Layout structure |
+|---|---|
+| `horizontal-row` (default) | External providers in a `flex-wrap` row at top, "OR SIGN IN WITH EMAIL" divider, local form below. Each external button has `flex: 1 1 0; min-width: 0` and ellipsis-truncates long labels. |
+| `vertical-stack` | External providers stacked full-width vertically, "OR SIGN IN WITH EMAIL" divider, local form below. Each external button is full card width. |
+| `primary-spotlight` | The provider matching `PRIMARY_PROVIDER_ID` rendered as a large primary CTA. Other external providers tucked under a `<details>` disclosure labeled "More sign-in options" or "Other ways to sign in". Then divider + local form. |
+| `tabbed` | A tab bar with one tab per provider (`displayName`). The selected tab's UI renders below. For external providers, the tab content is just the "Sign in with X" button; for local, it's the email/password form. |
+
+See `authentication-reference.md` for full code examples of each layout pattern in React.
+
+When the `/login` page exists, the AuthButton's "Sign In" must navigate to `/login` (use `<Link to="/login">`) instead of calling any login function directly.
 
 #### 5.1.2 Create Registration Page (Local Auth Only)
 
