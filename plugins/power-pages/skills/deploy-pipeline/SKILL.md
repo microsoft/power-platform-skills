@@ -507,7 +507,23 @@ Response is HTTP 204. If the PATCH fails with a version conflict error, check bo
 
 ### Phase 6 — Deploy and Monitor
 
-> **If `ValidatePackageAsync` was unavailable (`VALIDATE_PACKAGE_UNAVAILABLE = true`)**: use the PAC CLI as the primary deployment mechanism instead of 6.1:
+**6.0 Final deploy consent gate.** Before kicking off the actual deployment — whether via `DeployPackageAsync` (6.1) or the `pac pipeline deploy` PAC CLI fallback — confirm with the user explicitly. The earlier gates (Phase 2 stage pick, Phase 2.5 unblock, Phase 3.5 completeness, Phase 5 env var values) each cover their own decision, but none of them is a final "ready to ship?" prompt and the deploy itself is not transactional — partial failures leave whatever has already imported on the target. This gate makes the production-promotion moment explicit. Use `AskUserQuestion`:
+
+> "Ready to deploy `{ARTIFACT_SOLUTION_NAME}` (v`{newVersion}`) to **`{SELECTED_STAGE.name}`** (`{targetEnvUrl}`)?
+>
+> This will run for ~3–60 minutes depending on solution size. The import is **not** transactional — if it fails partway, whatever already imported stays on the target and a manual cleanup (or re-deploy with a higher artifact version) is required to recover. `docs/alm/last-deploy.json` is written regardless of outcome.
+>
+> 1. **Deploy now** — POST `DeployPackageAsync` (or run `pac pipeline deploy` for the CLI fallback) and poll until terminal
+> 2. **Cancel** — leave the stage run in its current state (validated but not deployed); re-run `/power-pages:deploy-pipeline` later when ready"
+
+Branch on the answer:
+
+- **Deploy now** → proceed to 6.1 below (or the PAC CLI fallback box).
+- **Cancel** → stop cleanly. Do NOT call `DeployPackageAsync` or `pac pipeline deploy`. Tell the user: *"Cancelled. The stage run `{STAGE_RUN_ID}` is validated but not deployed. Re-invoke `/power-pages:deploy-pipeline` to resume. If the source solution version changes before you re-invoke, the stage run's `artifactversion` field will need a fresh PATCH (Phase 5.2) before deploying — re-running the skill handles that automatically."* Do not write a `docs/alm/last-deploy.json` on cancel — there's no deploy outcome to record.
+
+For Production targets specifically, treat this gate as the single most important prompt in the skill — the cancellation cost (stage run already validated) is small compared to a wrong-stage import.
+
+> **If `ValidatePackageAsync` was unavailable (`VALIDATE_PACKAGE_UNAVAILABLE = true`)**: use the PAC CLI as the primary deployment mechanism instead of 6.1. The same Phase 6.0 consent gate above gates this path too — do not run `pac pipeline deploy` until the user has answered "Deploy now":
 >
 > Ask user for `currentVersion` (pre-fill from `.solution-manifest.json` `solution.version` if available) and `newVersion` (suggest incrementing the patch number, e.g. `1.0.0.0` → `1.0.0.1`).
 >
@@ -525,7 +541,7 @@ Response is HTTP 204. If the PATCH fails with a version conflict error, check bo
 >
 > If CLI succeeds: parse the output for stage run status, write `docs/alm/last-deploy.json` with `status: "Succeeded"` (or the parsed status), and skip the `DeployPackageAsync` call and polling in 6.1–6.2.
 
-**6.1 Trigger deployment** (skip if `VALIDATE_PACKAGE_UNAVAILABLE = true` — use PAC CLI path above):
+**6.1 Trigger deployment** (skip if `VALIDATE_PACKAGE_UNAVAILABLE = true` — use PAC CLI path above). Only run after the Phase 6.0 consent gate returned "Deploy now":
 
 ```
 POST {hostEnvUrl}/api/data/v9.0/DeployPackageAsync
@@ -924,13 +940,16 @@ Authorization: Bearer {HOST_TOKEN}
 
 1. **Phase 2**: Target stage selection (which environment to deploy to)
 2. **Phase 2**: Retry confirmation if last deploy to this stage failed
-3. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
-4. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
-5. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-6. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
-7. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
-8. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
-9. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
+3. **Phase 2.5**: Pre-flight blocked-attachments unblock (`Yes — unblock / No — proceed anyway / Cancel deploy`). Only fires when the target env's `blockedattachments` setting blocks extensions the solution needs (typically `.js` for code sites). Modifies a tenant-wide security setting; explicit consent required.
+4. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
+5. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
+6. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
+7. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
+8. **Phase 6.0**: **Final deploy consent gate** — `Deploy now / Cancel`. Fires immediately before `DeployPackageAsync` (or the `pac pipeline deploy` fallback). Makes the production-promotion moment explicit; without it, Phase 5 → Phase 6.1 could fire without a final confirmation when validation passes cleanly. Treat as the single most important prompt for Production targets.
+9. **Phase 6**: Deployment approval gate — if Pending Approval mid-deploy, wait for user to approve
+10. **Phase 7.6.2**: Reactive blocked-attachments unblock (`Yes — unblock and retry / No — leave settings unchanged / Cancel`). Only fires when the deploy failed with `AttachmentBlocked` and pre-flight (Phase 2.5) was skipped or declined. Same security-setting consent as Phase 2.5.
+11. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
+12. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
 
