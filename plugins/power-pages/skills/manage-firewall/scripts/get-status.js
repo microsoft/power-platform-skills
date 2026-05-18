@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`get-status.js — Returns the current firewall status for a site.
 
 Usage:
-  node get-status.js --portalId <guid>
+  node get-status.js --portalId <portal-id>
 
 Flags:
   --portalId   Power Platform API portal identifier (resolved during prerequisites)
@@ -27,7 +27,7 @@ const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
 
 if (!portalId) {
-  fail('Usage: node get-status.js --portalId <guid>', 1);
+  fail('Usage: node get-status.js --portalId <portal-id>', 1);
 }
 
 (async () => {

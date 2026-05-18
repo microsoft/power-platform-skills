@@ -7,7 +7,7 @@ if (process.argv.includes('--help')) {
 Only include the rules being added or modified; existing rules not in the payload are preserved.
 
 Usage:
-  node set-rules.js --portalId <guid> --data-inline '<json>'
+  node set-rules.js --portalId <portal-id> --data-inline '<json>'
 
 Flags:
   --portalId      Power Platform API portal identifier (resolved during prerequisites)

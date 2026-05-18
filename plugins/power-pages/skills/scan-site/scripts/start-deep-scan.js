@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`start-deep-scan.js — Triggers an asynchronous deep scan.
 
 Usage:
-  node start-deep-scan.js --portalId <guid>
+  node start-deep-scan.js --portalId <portal-id>
 
 Flags:
   --portalId   Power Platform API portal identifier (resolved during prerequisites)
@@ -27,7 +27,7 @@ const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
 
 if (!portalId) {
-  fail('Usage: node start-deep-scan.js --portalId <guid>', 1);
+  fail('Usage: node start-deep-scan.js --portalId <portal-id>', 1);
 }
 
 (async () => {

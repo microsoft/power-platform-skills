@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`disable.js — Turns off the web application firewall for a site.
 
 Usage:
-  node disable.js --portalId <guid> [--timeoutMinutes <n>]
+  node disable.js --portalId <portal-id> [--timeoutMinutes <n>]
 
 Flags:
   --portalId         Power Platform API portal identifier (resolved during prerequisites)
@@ -32,7 +32,7 @@ const portalId = args.portalId;
 const timeoutMs = (parseInt(args.timeoutMinutes || '15', 10)) * 60 * 1000;
 
 if (!portalId) {
-  fail('Usage: node disable.js --portalId <guid> [--timeoutMinutes <n>]', 1);
+  fail('Usage: node disable.js --portalId <portal-id> [--timeoutMinutes <n>]', 1);
 }
 
 (async () => {

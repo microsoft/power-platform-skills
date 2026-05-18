@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`get-latest-report.js — Fetches the latest completed deep-scan report.
 
 Usage:
-  node get-latest-report.js --portalId <guid>
+  node get-latest-report.js --portalId <portal-id>
 
 Flags:
   --portalId   Power Platform API portal identifier (resolved during prerequisites)
@@ -27,7 +27,7 @@ const args = parseCliArgs(process.argv);
 const portalId = args.portalId;
 
 if (!portalId) {
-  fail('Usage: node get-latest-report.js --portalId <guid>', 1);
+  fail('Usage: node get-latest-report.js --portalId <portal-id>', 1);
 }
 
 (async () => {

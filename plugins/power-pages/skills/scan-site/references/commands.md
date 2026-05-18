@@ -80,14 +80,14 @@ Triggers an asynchronous deep scan. The service runs the scan in the background;
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId <guid>
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/start-deep-scan.js" --portalId <portal-id>
 ```
 
 ### Parameters
 
 | Flag           | Required | Description |
 |----------------|----------|-------------|
-| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites |
 
 ### Response (stdout)
 
@@ -119,15 +119,15 @@ Polls the scan-status endpoint until the scan finishes or the timeout elapses.
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <guid> [--timeoutMinutes <n>] [--intervalSeconds <n>]
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <guid> --once
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> [--timeoutMinutes <n>] [--intervalSeconds <n>]
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/poll-deep-scan.js" --portalId <portal-id> --once
 ```
 
 ### Parameters
 
 | Flag                  | Required | Default | Description |
 |-----------------------|----------|---------|-------------|
-| `--portalId`          | Yes      | —       | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`          | Yes      | —       | Power Platform API portalId resolved during prerequisites |
 | `--timeoutMinutes`    | No       | `20`    | Maximum time to wait. |
 | `--intervalSeconds`   | No       | `60`    | Pause between status checks. |
 | `--once`              | No       | —       | Single status check, no polling. Exits 0 with `{ "status": "ongoing" \| "idle" }`. |
@@ -177,14 +177,14 @@ Fetches the latest completed deep-scan report. Outputs the full report JSON to s
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId <guid>
+node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/get-latest-report.js" --portalId <portal-id>
 ```
 
 ### Parameters
 
 | Flag           | Required | Description |
 |----------------|----------|-------------|
-| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites |
 
 ### Response (stdout)
 

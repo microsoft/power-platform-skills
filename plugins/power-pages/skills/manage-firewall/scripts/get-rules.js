@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`get-rules.js — Returns the firewall rules for a site (custom and managed).
 
 Usage:
-  node get-rules.js --portalId <guid> [--ruleType <name>]
+  node get-rules.js --portalId <portal-id> [--ruleType <name>]
 
 Flags:
   --portalId   Power Platform API portal identifier (resolved during prerequisites)
@@ -30,7 +30,7 @@ const portalId = args.portalId;
 const ruleType = args.ruleType;
 
 if (!portalId) {
-  fail('Usage: node get-rules.js --portalId <guid> [--ruleType <name>]', 1);
+  fail('Usage: node get-rules.js --portalId <portal-id> [--ruleType <name>]', 1);
 }
 
 (async () => {

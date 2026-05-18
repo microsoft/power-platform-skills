@@ -36,12 +36,12 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --help` for the full contra
 
 ## `get-status.js`
 
-Returns the current firewall status (Enabled / Disabled / Enabling / Disabling).
+Returns the current firewall status (None/ Enabling / Created / Disabled / Disabling / Failed). **Only `Created` indicates the firewall is active/ enabled**.
 
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId <guid>
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId <portal-id>
 ```
 
 ### Response (stdout)
@@ -74,15 +74,17 @@ Returns the full firewall configuration (managed rule sets and custom rules).
 
 ### Usage
 
+> **Important:** call `get-status.js` first and only invoke this script when the WAF is enabled (i.e. `Created`). When `get-status.js` returns `Disabled`, `None`, or `Failed`, no policy is provisioned and this endpoint will return a 500. Treat that case as "no rules configured" without calling this script.
+
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId <guid> [--ruleType <name>]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId <portal-id> [--ruleType <name>]
 ```
 
 ### Parameters
 
 | Flag           | Required | Description |
 |----------------|----------|-------------|
-| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`   | Yes      | Power Platform API portalId resolved during prerequisites |
 | `--ruleType`   | No       | Optional filter — `Custom` or `Managed`. Omit for both. |
 
 ### Response (stdout)
@@ -100,14 +102,14 @@ Turns the firewall on. The underlying operation is asynchronous — the script p
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/enable.js" --portalId <guid> [--timeoutMinutes <n>]
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/enable.js" --portalId <portal-id> [--timeoutMinutes <n>]
 ```
 
 ### Parameters
 
 | Flag                  | Required | Default | Description |
 |-----------------------|----------|---------|-------------|
-| `--portalId`          | Yes      | —       | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`          | Yes      | —       | Power Platform API portalId resolved during prerequisites |
 | `--timeoutMinutes`    | No       | `15`    | Maximum time to wait for the operation to complete. |
 
 ### Response (stdout)
@@ -145,14 +147,14 @@ Creates or updates firewall rules. Send only the rules being added or modified. 
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" --portalId <guid> --data-inline '<json>'
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" --portalId <portal-id> --data-inline '<json>'
 ```
 
 ### Parameters
 
 | Flag             | Required | Description |
 |------------------|----------|-------------|
-| `--portalId`     | Yes      | Power Platform API portalId resolved during prerequisites. |
+| `--portalId`     | Yes      | Power Platform API portalId resolved during prerequisites |
 | `--data-inline`  | Yes      | JSON string with `CustomRules` and/or `ManagedRules` arrays. |
 
 ### Payload shape
@@ -189,7 +191,7 @@ Deletes one or more **custom** rules by name. Managed rule sets are not affected
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" --portalId <guid> --names <name1,name2,...>
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" --portalId <portal-id> --names <name1,name2,...>
 ```
 
 ### Response (stdout)

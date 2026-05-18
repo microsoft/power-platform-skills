@@ -36,6 +36,7 @@ Configure the firewall for a Power Pages production site. The firewall is only a
 - **Custom rule priority range: 11–65000.** Values 1–10 are reserved for platform-managed rules.
 - **`set-rules.js` is additive / update-only.** Send only rules being created or modified. The service merges them; existing rules not in the payload are untouched.
 - **Use `delete-rules.js` to remove rules.** `set-rules.js` cannot remove. Always use `delete-rules.js --names`.
+- **WAF state semantics — `Created` is the only "enabled" state.** `get-status.js` returns `value: "Created"` when the firewall is enabled and actively filtering (counter-intuitive — the API does NOT use `"Enabled"`). Any other value (`Disabled`, `None`, `Enabling`, `Disabling`, `Failed`) means no active policy exists. **MUST** call `get-status.js` first and only invoke `get-rules.js` when `value` is `Created` — otherwise the rules endpoint returns a 500 and the whole firewall section gets skipped in the report.
 
 ## Workflow
 
@@ -87,17 +88,26 @@ If the site is ineligible, tell the user in plain language what the limitation i
 
 ## 2. Check firewall state
 
+### 2.1 Get status (always run first)
+
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>"
 ```
+
+The response shape is `{ "status": "ok", "value": "<state>" }`.
+
+- `Created` — WAF is enabled and filtering. Proceed to **2.2** to fetch rules.
+- Any other value (`Disabled`, `None`, `Enabling`, `Disabling`, `Failed`, etc.) — **WAF is not enabled**. **MUST NOT** call `get-rules.js` — the rules endpoint will return a 500 because no active policy exists to read. Skip **2.2** and treat the rules payload as empty: `{ "status": "ok", "body": { "CustomRules": [], "ManagedRules": [] } }`.
+
+If the status response is `"status": "unsupported"`, tell the user the firewall is not available and stop.
+
+### 2.2 Get rules (only when WAF is enabled)
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>"
 ```
 
-Both scripts output the full response as JSON to stdout.
-
-If either returns `"status": "unsupported"`, tell the user the firewall is not available and stop.
+Both scripts output the full response as JSON to stdout. If `get-rules.js` returns `"status": "unsupported"`, tell the user the firewall is not available and stop.
 
 ---
 
@@ -184,6 +194,8 @@ After completion, re-run status and rules calls to verify the new state.
 ## 5. Summarize and next steps
 
 ### 5.1 Review mode
+
+Apply the same status-then-rules gating as § 2 — only invoke `get-rules.js` when the status `value` is `Created`. For any other value, write the empty-rules payload directly to `<REVIEW_DIR>/firewall-rules.json` instead of calling the script.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"

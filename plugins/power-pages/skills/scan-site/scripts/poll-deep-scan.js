@@ -6,8 +6,8 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`poll-deep-scan.js — Polls the deep-scan status endpoint until completion or timeout.
 
 Usage:
-  node poll-deep-scan.js --portalId <guid> [--timeoutMinutes <n>] [--intervalSeconds <n>]
-  node poll-deep-scan.js --portalId <guid> --once
+  node poll-deep-scan.js --portalId <portal-id> [--timeoutMinutes <n>] [--intervalSeconds <n>]
+  node poll-deep-scan.js --portalId <portal-id> --once
 
 Flags:
   --portalId          Power Platform API portal identifier (resolved during prerequisites)
@@ -39,7 +39,7 @@ const timeoutMinutes = parseInt(args.timeoutMinutes || '20', 10);
 const intervalSeconds = parseInt(args.intervalSeconds || '60', 10);
 
 if (!portalId) {
-  fail('Usage: node poll-deep-scan.js --portalId <guid> [--timeoutMinutes <n>] [--intervalSeconds <n>] [--once]', 1);
+  fail('Usage: node poll-deep-scan.js --portalId <portal-id> [--timeoutMinutes <n>] [--intervalSeconds <n>] [--once]', 1);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

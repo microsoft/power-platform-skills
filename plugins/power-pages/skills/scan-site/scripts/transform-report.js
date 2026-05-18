@@ -10,11 +10,11 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`transform-report.js — Transforms a deep-scan report into findings JSON.
 
 Usage:
-  node transform-report.js --portalId <guid>
+  node transform-report.js --portalId <portal-id>
   node transform-report.js --reportFile <path>
 
 Flags:
-  --portalId    Power Platform API portal identifier (fetches the report)
+  --portalId    Power Platform API portal identifier (resolved during prerequisites)
   --reportFile  Path to a previously saved raw report JSON (skips the API call)
   --help        Show this help message
 

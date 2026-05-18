@@ -6,7 +6,7 @@ if (process.argv.includes('--help')) {
   process.stdout.write(`delete-rules.js — Deletes custom firewall rules by name.
 
 Usage:
-  node delete-rules.js --portalId <guid> --names <name1,name2,...>
+  node delete-rules.js --portalId <portal-id> --names <name1,name2,...>
 
 Flags:
   --portalId   Power Platform API portal identifier (resolved during prerequisites)
@@ -30,7 +30,7 @@ const portalId = args.portalId;
 const namesArg = args.names;
 
 if (!portalId || !namesArg) {
-  fail('Usage: node delete-rules.js --portalId <guid> --names <name1,name2,...>', 1);
+  fail('Usage: node delete-rules.js --portalId <portal-id> --names <name1,name2,...>', 1);
 }
 
 const names = namesArg.split(',').map((n) => n.trim()).filter(Boolean);
