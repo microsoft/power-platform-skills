@@ -6,13 +6,15 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
+const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-runValidation((cwd) => {
-  const configPath = findPath(cwd, 'powerpages.config.json');
-  if (!configPath) approve(); // Not a Power Pages project, skip
+async function main() {
+  return runValidation((cwd) => {
+    const configPath = findPath(cwd, 'powerpages.config.json');
+    if (!configPath) approve(); // Not a Power Pages project, skip
 
-  const projectRoot = path.dirname(configPath);
-  const errors = [];
+    const projectRoot = path.dirname(configPath);
+    const errors = [];
 
   // 1. Required files
   for (const file of ['package.json', '.gitignore', 'powerpages.config.json']) {
@@ -67,12 +69,13 @@ runValidation((cwd) => {
     errors.push('Missing src/ directory');
   }
 
-  if (errors.length > 0) {
-    block('Power Pages site validation failed:\n- ' + errors.join('\n- '));
-  }
+    if (errors.length > 0) {
+      block('Power Pages site validation failed:\n- ' + errors.join('\n- '));
+    }
 
-  approve();
-});
+    approve();
+  });
+}
 
 const PLACEHOLDER_RE = /__[A-Z][A-Z_]{2,}__/;
 
@@ -103,3 +106,8 @@ function findPlaceholders(dir) {
   } catch {}
   return results;
 }
+
+runInstrumented('validate-create-site', main).catch((err) => {
+  process.stderr.write(String((err && err.stack) || err) + '\n');
+  process.exit(1);
+});

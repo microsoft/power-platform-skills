@@ -20,7 +20,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 - `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in
 - `pacCliVersion` — semver from `pac --version`
-- `aiAgentName`, `aiAgentVersion` — host AI agent detected via env (Claude Code, Copilot CLI). Honors `AI_AGENT_NAME` / `AI_AGENT_VERSION` overrides
+- `aiAgentName`, `aiAgentVersion` — host AI agent detected via env (Claude Code via `CLAUDECODE=1`, GitHub Copilot CLI via `COPILOT_CLI=1` + `COPILOT_CLI_BINARY_VERSION`). Honors `AI_AGENT_NAME` / `AI_AGENT_VERSION` overrides
 
 **Per-event:**
 
