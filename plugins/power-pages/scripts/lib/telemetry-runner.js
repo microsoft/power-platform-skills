@@ -32,7 +32,7 @@ function loadTelemetryDeps() {
 
 async function runInstrumented(scriptName, asyncFn, _overrides = {}) {
   const deps = _overrides.deps || loadTelemetryDeps();
-  if (!deps) return asyncFn();
+  if (!deps) return await asyncFn();
 
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 

@@ -47,9 +47,10 @@ function readIkey() {
       ikey: cfg.instrumentationKey || "",
       collectorUrl: cfg.collector_url || "",
       eventStreamName: cfg.event_stream_name || "",
+      disabled: cfg.disabled === true,
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "" };
+    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
   }
 }
 
@@ -71,6 +72,9 @@ function readStdin() {
 }
 
 (async () => {
+  // Fast-path opt-out: skip stdin read and every other side effect.
+  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") process.exit(0);
+
   const raw = await readStdin();
   let parsed;
   try {
@@ -82,9 +86,15 @@ function readStdin() {
   const skillName = hookUtils.getTrackedSkillFromToolInput(parsed.tool_input);
   if (!skillName) process.exit(0);
 
+  // Fast-path kill switch / unconfigured: gate BEFORE the pac shell-outs
+  // (`pac auth who` ~3s + `pac --version` ~2s) so disabled / opted-out
+  // hook invocations cost effectively nothing.
+  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
+  if (disabled) process.exit(0);
+  if (!ikey) process.exit(0);
+
   const { correlation_id } = correlationLib.write({ skillName });
 
-  const { ikey, collectorUrl, eventStreamName } = readIkey();
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
   const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 

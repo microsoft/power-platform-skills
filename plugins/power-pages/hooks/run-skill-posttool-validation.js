@@ -69,13 +69,12 @@ process.stdin.on('end', async () => {
 
   // Telemetry emission: fail-closed, never changes exit code.
   try {
-    const emitSpawn = require(path.join(TELEMETRY_DIR, 'lib', 'emit-spawn'));
-    const eventsLib = require(path.join(TELEMETRY_DIR, 'lib', 'events'));
-    const correlationLib = require(path.join(TELEMETRY_DIR, 'lib', 'correlation'));
-    const sessionLib = require(path.join(TELEMETRY_DIR, 'lib', 'session'));
-    const pacAuthLib = require(path.join(TELEMETRY_DIR, 'lib', 'pac-auth'));
-    const agentInfoLib = require(path.join(TELEMETRY_DIR, 'lib', 'agent-info'));
-
+    // Fast-path opt-out / kill-switch: cheap checks BEFORE the pac
+    // shell-outs (`pac auth who` ~3s + `pac --version` ~2s) so disabled /
+    // opted-out invocations don't pay the latency.
+    if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === '0') {
+      process.exit(validatorStatus);
+    }
     const ikeyCfg = (() => {
       try {
         return JSON.parse(
@@ -85,6 +84,15 @@ process.stdin.on('end', async () => {
         return { ikey: '', collector_url: '', event_stream_name: '' };
       }
     })();
+    if (ikeyCfg.disabled === true) process.exit(validatorStatus);
+    if (!ikeyCfg.instrumentationKey) process.exit(validatorStatus);
+
+    const emitSpawn = require(path.join(TELEMETRY_DIR, 'lib', 'emit-spawn'));
+    const eventsLib = require(path.join(TELEMETRY_DIR, 'lib', 'events'));
+    const correlationLib = require(path.join(TELEMETRY_DIR, 'lib', 'correlation'));
+    const sessionLib = require(path.join(TELEMETRY_DIR, 'lib', 'session'));
+    const pacAuthLib = require(path.join(TELEMETRY_DIR, 'lib', 'pac-auth'));
+    const agentInfoLib = require(path.join(TELEMETRY_DIR, 'lib', 'agent-info'));
 
     const pluginVersion = (() => {
       try {

@@ -66,11 +66,6 @@ async function main() {
   });
 }
 
-runInstrumented('validate-setup-auth', main).catch((err) => {
-  process.stderr.write(String((err && err.stack) || err) + '\n');
-  process.exit(1);
-});
-
 function findAuthService(projectRoot) {
   const candidates = [
     path.join(projectRoot, 'src', 'services', 'authService.ts'),
