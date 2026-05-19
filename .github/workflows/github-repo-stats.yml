@@ -12,11 +12,18 @@ jobs:
         name: github-repo-stats
         runs-on: ubuntu-latest
         steps:
+            - name: generate app token
+              id: app-token
+              uses: actions/create-github-app-token@v1
+              with:
+                  app-id: 3189942
+                  private-key: ${{ secrets.POWER_PLATFORM_SKILLS_APP_PRIVATE_KEY }}
+
             - name: run-ghrs
               # Use latest release.
               uses: jgehrcke/github-repo-stats@RELEASE
               with:
                   repository: microsoft/power-platform-skills
-                  ghtoken: ${{ secrets.ghrs_github_api_token }}
+                  ghtoken: ${{ steps.app-token.outputs.token }}
                   databranch: github-repo-stats
                   ghpagesprefix: https://microsoft.github.io/power-platform-skills
