@@ -48,3 +48,9 @@ ENV/
 Thumbs.db
 
 .playwright-mcp/
+
+# BMad Method (dev-time only; not part of the published plugin marketplace)
+_bmad/
+_bmad-output/
+.claude/skills/
+docs/
