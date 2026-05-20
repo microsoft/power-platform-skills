@@ -212,12 +212,15 @@ Read `genpage-plan.md` for the app decision and the `Solution` line in
 **If "create new":**
 
 ```powershell
-pac model create --name "App Name" --solution "<Solution unique name>"
+pac model create --name "App Name" --solution "<Solution unique name>" --publish
 ```
 
 **`--solution` is mandatory.** `pac model create` errors out with
 `"The given solution name is not valid: ()"` if you omit it — its claimed
 "active solution" fallback does not work in practice.
+
+**`--publish` is mandatory.** Without it the new appmodule stays in draft and
+the genux runtime URL errors with "app not published".
 
 - Use the plan's `Solution` value verbatim. The planner always writes one
   (default fallback is literally `Default`).
