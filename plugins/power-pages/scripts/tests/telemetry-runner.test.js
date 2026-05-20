@@ -30,11 +30,11 @@ test("runInstrumented forwards envelopeName from ikey.json event_stream_name", a
     ikeyCfg: {
       instrumentationKey: "key-value",
       collector_url: "https://x",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
     },
   };
   await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
-  assert.equal(captured.envelopeName, "PowerPagesPluginEvent");
+  assert.equal(captured.envelopeName, "PagesPluginEvent");
 });
 
 test("runInstrumented reads iKey from instrumentationKey property (not legacy 'ikey')", async () => {
@@ -48,7 +48,7 @@ test("runInstrumented reads iKey from instrumentationKey property (not legacy 'i
       instrumentationKey: "the-real-key",
       ikey: "DO-NOT-READ-THIS-LEGACY-FIELD",
       collector_url: "https://x",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
     },
   };
   await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });

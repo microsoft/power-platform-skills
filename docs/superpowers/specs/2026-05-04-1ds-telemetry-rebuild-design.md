@@ -44,7 +44,7 @@ plugin's ikey.json    ┐
                        ├──►  hook wrapper  ──►  events.js builder  ──►  fireAndForget  ──►  emit-dispatcher  ──►  HTTPS POST
 PAC auth profile  ────┘                                                                                          │
                                                                                                                   ▼
-                                                                                                  PowerPagesPluginEvent (Kusto table)
+                                                                                                  PagesPluginEvent (Kusto table)
 ```
 
 The shared library is unchanged conceptually:
@@ -67,7 +67,7 @@ The envelope name is per-plugin configuration carried alongside the iKey in `ike
 {
   "ikey": "<plugin's tenant iKey, write-only identifier>",
   "collector_url": "<region-appropriate OneCollector URL>",
-  "event_stream_name": "PowerPagesPluginEvent",
+  "event_stream_name": "PagesPluginEvent",
   "disabled": true
 }
 ```
@@ -217,12 +217,12 @@ Detecting via process tree, `process.title`, or parent process inspection is fra
 For handoff to the tenant team that owns Geneva/Aria provisioning, the relevant annotation content is shown below. The implementation plan will save it as a standalone file under `docs/superpowers/handoff/` so it can be copied into the provisioning repo as-is.
 
 ```xml
-<EventStreamingAnnotation name="^PowerPagesPluginEvent$">
+<EventStreamingAnnotation name="^PagesPluginEvent$">
   <Indexing>
     <Content><![CDATA[
     {
       "Interchange": {
-        "CollectorEventMappingList": ["<iKey-32-hex-prefix>:PowerPagesPluginEvent"],
+        "CollectorEventMappingList": ["<iKey-32-hex-prefix>:PagesPluginEvent"],
         "FieldNameMappings": [
           "data_eventName:EventName",
           "data_eventType:EventType",
@@ -262,7 +262,7 @@ For handoff to the tenant team that owns Geneva/Aria provisioning, the relevant 
 </EventStreamingAnnotation>
 ```
 
-The `<iKey-32-hex-prefix>` is the first 32 hex chars of the full iKey before any dash. The annotation registers the `(iKey, "PowerPagesPluginEvent")` tuple, without which OneCollector silently drops events even though it returns `acc:1`.
+The `<iKey-32-hex-prefix>` is the first 32 hex chars of the full iKey before any dash. The annotation registers the `(iKey, "PagesPluginEvent")` tuple, without which OneCollector silently drops events even though it returns `acc:1`.
 
 ---
 
@@ -375,7 +375,7 @@ Telemetry never alters exit codes or blocks the parent process.
 | `pac-auth.test.js` (new) | Fixture-driven: profile present (returns `{orgId, tenantId}`), profile missing (returns `null`), profile unparseable (returns `null`), throws-on-read (returns `null`). Never throws. |
 | `emit-dispatcher.test.js` (updated) | Probe body has the expected top-level keys (no nested `eventInfo`); `name` matches the configured envelope name; trailing newline; env-var opt-out (`POWER_PLATFORM_SKILLS_TELEMETRY=0`) and repo kill switch both gate emission. |
 | `emit-from-prompt.test.js` (updated) | Stubbed emitter captures the full event; assert all common fields populated; `pac-auth` mocked to return both fixed value and `null`. |
-| Plugin integration test (`run-user-prompt-telemetry.test.js`) | Real hook invocation via `FAKE_HTTPS` probe; assert the wire body contains `name: "PowerPagesPluginEvent"` (or whatever the test ikey.json sets), top-level fields, and trailing newline. |
+| Plugin integration test (`run-user-prompt-telemetry.test.js`) | Real hook invocation via `FAKE_HTTPS` probe; assert the wire body contains `name: "PagesPluginEvent"` (or whatever the test ikey.json sets), top-level fields, and trailing newline. |
 
 ---
 

@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 
 const { withTelemetry } = require("../lib/with-telemetry");
 
-const ENVELOPE = "PowerPagesPluginEvent";
+const ENVELOPE = "PagesPluginEvent";
 
 function recorder() {
   const events = [];

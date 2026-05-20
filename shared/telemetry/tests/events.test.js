@@ -9,7 +9,7 @@ const {
   buildScriptCompleted,
 } = require("../lib/events");
 
-const ENVELOPE = "PowerPagesPluginEvent";
+const ENVELOPE = "PagesPluginEvent";
 
 const common = {
   pluginName: "power-pages",

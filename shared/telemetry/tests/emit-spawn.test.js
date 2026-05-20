@@ -13,7 +13,7 @@ function mkTmp() {
 }
 
 const sampleEvent = {
-  name: "PowerPagesPluginEvent",
+  name: "PagesPluginEvent",
   data: {
     eventName: "skill_started",
     eventType: "Trace",
@@ -43,7 +43,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
     JSON.stringify({
       instrumentationKey: "placeholder",
       collector_url: "https://example.invalid/",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
       disabled: false,
     })
   );
@@ -70,7 +70,7 @@ test("dispatcher child receives the event and writes the probe", async () => {
   assert.ok(contents.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(contents.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-  assert.equal(body.name, "PowerPagesPluginEvent");
+  assert.equal(body.name, "PagesPluginEvent");
   assert.equal(body.data.eventName, "skill_started");
   assert.equal(body.data.skillName, "hello");
 });

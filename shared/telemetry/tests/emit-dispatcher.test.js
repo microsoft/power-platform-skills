@@ -22,7 +22,7 @@ function mkEnabledIkey(tmp) {
     JSON.stringify({
       instrumentationKey: "placeholder",
       collector_url: "https://example.invalid/",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
       disabled: false,
     })
   );
@@ -48,7 +48,7 @@ function runDispatcher({ event, env }) {
 }
 
 const fakeEvent = {
-  name: "PowerPagesPluginEvent",
+  name: "PagesPluginEvent",
   data: {
     eventName: "skill_started",
     eventType: "Trace",
@@ -141,7 +141,7 @@ test("dispatcher writes a probe file when fake-https points to one (happy path)"
   const body = JSON.parse(probe.body);
   assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
   assert.equal(body.ver, "4.0");
-  assert.equal(body.name, "PowerPagesPluginEvent");
+  assert.equal(body.name, "PagesPluginEvent");
   assert.equal(body.iKey, "o:real");
   assert.match(body.time, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(body.data, fakeEvent.data);
@@ -151,7 +151,7 @@ test("dispatcher strips unknown fields from event.data (defense-in-depth)", () =
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const eventWithExtras = {
-    name: "PowerPagesPluginEvent",
+    name: "PagesPluginEvent",
     data: {
       eventName: "skill_started",
       eventType: "Trace",
@@ -219,7 +219,7 @@ test("dispatcher appends to events.jsonl when iKey is placeholder", () => {
   const lines = fs.readFileSync(logFile, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
-  assert.equal(parsed.name, "PowerPagesPluginEvent");
+  assert.equal(parsed.name, "PagesPluginEvent");
   assert.equal(parsed.data.eventName, "skill_started");
 });
 

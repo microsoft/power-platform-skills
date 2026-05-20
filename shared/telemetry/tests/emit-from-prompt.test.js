@@ -42,7 +42,7 @@ test("returns { emitted: false } when detection returns null", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   const result = callWithStub({
@@ -58,7 +58,7 @@ test("emits skill_started with envelope name from ikey.json", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   const result = callWithStub({
@@ -68,7 +68,7 @@ test("emits skill_started with envelope name from ikey.json", () => {
   });
   assert.equal(result.emitted, true);
   assert.equal(result.skillName, "add-seo");
-  assert.equal(captured.event.name, "PowerPagesPluginEvent");
+  assert.equal(captured.event.name, "PagesPluginEvent");
   assert.equal(captured.event.data.eventName, "skill_started");
   assert.equal(captured.event.data.eventType, "Trace");
   assert.equal(captured.event.data.severity, "Info");
@@ -86,7 +86,7 @@ test("populates orgId/tenantId when PAC auth is present", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   callWithStub({
@@ -106,7 +106,7 @@ test("populates aiAgentName/aiAgentVersion/pacCliVersion when agentInfo is prese
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   callWithStub({
@@ -128,7 +128,7 @@ test("omits agent fields when agentInfo returns empty values", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   callWithStub({
@@ -146,7 +146,7 @@ test("omits orgId/tenantId when PAC auth is absent", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const captured = {};
   callWithStub({
@@ -163,7 +163,7 @@ test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and FAKE_HTTPS into spawn opts",
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   const prevCfg = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
   const prevProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
@@ -208,7 +208,7 @@ test("does not throw when _emit throws", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
+    eventStreamName: "PagesPluginEvent",
   });
   assert.doesNotThrow(() =>
     emitSkillStartedFromPrompt("/power-pages:add-seo", {

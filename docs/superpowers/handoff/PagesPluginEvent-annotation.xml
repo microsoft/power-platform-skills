@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<EventStreamingAnnotation name="^PowerPagesPluginEvent$">
+<EventStreamingAnnotation name="^PagesPluginEvent$">
   <Indexing>
     <Content><![CDATA[
     {
       "Interchange": {
-        "CollectorEventMappingList": ["ffdb4c99ca3a4ad5b8e9ffb08bf7da0d:PowerPagesPluginEvent"],
+        "CollectorEventMappingList": ["ffdb4c99ca3a4ad5b8e9ffb08bf7da0d:PagesPluginEvent"],
         "FieldNameMappings": [
           "data_eventName:EventName",
           "data_eventType:EventType",
