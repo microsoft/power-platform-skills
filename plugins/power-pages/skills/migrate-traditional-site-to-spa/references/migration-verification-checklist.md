@@ -1,6 +1,6 @@
 # Migration Verification Checklist
 
-Use this reference during `/migrate-edm-to-spa` Phase 5 to build a deterministic, evidence-backed checklist from the static analyzer's and runtime discoverer's findings, and during Phase 8 as the contract the independent `migration-validator` agent checks against.
+Use this reference during `/migrate-traditional-site-to-spa` Phase 5 to build a deterministic, evidence-backed checklist from the static analyzer's and runtime discoverer's findings, and during Phase 8 as the contract the independent `migration-validator` agent checks against.
 
 The checklist is the only artifact that survives the migration as a falsifiable claim about what was migrated. The validator's job is to read this file, walk every entry, and produce a verdict from the filesystem and (optionally) the running site — not from the main agent's self-report.
 

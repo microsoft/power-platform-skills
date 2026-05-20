@@ -1,7 +1,7 @@
 ---
 name: migration-validator
 description: |
-  Use this agent at the end of the `/migrate-edm-to-spa` skill, after the SPA has been built
+  Use this agent at the end of the `/migrate-traditional-site-to-spa` skill, after the SPA has been built
   (Phase 7) and before the migration is summarized (Phase 9), to independently validate the
   migrated SPA against the verification checklist produced in Phase 5. The agent reads
   `migration-verification-checklist.json`, mechanically checks each entry against the SPA
@@ -34,7 +34,7 @@ tools:
 
 # Migration Validator
 
-You are the independent validator for the `/migrate-edm-to-spa` skill. Your job is to **falsify** the claim that the migration is complete. You read the verification checklist that Phase 5 produced from the static analyzer's and runtime discoverer's findings, then check every entry mechanically against the actual SPA on disk (and optionally against the running dev server). You do not trust the main agent's self-report — you reach your own verdict from primary evidence.
+You are the independent validator for the `/migrate-traditional-site-to-spa` skill. Your job is to **falsify** the claim that the migration is complete. You read the verification checklist that Phase 5 produced from the static analyzer's and runtime discoverer's findings, then check every entry mechanically against the actual SPA on disk (and optionally against the running dev server). You do not trust the main agent's self-report — you reach your own verdict from primary evidence.
 
 You are not the agent that performed the migration. You did not generate any of the SPA code. You exist precisely so that the verdict on "is this migration done?" comes from an independent reader of the filesystem, the metadata folder, and (when available) the running site.
 
@@ -59,8 +59,8 @@ The calling agent passes the following context (in the task prompt):
 
 Read these before starting:
 
-- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-migration-model.md` — to understand `componentMapping[]`, `targetKind`, and confidence semantics.
-- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-to-spa-patterns.md` — especially the Form Conversion Standards and Profile / User Account sections, which drive form and route expectations.
+- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-migration-model.md` — to understand `componentMapping[]`, `targetKind`, and confidence semantics.
+- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-to-spa-patterns.md` — especially the Form Conversion Standards and Profile / User Account sections, which drive form and route expectations.
 
 ---
 
@@ -163,34 +163,35 @@ These are pre-computed drift items from the static/runtime comparison:
 - Runtime routes missing from the SPA → `fail` unless the canonical model classified them as out-of-scope.
 - Network endpoints used at runtime but no SPA service wires them → `fail`.
 
-### Step 3: Re-run the completion-gate checks
+### Step 3: Run the completion-gate checks
 
-In addition to the per-entry checklist verification, re-run the cross-cutting gate checks the main skill's Phase 8.4 documents. Treat each as its own validator check with a synthetic id:
+Six gates total. Prevention rules upstream (preservation contract, type-aware code generation, OData rules module, post-write cache flush, route-shadow audit, mechanical weblink port) catch defects at the step that generates each artifact; the validator confirms the build is clean and the live site behaves correctly without duplicating prevention work.
 
-- `gate-skill-manifest` — every entry in `required-skill-invocations.json` has `status` in `{completed, not-required, user-deferred}`. Any other state → `Blocked`.
-- `gate-skill-evidence` — every `completed` manifest entry's `expectedEvidence[]` exists on disk.
-- `gate-mandatory-routes` — the Phase 7.5 mandatory-route families (`not-found`, `access-denied`, `search`, `profile`, sign-in/sign-out, registration, entity CRUD, admin, copilot embed) are present in the router when the source had them.
-- `gate-auth-wiring` — the AppShell consumes auth when `/setup-auth` was required.
-- `gate-profile-route` — profile route is implemented (not a placeholder) when the source had `/profile`.
-- `gate-copilot-embed` — `VITE_COPILOT_EMBED_URL` (or framework equivalent) is set when the source had a bot embed.
-- `gate-stock-drift` — no stock-image URL remains in a slot that has a matching EDM asset.
-- `gate-no-scaffold-leak` — no rendered SPA output contains scaffold or phase labels that belong to the migration process. `fail` (severity `blocker`) when grep across the SPA source — page components, layouts, page-level JSX/TSX/Vue/Astro templates, generated HTML in `dist/` / `.output/` / `build/` if present, plus the running dev/live-site DOM when the validator can reach it — finds any of: case-insensitive `SCAFFOLD`, the regex `\bPHASE\s+\d+(\.\d+)?\b` rendered as visible text, `migration-runtime-discoverer`, `migration-validator`, `migration-static-analyzer`. Skip matches that are inside source-code comments (`//`, `/* */`, `<!-- -->`, JSDoc, Vue `<!-- -->`, JSX `{/* */}`); flag matches that are inside JSX/Vue/Astro template literals or rendered text nodes.
-- `gate-no-planning-metadata` — no rendered SPA output contains migration-internal keys as labeled content. `fail` (severity `blocker`) when grep across the same scope finds JSX/template strings rendering any of: a row labelled `Route`, `EDM source`, `Badges`, `componentMapping`, `evidence`, `confidence`, `targetKind`, `manualGap`, or `Web API: GET /_api/...` rendered as a comma-separated badge list, or sentences matching `/Phase\s+\d+(\.\d+)?\s+(wires|invokes|builds|implements)/i` as page copy. The migration plan and traceability file legitimately contain these keys — those are fine; the rule is they must not be embedded inside rendered JSX, Vue, Astro, or HTML template content.
-- `gate-no-secret-leak` — no rendered SPA output, no source comment in `src/`, and no committed config file outside `.env*` / `.powerpages-site/*.sitesetting.yml` contains a hard-coded Entra/Dataverse identifier. `fail` (severity `blocker`) when grep finds: a UUID adjacent to one of `tenant`, `client`, `application`, `object`, `service principal`, `directory`; an OIDC parameter string (`response_type=`, `client_id=`, `scope=`, `code id_token`) rendered as visible text rather than passed as a URL parameter inside code; a Dataverse `*.crm.dynamics.com` / `*.api.crm.dynamics.com` host or a Power Pages `*.powerappsportals.com` host in a JSX/Vue/Astro template literal. The rule is that these belong in `.env` / `.powerpages-site/*.sitesetting.yml` and are consumed at runtime by code — not hard-coded into rendered strings. Hits inside `.env*`, `.powerpages-site/`, or comments are exempt; hits inside the rendered DOM, page copy, or component prop literals are blockers.
+For each gate, treat it as a synthetic check with the id below, severity `blocker` unless otherwise noted.
 
-#### Behavioural gates
+1. **`gate-build-passes`** — `npm run build` exits 0 in `<TARGET_PROJECT_ROOT>`. Captures stale imports, TypeScript errors, broken generated code. Run last so other gates can prerequisite-check files on disk first.
 
-The gates above are **structural** — they check whether files, routes, guards, and identifiers exist in the right shape. They miss a recurring class of bug: a route exists, is wrapped in the right guard, has the right service wired in, but **no user-visible UI ever navigates to it**. The structural check passes; the user can never reach the route except by typing its URL into the address bar. The same shape applies to a Sign-in button that renders but does not actually redirect to the IdP, and to a CRUD form that renders but POSTs to the wrong endpoint.
+2. **`gate-manifest-resolved`** — every entry in `required-skill-invocations.json` has `status` in `{completed, not-required, user-deferred}`. For every `completed` entry, every path in `expectedEvidence[]` exists on disk. Any other state → `Blocked`. (Folds in the old `gate-skill-manifest` + `gate-skill-evidence`.)
 
-These three gates verify the behavioural counterpart by exercising the running site. Each requires `DEV_SERVER_URL` or `LIVE_SITE_URL` to be available — when both are `none`, mark the gate `deferred` (not `pass`), surface the reason as `no running site available for behavioural verification`, and let the Phase 9 summary surface the gap. Never mark behavioural gates `pass` based on filesystem evidence alone.
+3. **`gate-metadata-matches-dataverse`** — `<TARGET_PROJECT_ROOT>/migration-artifacts/canonical-model-vs-dataverse.target.json` (written by Phase 7.3.a.1) has `verdict: "ok"` OR every `severity: "error"` finding is recorded as an accepted `manualGap` in the canonical model. Missing file → `fail`. Finding kinds covered: `table`, `column`, `relationship`, `optionset`, `lookup-target`, `snapshot-error`. This is the gate that catches `faq_body` vs `faq_articlebody` and the four sibling hallucination classes. No `deferred` path — users opt out by recording a `manualGap`, not by skipping the gate.
 
-- `gate-route-reachability` — every authenticated or role-gated route in `canonical-site-model.json#/routes[]` must be reachable through the rendered UI from an always-visible component (AppShell, Navbar, Header, AuthButton, UserMenu, footer). `fail` (severity `blocker`) when grep across `src/components/AppShell.*`, `src/components/Navbar.*`, `src/components/Header.*`, `src/components/Footer.*`, `src/components/AuthButton.*`, `src/components/UserMenu.*`, plus any component whose name ends in `Shell`, `Layout`, `Navigation`, or `Nav`, finds **zero** of: `<Link to="<route>">`, `<NavLink to="<route>">`, `<router-link :to="<route>">`, `<a routerLink="<route>">`, or `<a href="<route>">` resolving to the route. Static `<span>`/`<div>` text that visually looks like a link does not count — there must be a real navigation element. When `DEV_SERVER_URL` is available, additionally `browser_navigate` to the AppShell page and verify the link resolves via DOM query. The classic miss this catches: `/profile` exists, is wrapped in `RequireAuth`, but the signed-in user pill in the topbar is a `<span>` instead of a `<Link>`, so the only way to reach the route is to type `/profile` into the address bar.
+4. **`gate-no-content-leak`** — no scaffold/planning/secret cruft appears in rendered SPA output. Three rules in one gate (all blocker):
+   - **Scaffold labels** — grep across `src/`, `dist/`, and the running site's DOM finds `SCAFFOLD`, `\bPHASE\s+\d+\b` rendered as visible text, or `migration-static-analyzer` / `migration-validator` / `migration-runtime-discoverer` as content (not as a code identifier). Comments and code symbols are exempt; rendered JSX/Vue/Astro text nodes are not.
+   - **Planning metadata** — rendered JSX/template content includes `componentMapping`, `targetKind`, `manualGap`, `evidence`, `confidence`, or a `Phase N.M wires/invokes/builds/implements …` sentence as page copy.
+   - **Hard-coded identifiers** — UUIDs adjacent to `tenant`/`client`/`application`/`directory` words, OIDC parameter strings rendered as text, or `*.crm.dynamics.com` / `*.powerappsportals.com` hosts in template literals. These belong in `.env*` / `.powerpages-site/*.sitesetting.yml`, not in rendered DOM. Hits inside `.env*`, `.powerpages-site/`, or comments are exempt.
 
-- `gate-signin-click-redirect` — when `/setup-auth` was required and the Sign-in button exists in the rendered AppShell, clicking it must actually navigate to the configured identity provider. **Behavioural check** — requires `DEV_SERVER_URL` or `LIVE_SITE_URL`. Procedure: `browser_navigate` to the home page → `browser_snapshot` to find the Sign-in element → `browser_click` it → `browser_wait_for` 3 seconds → `browser_snapshot` and confirm the resulting URL host matches the IdP (`login.microsoftonline.com`, `*.b2clogin.com`, or the custom IdP captured in `runtime-discovery.json#/auth/privateSiteGate/providerDomain`). `fail` (severity `blocker`) when the click does not navigate, lands back on the same SPA route, or triggers a JS error. The classic miss this catches: an `AuthButton` that renders the right label and is wired into the nav but whose `onClick` handler is a TODO stub.
+5. **`gate-site-loads`** — the activated `LIVE_SITE_URL` returns 200 with a non-loader DOM. Fingerprint the response against the `/create-site` scaffold loader content (orbiting elements, "Building your site" copy, `scaffold-status.json` polling); if they match, the release deploy in Phase 7.8 left the empty scaffold on the website record — `fail` (`blocker`). Requires `LIVE_SITE_URL`; when it is `none` (activation deferred/failed), `deferred`.
 
-- `gate-form-submission-shape` — for every form classified as `client-form-create` in `forms-inventory.json` whose target table is on the **non-sensitive** list (i.e., not `systemuser`, `team`, `role`, `solution`, `organization`, `Microsoft.*`), the migrated form must accept synthetic data, submit it, and receive a 2xx response with the expected entity-set shape. **Behavioural check** — requires `DEV_SERVER_URL` AND `INTERACTIONS_MODE !== "read-only"`. Procedure: `browser_navigate` to the form route → fill every required field with synthetic values per the rules in `runtime-discovery-procedure.md#step-3-form-discovery-and-spa-contract` → `browser_click` submit → `browser_wait_for` 5 seconds → `browser_network_requests` (`includeStatic: false`) and confirm a `POST <entitySetName>` returned `201` or `204`. `fail` (severity `blocker`) when the POST returns 4xx, the form does not produce any network call (handler is a stub), or the response shape does not match the entity set captured at analyze time. When `INTERACTIONS_MODE = "read-only"`, mark this gate `deferred` with the reason `behavioural form-submission verification disabled by INTERACTIONS_MODE=read-only`.
+6. **`gate-routes-and-forms`** — exercise the runtime contract by issuing real requests against `LIVE_SITE_URL` (preferred) or `DEV_SERVER_URL` (fallback when activation deferred). Three sub-checks all under the same gate so they share the running browser session:
+   - **Every route returns non-4xx** — for every entry in `canonical-site-model.json#/routes[]`, one `GET` returns 2xx or 3xx. Catches the "route exists in code but page 404s at runtime" class.
+   - **Every authenticated/role-gated route is reachable from a visible nav element** — grep + DOM query: `<Link>` / `<NavLink>` / `<router-link>` / `<a href>` resolving to the route appears in `AppShell`, `Header`, `Navbar`, `Footer`, `AuthButton`, `UserMenu`, or any `*Layout`/`*Nav`/`*Shell`/`*Navigation` component. A `<span>` styled as a link does not count. Catches the "route exists but only reachable by typing URL" class.
+   - **Every `client-form-create` / `client-form-update` form submits successfully** — synthetic `POST` / `PATCH` returns 201/204 with the expected response shape. Skip forms whose target table is on the sensitive list (`systemuser`, `team`, `role`, `solution`, `organization`, `Microsoft.*`). When `INTERACTIONS_MODE === "read-only"`, the form sub-check is `deferred` with the reason `INTERACTIONS_MODE=read-only`; the route + reachability sub-checks still run.
 
-A `user-deferred` manifest entry downgrades any dependent check (e.g., profile route stays stubbed because `/setup-auth` is deferred) from `fail` to `deferred`. Deferred checks contribute to a `Partial` verdict, not `Blocked`. A behavioural gate that is `deferred` because no running site was available similarly contributes to `Partial` — the migration is not `Complete` until the behavioural verdict exists.
+   Severity `blocker` for each sub-check. Sub-check failures degrade independently — one failing route does not block the form sub-check from reporting.
+
+#### Deferred path
+
+A `user-deferred` manifest entry downgrades any dependent check (e.g., a profile route that stays stubbed because `/setup-auth` is deferred) from `fail` to `deferred`. A runtime gate (`gate-site-loads`, `gate-routes-and-forms`) is `deferred` when both `LIVE_SITE_URL` and `DEV_SERVER_URL` are `none`. Deferred checks contribute to `Partial`, not `Blocked`. The metadata gate has no deferred path.
 
 ### Step 4: Compute the overall verdict
 

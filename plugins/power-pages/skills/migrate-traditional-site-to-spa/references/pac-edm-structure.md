@@ -1,6 +1,6 @@
 # PAC EDM Website Data Structure
 
-Use this reference during `/migrate-edm-to-spa` Phase 2 and Phase 3 to locate and classify records in a PAC-downloaded classic EDM Power Pages site. The structure is based on observed Community Portal V2, Customer Portal V2, Employee Self-Service Portal V2, and FAQ V2 website-data patterns and should be treated as guidance, not as a fixed schema.
+Use this reference during `/migrate-traditional-site-to-spa` Phase 2 and Phase 3 to locate and classify records in a PAC-downloaded classic EDM Power Pages site. The structure is based on observed Community Portal V2, Customer Portal V2, Employee Self-Service Portal V2, and FAQ V2 website-data patterns and should be treated as guidance, not as a fixed schema.
 
 ## Contents
 
@@ -282,7 +282,7 @@ Every finding that influences generated SPA code should include evidence paths a
 
 ## EDM-aggregate to SPA-granular mapping
 
-Used by `migrate-edm-to-spa-implement` Phase 7.3.d. EDM exports aggregate many records of the same kind into a single YAML file; the SPA's `.powerpages-site/` is more granular and expects one file per record. Do **not** copy EDM aggregate files directly — split them per the mapping below.
+Used by `migrate-traditional-site-to-spa-implement` Phase 7.3.d. EDM exports aggregate many records of the same kind into a single YAML file; the SPA's `.powerpages-site/` is more granular and expects one file per record. Do **not** copy EDM aggregate files directly — split them per the mapping below.
 
 | EDM source shape | SPA `.powerpages-site` target shape |
 |------------------|-------------------------------------|

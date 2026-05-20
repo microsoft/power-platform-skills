@@ -1,6 +1,6 @@
 # SPA Output Rules — What MUST NOT Appear
 
-Reference for `migrate-edm-to-spa-implement` Phase 7.6. The artifacts under `migration-artifacts/` (canonical model, verification checklist, gap log, manifest, plan) are **planning context** — they exist so the migration is auditable. They must not be rendered into the SPA itself.
+Reference for `migrate-traditional-site-to-spa-implement` Phase 7.6. The artifacts under `migration-artifacts/` (canonical model, verification checklist, gap log, manifest, plan) are **planning context** — they exist so the migration is auditable. They must not be rendered into the SPA itself.
 
 Pages migrated from EDM source should look like the EDM source did, not like an internal status dashboard.
 

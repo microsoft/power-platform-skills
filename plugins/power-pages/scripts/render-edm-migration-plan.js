@@ -30,7 +30,7 @@ renderTemplate({
     __dirname,
     '..',
     'skills',
-    'migrate-edm-to-spa',
+    'migrate-traditional-site-to-spa',
     'assets',
     'edm-migration-plan.html'
   ),
@@ -47,6 +47,13 @@ renderTemplate({
     'GAPS_DATA',
     'RATIONALE_DATA',
     'DESIGN_DATA',
+    // Functionality-first overview content (purpose, features, audiences) plus the
+    // preservation contract (constraints + additions) and the reusable-component
+    // catalog all feed dedicated cards at the top of the Overview tab. See
+    // references/edm-migration-plan-data-format.md for the shapes.
+    'FUNCTIONAL_UNDERSTANDING',
+    'PRESERVATION',
+    'REUSABLE_COMPONENTS',
   ],
   escapeStringValues: true,
 });

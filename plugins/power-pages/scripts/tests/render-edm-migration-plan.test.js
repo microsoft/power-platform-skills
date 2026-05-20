@@ -145,6 +145,13 @@ const SAMPLE_DATA = {
       description: 'Direct Web API gives more control over UI/UX and validation',
     },
   ],
+  // Three new required keys added when the Overview tab gained functionality-first cards
+  // (preservation contract, reusable components, what-the-site-does summary). Each defaults
+  // to its empty shape here so the existing render assertions still pass; tests that care
+  // about the new cards extend SAMPLE_DATA via spread + override.
+  FUNCTIONAL_UNDERSTANDING: { purpose: '', features: [], audiences: [] },
+  PRESERVATION: { policy: 'preserve-source-by-default', dataModel: { tables: [], additions: [] }, tablePermissions: [], webRoles: [], constraints: [] },
+  REUSABLE_COMPONENTS: [],
 };
 
 test('render-edm-migration-plan renders HTML from JSON data', () => {

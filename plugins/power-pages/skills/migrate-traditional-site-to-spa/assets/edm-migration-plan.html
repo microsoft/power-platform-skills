@@ -134,8 +134,30 @@ td.rationale-cell{vertical-align:top;font-size:12px;line-height:1.55;color:var(-
     <div class="content">
       <div class="section active" id="tab-overview">
         <h2>Migration Plan Overview</h2>
-        <p class="section-desc">EDM-to-SPA migration plan for <code>__SITE_NAME__</code></p>
+        <p class="section-desc">Migration plan for <code>__SITE_NAME__</code></p>
 
+        <h3 id="functionalHeading" style="display:none;">What this site does</h3>
+        <div class="summary-box" id="functionalPurpose" style="display:none;"></div>
+
+        <h3 id="featuresHeading" style="display:none;">Features</h3>
+        <ul id="featuresList" style="display:none;"></ul>
+
+        <h3 id="audiencesHeading" style="display:none;">Audiences</h3>
+        <div id="audiencesContainer" style="display:none;"></div>
+
+        <h3 id="constraintsHeading" style="display:none;">Migration constraints &mdash; what we will preserve</h3>
+        <p class="section-desc" id="constraintsSubheading" style="display:none;">The migration is preservation-by-default. Source data model, table permissions, and web roles are copied verbatim (fresh GUIDs); modifications are forbidden. Additions appear separately below with a justification.</p>
+        <div id="constraintsContainer" style="display:none;"></div>
+
+        <h3 id="additionsHeading" style="display:none;">Proposed additions</h3>
+        <p class="section-desc" id="additionsSubheading" style="display:none;">New tables, columns, table permissions, or web roles the migration is proposing on top of the source. Each carries a justification. Reject any you do not want before approving the plan.</p>
+        <div id="additionsContainer" style="display:none;"></div>
+
+        <h3 id="reusableHeading" style="display:none;">Reusable components</h3>
+        <p class="section-desc" id="reusableSubheading" style="display:none;">Source content snippets, web templates, and weblink-sets that are reused across multiple pages. Each becomes one SPA component in the migrated site; inlining is forbidden.</p>
+        <div id="reusableContainer" style="display:none;"></div>
+
+        <h3>Migration plan summary</h3>
         <div class="summary-box" id="summaryBox">__SUMMARY__</div>
 
         <div class="stats-grid">
@@ -314,6 +336,13 @@ const SECURITY_DATA = __SECURITY_DATA__;
 const GAPS_DATA = __GAPS_DATA__;
 const RATIONALE_DATA = __RATIONALE_DATA__;
 const DESIGN_DATA = __DESIGN_DATA__;
+// Functionality-first sections at the top of the Overview tab. The render script
+// requires all three keys; empty arrays / null fields cause the corresponding card
+// to stay hidden so a site without (e.g.) any reusable components doesn't show a
+// blank section.
+const FUNCTIONAL_UNDERSTANDING = __FUNCTIONAL_UNDERSTANDING__;
+const PRESERVATION = __PRESERVATION__;
+const REUSABLE_COMPONENTS = __REUSABLE_COMPONENTS__;
 
 function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
@@ -353,6 +382,104 @@ document.getElementById('statRoutes').textContent = SITE_STATS.routeCount || 0;
 document.getElementById('statComponents').textContent = SITE_STATS.componentCount || 0;
 document.getElementById('statTables').textContent = SITE_STATS.tableCount || 0;
 document.getElementById('statGaps').textContent = SITE_STATS.manualGapCount || 0;
+
+// Show/hide helper — each functionality-first card stays hidden when its data slot is
+// empty so a site with (say) no proposed additions doesn't render an empty section.
+function show(id) { const el = document.getElementById(id); if (el) el.style.display = ''; }
+
+// ----- Functional Understanding ----------------------------------------------
+if (FUNCTIONAL_UNDERSTANDING) {
+  const purpose = FUNCTIONAL_UNDERSTANDING.purpose;
+  if (purpose && typeof purpose === 'string' && purpose.trim()) {
+    document.getElementById('functionalPurpose').textContent = purpose.trim();
+    show('functionalHeading'); show('functionalPurpose');
+  }
+  const features = Array.isArray(FUNCTIONAL_UNDERSTANDING.features) ? FUNCTIONAL_UNDERSTANDING.features : [];
+  if (features.length) {
+    const list = document.getElementById('featuresList');
+    list.innerHTML = features.map(f => `<li>${esc(f)}</li>`).join('');
+    show('featuresHeading'); show('featuresList');
+  }
+  const audiences = Array.isArray(FUNCTIONAL_UNDERSTANDING.audiences) ? FUNCTIONAL_UNDERSTANDING.audiences : [];
+  if (audiences.length) {
+    const container = document.getElementById('audiencesContainer');
+    container.innerHTML = audiences.map(a => `<span class="badge badge-status" style="margin-right:0.5rem;">${esc(a)}</span>`).join('');
+    show('audiencesHeading'); show('audiencesContainer');
+  }
+}
+
+// ----- Preservation Contract (Constraints + Additions) ----------------------
+if (PRESERVATION) {
+  // Source counts give the user a one-look "what's being preserved" view.
+  const sourceTablesCount = (PRESERVATION.dataModel && Array.isArray(PRESERVATION.dataModel.tables))
+    ? PRESERVATION.dataModel.tables.filter(t => t.source).length : 0;
+  const sourcePermCount = (Array.isArray(PRESERVATION.tablePermissions) ? PRESERVATION.tablePermissions : [])
+    .filter(p => p.source).length;
+  const sourceRoleCount = (Array.isArray(PRESERVATION.webRoles) ? PRESERVATION.webRoles : [])
+    .filter(r => r.source).length;
+  if (sourceTablesCount || sourcePermCount || sourceRoleCount || (Array.isArray(PRESERVATION.constraints) && PRESERVATION.constraints.length)) {
+    const rows = [
+      ['Source tables preserved', sourceTablesCount, 'verbatim — no renames, no retypes, no drops'],
+      ['Source table permissions ported (fresh GUIDs)', sourcePermCount, 'identical entity / scope / privileges / role assignments'],
+      ['Source web roles ported (fresh GUIDs)', sourceRoleCount, 'identical name / default / anonymous / authenticated flags'],
+    ];
+    const constraintsHtml = (PRESERVATION.constraints || [])
+      .map(c => `<li>${esc(c)}</li>`).join('');
+    document.getElementById('constraintsContainer').innerHTML =
+      `<table style="margin-bottom:1rem;"><thead><tr><th>What we preserve</th><th>Count</th><th>How</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${esc(r[0])}</td><td><strong>${r[1]}</strong></td><td>${esc(r[2])}</td></tr>`).join('') +
+      `</tbody></table>` +
+      (constraintsHtml ? `<ul>${constraintsHtml}</ul>` : '');
+    show('constraintsHeading'); show('constraintsSubheading'); show('constraintsContainer');
+  }
+
+  // Additions surface every proposed new column/table/permission/role with a
+  // justification so the user can challenge each one before approving the plan.
+  const additions = [];
+  if (PRESERVATION.dataModel && Array.isArray(PRESERVATION.dataModel.additions)) {
+    for (const a of PRESERVATION.dataModel.additions) {
+      additions.push({ kind: a.kind || 'data-model', name: a.logicalName || a.name || '', justification: a.justification || '' });
+    }
+    // Per-table column additions
+    for (const t of (PRESERVATION.dataModel.tables || [])) {
+      for (const a of (t.additions || [])) {
+        additions.push({ kind: 'column', name: `${t.logicalName}.${a.logicalName || a.name}`, justification: a.justification || '' });
+      }
+    }
+  }
+  for (const p of (PRESERVATION.tablePermissions || [])) {
+    if (p.source === false) additions.push({ kind: 'table-permission', name: p.sourceName || p.name || '', justification: p.justification || '' });
+  }
+  for (const r of (PRESERVATION.webRoles || [])) {
+    if (r.source === false) additions.push({ kind: 'web-role', name: r.sourceName || r.name || '', justification: r.justification || '' });
+  }
+  if (additions.length) {
+    document.getElementById('additionsContainer').innerHTML =
+      `<table><thead><tr><th>Kind</th><th>Name</th><th>Justification</th></tr></thead><tbody>` +
+      additions.map(a => `<tr><td><span class="badge badge-status">${esc(a.kind)}</span></td><td><code>${esc(a.name)}</code></td><td>${esc(a.justification)}</td></tr>`).join('') +
+      `</tbody></table>`;
+    show('additionsHeading'); show('additionsSubheading'); show('additionsContainer');
+  }
+}
+
+// ----- Reusable Components ---------------------------------------------------
+if (Array.isArray(REUSABLE_COMPONENTS) && REUSABLE_COMPONENTS.length) {
+  // Only surface entries with reuseCount >= 2 in the user-facing summary; single-use
+  // entries are a long tail that don't help the user decide anything.
+  const reused = REUSABLE_COMPONENTS.filter(c => (c.reuseCount || 0) >= 2);
+  if (reused.length) {
+    document.getElementById('reusableContainer').innerHTML =
+      `<table><thead><tr><th>Source kind</th><th>Source artifact</th><th>Reuse count</th><th>SPA component</th></tr></thead><tbody>` +
+      reused.map(c =>
+        `<tr><td><span class="badge badge-status">${esc(c.sourceKind || '')}</span></td>` +
+        `<td><code>${esc(c.sourceArtifact || '')}</code></td>` +
+        `<td><strong>${c.reuseCount || 0}</strong></td>` +
+        `<td><code>${esc((c.spaTarget && c.spaTarget.componentName) || '')}</code></td></tr>`
+      ).join('') +
+      `</tbody></table>`;
+    show('reusableHeading'); show('reusableSubheading'); show('reusableContainer');
+  }
+}
 
 // Populate design system (aesthetic+mood headline, derived meta, and palette)
 const designHeadline = document.getElementById('designHeadline');

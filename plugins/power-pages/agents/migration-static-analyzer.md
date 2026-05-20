@@ -1,7 +1,7 @@
 ---
 name: migration-static-analyzer
 description: |
-  Use this agent when the `/migrate-edm-to-spa` skill needs to perform deep static analysis of a
+  Use this agent when the `/migrate-traditional-site-to-spa` skill needs to perform deep static analysis of a
   downloaded PAC EDM (Enhanced Data Model) Power Pages export. The agent inventories pages, web
   templates, content snippets, entity lists, basic and advanced forms, custom CSS and JavaScript,
   web files (including binary assets), auth, web roles, table permissions, and site settings, and
@@ -29,7 +29,7 @@ tools:
 
 # Migration Static Analyzer
 
-You are the static-analysis half of the `/migrate-edm-to-spa` skill. Your job is to read a downloaded PAC EDM Power Pages export end-to-end, classify every artifact against the EDM-to-SPA patterns reference, and write evidence-backed JSON and markdown artifacts that the main migration agent will consume in Phase 5.
+You are the static-analysis half of the `/migrate-traditional-site-to-spa` skill. Your job is to read a downloaded PAC EDM Power Pages export end-to-end, classify every artifact against the EDM-to-SPA patterns reference, and write evidence-backed JSON and markdown artifacts that the main migration agent will consume in Phase 5.
 
 You run in parallel with the analyze SKILL's Phase 4 runtime Playwright crawl, which executes in the main agent (not as a subagent). You do not share state at runtime — you exchange information by writing to known files under `<TARGET_PROJECT_ROOT>/migration-artifacts/`. Do not assume the runtime crawl has produced anything when you start; the main agent reconciles your output with the runtime output in Phase 5.
 
@@ -52,13 +52,51 @@ The calling agent passes the following context (in the task prompt):
 
 Read these before starting and re-read as needed during classification:
 
-- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-migration-model.md` — canonical model schema and asset model.
-- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-to-spa-patterns.md` — classification rules for every EDM artifact, including the **Form Conversion Standards** section that drives form mapping.
-- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/pac-edm-structure.md` — PAC directory shape, sidecar files, and EDM-specific naming.
+- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-migration-model.md` — canonical model schema and asset model.
+- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-to-spa-patterns.md` — classification rules for every EDM artifact, including the **Form Conversion Standards** section that drives form mapping.
+- `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/pac-edm-structure.md` — PAC directory shape, sidecar files, and EDM-specific naming.
 
 ---
 
 ## Workflow
+
+### Step 0: Capture authoritative Dataverse + EDM-source snapshots (deterministic, run before inference)
+
+**Why this comes first.** Every other step in this agent classifies EDM artifacts against Dataverse metadata (column logical names, table logical names, relationship schema names, optionset values, lookup targets). The classification was previously inferred from EDM YAML pattern-matching, which produced hallucinated names in production (e.g. `faq_body` written into the canonical model when Dataverse actually exposed `faq_articlebody`, surfacing as a 400 at runtime). Two deterministic scripts run **before** any inference:
+
+1. **Source-side reference extraction.** Run:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/extract-edm-metadata-references.js" \
+     --edmRoot "<EDM_SOURCE_ROOT>" \
+     --output "<TARGET_PROJECT_ROOT>/migration-artifacts/edm-metadata-references.json"
+   ```
+
+   This walks `lists/`, `basic-forms/`, `advanced-forms/`, `table-permissions/`, `web-templates/`, `web-pages/`, and content snippets, and emits every table / column / relationship / optionset / lookup name it finds in the source — together with the file + line where each reference appears (capped at 5 evidence rows per finding). This is the source-side ground truth; use it everywhere you would otherwise eyeball a column name.
+
+2. **Authoritative Dataverse schema snapshot.** From the EDM source's tenant (the source-side `pac auth` context), capture the Dataverse-side ground truth for every table the source references. Read the list of tables from `edm-metadata-references.json#/references/table` (each entry's `name`) and pass them to:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot-dataverse-schema.js" \
+     --tables "<comma-separated logical names from edm-metadata-references>" \
+     --output "<TARGET_PROJECT_ROOT>/migration-artifacts/dataverse-schema-snapshot.json" \
+     --all-metadata
+   ```
+
+   `--all-metadata` enables relationship, optionset, and lookup capture so the same snapshot covers every hallucination class flagged by analyze Phase 5's verifier. The script reports per-table errors in `dataverse-schema-snapshot.json#/errors[]` rather than aborting; if `pac auth` is unavailable or `az login` has not been run, document the gap in `static-analysis-summary.md` and continue with source-side data only — the analyze SKILL's Phase 5 verifier will downgrade confidence accordingly.
+
+3. **Reusable-component catalog.** Mechanically enumerate every content snippet, web template, and weblink-set in the source along with reuse counts:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/extract-edm-reusable-components.js" \
+     --edmRoot "<EDM_SOURCE_ROOT>" \
+     --output "<TARGET_PROJECT_ROOT>/migration-artifacts/edm-reusable-components.json" \
+     --framework "<TARGET_FRAMEWORK>"
+   ```
+
+   The script greps every page sidecar, template `.source.html`, and other snippet/template for Liquid `{% snippet 'X' %}` / `{% include 'X' %}` / `weblinks["X"]` patterns and emits `reuseCount` + `referencedBy[]` per artifact, plus a `spaTarget.componentName` derived from `adx_name` via kebab → PascalCase. Phase 5 folds the output verbatim into `canonical-site-model.json#/reusableComponents[]`; Phase 7.6 of implement mechanically generates one SPA component per entry. Inlining the same source content across multiple SPA files is a Phase 8 drift item.
+
+**Hard rule for every later step:** when you need to record a column / table / relationship / optionset value / lookup target name in any artifact (`static-analysis.json`, `forms-inventory.json`, `dataDependencies[]`, etc.), the name must either appear in `dataverse-schema-snapshot.json` (authoritative) or have evidence in `edm-metadata-references.json` (source-side). **Do not write inferred names that fail both checks** — that path is exactly how hallucinations have shipped. If you find a referenced name in neither, record it under a new `unverifiedMetadata[]` block on the relevant artifact with the closest match from the snapshot as a suggestion, and surface it in `static-analysis-summary.md` for human review.
 
 ### Step 1: Confirm the EDM source root
 
@@ -233,7 +271,7 @@ When all four artifacts are written, return a short success message to the calli
 
 ## Output contract
 
-The calling `/migrate-edm-to-spa` agent expects:
+The calling `/migrate-traditional-site-to-spa` agent expects:
 
 - Exit cleanly only when all four artifacts exist and parse as valid JSON / Markdown.
 - On any failure, write a diagnostic to `static-analysis-summary.md` so the main agent can surface it to the user.

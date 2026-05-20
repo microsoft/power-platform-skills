@@ -420,6 +420,73 @@ The new SPA's design direction, captured in Phase 6.1 by asking the user just tw
 - `palette.name`: short, descriptive label that reflects the actual derived palette (e.g., `"Charcoal + Copper"`, `"Earth Tones with Terracotta Accent"`). Avoid generic preset names.
 - `palette.colors`: ordered list of `{ name, hex }` pairs derived from the aesthetic + mood color direction. Avoid the cliched purple-on-white AI palette. The renderer accepts any non-empty list and shows each as a labeled swatch in the Overview tab. Each `hex` must be a valid CSS color (e.g., `#0078d4`, `#0078d4cc`); invalid values fall back to a neutral gray.
 
+### `FUNCTIONAL_UNDERSTANDING` (object, required)
+
+User-facing description of what the source site does, rendered as the first card in the Overview tab. Pulled from `canonical-site-model.json#/functionalUnderstanding` (see [Functional Understanding](edm-migration-model.md#functional-understanding) for derivation rules). Empty fields cause the corresponding card to stay hidden so the Overview tab doesn't render blank sections.
+
+**Schema:**
+
+```json
+{
+  "purpose": "Public knowledge base for a customer-support team. Anonymous visitors browse FAQ articles by topic; authenticated members submit support requests.",
+  "features": [
+    "FAQ articles with category browsing",
+    "Topic taxonomy with hierarchical navigation",
+    "Contact form that creates a Dataverse case"
+  ],
+  "audiences": ["Anonymous Users", "Authenticated Users"]
+}
+```
+
+`features[]` is deterministically derived from `routes[]` and `forms[]` classifications — not free-form prose. `audiences[]` is sourced from `webrole.yml` and ordered anonymous-first.
+
+### `PRESERVATION` (object, required)
+
+The migration's preservation contract from the canonical model. Drives the **Constraints** and **Additions** cards in the Overview tab. See [Preservation Contract](edm-migration-model.md#preservation-contract) for the full schema, derivation rules, and consumer behavior. Empty arrays cause the corresponding cards to stay hidden.
+
+**Schema (abbreviated):**
+
+```json
+{
+  "policy": "preserve-source-by-default",
+  "dataModel": {
+    "tables": [{ "logicalName": "faq_article", "source": true, "columns": [...], "additions": [] }],
+    "additions": []
+  },
+  "tablePermissions": [{ "sourceName": "Article-read-anon", "source": true }],
+  "webRoles": [{ "sourceName": "Authenticated Users", "source": true }],
+  "constraints": ["No source column may be renamed, retyped, or deleted."]
+}
+```
+
+`source: true` items are ported verbatim with fresh GUIDs (renames/retypes/drops forbidden); `source: false` items appear in the Additions card with a `justification` string the user can challenge before approving the plan.
+
+### `REUSABLE_COMPONENTS` (array of objects, required)
+
+The reusable-component catalog from the canonical model (see [Reusable Components](edm-migration-model.md#reusable-components)). Drives the **Reusable Components** card in the Overview tab. The renderer surfaces only entries with `reuseCount >= 2`; single-use entries are kept in the array for traceability but not shown to the user.
+
+**Schema:**
+
+```json
+[
+  {
+    "sourceArtifact": "content-snippets/Newsletter CTA.contentsnippet.yml",
+    "sourceKind": "content-snippet",
+    "reuseCount": 5,
+    "referencedBy": ["web-pages/home/...", "web-pages/about/..."],
+    "spaTarget": {
+      "componentName": "NewsletterCta",
+      "kind": "content",
+      "framework": "react",
+      "i18n": false,
+      "props": []
+    }
+  }
+]
+```
+
+Pass through verbatim from `extract-edm-reusable-components.js` — no agent re-classification, no re-derivation of `componentName`.
+
 ---
 
 ## Example Complete JSON

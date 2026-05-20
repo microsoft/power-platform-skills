@@ -1,6 +1,6 @@
 # EDM to SPA Migration Patterns
 
-Use this reference during `/migrate-edm-to-spa` Phases 3, 6, 7, and 8 to map EDM Power Pages artifacts to static SPA code-site equivalents.
+Use this reference during `/migrate-traditional-site-to-spa` Phases 3, 6, 7, and 8 to map EDM Power Pages artifacts to static SPA code-site equivalents.
 
 ## Contents
 
@@ -366,7 +366,7 @@ Treat non-image binaries (PDFs, Office docs, ZIPs, font files) the same way as i
 
 ## Mandatory Route Families
 
-Used by `migrate-edm-to-spa-implement` Phase 7.5 (and the analyze skill's Phase 5 when building `ROUTES_DATA[]`). Whenever the source EDM site exposed any of the following route families — via web pages, sitemarkers, web page rules, web link sets, or runtime evidence captured in Phase 4 — the SPA **must** implement them as real routes in Phase 7.5 and back them with real components in Phase 7.6. None of these may be left as a `manualGap`, a placeholder shell, or a "next step".
+Used by `migrate-traditional-site-to-spa-implement` Phase 7.5 (and the analyze skill's Phase 5 when building `ROUTES_DATA[]`). Whenever the source EDM site exposed any of the following route families — via web pages, sitemarkers, web page rules, web link sets, or runtime evidence captured in Phase 4 — the SPA **must** implement them as real routes in Phase 7.5 and back them with real components in Phase 7.6. None of these may be left as a `manualGap`, a placeholder shell, or a "next step".
 
 | Route family | When the source has it | Mandatory SPA implementation |
 |--------------|------------------------|------------------------------|
@@ -386,7 +386,7 @@ If a mandatory route family is implied by the source but is not yet represented 
 
 ## Reuse EDM-Source Assets
 
-Used by `migrate-edm-to-spa-implement` Phase 7.6. Walk the canonical model's `assets[]` collection from analyze Phase 5 and physically wire each entry into the SPA so the migrated site renders the **same imagery the EDM source already used**.
+Used by `migrate-traditional-site-to-spa-implement` Phase 7.6. Walk the canonical model's `assets[]` collection from analyze Phase 5 and physically wire each entry into the SPA so the migrated site renders the **same imagery the EDM source already used**.
 
 1. **Copy the binary into the SPA.** For each asset, copy the file at `<EDM_SOURCE_ROOT>/<sourcePath>` into the SPA's static asset folder using the planned `targetPath`. For Vite/React/Vue/Astro scaffolds this is typically `<TARGET_PROJECT_ROOT>/public/<original-filename>`; for assets that must be hashed/imported by the bundler (e.g., referenced from component source), use `<TARGET_PROJECT_ROOT>/src/assets/<original-filename>` and import them from the component module. Preserve the original filename whenever an EDM route, CSS rule, or external link depends on it.
 2. **Rewrite references in migrated content.** When porting page `.copy.html`, `.summary.html`, web-template `.source.html`, content snippets, and custom CSS into SPA components or styles, rewrite each `<img src>`, `srcset`, `url(...)`, `background-image`, and Liquid asset helper that pointed at an EDM web-file to point at the new SPA `targetPath` (e.g., `/hero-banner.png` for a `public/` asset, or an imported module reference for `src/assets/`). Preserve `alt` text from the source where present; otherwise generate accessible alt text from the surrounding copy.
@@ -402,7 +402,7 @@ Do **not** substitute EDM source imagery with newly-sourced stock photography ju
 
 ## Profile Route Implementation
 
-Used by `migrate-edm-to-spa-implement` Phase 7.6 whenever the source EDM site had `/profile` (or an equivalent user-account page). Phase 7.5 added the route shell; Phase 7.6 must fill in the component, not log the page as a manual gap.
+Used by `migrate-traditional-site-to-spa-implement` Phase 7.6 whenever the source EDM site had `/profile` (or an equivalent user-account page). Phase 7.5 added the route shell; Phase 7.6 must fill in the component, not log the page as a manual gap.
 
 1. **Identity comes from `/setup-auth`.** Read the signed-in user's identity from the auth service that `/setup-auth` produced in Phase 7.3 (`authService`, `useAuth()`, or framework equivalent). Do not re-implement auth in the profile component.
 2. **Contact read/update comes from `/integrate-webapi`.** Use the Web API service scaffolded for the `contact` table in Phase 7.3 to read the signed-in contact's profile fields and update the columns the EDM profile editor exposed. Respect the `Contact`-scoped table permission and the narrowed `Webapi/contact/fields` site setting from the migration plan — never widen the field set beyond what the source allowed.

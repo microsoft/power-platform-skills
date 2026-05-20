@@ -1,6 +1,6 @@
 # Required Skill Invocations Manifest
 
-Reference for `migrate-edm-to-spa-implement` Phase 7.3.a (derive the manifest) and 7.3.b (invoke in order). The manifest drives every required Power Pages skill the migration must run inline — none of these may be deferred to "Recommended Next Skills" without explicit user deferral.
+Reference for `migrate-traditional-site-to-spa-implement` Phase 7.3.a (derive the manifest) and 7.3.b (invoke in order). The manifest drives every required Power Pages skill the migration must run inline — none of these may be deferred to "Recommended Next Skills" without explicit user deferral.
 
 ## Contents
 

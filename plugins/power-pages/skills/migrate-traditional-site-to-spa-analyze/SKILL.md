@@ -1,11 +1,11 @@
 ---
-name: migrate-edm-to-spa-analyze
+name: migrate-traditional-site-to-spa-analyze
 description: >-
   Analyzes a classic Enhanced Data Model (EDM) Power Pages website and produces an approved
-  migration plan that `migrate-edm-to-spa-implement` consumes. Phases 1-6 of the migration workflow:
+  migration plan that `migrate-traditional-site-to-spa-implement` consumes. Phases 1-6 of the migration workflow:
   resolve source, pre-flight readiness, static EDM analysis, runtime discovery, build canonical
   model and verification checklist, render the HTML migration plan and capture user approval.
-  Invoked directly by `migrate-edm-to-spa` (the meta skill) or standalone when the user wants only
+  Invoked directly by `migrate-traditional-site-to-spa` (the meta skill) or standalone when the user wants only
   the analysis phase. Intended for development environments only — Phase 4 can submit real forms
   to the source's Dataverse if `submit-synthetic` interactions mode is chosen.
 user-invocable: true
@@ -18,13 +18,21 @@ model: opus
 
 # Analyze EDM Site for SPA Migration
 
+> ## 🎯 Recommended run mode
+>
+> This skill walks six phases (resolve source → pre-flight → static analysis → runtime crawl → canonical model → HTML plan). Past runs have stopped after the static-analysis phase or after the runtime crawl without producing the HTML plan and writing `analyze-complete.json`. Run this skill inside a goal-tracking mode so the agent cannot quit early:
+>
+> - **Claude Code or Codex** — invoke with `/goal`. Goal mode keeps the agent on-target until the stated goal is satisfied.
+> - **GitHub Copilot** — turn on autopilot mode.
+
+
 > ## ⚠️ Use a development environment only
 >
 > Phase 4 crawls the live source site in your browser. If `INTERACTIONS_MODE` is `submit-synthetic`, the agent generates synthetic form payloads and submits them — this creates real records (contacts, cases, etc.) against the **source's Dataverse**. Even in `read-only` mode, every page load triggers the portal's own GET requests against the source.
 >
 > Point this skill at a **development tenant** for the source EDM site. Do not crawl a production portal unless you fully understand which interactions will be triggered and have explicit approval from whoever owns the data.
 
-Phase 1-6 of the EDM-to-SPA migration workflow. Discovers the EDM source, observes runtime behavior, builds an explainable migration model, and renders manual gaps into an approval-gated HTML plan. Produces the `migration-artifacts/` folder that `migrate-edm-to-spa-implement` consumes.
+Phase 1-6 of the EDM-to-SPA migration workflow. Discovers the EDM source, observes runtime behavior, builds an explainable migration model, and renders manual gaps into an approval-gated HTML plan. Produces the `migration-artifacts/` folder that `migrate-traditional-site-to-spa-implement` consumes.
 
 ## Core Principles
 
@@ -51,7 +59,7 @@ Phase 1-6 of the EDM-to-SPA migration workflow. Discovers the EDM source, observ
 3. **Static EDM Analysis** — Delegate to `migration-static-analyzer` (parallel with Phase 4).
 4. **Runtime Discovery** — Drive the multi-session Playwright crawl **in the main agent** (parallel with Phase 3). Runtime discovery is not delegated to a subagent because subagents cannot use `AskUserQuestion`, which the login/role-switch flow needs.
 5. **Build Migration Model and Verification Checklist** — Reconcile both agents' artifacts into the canonical model and the falsifiable checklist Phase 8 will validate against.
-6. **Review Migration Plan** — Render the HTML plan, capture user approval, write `analyze-complete.json` so the implement skill knows analysis is done.
+6. **Review Migration Plan** — Render the HTML plan, capture user approval, capture the implement-now preference, write `analyze-complete.json` (with `proceedToImplement`) so the implement skill / meta skill have a deterministic handoff signal.
 
 ---
 
@@ -65,7 +73,7 @@ Display the dev-environment warning to the user **as a chat message** (not just 
 
 > ⚠️ **Use a development environment only.** This skill crawls the live EDM source site in your browser. Even in read-only mode, every page load triggers GET requests against the source's Dataverse. If you choose to submit forms during the runtime crawl (Phase 4.2), the agent generates synthetic test data and submits it — **this creates real records** (contacts, cases, etc.) in the source's Dataverse.
 >
-> The follow-on implement skill (Phase 7) deploys, activates a public URL, and writes table permissions / web roles / site settings / server logic to the target Dataverse tenant.
+> The follow-on implement skill (Phase 7) deploys, activates a `https://<subdomain>.powerappsportals.com` URL bound to the tenant (the site remains private at this point — anonymous visibility is still gated by `websiteaccess.yml`, table permissions, and web roles), and writes table permissions / web roles / site settings / server logic to the target Dataverse tenant.
 >
 > Run this against **development tenants** only. Validate the full migration end-to-end in dev before pointing it at production.
 
@@ -79,7 +87,7 @@ On **Cancel** → stop immediately. Tell the user they can re-invoke the skill a
 
 On **Yes** → proceed to Phase 1.
 
-If this skill was invoked by `migrate-edm-to-spa` (the meta skill), the gate still fires here — the meta does not pre-confirm. The user sees the warning at the entry point of analyze regardless of how analyze was invoked.
+If this skill was invoked by `migrate-traditional-site-to-spa` (the meta skill), the gate still fires here — the meta does not pre-confirm. The user sees the warning at the entry point of analyze regardless of how analyze was invoked.
 
 ---
 
@@ -126,7 +134,7 @@ Tell the user where the source was downloaded. If the command fails, surface the
 
 #### 1.4 Locate the Website Data Root
 
-The EDM root typically contains `website.yml` plus subfolders like `web-pages/`, `web-templates/`, `content-snippets/`, `web-files/`, `lists/`, `basic-forms/`, `table-permissions/`, `webrole.yml`, `sitesetting.yml`. If the directory shape is unclear, read `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/pac-edm-structure.md` and confirm the correct root with the user.
+The EDM root typically contains `website.yml` plus subfolders like `web-pages/`, `web-templates/`, `content-snippets/`, `web-files/`, `lists/`, `basic-forms/`, `table-permissions/`, `webrole.yml`, `sitesetting.yml`. If the directory shape is unclear, read `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/pac-edm-structure.md` and confirm the correct root with the user.
 
 ### Output
 
@@ -143,7 +151,7 @@ The EDM root typically contains `website.yml` plus subfolders like `web-pages/`,
 
 #### 2.1 Load PAC Structure Guidance
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/pac-edm-structure.md` and use it to validate the source shape and identify relevant PAC record groups.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/pac-edm-structure.md` and use it to validate the source shape and identify relevant PAC record groups.
 
 #### 2.2 Build a Source Inventory
 
@@ -189,7 +197,7 @@ Verify `EDM_SOURCE_ROOT` (must contain `website.yml`), `TARGET_PROJECT_ROOT` (ab
 
 Use the `Task` tool to invoke the agent at `${CLAUDE_PLUGIN_ROOT}/agents/migration-static-analyzer.md`.
 
-Use the prompt template in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/agent-prompts.md#static-analyzer-prompt` with substitutions: `EDM_SOURCE_ROOT`, `TARGET_PROJECT_ROOT`, `TARGET_FRAMEWORK`, `LIVE_SITE_URL` (or `'none'`).
+Use the prompt template in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/agent-prompts.md#static-analyzer-prompt` with substitutions: `EDM_SOURCE_ROOT`, `TARGET_PROJECT_ROOT`, `TARGET_FRAMEWORK`, `LIVE_SITE_URL` (or `'none'`).
 
 Launch this `Task` call in the **same tool-calling turn** as the Phase 4 anonymous-session Playwright work so they run concurrently — the analyzer runs in a subagent while the main agent drives the browser.
 
@@ -200,6 +208,8 @@ Confirm all four artifacts exist on disk. If any are missing, re-invoke with a c
 ### Output
 
 - `migration-artifacts/edm-source-inventory.json`, `static-analysis.json`, `forms-inventory.json`, `static-analysis-summary.md`.
+- `migration-artifacts/edm-metadata-references.json` — source-side ground truth from `extract-edm-metadata-references.js` (every table/column/relationship/optionset/lookup the source references, with file+line evidence).
+- `migration-artifacts/dataverse-schema-snapshot.json` — authoritative Dataverse-side schema from `snapshot-dataverse-schema.js` (`--all-metadata`), captured against the source's tenant. Phase 5's verifier compares the canonical model against this snapshot; any column/table/relationship/optionset/lookup the canonical model references that isn't in the snapshot is a `blocker` finding (the exact failure class that produced `faq_body` instead of `faq_articlebody` in past runs).
 - Form classification covering every basic and advanced form, with mandatory mappings never defaulted to `manual-gap`.
 
 ---
@@ -214,7 +224,7 @@ Phase 4 still runs **in parallel with Phase 3**. Launch the Phase 3 `Task` (stat
 
 > **Per-session crawl procedure** (per-page loop, form discovery, API aggregation, artifact schemas, things never to do) is in:
 >
-> `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/runtime-discovery-procedure.md`
+> `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/runtime-discovery-procedure.md`
 >
 > Read it before starting the first session. The orchestration below tells you *when* to run each crawl; the procedure reference tells you *what* to do during one.
 
@@ -395,11 +405,17 @@ If any required artifact is missing, return to the relevant phase — do not inf
 
 #### 5.2 Build the Canonical Model
 
-Follow the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-migration-model.md`.
+Follow the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-migration-model.md`.
 
-Use `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-to-spa-patterns.md` to classify Liquid (composition/static → component/content; safe read-only data → Web API; server-only context / privileged access / server-evaluated rules → **Server Logic** handed off to `/add-server-logic` in Phase 7.3; ambiguous → manual gap). Routes with explicit patterns in the reference (profile / sign-in / search / access-denied / entity CRUD / admin / Copilot embed) **must not** be defaulted to `manualGap` without applying them first.
+Use `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-to-spa-patterns.md` to classify Liquid (composition/static → component/content; safe read-only data → Web API; server-only context / privileged access / server-evaluated rules → **Server Logic** handed off to `/add-server-logic` in Phase 7.3; ambiguous → manual gap). Routes with explicit patterns in the reference (profile / sign-in / search / access-denied / entity CRUD / admin / Copilot embed) **must not** be defaulted to `manualGap` without applying them first.
 
 When merging the two agents' form classifications, runtime wins on endpoint/method (network evidence is authoritative for the SPA's Web API call shape); static wins on field semantics, validation rules, and target table. Record disagreements in the form's `caveats[]`.
+
+The canonical model also carries three preservation/derivation sections — schema and rules are in the canonical-model reference, summarized here:
+
+- **`preservation`** (see [Preservation Contract](../migrate-traditional-site-to-spa/references/edm-migration-model.md#preservation-contract)) — every source web role and table permission is emitted with `source: true` and a fresh-GUID strategy. The data model lists every source column with `source: true` and its `attributeType` from the Dataverse snapshot. New roles, permissions, columns, or tables appear only with `source: false` and a `justification`. Renaming, retyping, or dropping source items is forbidden — the static-analyzer agent already produces the source inventory; Phase 5.2 turns it into this contract verbatim.
+- **`reusableComponents`** (see [Reusable Components](../migrate-traditional-site-to-spa/references/edm-migration-model.md#reusable-components)) — every source content snippet, web template, and weblink-set with `reuseCount` and `referencedBy[]` computed by grep across page sidecars + template `.source.html` + other snippets. `spaTarget.componentName` is derived from the source `adx_name` (kebab → PascalCase). Phase 7.6 mechanically generates one SPA component per entry; inlining the same source content across multiple SPA files is a Phase 8 drift item.
+- **`functionalUnderstanding`** (see [Functional Understanding](../migrate-traditional-site-to-spa/references/edm-migration-model.md#functional-understanding)) — one to two plain-language sentences in `purpose`, a deterministic bulleted `features[]` list derived from route/form classifications via a small lookup table (not free-form prose), and `audiences[]` ordered anonymous-first. Drives the HTML plan's Overview tab.
 
 #### 5.3 Build the EDM-to-SPA Mapping Matrix
 
@@ -411,7 +427,7 @@ Before any entry lands in the canonical model with `targetKind: "manualGap"` or 
 
 ##### 5.4.a Refuse `manualGap` for mandatory-route-family items
 
-If the underlying source artifact matches a row in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-to-spa-patterns.md#mandatory-route-families`, **`manualGap` is forbidden** for the route itself. The mandatory families are: not-found / 404, access-denied / 403, search, profile / user account, sign-in / sign-out / auth callback, registration / invitation / password reset, entity list / detail / create / edit, admin / role-gated, Copilot / bot embed.
+If the underlying source artifact matches a row in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-to-spa-patterns.md#mandatory-route-families`, **`manualGap` is forbidden** for the route itself. The mandatory families are: not-found / 404, access-denied / 403, search, profile / user account, sign-in / sign-out / auth callback, registration / invitation / password reset, entity list / detail / create / edit, admin / role-gated, Copilot / bot embed.
 
 For each, the patterns reference names the required SPA implementation (a real component plus services from `/integrate-webapi`, `/setup-auth`, `/create-webroles`, or `/add-server-logic`). Use that instead. Specific sub-features within the route (federated linking on profile, CAPTCHA on registration, faceted search on knowledge) may still be `manualGap` entries — but the route itself never is.
 
@@ -447,24 +463,46 @@ A gap entry that cannot answer (3) with a specific feature name (not a category)
 
 #### 5.6 Build the Verification Checklist
 
-Walk the canonical model and the two agents' artifacts to produce `migration-artifacts/migration-verification-checklist.json` per the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/migration-verification-checklist.md`. One falsifiable check per migrated route, form, Web API integration, auth wiring step, role, table permission, server-logic operation, asset, and metadata group, plus drift checks derived from the static/runtime comparison.
+Walk the canonical model and the two agents' artifacts to produce `migration-artifacts/migration-verification-checklist.json` per the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/migration-verification-checklist.md`. One falsifiable check per migrated route, form, Web API integration, auth wiring step, role, table permission, server-logic operation, asset, and metadata group, plus drift checks derived from the static/runtime comparison.
 
 Set every check's initial `status` to `"pending"`. Mandatory-route-family checks and forms on those routes must be `blocker`-severity. The checklist is locked at user approval (Phase 6.5); regenerate it if the user revises the plan.
 
-#### 5.7 Save Model Artifacts
+#### 5.7 Verify Canonical Model Against Dataverse (Deterministic Gate)
 
-Save `canonical-site-model.json`, `edm-to-spa-mapping.md`, `migration-gap-log.md`, `migration-verification-checklist.json`.
+Before the canonical model becomes the input to the HTML plan in Phase 6, cross-check every Dataverse reference it contains against the snapshot from Phase 3. This catches hallucinated column / table / relationship / optionset / lookup names while they are still cheap to fix — long before they reach `.powerpages-site/site-settings/Webapi-<table>-fields.sitesetting.yml` and cause runtime 400s.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-canonical-model-against-dataverse.js" \
+  --canonicalModel "<TARGET_PROJECT_ROOT>/migration-artifacts/canonical-site-model.json" \
+  --snapshot "<TARGET_PROJECT_ROOT>/migration-artifacts/dataverse-schema-snapshot.json" \
+  --edmReferences "<TARGET_PROJECT_ROOT>/migration-artifacts/edm-metadata-references.json" \
+  --output "<TARGET_PROJECT_ROOT>/migration-artifacts/canonical-model-vs-dataverse.json"
+```
+
+Exit codes:
+- `0` (verdict `ok`) — proceed to 5.8. Warnings, if any, are surfaced in the HTML plan's gaps tab.
+- `2` (verdict `fail`) — at least one error-severity finding. **Do not advance to Phase 6.** Read `canonical-model-vs-dataverse.json#/findings[]`:
+  - For each `error` finding, decide one of: (a) the canonical model has a typo → correct the model and re-run 5.7; (b) the source EDM truly references a name Dataverse no longer has → record it as a `manualGap` with the deprecation evidence and rebuild the verifier-relevant section of the model; (c) the snapshot is stale (Dataverse has been reorganized since the migration started) → re-run `snapshot-dataverse-schema.js` and re-verify. The `suggestion` field on each finding is the closest snapshot name within edit distance 4 — use it as a starting point, not a blind autofix.
+  - `warning` findings (e.g. over-permissive Web API whitelist: a column exists in Dataverse but the EDM source never referenced it) do not block but must appear in the HTML plan's Gaps & Manual Work tab so reviewers can decide whether to trim.
+- `1` — fatal error (missing input file). Fix the input path and re-run.
+
+Persist the result in the canonical model: write `canonical-site-model.json#/_dataverseVerification` with the verifier's `verdict`, `summary`, and the first 20 findings so anyone reading the model later sees the verification context inline. If the verifier returned `fail`, the model must not progress to 5.8 until either the model or the snapshot is updated and re-verification returns `ok` (or the user explicitly accepts every remaining `error` as a `manualGap`).
+
+#### 5.8 Save Model Artifacts
+
+Save `canonical-site-model.json`, `edm-to-spa-mapping.md`, `migration-gap-log.md`, `migration-verification-checklist.json`, and `canonical-model-vs-dataverse.json`.
 
 ### Output
 
-- Canonical model ready for user review in Phase 6.
+- Canonical model ready for user review in Phase 6, **verified against Dataverse** (`canonical-model-vs-dataverse.json` has `verdict: "ok"` or every remaining `error` finding is recorded as an accepted `manualGap`).
 - Verification checklist ready for Phase 8.4's validator.
+- `_dataverseVerification` block on `canonical-site-model.json` carries the verifier's `verdict`, `summary`, and the first 20 findings as inline context.
 
 ---
 
 ## Phase 6: Review Migration Plan
 
-**Goal:** Capture the new SPA's design choices, present the migration plan in an interactive HTML document, and get explicit user approval before `migrate-edm-to-spa-implement` writes any SPA files.
+**Goal:** Capture the new SPA's design choices, present the migration plan in an interactive HTML document, and get explicit user approval before `migrate-traditional-site-to-spa-implement` writes any SPA files.
 
 ### Actions
 
@@ -481,7 +519,7 @@ Then read `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics
 
 Persist as `DESIGN_DATA` with `aesthetic` and `mood` as separate fields so they pass to `/create-site` verbatim in the implement skill's Phase 7.1.
 
-`DESIGN_DATA` shape and field list are in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-migration-plan-data-format.md`.
+`DESIGN_DATA` shape and field list are in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-migration-plan-data-format.md`.
 
 #### 6.1.b Capture Weblink Layout (Only When the Source Has Weblink Sets)
 
@@ -511,7 +549,7 @@ The chosen layout flows through `DESIGN_DATA` to:
 
 #### 6.2 Consolidate Plan Data
 
-Build a JSON object from `canonical-site-model.json` + `DESIGN_DATA` per the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-edm-to-spa/references/edm-migration-plan-data-format.md`. Required keys: `SITE_NAME`, `PLAN_TITLE` (always `"EDM Migration Plan"`), `SUMMARY`, `SITE_STATS` (`componentCount` counts only `targetKind` `component`/`content` — never `serverLogic`/`webApi`/`manualGap`), `ROUTES_DATA`, `DATAVERSE_DATA`, `SECURITY_DATA`, `GAPS_DATA`, `RATIONALE_DATA`, `DESIGN_DATA`.
+Build a JSON object from `canonical-site-model.json` + `DESIGN_DATA` per the schema in `${CLAUDE_PLUGIN_ROOT}/skills/migrate-traditional-site-to-spa/references/edm-migration-plan-data-format.md`. Required keys: `SITE_NAME`, `PLAN_TITLE` (always `"EDM Migration Plan"`), `SUMMARY`, `SITE_STATS` (`componentCount` counts only `targetKind` `component`/`content` — never `serverLogic`/`webApi`/`manualGap`), `ROUTES_DATA`, `DATAVERSE_DATA`, `SECURITY_DATA`, `GAPS_DATA`, `RATIONALE_DATA`, `DESIGN_DATA`.
 
 Every `ROUTES_DATA[]` entry **must** include a `rationale` string explaining why the chosen `componentMapping` is correct: cite the EDM evidence (specific source artifact, runtime observation, or Form Conversion Standard from `edm-to-spa-patterns.md`) and any caveats. The rendered Routes table surfaces this column so reviewers can challenge the mapping without re-reading the source. Generic phrases like "standard mapping" or "follows convention" are not acceptable — be specific.
 
@@ -553,17 +591,27 @@ Review the plan in the browser, including the Gaps & Manual Work tab, then confi
 
 | Question | Options |
 |----------|---------|
-| Approve this migration plan? | Approve and implement, Revise the plan, Narrow scope, Stop |
+| Approve this migration plan? | Approve, Revise the plan, Narrow scope, Stop |
 
 On **Revise the plan**: update the model + checklist, regenerate the HTML (use a new filename — the render script never overwrites), open the updated plan, ask again.
 
 On **Stop**: clean up temp artifacts and exit.
 
-On **Approve and implement**: continue to 6.6 — do **not** invoke the implement skill from here (the meta skill is responsible for that handoff).
+On **Approve**: continue to 6.6 to capture whether the user wants to chain into implement immediately. Do **not** invoke the implement skill from here (the meta skill is responsible for that handoff).
 
-#### 6.6 Write the Analyze-Complete Signal
+#### 6.6 Capture Implementation-Handoff Preference
 
-Write `<TARGET_PROJECT_ROOT>/migration-artifacts/analyze-complete.json` so `migrate-edm-to-spa-implement` (and the meta skill) know analysis finished and was approved:
+The plan is approved, but analysis and implementation are still separable. Capture the user's preference now — while this skill is still running and `AskUserQuestion` is guaranteed to be in the active tool set. Persisting the answer to `analyze-complete.json` lets the parent flow (the meta skill, or a later standalone implement run) decide what to do without re-prompting. This sidesteps the brittle pattern of asking the user a follow-up question *after* the sub-skill returns, where the parent agent may treat the sub-skill's exit message as a terminal signal and stop.
+
+| Header | Question | Options |
+|--------|----------|---------|
+| Implement now? | The migration plan is approved (see `<planPath>`). Start the implementation phase right after this? It scaffolds the SPA via `/create-site`, deploys to hydrate `.powerpages-site/`, activates the site, runs the required skills (`/integrate-webapi`, `/create-webroles`, `/setup-auth`, `/audit-permissions`, `/add-server-logic`), implements routes/components, and validates the result. | Yes — start implementation now (Recommended), No — stop after analysis (I'll run implement later) |
+
+Store the answer as `PROCEED_TO_IMPLEMENT` (`true` for "Yes", `false` for "No").
+
+#### 6.7 Write the Analyze-Complete Signal
+
+Write `<TARGET_PROJECT_ROOT>/migration-artifacts/analyze-complete.json` so `migrate-traditional-site-to-spa-implement` (and the meta skill) know analysis finished, was approved, and whether the user wants to chain into implement immediately:
 
 ```json
 {
@@ -573,17 +621,23 @@ Write `<TARGET_PROJECT_ROOT>/migration-artifacts/analyze-complete.json` so `migr
   "targetFramework": "<TARGET_FRAMEWORK>",
   "targetProjectRoot": "<TARGET_PROJECT_ROOT>",
   "liveSiteUrl": "<LIVE_SITE_URL or null>",
-  "planPath": "<absolute path to the HTML plan>"
+  "planPath": "<absolute path to the HTML plan>",
+  "proceedToImplement": <PROCEED_TO_IMPLEMENT>
 }
 ```
 
-Tell the user analysis is complete and they can invoke `migrate-edm-to-spa-implement` (or let the meta skill handle the handoff) to continue.
+#### 6.8 Tell the User What Happens Next
+
+Print one of the two messages below based on `PROCEED_TO_IMPLEMENT`, then end the skill. Do **not** invoke `migrate-traditional-site-to-spa-implement` from here — the meta skill (or the user, standalone) drives that handoff.
+
+- `proceedToImplement: true` → "Analysis is complete and approved. You opted in to start implementation next — the meta skill will invoke `migrate-traditional-site-to-spa-implement` immediately." If this skill was invoked standalone (no meta skill above), additionally tell the user they can now run `/migrate-traditional-site-to-spa-implement` directly with `targetProjectRoot=<TARGET_PROJECT_ROOT>`.
+- `proceedToImplement: false` → "Analysis is complete and approved. Paused as requested. Resume later with `/migrate-traditional-site-to-spa-implement` — point it at `<analyze-complete.json path>`."
 
 ### Output
 
 - `DESIGN_DATA` captured for `/create-site` reuse in the implement skill's Phase 7.1.
 - Approved migration plan rendered to `docs/edm-migration-plan.html`.
-- `migration-artifacts/analyze-complete.json` written as the explicit handoff signal.
+- `migration-artifacts/analyze-complete.json` written as the explicit handoff signal — includes `proceedToImplement` so the meta skill (or a later standalone implement run) can decide whether to chain into implement without re-prompting.
 
 ---
 
@@ -605,7 +659,7 @@ Tell the user analysis is complete and they can invoke `migrate-edm-to-spa-imple
 | Phase 3: Analyze EDM source | Phase 3: Analyzing source | Delegate static analysis to `migration-static-analyzer` (parallel with Phase 4); inventory pages, templates, snippets, lists, forms, assets, custom code, auth, roles, permissions |
 | Phase 4: Discover runtime behavior | Phase 4: Discovering runtime | Capture `INTERACTIONS_MODE`, derive role hint, drive the multi-session Playwright crawl in the main agent (parallel with Phase 3); ask the user to log in between sessions, verify via `browser_snapshot`, capture per-session routes, network calls, form submission contracts |
 | Phase 5: Build migration model | Phase 5: Building model | Build canonical model, EDM-to-SPA matrix, confidence scoring, verification checklist |
-| Phase 6: Review migration plan | Phase 6: Reviewing plan | Capture design direction, render HTML plan, get user approval, write `analyze-complete.json` |
+| Phase 6: Review migration plan | Phase 6: Reviewing plan | Capture design direction, render HTML plan, get user approval, capture the implement-now preference, write `analyze-complete.json` (with `proceedToImplement`) |
 
 ---
 

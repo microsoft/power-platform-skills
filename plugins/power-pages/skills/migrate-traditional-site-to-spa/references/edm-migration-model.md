@@ -1,11 +1,14 @@
 # EDM Migration Model
 
-Use this reference during `/migrate-edm-to-spa` Phases 5, 6, and 8. The goal is to turn static PAC records and runtime Playwright observations into a reviewable model that can drive SPA re-authoring.
+Use this reference during `/migrate-traditional-site-to-spa` Phases 5, 6, and 8. The goal is to turn static PAC records and runtime Playwright observations into a reviewable model that can drive SPA re-authoring.
 
 ## Contents
 
 - [Artifact Set](#artifact-set)
 - [Canonical Site Model Shape](#canonical-site-model-shape)
+- [Preservation Contract](#preservation-contract)
+- [Reusable Components](#reusable-components)
+- [Functional Understanding](#functional-understanding)
 - [Metadata Translation Model](#metadata-translation-model)
 - [Route Model](#route-model)
 - [Data Dependency Model](#data-dependency-model)
@@ -76,11 +79,173 @@ Use this shape as a guide. Add fields when needed, but keep the top-level catego
     "websiteAccess": [],
     "unmapped": []
   },
+  "preservation": {
+    "policy": "preserve-source-by-default",
+    "dataModel": { "tables": [], "additions": [] },
+    "tablePermissions": [],
+    "webRoles": [],
+    "constraints": []
+  },
+  "reusableComponents": [],
+  "functionalUnderstanding": {
+    "purpose": "",
+    "features": [],
+    "audiences": []
+  },
   "assets": [],
   "unsupportedOrManual": [],
   "evidenceLedger": []
 }
 ```
+
+## Preservation Contract
+
+The migration is **preservation-by-default**. The source site's data model, table permissions, and web roles all encode functionality that the migrated SPA must continue to provide. The migration is allowed to **add** new metadata when the target site genuinely needs it (a new SPA-only access path, a Web API column not in the source); it is not allowed to **modify or drop** anything the source had.
+
+The `preservation` section of `canonical-site-model.json` is the single contract that `/create-webroles`, `/audit-permissions`, and the metadata-translation step (implement Phase 7.3.d) all consume. Each consumer refuses to drop a `source: true` entry; additions are emitted only when `source: false` with a `justification`.
+
+### Constraints by concern
+
+| Concern | Allowed | Forbidden |
+|---|---|---|
+| **Data model** | Adding new columns or tables when the SPA's Web API or new functionality genuinely needs them. Each addition is recorded under `preservation.dataModel.additions[]` (or per-table `additions[]`) with a `justification`. | Renaming, retyping, deleting, or otherwise modifying any column or table the source had. The source schema is the contract. |
+| **Table permissions** | Adding new permissions when a new SPA-only access path needs one. | Dropping a source permission. Narrowing scope (e.g., changing `Global` to `Contact`) on a permission the source had. |
+| **Web roles** | Adding new roles when a new SPA-only access path needs one. | Renaming, dropping, or changing the `default` / `anonymous` / `authenticated` flags on a source role. GUIDs change (the target tenant gets fresh ones); identity is preserved by name. |
+
+### Shape
+
+```json
+{
+  "policy": "preserve-source-by-default",
+  "dataModel": {
+    "tables": [
+      {
+        "logicalName": "faq_article",
+        "source": true,
+        "sourceEvidence": ["lists/Articles.entitylist.yml", "basic-forms/Edit-Article.basicform.yml"],
+        "columns": [
+          { "logicalName": "faq_articleid", "source": true, "attributeType": "Uniqueidentifier" },
+          { "logicalName": "faq_articlebody", "source": true, "attributeType": "Memo" }
+        ],
+        "additions": []
+      }
+    ],
+    "additions": [
+      {
+        "kind": "table",
+        "logicalName": "faq_articlefeedback",
+        "justification": "New SPA-only feedback widget needs a place to write user reactions.",
+        "source": false
+      }
+    ]
+  },
+  "tablePermissions": [
+    {
+      "sourceName": "Article-read-anon",
+      "source": true,
+      "sourceFile": "table-permissions/Article-read-anon.tablepermission.yml",
+      "entityLogicalName": "faq_article",
+      "scope": "Global",
+      "privileges": ["Read"],
+      "webRoleNames": ["Anonymous Users"],
+      "targetIdStrategy": "generate-new-guid",
+      "justification": null
+    }
+  ],
+  "webRoles": [
+    {
+      "sourceName": "Authenticated Users",
+      "source": true,
+      "sourceFile": "webrole.yml#Authenticated Users",
+      "default": true,
+      "anonymous": false,
+      "authenticated": true,
+      "targetIdStrategy": "generate-new-guid",
+      "justification": null
+    }
+  ],
+  "constraints": [
+    "No source column may be renamed, retyped, or deleted in the target tenant.",
+    "Every source table permission must exist in the target; new permissions allowed only with explicit justification.",
+    "Every source web role must exist in the target; new roles allowed only with explicit justification."
+  ]
+}
+```
+
+### Consumer rules
+
+- `/create-webroles` (Phase 7.3.b) — for every entry in `preservation.webRoles[]`, generate the corresponding `.powerpages-site/web-roles/<sanitized-name>.webrole.yml`. Cannot skip a `source: true` entry; if generation fails, the migration is `Blocked`.
+- `/audit-permissions` (Phase 7.3.b) — for every entry in `preservation.tablePermissions[]`, generate the corresponding `.powerpages-site/table-permissions/<sanitized-name>.tablepermission.yml`. Source permissions get fresh GUIDs but identical `entityLogicalName` / `scope` / `privileges` / `webRoleNames`. Cannot drop a source permission, cannot narrow scope.
+- Metadata translation (Phase 7.3.d) — for every column listed under `preservation.dataModel.tables[].columns[]`, confirm the column exists in the target tenant's Dataverse snapshot (via `verify-canonical-model-against-dataverse.js`). Mismatches are blocker findings, not deferral candidates.
+- HTML plan rendering (Phase 6) — surface a **Constraints** card and an **Additions** card in the Overview tab. The user reviews additions before approving the plan; source-preserved items are summarized as counts (e.g., "All 7 source web roles will be preserved with fresh GUIDs").
+
+## Reusable Components
+
+The source site uses content snippets, web templates, and weblink-sets as reusable building blocks. The migration must factor them into SPA components when they're reused across multiple pages — inlining the same source content across N SPA files is a Phase 8 drift item, not a successful migration.
+
+The static analyzer (Phase 3) enumerates every reusable source artifact deterministically (grep across page sidecars, template `.source.html`, and other snippets for the source's `adx_name` and reference patterns). The implement step (Phase 7.6) mechanically generates one SPA component per entry; page-level `componentMapping[]` entries reference the component by name.
+
+```json
+{
+  "sourceArtifact": "content-snippets/Newsletter-CTA.contentsnippet.yml",
+  "sourceKind": "content-snippet",
+  "reuseCount": 5,
+  "referencedBy": [
+    "web-pages/home/Home.webpage.copy.html",
+    "web-pages/about/About.webpage.copy.html",
+    "web-pages/faq/FAQ.webpage.copy.html",
+    "web-pages/contact/Contact.webpage.copy.html",
+    "web-templates/Layout.webtemplate.source.html"
+  ],
+  "spaTarget": {
+    "componentName": "NewsletterCTA",
+    "kind": "content",
+    "framework": "react",
+    "props": [],
+    "i18n": false
+  },
+  "evidence": ["content-snippets/Newsletter-CTA.contentsnippet.yml"]
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `sourceKind` | `content-snippet`, `web-template`, `weblink-set`, `shared-css`, or `shared-script` |
+| `reuseCount` | Number of distinct source files that reference this artifact |
+| `referencedBy[]` | PAC-relative paths of every referencing source file (used to update page-level `componentMapping[]` entries) |
+| `spaTarget.kind` | `content` (snippet → content module), `layout` (web template → layout component), `navigation` (weblink-set → nav component), or `asset` (shared CSS/JS) |
+| `spaTarget.componentName` | Derived from `adx_name` (kebab-cased into PascalCase) |
+| `spaTarget.i18n` | `true` when source has multiple language variants of the snippet |
+
+**Inlining rule (Phase 7.6):** if `reuseCount >= 2`, the SPA must factor the artifact into a single component. The agent does not get to choose to inline. A single-use snippet (`reuseCount === 1`) may be inlined into the consuming page when the snippet is trivially short; longer snippets get factored regardless.
+
+The HTML plan surfaces a **Reusable Components** card listing each entry with `reuseCount`, `referencedBy[]` count, and `spaTarget.componentName` so the user can review the factoring before approving.
+
+## Functional Understanding
+
+The Overview tab of the HTML plan leads with a user-facing description of what the source site does, not designer/engineer metadata. Three fields drive it:
+
+```json
+{
+  "purpose": "Public-facing knowledge base for a customer-support team. Anonymous visitors browse FAQ articles by topic; authenticated members submit support requests and track their cases.",
+  "features": [
+    "FAQ articles with category browsing and search",
+    "Topic taxonomy with hierarchical navigation",
+    "Contact form that creates a Dataverse case",
+    "Authenticated profile editing",
+    "Member-only support history"
+  ],
+  "audiences": ["Anonymous Users", "Authenticated Users", "Support Staff"]
+}
+```
+
+| Field | Source |
+|-------|--------|
+| `purpose` | One to two plain-language sentences. Derived from the source site's name, `sitesetting.yml#Site/Description` (when present), and the static analyzer's site-type classification (portal / dashboard / knowledge / community / faq / support). |
+| `features[]` | Bulleted user-visible capabilities. Derived deterministically from the canonical model's `routes[]` and `forms[]` classifications, mapped to feature names via a lookup table in the static analyzer (e.g., a route classified as `entity-list` over `kbarticle` → "Knowledge articles list"). Not free-form agent prose. |
+| `audiences[]` | Sourced from `webrole.yml` (every role with `adx_name`), reordered so anonymous-first / authenticated-second / specific roles last. |
+
+The HTML plan's Overview tab renders these as the first three cards, above any aesthetic / mood / palette / count detail.
 
 ## Metadata Translation Model
 

@@ -520,13 +520,23 @@ Use `AskUserQuestion`:
 |----------|---------|
 | Authentication and authorization are configured. To make login work, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke `/deploy-site`.
+**If "Yes, deploy now"**: Invoke `/deploy-site`, then clear the runtime cache in 8.5.
 
 **If "No"**: Remind the user:
 
 > "Remember to deploy your site using `/deploy-site` when you're ready. Authentication will not work until the site is deployed with the new site settings."
 
-#### 8.5 Post-Deploy Notes
+#### 8.5 Clear Site Cache (after deploy)
+
+Power Pages caches site settings (including the auth identity-provider records) for 2–5 minutes. Without an explicit flush, the next sign-in attempt may still see the pre-deploy state. Run the flush immediately after `/deploy-site` returns:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+The script reads the target website record id from `.powerpages-site/website.yml#id` so it restarts the right site even when the SPA's `siteName` collides with another website in the tenant.
+
+#### 8.6 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 

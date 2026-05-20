@@ -4,8 +4,8 @@ Reusable `Task` tool prompts for the agents invoked by the migration skills. The
 
 | Agent | Invoked by | Why it's a subagent |
 |-------|------------|---------------------|
-| `migration-static-analyzer` | `migrate-edm-to-spa-analyze` Phase 3 | CPU-bound work on the PAC export; no user interaction needed |
-| `migration-validator` | `migrate-edm-to-spa-implement` Phase 8.4 | Independent of the migration agent — produces the completion verdict from primary evidence |
+| `migration-static-analyzer` | `migrate-traditional-site-to-spa-analyze` Phase 3 | CPU-bound work on the PAC export; no user interaction needed |
+| `migration-validator` | `migrate-traditional-site-to-spa-implement` Phase 8.4 | Independent of the migration agent — produces the completion verdict from primary evidence |
 
 Runtime discovery was previously delegated to a `migration-runtime-discoverer` subagent. That delegation was reverted because subagents cannot use `AskUserQuestion`, which the multi-session login flow needs. The analyze SKILL's Phase 4 now drives Playwright directly in the main agent — see `runtime-discovery-procedure.md` for the per-session crawl details.
 
@@ -18,7 +18,7 @@ Runtime discovery was previously delegated to a `migration-runtime-discoverer` s
 
 ## Static analyzer prompt
 
-Used in `migrate-edm-to-spa-analyze` Phase 3.2. The static analyzer inventories a PAC EDM export, classifies every form against the Form Conversion Standards, captures binary assets, and writes the canonical static-analysis artifacts. It runs in parallel with the main agent's Phase 4 Playwright crawl.
+Used in `migrate-traditional-site-to-spa-analyze` Phase 3.2. The static analyzer inventories a PAC EDM export, classifies every form against the Form Conversion Standards, captures binary assets, and writes the canonical static-analysis artifacts. It runs in parallel with the main agent's Phase 4 Playwright crawl.
 
 **Required substitutions:**
 
@@ -46,13 +46,13 @@ Used in `migrate-edm-to-spa-analyze` Phase 3.2. The static analyzer inventories 
 
 ## Validator prompt
 
-Used in `migrate-edm-to-spa-implement` Phase 8.4. The validator is independent of the migration agent — it reads the checklist (built in analyze Phase 5) and the manifest (built in implement Phase 7.3), walks every entry against the SPA filesystem and the running dev server / live site, and produces the completion verdict.
+Used in `migrate-traditional-site-to-spa-implement` Phase 8.4. The validator is independent of the migration agent — it reads the checklist (built in analyze Phase 5) and the manifest (built in implement Phase 7.3), walks every entry against the SPA filesystem and the running dev server / live site, and produces the completion verdict.
 
 **Required substitutions:**
 
 - `<TARGET_PROJECT_ROOT>`
 - `<DEV_SERVER_URL>` — from implement Phase 8.3, or `'none'` if not running
-- `<LIVE_SITE_URL>` — value of `migration-completion-status.json#/activation/liveUrl` from implement Phase 7.2.d, or `'none'` if activation was user-deferred or failed
+- `<LIVE_SITE_URL>` — value of `migration-completion-status.json#/activation/liveUrl` from implement Phase 7.9, or `'none'` if activation was user-deferred or failed
 
 **Prompt template:**
 
@@ -64,13 +64,14 @@ Used in `migrate-edm-to-spa-implement` Phase 8.4. The validator is independent o
 > - `CHECKLIST_PATH` = `<TARGET_PROJECT_ROOT>/migration-artifacts/migration-verification-checklist.json`
 > - `SKILL_MANIFEST_PATH` = `<TARGET_PROJECT_ROOT>/migration-artifacts/required-skill-invocations.json`
 > - `POWERPAGES_SITE_PATH` = `<TARGET_PROJECT_ROOT>/.powerpages-site/`
+> - `DATAVERSE_VERIFICATION_PATH` = `<TARGET_PROJECT_ROOT>/migration-artifacts/canonical-model-vs-dataverse.target.json` — required input for the five metadata gates (`gate-webapi-fields-match-dataverse`, `gate-tables-match-dataverse`, `gate-relationships-match-dataverse`, `gate-optionsets-match-dataverse`, `gate-lookups-match-dataverse`). If this file is missing, fail every metadata gate as `blocker` and return phase 7.3.a.1 as the remediation pointer.
 > - `DEV_SERVER_URL` = `<DEV_SERVER_URL>`
 > - `LIVE_SITE_URL` = `<LIVE_SITE_URL>`
 > - `INTERACTIONS_MODE` = `read-only` (the validator never submits forms)
 >
-> The validator must drive its live-site checks against `LIVE_SITE_URL` when one is provided. When `LIVE_SITE_URL` is `none`, mark every live-site check as `deferred` (not `pass`, not `fail`) and surface the reason as `activation deferred or failed in Phase 7.2.d`.
+> The validator must drive its live-site checks against `LIVE_SITE_URL` when one is provided. When `LIVE_SITE_URL` is `none`, mark every live-site check as `deferred` (not `pass`, not `fail`) and surface the reason as `activation deferred or failed in Phase 7.9`.
 >
-> Walk every entry in the checklist, run the synthetic gate-* checks documented in your workflow — both the **structural** gates (`skill-manifest`, `skill-evidence`, `mandatory-routes`, `auth-wiring`, `profile-route`, `copilot-embed`, `stock-drift`, `no-scaffold-leak`, `no-planning-metadata`, `no-secret-leak`) and the **behavioural** gates (`route-reachability`, `signin-click-redirect`, `form-submission-shape`). The behavioural gates require a running site (`DEV_SERVER_URL` or `LIVE_SITE_URL`) — when neither is available, mark them `deferred`, not `pass`. Write all three artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
+> Walk every entry in the checklist and run the six synthetic gate-* checks documented in your workflow: `gate-build-passes`, `gate-manifest-resolved`, `gate-metadata-matches-dataverse` (consumes `DATAVERSE_VERIFICATION_PATH`), `gate-no-content-leak`, `gate-site-loads`, and `gate-routes-and-forms`. The runtime gates (`gate-site-loads`, `gate-routes-and-forms`) require `LIVE_SITE_URL` or `DEV_SERVER_URL`; when both are `none` they are `deferred`, not `pass`. The metadata gate has no deferred path; it is `blocker` whenever `DATAVERSE_VERIFICATION_PATH` is missing or contains `error`-severity findings without matching `manualGap` entries. Write all three artifacts under `<TARGET_PROJECT_ROOT>/migration-artifacts/`:
 >
 > - `migration-validation-report.json`
 > - `migration-validation-report.md`

@@ -156,13 +156,17 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 
 #### 2.3 Get Website Record ID
 
-Run `pac pages list` to get the website record ID:
+Prefer the authoritative source on disk over a name lookup.
 
-```bash
-pac pages list
-```
+1. **Read `<PROJECT_ROOT>/.powerpages-site/website.yml`** (the file `pac pages upload-code-site` writes after a deploy). If it exists, parse the top-level `id:` line and use that GUID as `websiteRecordId`. This is the only safe source when migrating an existing portal — the migrated SPA can share a `siteName` with the source EDM site (analyze preserves the source name through scaffolding), so a name-based search across `pac pages list` returns the wrong record. Stop here on success; do not run step 2.
 
-Parse the output to find the website record that matches the site name. Extract the `Website Record ID` (GUID). If `pac pages list` returns no results or the command is not available, set `websiteRecordId` to `$null` — the API will create a new website record.
+2. **Fall back to `pac pages list`** only when `.powerpages-site/website.yml` is absent (typical for a brand-new site that has never been deployed):
+
+   ```bash
+   pac pages list
+   ```
+
+   Parse the output for rows containing the site name. If **exactly one** row matches, extract its `Website Record ID` (GUID). If **multiple rows match the same name**, stop and tell the user the lookup is ambiguous — they should deploy first so `.powerpages-site/website.yml` exists, or rename the site to disambiguate. Do **not** silently pick the first match. If no rows match or the command is unavailable, set `websiteRecordId` to `$null` — the API will create a new website record.
 
 ### Output
 
