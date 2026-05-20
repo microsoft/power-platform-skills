@@ -1,23 +1,18 @@
 ---
 name: setup-auth
 description: >
-  This skill should be used when the user asks to "set up authentication",
-  "add login", "add logout", "configure Entra ID", "set up Azure AD auth",
-  "add Microsoft login", "enable authentication", "set up sign in",
-  "add role-based access", "add authorization", "protect routes",
-  "add auth to my site", "configure identity provider", "set up SAML",
-  "add SAML authentication", "configure OpenID Connect", "add OIDC",
-  "set up local login", "add username password login",
-  "configure Facebook login", "add Facebook auth",
-  "add Google sign in", "configure Google login",
-  "add Microsoft Account login", "configure Microsoft login",
-  "set up WS-Federation",
-  "configure Entra External ID", "set up External ID auth", "add External ID login",
-  "enable two-factor authentication", "add 2FA", "set up invitation login",
-  or wants to set up authentication (login/logout) and role-based
-  authorization for their Power Pages code site using any supported
-  identity provider (Microsoft Entra ID, Entra External ID, OpenID Connect,
-  SAML2, WS-Federation, local authentication, Microsoft Account, Facebook,
+  Use when the user asks to "set up authentication", "add login",
+  "add logout", "add sign in", "enable auth", "add role-based access",
+  "add authorization", "protect routes", "configure identity provider",
+  "configure Entra ID", "configure Entra External ID",
+  "configure OpenID Connect", "add OIDC", "set up SAML",
+  "set up WS-Federation", "set up local login", "add username password",
+  "add Facebook login", "add Google sign in", "add Microsoft Account",
+  "enable 2FA", "set up invitation login", or otherwise wants to set up
+  authentication (login/logout) and role-based authorization for their
+  Power Pages code site using any supported identity provider
+  (Microsoft Entra ID, Entra External ID, OpenID Connect, SAML2,
+  WS-Federation, local authentication, Microsoft Account, Facebook,
   or Google).
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
