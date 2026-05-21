@@ -380,6 +380,8 @@ Authenticated users cannot create/read records
 
 ## Pattern 15: Environment Already Associated With Another Pipelines Host
 
+> **Approval gates:** Detection by `setup-pipeline:5a.pattern-15` (consent). Auto-fix by `force-link-environment:4.destructive` (consent). See `references/approval-gates.md` §6.3 and §6.9.
+
 **Error pattern** (from `deploymentenvironments` POST or its `validationstatus` poll):
 ```
 This environment is already associated with another pipelines host.

@@ -67,6 +67,9 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
 
+<!-- gate: setup-pipeline:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · setup-pipeline:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -80,6 +83,9 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: setup-pipeline:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · setup-pipeline:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -158,6 +164,9 @@ Steps:
 
 6. Report findings: "Project: `{siteName}`. Solution: `{uniqueName}`. Dev env: `{devEnvUrl}`. Host env: `{HOST_ENV_URL ?? 'pending — will be ensured next'}` ({hostResult.resolutionStatus}). Existing pipeline: found/not found."
 
+<!-- gate: setup-pipeline:1.existing-pipeline | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-pipeline:1.existing-pipeline):** Existing `docs/alm/last-pipeline.json` found — overwrite, review first, or cancel. No Dataverse write yet.
+
 **If an existing `docs/alm/last-pipeline.json` is found**, ask via `AskUserQuestion`:
 
 > "A pipeline configuration already exists for `{pipelineName}` (created {createdAt}). How would you like to proceed?
@@ -181,6 +190,9 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 5 (Register Environments with the Pipelines Host).
 
 ### Phase 2 — Select CI/CD Platform
+
+<!-- gate: setup-pipeline:2.platform | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-pipeline:2.platform):** Pick CI/CD platform — PP Pipelines (full) vs GitHub Actions / ADO (coming soon stubs).
 
 Ask user via `AskUserQuestion`:
 
@@ -210,6 +222,9 @@ Before asking any questions, assemble what was auto-detected:
 | Dev environment URL | `{devEnvUrl}` from `pac env who` |
 | Host environment URL | `{HOST_ENV_URL}` from `ensure-pipelines-host-detect.js` (resolved in Phase 1 step 4) |
 | BAP environment ID (dev) | From `pac env list` |
+
+<!-- gate: setup-pipeline:3.config | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-pipeline:3.config):** Confirm auto-detected pipeline configuration — pipeline name, host env, target envs. Cancel exits before any Dataverse write to the host.
 
 Ask user via `AskUserQuestion` with pre-filled values:
 
@@ -275,6 +290,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" \
 If `wasBlocked` is non-empty for any env, inform the user:
 > "`.js` files are blocked in `{envUrl}`. This will cause upload/deployment failures for Power Pages code sites. Remove the block? This modifies an environment-level security setting."
 
+<!-- gate: setup-pipeline:4.4.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
+> 🚦 **Gate (consent · setup-pipeline:4.4.blocked-attachments):** Modify env-level `blockedattachments` security setting (tenant-wide impact). Affects all users of the env, not just this skill. Reversible from PPAC. **Fires PER ENV that has blocks.** Phase 4.4 checks source + every target env; if M envs out of N have `.js` (or other media extensions) on the blocklist, the gate fires M times — once per env. Each env has its own security setting and its own group of affected makers. Yes for source does NOT cover staging; yes for staging does NOT cover production. **Do NOT batch consent across envs.**
+
 Ask via `AskUserQuestion`: 1. Yes, remove block (recommended) / 2. Skip (I'll fix manually).
 
 If approved, re-run **without** `--dry-run` to apply the change. If the user declines, record it as a warning — they'll need to fix it manually before deployment succeeds.
@@ -321,6 +339,9 @@ If the script's stderr (case-insensitively) contains any of these substrings, th
 - `claimed by another host`
 
 Match all of these case-insensitively (`String.prototype.toLowerCase()` before `.includes()`) so backend wording drift between Pipelines package versions doesn't silently break detection. If none match but the script exited with the underlying Dataverse error code `0x80048d18` (or a wrapped `errormessage` containing that hex code), treat it as the same pattern — that's the stable signal even when the message wording shifts.
+
+<!-- gate: setup-pipeline:5a.pattern-15 | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · setup-pipeline:5a.pattern-15):** Target env stamped to a different Pipelines host. Offer force-link as documented auto-fix — DESTRUCTIVE: previous host loses pipeline access for this env. Cancel here exits setup-pipeline cleanly. **Fires PER ENV that triggers Pattern 15.** Phase 5 loops over source + each target env when registering with the host; if two target envs both turn out to be stamped to different hosts, this gate fires twice — once per env. Do NOT batch the consent across envs; the destructive blast radius is per-env (each env carries its own previous-host stamp and its own group of makers losing access).
 
 This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the raw `errormessage` to the user verbatim and offer the documented auto-fix via `AskUserQuestion`:
 
@@ -511,6 +532,9 @@ Inform the user:
 > **For now, you have two options:**
 > 1. Use **Power Platform Pipelines** — select option 1 to set up Microsoft's native deployment pipeline (recommended)
 > 2. Exit — I'll set up GitHub Actions / Azure DevOps manually using the documentation"
+
+<!-- gate: setup-pipeline:coming-soon.exit | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-pipeline:coming-soon.exit):** User selected GitHub/ADO (coming-soon stubs) — offer to switch back to PP Pipelines or exit cleanly.
 
 Ask via `AskUserQuestion`:
 1. Switch to Power Platform Pipelines — go back to Phase 2

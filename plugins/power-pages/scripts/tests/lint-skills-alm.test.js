@@ -12,6 +12,12 @@ const {
   parseAllowlist,
   allowlistPathMatches,
   KNOWN_RULES,
+  ALM_SKILLS,
+  CANCEL_LEAVES_VOCAB,
+  extractGateMarkers,
+  extractNotAGateMarkers,
+  findPromptLines,
+  splitIntoSections,
 } = require('../lint-skills-alm');
 
 function mkPluginRoot(t) {
@@ -472,4 +478,301 @@ test('collectFindings — allowlist rule mismatch does not suppress', async (t) 
     1,
     'DISCOVER-coverage is a separate rule — should still fire'
   );
+});
+
+// ============================================================================
+// Approval Gate rule tests
+// ============================================================================
+
+function writeCatalog(root, gateIds) {
+  fs.mkdirSync(path.join(root, 'references'), { recursive: true });
+  const content =
+    '# Approval Gates Catalog (test fixture)\n\n' +
+    gateIds.map((id) => `- \`${id}\``).join('\n') +
+    '\n';
+  fs.writeFileSync(path.join(root, 'references', 'approval-gates.md'), content);
+}
+
+test('extractGateMarkers: parses well-formed marker comments', () => {
+  const content = [
+    '## Phase 1',
+    '<!-- gate: plan-alm:1.deferral | category=progress | cancel-leaves=deferral-marker -->',
+    '> 🚦 **Gate (progress · plan-alm:1.deferral):** Description.',
+    '',
+    '`AskUserQuestion`:',
+    '',
+    '## Phase 2',
+    '<!-- gate: plan-alm:2.q1 | category=plan | cancel-leaves=nothing -->',
+  ].join('\n');
+  const markers = extractGateMarkers(content);
+  assert.equal(markers.length, 2);
+  assert.equal(markers[0].gateId, 'plan-alm:1.deferral');
+  assert.equal(markers[0].category, 'progress');
+  assert.equal(markers[0].cancelLeaves, 'deferral-marker');
+  assert.equal(markers[1].gateId, 'plan-alm:2.q1');
+});
+
+test('extractNotAGateMarkers: accepts hyphens in reason text', () => {
+  const content = `<!-- not-a-gate: data-gathering — free-text fallback when auto-detection fails -->`;
+  const markers = extractNotAGateMarkers(content);
+  assert.equal(markers.length, 1);
+  assert.match(markers[0].reason, /data-gathering/);
+});
+
+test('findPromptLines: matches backticked AskUserQuestion followed by colon', () => {
+  const content = [
+    'allowed-tools: AskUserQuestion',                    // not a prompt
+    'Ask via `AskUserQuestion`:',                        // prompt
+    'Use `AskUserQuestion` with `multiSelect: true`:',   // prompt (multiSelect on same line)
+    'Use `AskUserQuestion` for the prompt — no colon',   // not a prompt
+    'See `AskUserQuestion` docs for details.',           // not a prompt
+  ].join('\n');
+  const lines = findPromptLines(content);
+  assert.deepEqual(lines, [2, 3]);
+});
+
+test('splitIntoSections: treats ## and ### as section boundaries; not ####', () => {
+  const content = [
+    'preamble',
+    '## Phase 1',
+    'a',
+    '### Sub 1.1',
+    'b',
+    '#### Step 1.1.1',
+    'c',
+    '## Phase 2',
+    'd',
+  ].join('\n');
+  const sections = splitIntoSections(content);
+  // file-prologue + Phase 1 + Sub 1.1 + Phase 2 (#### does NOT open a new section)
+  const headings = sections.map((s) => s.heading);
+  assert.deepEqual(headings, ['<file-prologue>', 'Phase 1', 'Sub 1.1', 'Phase 2']);
+});
+
+test('GATE-must-have-marker: fires on unmarked AskUserQuestion in ALM skill (error severity)', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-must-have-marker');
+  assert.ok(match, 'expected GATE-must-have-marker to fire');
+  assert.equal(match.severity, 'error', 'ALM skill → error severity');
+});
+
+test('GATE-must-have-marker: fires as warning for non-ALM skill', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'add-cloud-flow',
+    `# add-cloud-flow
+## Phase 1
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-must-have-marker');
+  assert.ok(match);
+  assert.equal(match.severity, 'warning', 'non-ALM skill → warning severity');
+});
+
+test('GATE-must-have-marker: passes when section has a gate marker before the prompt', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing -->
+Some prose.
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.foo']);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-must-have-marker').length, 0);
+});
+
+test('GATE-must-have-marker: passes when section has a not-a-gate marker', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- not-a-gate: free-text fallback — data-gathering only -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-must-have-marker').length, 0);
+});
+
+test('GATE-must-have-marker: pairing is per-section (marker in earlier section does NOT cover later section)', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing -->
+## Phase 2
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.foo']);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-must-have-marker').length, 1);
+});
+
+test('GATE-id-must-be-unique: fires when same gate-id appears in two SKILL.md files', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: shared-id:1 | category=plan | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeSkill(
+    root,
+    'setup-solution',
+    `# setup-solution
+## Phase 1
+<!-- gate: shared-id:1 | category=plan | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['shared-id:1']);
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-id-must-be-unique');
+  assert.ok(match, 'expected GATE-id-must-be-unique to fire');
+  assert.match(match.message, /shared-id:1/);
+});
+
+test('GATE-must-be-in-catalog: fires when gate-id is missing from catalog', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.unknown | category=plan | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.known']); // doesn't include `:1.unknown`
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-must-be-in-catalog');
+  assert.ok(match, 'expected GATE-must-be-in-catalog to fire');
+});
+
+test('GATE-must-be-in-catalog: skipped when catalog file is absent (graceful degradation)', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  // No catalog written
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-must-be-in-catalog').length, 0);
+});
+
+test('GATE-intent-must-call-helper: fires when intent marker has no helper invocation', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 0
+<!-- gate: plan-alm:0.entry | category=intent | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:0.entry']);
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-intent-must-call-helper');
+  assert.ok(match, 'expected GATE-intent-must-call-helper to fire');
+});
+
+test('GATE-intent-must-call-helper: passes when SKILL.md mentions one of the known helpers', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'setup-solution',
+    `# setup-solution
+## Phase 0
+Run \`check-alm-plan.js --projectRoot "."\` first.
+<!-- gate: setup-solution:0.entry | category=intent | cancel-leaves=nothing -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['setup-solution:0.entry']);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-intent-must-call-helper').length, 0);
+});
+
+test('GATE-cancel-leaves-known-vocab: passes for known vocabulary values', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.a | category=plan | cancel-leaves=nothing -->
+<!-- gate: plan-alm:1.b | category=consent | cancel-leaves=validated-stage-run -->
+<!-- gate: plan-alm:1.c | category=consent | cancel-leaves=partial-manifest -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.a', 'plan-alm:1.b', 'plan-alm:1.c']);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-cancel-leaves-known-vocab').length, 0);
+});
+
+test('GATE-cancel-leaves-known-vocab: passes for valid kebab-case custom slugs', async (t) => {
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.x | category=plan | cancel-leaves=my-custom-state -->
+Ask via \`AskUserQuestion\`:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.x']);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-cancel-leaves-known-vocab').length, 0);
+});
+
+test('ALM_SKILLS export includes the 12 documented ALM skills', () => {
+  const required = [
+    'plan-alm', 'setup-solution', 'setup-pipeline', 'deploy-pipeline',
+    'export-solution', 'import-solution', 'configure-env-variables',
+    'ensure-pipelines-host', 'force-link-environment', 'activate-site',
+    'test-site', 'diagnose-deployment',
+  ];
+  for (const skill of required) {
+    assert.ok(ALM_SKILLS.has(skill), `ALM_SKILLS missing: ${skill}`);
+  }
+});
+
+test('CANCEL_LEAVES_VOCAB export has the documented values', () => {
+  const required = ['nothing', 'validated-stage-run', 'partial-manifest', 'attachment-block-modified'];
+  for (const v of required) {
+    assert.ok(CANCEL_LEAVES_VOCAB.has(v), `CANCEL_LEAVES_VOCAB missing: ${v}`);
+  }
 });

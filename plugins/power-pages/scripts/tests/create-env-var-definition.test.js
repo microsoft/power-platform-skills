@@ -3,9 +3,17 @@ const assert = require('node:assert/strict');
 
 const { createEnvVarDefinition, ENV_VAR_TYPES } = require('../lib/create-env-var-definition');
 
-test('ENV_VAR_TYPES exports expected type codes', () => {
-  assert.equal(ENV_VAR_TYPES.Secret, 100000003);
+test('ENV_VAR_TYPES exports the canonical Dataverse option-set codes (verified against live tenant)', () => {
+  // Regression guard for a real bug: earlier ENV_VAR_TYPES had Secret=100000003,
+  // Json=100000005 — swapped. A Secret env var created via the Power Platform
+  // UI is stored as type 100000005; this helper sending 100000003 was silently
+  // producing JSON-typed records when callers asked for Secret.
   assert.equal(ENV_VAR_TYPES.String, 100000000);
+  assert.equal(ENV_VAR_TYPES.Number, 100000001);
+  assert.equal(ENV_VAR_TYPES.Boolean, 100000002);
+  assert.equal(ENV_VAR_TYPES.JSON, 100000003);
+  assert.equal(ENV_VAR_TYPES.DataSource, 100000004);
+  assert.equal(ENV_VAR_TYPES.Secret, 100000005);
 });
 
 test('createEnvVarDefinition throws when required args are missing', async () => {

@@ -270,6 +270,8 @@ Every skill pauses for user approval at three junctures:
 
 Between checkpoints, skills work **autonomously** — no mid-analysis questions.
 
+> **Approval Gates — canonical catalog.** Every individual `AskUserQuestion` that meets the gate test (would Cancel leave partial or complete-but-wrong state behind?) is an **Approval Gate**. See `references/approval-gates.md` for the canonical terminology, the six categories (`intent` / `plan` / `progress` / `consent` / `final` / `pause`), the marker syntax (`<!-- gate: skill:phase | category=X | cancel-leaves=Y -->` + human-readable `> 🚦 **Gate (...)**` block), the per-skill catalog, and the lint rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`). ALM skills enforce these rules with `severity: 'error'`; non-ALM skills currently warn-only until the catalog extends.
+
 ### Approval in Practice
 
 | Skill | Checkpoint 1 (Discovery) | Checkpoint 2 (Plan) | Checkpoint 3 (Deploy) |

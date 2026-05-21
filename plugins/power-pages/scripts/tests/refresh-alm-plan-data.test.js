@@ -1230,6 +1230,73 @@ test('backfill: envVars not in deployment-settings.json are left alone (no spuri
     'env vars not referenced in deployment-settings.json must not get an empty values{} map');
 });
 
+// ── configure-env-variables phase ────────────────────────────────────────
+
+test('configure-env-variables: backfills env var values + ingests last-env-vars sidecar + zeros plannedEnvVarCount', (t) => {
+  const root = makeProject(t);
+  // The skill writes both the deployment-settings.json (per-stage values)
+  // AND the last-env-vars sidecar (definitions) before invoking refresh.
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_x', Value: 'staging-x' },
+      ],
+    },
+    Production: {
+      EnvironmentVariables: [
+        { SchemaName: 'cr5fe_x', Value: 'prod-x' },
+      ],
+    },
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-env-vars.json'), {
+    envVars: [
+      { schemaName: 'cr5fe_x', displayName: 'X', type: 'String', defaultValue: 'dev-x' },
+    ],
+    count: 1,
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    plannedEnvVarCount: 1,
+    envVars: [],  // empty pre-config
+    steps: [{ name: 'Configure env variables', status: 'pending' }],
+  });
+
+  refresh({ projectRoot: root, phase: 'configure-env-variables', render: false });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  // 1. envVars[] populated from the sidecar
+  assert.equal(planData.envVars.length, 1);
+  assert.equal(planData.envVars[0].schemaName, 'cr5fe_x');
+  // 2. values{} backfilled from deployment-settings.json
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'staging-x', Production: 'prod-x' });
+  // 3. plannedEnvVarCount zeroed
+  assert.equal(planData.plannedEnvVarCount, 0);
+  // 4. Step flipped
+  assert.equal(planData.steps[0].status, 'completed');
+});
+
+test('configure-env-variables: is accepted by --phase argument', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'TestSite' });
+  // Should not throw — the negative-path check earlier asserts "bogus-phase"
+  // fails; this asserts the new phase is whitelisted.
+  assert.doesNotThrow(() => refresh({ projectRoot: root, phase: 'configure-env-variables', render: false }));
+});
+
+test('configure-env-variables: matches "Configure environment variables" step name variants', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Configure environment variables', status: 'pending' },
+    ],
+  });
+  refresh({ projectRoot: root, phase: 'configure-env-variables', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed',
+    'both "env variables" and "environment variables" step name spellings must flip');
+});
+
 test('extractPerStageValues: defensive against null / wrong-type inputs', () => {
   const { extractPerStageValues } = require('../lib/refresh-alm-plan-data');
   assert.equal(extractPerStageValues(null), null);

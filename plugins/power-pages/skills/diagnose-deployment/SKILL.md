@@ -126,6 +126,9 @@ Present all findings in a table:
 
 For each Error finding with `autoFixAvailable: true`, in order:
 
+<!-- gate: diagnose-deployment:6.auto-fix | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · diagnose-deployment:6.auto-fix):** Per-finding consent before applying any auto-fix. **Loops once per Error finding with `autoFixAvailable: true`** — each finding gets its own Yes / No / Skip-all `AskUserQuestion`. The pattern ID surfaces in the prompt. **Never batch fixes** — three findings = three separate consent prompts (unless the user picks "Skip all" on the first, which short-circuits the loop). The Yes from finding 1 does NOT cover finding 2; each fix has its own blast radius (different files, different settings, different reversibility).
+
 1. Explain the issue and proposed fix
 2. Ask explicit permission via `AskUserQuestion`:
    > "Issue: {message}

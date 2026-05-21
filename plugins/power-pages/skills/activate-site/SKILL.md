@@ -146,6 +146,9 @@ This outputs a string like `site-a3f2b1`. Resolve the correct site URL domain fr
 | `UsGovDod` | `appsplatform.us` |
 | `China` | `powerappsportals.cn` |
 
+<!-- gate: activate-site:2.2.subdomain | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · activate-site:2.2.subdomain):** Confirm or override the generated subdomain. Subdomain is part of the resulting site URL; Cancel exits before any provisioning call.
+
 Present the generated subdomain to the user and ask them to accept or enter their own using `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -177,6 +180,9 @@ Parse the output to find the website record that matches the site name. Extract 
 **Goal:** Present all activation parameters to the user and get explicit approval before making the API call.
 
 ### Actions
+
+<!-- gate: activate-site:3.confirm | category=final | cancel-leaves=nothing -->
+> 🚦 **Gate (final · activate-site:3.confirm):** Last-call before the activation API call. All activation parameters echoed back; Cancel exits cleanly before provisioning. **Fires fresh on every skill invocation.** When `plan-alm` orchestrates multi-stage activation (Staging + Production), it invokes `activate-site` **once per stage** — each invocation hits this gate fresh with its own `siteName`, `subdomain`, and target env. The Staging activation consent does NOT cover Production. Each stage's site URL is a separate go-live decision (different audiences, different timing).
 
 Present all activation parameters to the user using `AskUserQuestion`:
 

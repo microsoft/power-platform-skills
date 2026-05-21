@@ -40,6 +40,9 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
    ```
 
+   <!-- gate: plan-alm:1.deferral | category=progress | cancel-leaves=deferral-marker -->
+   > 🚦 **Gate (progress · plan-alm:1.deferral):** `.alm-deferred` marker present — continue and remove, continue and keep marker, or cancel. Determines whether downstream ALM skills resume gate enforcement.
+
    The helper returns `{ deferred, deferral, ... }`. If `deferred === true`, read the deferral reason (`deferral.reason` or the raw marker text) and ask via `AskUserQuestion`:
 
    > "This project has an `.alm-deferred` marker — `{reason}`. ALM was previously deferred here, so the other ALM skills (`setup-solution`, `setup-pipeline`, `deploy-pipeline`, …) skip their plan-completeness checks for this project. How would you like to proceed?"
@@ -239,6 +242,9 @@ Steps:
 
       Always render the **site languages** line when `missing.siteLanguages.length > 0`, even when other categories are zero — this gap was a recurring silent-failure mode before discover-site-components started enumerating `powerpagesitelanguages`. See `references/solution-api-patterns.md` for the 3-entity model.
 
+      <!-- gate: plan-alm:1.completeness | category=progress | cancel-leaves=nothing -->
+      > 🚦 **Gate (progress · plan-alm:1.completeness):** Completeness check found gaps vs live site. Sync first, plan with gaps recorded, or cancel.
+
       Ask via `AskUserQuestion`:
 
       | Question | Header | Options |
@@ -309,6 +315,9 @@ Ask questions in sequence. **Solution is always Q1** — it is the prerequisite 
 
 **If `SOLUTION_DONE = true`** (manifest found in Phase 1):
 
+<!-- gate: plan-alm:2.q1-existing | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q1-existing):** Existing solution found — reuse it (skip setup-solution) or create new (run setup-solution).
+
 Ask via `AskUserQuestion`:
 > "A Dataverse solution is already configured for this site: **{SOLUTION_UNIQUE_NAME}**. Use this existing solution?"
 
@@ -321,6 +330,9 @@ Options:
 Tell the user (not via `AskUserQuestion` — informational only):
 > "No Dataverse solution is set up for this site yet. **`setup-solution` will be the first step in your plan.** The publisher prefix you choose during setup is irreversible — choose carefully."
 
+<!-- gate: plan-alm:2.q1-fresh | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q1-fresh):** No existing solution — include setup-solution in plan, or accept a user-supplied unique name.
+
 Ask via `AskUserQuestion`:
 > "Ready to include solution setup in the plan?"
 
@@ -331,6 +343,9 @@ Options:
 ---
 
 ### Q1b — Split Recommendation (only if `RECOMMEND_SPLIT = true`)
+
+<!-- gate: plan-alm:2.q1b-split | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q1b-split):** Follow recommended split strategy, override to single, accept Asset Advisory first, or show migration guidance.
 
 The decision tree from Phase 1 Step 10 recommended splitting into multiple solutions. Ask via `AskUserQuestion`:
 
@@ -364,6 +379,9 @@ Options:
    Solutions exceeding the platform thresholds frequently fail to import (timeouts, OOM, partial state). A single-solution plan that lands in the red tier is the most common cause of "the deploy hung overnight" reports. Recovering means splitting after the fact, which is harder than splitting upfront.
    ```
 
+   <!-- gate: plan-alm:2.q1b-override | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · plan-alm:2.q1b-override):** Override the data-driven split recommendation to keep as single solution. Free-text `overrideReason` follows on Yes.
+
    Then ask via `AskUserQuestion`:
 
    | Question | Header | Options |
@@ -382,6 +400,9 @@ Options:
 ---
 
 ### Q2 — Strategy Selection (always asked)
+
+<!-- gate: plan-alm:2.q2-strategy | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q2-strategy):** Pick promotion strategy — PP Pipelines, manual export/import, existing pipeline, or help-me-decide. Branches the rest of the plan.
 
 Ask via `AskUserQuestion`:
 
@@ -403,6 +424,9 @@ Then re-ask Q2 with only options 1–3.
 ---
 
 ### PP Pipelines Path — Q3 through Q6
+
+<!-- gate: plan-alm:2.q3-stages | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q3-stages):** Pick how many deployment stages — Staging only / +Production / Production directly / Custom.
 
 **Q3:** Ask via `AskUserQuestion`:
 > "How many deployment stages do you want in this pipeline?"
@@ -447,6 +471,9 @@ Store the resulting `HOST_ENV_URL` for use by the rest of plan-alm. The auxiliar
 
 The same cap policy applies to `ensure-pipelines-host` Phase 3.C — see that skill's Step 3a for the same rules. Keep the two implementations consistent so users see the same prompt shape regardless of whether they enter via plan-alm or directly via setup-pipeline → ensure-pipelines-host.
 
+<!-- gate: plan-alm:2.q5-approval | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q5-approval):** Pick approval mode — required per stage / staging auto + prod required / no gates.
+
 **Q5:** Ask via `AskUserQuestion`:
 > "Should deployments require approval before each stage?"
 
@@ -472,6 +499,9 @@ When `HAS_ENV_VARS = true`, the plan notes that `deploy-pipeline` will prompt fo
 
 ### Manual Path — Q3 through Q6
 
+<!-- gate: plan-alm:2.q3-manual | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q3-manual):** Pick how many target environments for manual export/import path.
+
 **Q3:** Ask via `AskUserQuestion`:
 > "How many target environments do you need to deploy to?"
 
@@ -484,6 +514,9 @@ Store as `MANUAL_TARGET_COUNT`.
 
 If option 3: set `MANUAL_TARGET_COUNT = 0`. Proceed to Q5.
 
+<!-- gate: plan-alm:2.q4-manual-target | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q4-manual-target):** Pick the URL for each manual target env. **Fires PER TARGET in the `MANUAL_TARGET_COUNT` loop.** Two targets (Staging + Production) = two separate prompts. Each prompt pre-fills from `pac env list` and accepts a different URL. Do NOT collect all target URLs in a single multi-input prompt — each target is a distinct decision (different audiences, different env characteristics, possibly different SKUs).
+
 **Q4 (one per stage):** For each target environment needed, ask via `AskUserQuestion`:
 
 > "What is the URL for target environment {N}?"
@@ -491,6 +524,9 @@ If option 3: set `MANUAL_TARGET_COUNT = 0`. Proceed to Q5.
 Pre-fill from `ENV_LIST`: show up to 3 known environment URLs from `pac env list` as options, plus "Enter a different URL" as the last option.
 
 Store target URLs as `MANUAL_TARGETS` (array).
+
+<!-- gate: plan-alm:2.q5-manual-type | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · plan-alm:2.q5-manual-type):** Managed vs Unmanaged export — irreversible choice for the produced zip.
 
 **Q5:** Ask via `AskUserQuestion`:
 > "How should the solution be exported?"
@@ -500,6 +536,9 @@ Options:
 2. Unmanaged — for dev-to-dev (editable in target)
 
 Store as `EXPORT_TYPE`.
+
+<!-- gate: plan-alm:2.q6-manual-checkpoint | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:2.q6-manual-checkpoint):** Pause between export and import for review, or proceed automatically.
 
 **Q6:** Ask via `AskUserQuestion`:
 > "Do you want a checkpoint pause between export and import for review?"
@@ -905,6 +944,9 @@ Present a concise inline Markdown summary:
 Full plan written to: docs/alm-plan.html
 ```
 
+<!-- gate: plan-alm:4.approve | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:4.approve):** The capstone — user approves the rendered HTML plan before plan-alm dispatches any downstream skill. Save-for-later writes the plan but exits without execution.
+
 Ask via `AskUserQuestion`:
 > "Does this ALM plan look correct?"
 
@@ -924,6 +966,8 @@ Capture the name silently using git, falling back to the OS user:
 ```bash
 node -e "const {execSync}=require('child_process');let n='';try{n=execSync('git config user.name',{encoding:'utf8'}).trim();}catch{};if(!n){n=process.env.USER||process.env.USERNAME||'';}process.stdout.write(n);"
 ```
+
+<!-- not-a-gate: approver-name fallback prompt — data-gathering when git config / env vars empty -->
 
 Store the output as `APPROVER`. If `APPROVER` is empty (no git config, no USER env var), ask via `AskUserQuestion`:
 
@@ -1005,6 +1049,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
 
 The helper re-renders `docs/alm-plan.html` so the Export-step status update is visible to reviewers immediately.
 
+<!-- gate: plan-alm:7.manual-checkpoint | category=progress | cancel-leaves=partial-manifest -->
+> 🚦 **Gate (progress · plan-alm:7.manual-checkpoint):** Manual path pause between export and import — user reviews zip before import proceeds. Defer-now exits cleanly leaving the zip.
+
 **If `MANUAL_CHECKPOINT = true`:** Ask via `AskUserQuestion`:
 > "Export complete. Review the solution zip at `{zipPath}` before importing. Ready to proceed with import?"
 
@@ -1061,6 +1108,9 @@ node -e "const d=require('./docs/alm/last-deploy.json'); process.stdout.write(JS
   ```
 
   Where `{stage.targetEnvironmentUrl}` is the current stage's target environment URL — pulled from `planData.stages[]` (matched by `stage.label === stageName`, then `stage.envUrl`) or equivalently from `docs/alm/last-pipeline.json` `stages[].targetEnvironmentUrl`. Do NOT skip this switch even when only one target stage exists — by the time Step B runs, PAC may already have been switched back to dev by the end of `deploy-pipeline`.
+
+  <!-- gate: plan-alm:7.activate-step-b | category=plan | cancel-leaves=nothing -->
+  > 🚦 **Gate (plan · plan-alm:7.activate-step-b):** Per-stage post-deploy activation prompt — Step B second-chance when deploy-pipeline Phase 7.7 was skipped or errored. **Fires PER STAGE in the multi-stage execution loop.** Two stages (Staging + Production) where both need activation = two prompts. The "Yes, activate now" answer for Staging does NOT cover Production — each stage's activation is a distinct decision (different URLs, different audiences, different go-live timing). Do NOT batch.
 
   Then ask via `AskUserQuestion`:
 

@@ -21,10 +21,17 @@ function withMockedRequests(t, handler) {
   return calls;
 }
 
-test('typeLabel maps known option-set codes and falls back to String', () => {
-  assert.equal(typeLabel(TYPE_LABELS && 100000000), 'String');
+test('typeLabel maps the canonical Dataverse option-set codes (verified against live tenant)', () => {
+  // Regression guard for a real bug: earlier TYPE_LABELS had 100000003→'Secret'
+  // and 100000005→'Json' — swapped. A Secret env var created via the Power
+  // Platform UI is stored as type 100000005, and this helper was rendering
+  // it as "Json" in the ALM plan's Env Variables tab.
+  assert.equal(typeLabel(100000000), 'String');
+  assert.equal(typeLabel(100000001), 'Number');
   assert.equal(typeLabel(100000002), 'Boolean');
-  assert.equal(typeLabel(100000003), 'Secret');
+  assert.equal(typeLabel(100000003), 'JSON');
+  assert.equal(typeLabel(100000004), 'DataSource');
+  assert.equal(typeLabel(100000005), 'Secret');
   assert.equal(typeLabel(undefined), 'String');
   assert.equal(typeLabel(null), 'String');
   assert.equal(typeLabel(99999), 'String'); // unknown code
@@ -245,7 +252,7 @@ test('discoverEnvVarDefinitions handles missing defaultvalue and unknown type gr
             // No defaultvalue, unknown type code
             { environmentvariabledefinitionid: 'def-x', schemaname: 'cr_NoDefault', type: 99999 },
             // null defaultvalue
-            { environmentvariabledefinitionid: 'def-y', schemaname: 'cr_NullDefault', type: 100000003, defaultvalue: null },
+            { environmentvariabledefinitionid: 'def-y', schemaname: 'cr_NullDefault', type: 100000005, defaultvalue: null },
           ],
         }),
       };

@@ -66,6 +66,9 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy, and orchestrates this skill in the right order alongside setup-solution / setup-pipeline / activate-site / test-site. Want me to run plan-alm now?"
 
+<!-- gate: deploy-pipeline:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · deploy-pipeline:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -79,6 +82,9 @@ The helper returns JSON with `{ exists, stale, staleness: { reason, detail }, ge
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). The plan's component count, size analysis, and split decisions may be outdated. Re-running `plan-alm` will refresh the analysis."
+
+<!-- gate: deploy-pipeline:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · deploy-pipeline:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -155,6 +161,9 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 
 If the user passed a stage name or environment label as an argument (e.g., `staging`), match it against stages in `docs/alm/last-pipeline.json` and skip this question.
 
+<!-- gate: deploy-pipeline:2.stage | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · deploy-pipeline:2.stage):** Pick target stage — Staging / Production / etc. Wrong stage selection here is the biggest single failure mode of this skill.
+
 Otherwise, ask via `AskUserQuestion`:
 
 > "Which environment do you want to deploy to?
@@ -165,14 +174,18 @@ Otherwise, ask via `AskUserQuestion`:
 Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploymentEnvironmentId`, `targetEnvironmentUrl`).
 
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
-1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → deploy → poll) against the same pipeline.
+1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → **fire Phase 6.0 consent gate** → deploy → poll) against the same pipeline.
 2. If any iteration fails (validation or deployment), halt the loop and report **which solution** failed and which had already landed.
 3. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
+
+> **⚠ Per-iteration gate firing — non-negotiable.** Inside the loop, the **full Phase 3 → 3.5 → 4 → 5 → 6.0 → 6.1 → 6.2 → 7 sequence runs for each solution.** Do NOT batch validation across solutions, do NOT batch the Phase 6.0 consent gate, and do NOT treat any upstream answer (Phase 2 stage selection, `--stage` argument, the previous iteration's "Deploy now") as covering subsequent iterations. The Phase 6.0 gate fires `N` times for `N` non-skipped solutions in `DEPLOYMENT_ORDER`. If you find yourself proceeding from iteration 1's success directly to iteration 2's `DeployPackageAsync` without a fresh Phase 6.0 prompt, you have skipped the gate.
 
 **In `MULTI_PIPELINE_MODE` (v2 — legacy):** The selected stage label (e.g., "Staging") is matched against each pipeline's `stages[]` — each pipeline has its own `stageId` for the same target environment. All subsequent phases (validate, deploy, poll) are looped over `PIPELINES_LIST` in `order`:
 1. Loop iteration i: use `pipelines[i].stageId` where stage label matches `SELECTED_STAGE.name`, `pipelines[i].solutionName`, etc.
 2. If any iteration fails (validation or deployment), halt the loop and report which pipeline failed and which were already deployed.
 3. Write one `docs/alm/last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
+
+> **⚠ Per-iteration gate firing also applies here.** Same rule as MULTI_RUN_MODE: each pipeline in the loop gets its own Phase 4 / 5 / 6.0 / 6.1 / 6.2 sequence. The Phase 6.0 consent gate fires once per pipeline. Do NOT batch.
 
 > **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-solution (v3) or per-pipeline (v2) `status` in `docs/alm/last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all entries again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-solution deploy to production.
 
@@ -205,6 +218,9 @@ Power Pages code-site solutions almost always contain `.js` bundle chunks (Vite/
 3. Capture the output as JSON. Inspect `wasBlocked[]`:
 
    - **`wasBlocked: []`** → target env doesn't block the relevant extensions. Switch PAC CLI back to source (`pac env select --environment "{sourceEnvUrl}"`) and proceed to Phase 3. No prompt, no noise.
+
+   <!-- gate: deploy-pipeline:2.5.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
+   > 🚦 **Gate (consent · deploy-pipeline:2.5.blocked-attachments):** Pre-flight — modify target env's `blockedattachments` security setting (tenant-wide impact). Reversible from PPAC. Skipping costs 50–75 min of wasted import.
 
    - **`wasBlocked: ["js"]` or includes other media-relevant extensions** → the deployment WILL fail mid-import. Prompt the user immediately via `AskUserQuestion` (do NOT bury this in chat — it MUST gate Phase 3 progression):
 
@@ -279,6 +295,9 @@ PRE_SYNC_MISSING = { siteComponents, siteLanguages, cloudFlows, envVarDefinition
 Then:
 
 - **All `missing.*` empty** → proceed to Phase 4.
+<!-- gate: deploy-pipeline:3.5.completeness | category=progress | cancel-leaves=nothing -->
+> 🚦 **Gate (progress · deploy-pipeline:3.5.completeness):** Source solution incomplete vs live site. Sync first, deploy anyway (gap ships), or cancel.
+
 - **Any non-empty** → report a short summary ("Solution is missing {N} components"). Ask via `AskUserQuestion`:
   > "The source solution appears incomplete relative to the live site. What would you like to do?
   > 1. **Run `/power-pages:setup-solution` now** (sync mode) — adopts missing components and bumps the version, then re-confirm with you before deploying (Recommended)
@@ -290,6 +309,9 @@ Then:
     2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
     3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 3.5 prompt above.
     4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
+    <!-- gate: deploy-pipeline:3.5.post-sync | category=progress | cancel-leaves=nothing -->
+    > 🚦 **Gate (progress · deploy-pipeline:3.5.post-sync):** Post-sync re-confirm. Solution version bumped + components adopted — user inspects delta before deploy proceeds.
+
     5. **Re-confirm with the user before proceeding to Phase 4** — the solution about to ship is now different from what the user originally saw when they started the deploy. Use `AskUserQuestion`:
 
        > "Sync complete.
@@ -381,6 +403,9 @@ Surface any `SolutionValidationResults` entries to the user as warnings. Pay spe
 - `ErrorCode: -2147188672` — managed/unmanaged conflict: "The solution is already installed as unmanaged but this package is managed." The user must uninstall the existing solution from the target environment first, then retry.
 - Missing connection references or environment variable gaps
 
+<!-- gate: deploy-pipeline:4.pending-approval | category=pause | cancel-leaves=external-state-pending -->
+> 🚦 **Gate (pause · deploy-pipeline:4.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` (Pending Approval). User must approve in PPAC. Cancel leaves the run pending on the host. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that hits Pending Approval — not once per skill invocation.**
+
 If `stageRunStatus = 200000005` (Pending Approval): inform the user they need to approve in Power Platform (`make.powerapps.com` → Solutions → Pipelines → find this run → Approve). Ask via `AskUserQuestion`: "Have you approved the validation? 1. Yes, continue / 2. No, cancel"
 
 **4.4 Fetch AI-generated deployment notes** (if `AI_NOTES_ENABLED = true`):
@@ -448,6 +473,9 @@ const unconfigured = SOLUTION_ENV_VARS.filter(v =>
 );
 ```
 
+<!-- gate: deploy-pipeline:5.env-vars | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · deploy-pipeline:5.env-vars):** Unconfigured env vars per stage — user supplies values or skips (uses default). Without values, runtime reads default which may be dev-only. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that has unconfigured env vars — values supplied for iteration 1 do NOT carry to iteration 2.**
+
 **If there are unconfigured env vars**, present them to the user via `AskUserQuestion`:
 
 > "This solution has **{N} environment variable(s)** with no value configured for **{stageName}**. Enter the value for each (leave blank to use the default, or skip if not applicable):
@@ -503,9 +531,32 @@ If `ENV_VAR_OVERRIDES` is empty and there are no connection references, omit `de
 
 Response is HTTP 204. If the PATCH fails with a version conflict error, check both version values and retry.
 
+> **Caveat — `deploymentsettingsjson` does NOT always write `environmentvariablevalues` records on the target post-deploy.** Observed live: a Power Pages site with env var definitions that are **not yet linked to an `mspp_sitesetting`** record can complete a successful deploy with a populated `deploymentsettingsjson`, and the target environment's `environmentvariablevalues` table still ends up empty for those entries. The Power Platform Pipelines handler appears to write values only for definitions that have an existing site-setting binding (or another consumer the platform recognizes). This may be a platform bug or by-design pending a separate Power Pages Management UI step. If you ship Secret env vars or any other type that the user expects to land in the target before `setup-auth`/`configure-env-variables` runs there, **verify in Phase 7 below that `environmentvariablevalues` records exist on the target after the deploy completes**, and surface a clear prompt if they don't. Workaround: invoke `configure-env-variables` (or run `link-site-setting-to-env-var.js` per definition) on the target after the deploy to create the values explicitly. Track this in the next PR if it becomes a recurring blocker.
+
 ### Phase 6 — Deploy and Monitor
 
-> **If `ValidatePackageAsync` was unavailable (`VALIDATE_PACKAGE_UNAVAILABLE = true`)**: use the PAC CLI as the primary deployment mechanism instead of 6.1:
+<!-- gate: deploy-pipeline:6.0.final-consent | category=final | cancel-leaves=validated-stage-run -->
+> 🚦 **Gate (final · deploy-pipeline:6.0.final-consent):** Last-call before **each** `DeployPackageAsync` / `pac pipeline deploy` call. Validation already passed. Non-transactional import — partial failure leaves whatever already imported on the target.
+>
+> **⚠ Fires PER LOOP ITERATION in MULTI_RUN_MODE / MULTI_PIPELINE_MODE.** Three solutions in `deploymentOrder` → three Phase 6.0 prompts (one before each iteration's `DeployPackageAsync`). The upstream Phase 2 stage selection — whether via interactive `AskUserQuestion` or via the `--stage` argument — covers only **stage choice**, NOT individual deploy authorization. **Never batch the deploy loop.** Skipping the per-iteration prompt and proceeding straight from Phase 5 → Phase 6.1 for solutions 2..N is the documented strategy violation this gate exists to prevent.
+
+**6.0 Final deploy consent gate.** Before kicking off **each** deployment — whether via `DeployPackageAsync` (6.1) or the `pac pipeline deploy` PAC CLI fallback, and whether this is the first solution or the Nth in MULTI_RUN_MODE — confirm with the user explicitly. The earlier gates (Phase 2 stage pick, Phase 2.5 unblock, Phase 3.5 completeness, Phase 5 env var values) each cover their own decision, but none of them is a per-iteration "ready to ship this one?" prompt and the deploy itself is not transactional — partial failures leave whatever has already imported on the target. This gate makes **every** production-promotion moment explicit. Use `AskUserQuestion`:
+
+> "Ready to deploy `{ARTIFACT_SOLUTION_NAME}` (v`{newVersion}`) to **`{SELECTED_STAGE.name}`** (`{targetEnvUrl}`)?
+>
+> This will run for ~3–60 minutes depending on solution size. The import is **not** transactional — if it fails partway, whatever already imported stays on the target and a manual cleanup (or re-deploy with a higher artifact version) is required to recover. `docs/alm/last-deploy.json` is written regardless of outcome.
+>
+> 1. **Deploy now** — POST `DeployPackageAsync` (or run `pac pipeline deploy` for the CLI fallback) and poll until terminal
+> 2. **Cancel** — leave the stage run in its current state (validated but not deployed); re-run `/power-pages:deploy-pipeline` later when ready"
+
+Branch on the answer:
+
+- **Deploy now** → proceed to 6.1 below (or the PAC CLI fallback box).
+- **Cancel** → stop cleanly. Do NOT call `DeployPackageAsync` or `pac pipeline deploy`. Tell the user: *"Cancelled. The stage run `{STAGE_RUN_ID}` is validated but not deployed. Re-invoke `/power-pages:deploy-pipeline` to resume. If the source solution version changes before you re-invoke, the stage run's `artifactversion` field will need a fresh PATCH (Phase 5.2) before deploying — re-running the skill handles that automatically."* Do not write a `docs/alm/last-deploy.json` on cancel — there's no deploy outcome to record.
+
+For Production targets specifically, treat this gate as the single most important prompt in the skill — the cancellation cost (stage run already validated) is small compared to a wrong-stage import.
+
+> **If `ValidatePackageAsync` was unavailable (`VALIDATE_PACKAGE_UNAVAILABLE = true`)**: use the PAC CLI as the primary deployment mechanism instead of 6.1. The same Phase 6.0 consent gate above gates this path too — do not run `pac pipeline deploy` until the user has answered "Deploy now":
 >
 > Ask user for `currentVersion` (pre-fill from `.solution-manifest.json` `solution.version` if available) and `newVersion` (suggest incrementing the patch number, e.g. `1.0.0.0` → `1.0.0.1`).
 >
@@ -523,7 +574,7 @@ Response is HTTP 204. If the PATCH fails with a version conflict error, check bo
 >
 > If CLI succeeds: parse the output for stage run status, write `docs/alm/last-deploy.json` with `status: "Succeeded"` (or the parsed status), and skip the `DeployPackageAsync` call and polling in 6.1–6.2.
 
-**6.1 Trigger deployment** (skip if `VALIDATE_PACKAGE_UNAVAILABLE = true` — use PAC CLI path above):
+**6.1 Trigger deployment** (skip if `VALIDATE_PACKAGE_UNAVAILABLE = true` — use PAC CLI path above). Only run after the Phase 6.0 consent gate returned "Deploy now":
 
 ```
 POST {hostEnvUrl}/api/data/v9.0/DeployPackageAsync
@@ -557,6 +608,9 @@ The script polls `msdyn_stagerunstatus` until a terminal state:
 `suboperation` field (not polled by the script but visible in Power Platform) shows progress detail:
 - `200000100` = None (starting/finishing)
 - `200000105` = Deploying Artifact (actively installing solution)
+
+<!-- gate: deploy-pipeline:6.pending-approval | category=pause | cancel-leaves=external-state-pending -->
+> 🚦 **Gate (pause · deploy-pipeline:6.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` mid-deploy. User approves in PPAC. Cancel here PATCHes `iscanceled: true` on the run. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that hits Pending Approval.**
 
 **Approval gate handling**: If `result.status === 'Awaiting'` (`msdyn_stagerunstatus = 200000005`):
 - Inform user: "This deployment is waiting for approval. Please approve it in Power Platform: `make.powerapps.com` → Solutions → Pipelines → find deployment for `{STAGE_RUN_ID}` → Approve."
@@ -763,6 +817,9 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
 2. Tell the user explicitly:
    > "The deployment failed because the target environment **`{targetEnvName}`** blocks file types that this solution needs: **`{wasBlocked.join(', ')}`**. This is an environment-level security setting that affects all users of that env. To proceed, the block needs to be removed for these specific types. The change is reversible from the Power Platform Admin Center → Environments → `{targetEnvName}` → Settings → Product → Features → Blocked Attachments."
 
+<!-- gate: deploy-pipeline:7.6.2.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
+> 🚦 **Gate (consent · deploy-pipeline:7.6.2.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC. **Fires PER FAILURE that matches the AttachmentBlocked pattern.** In MULTI_RUN_MODE this is rare — Phase 2.5 pre-flight typically catches the block before the loop starts — but if iteration N still fails with `AttachmentBlocked` after a successful Phase 2.5, the gate fires again for that failure. Each failure is its own consent decision (different solution, possibly different blocked extensions). Do NOT carry consent across failures.
+
 3. Invoke `AskUserQuestion` (do NOT bury this in chat — the user must answer before any change happens):
 
    | Question | Header | Options |
@@ -775,6 +832,9 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
      > "To unblock manually: open Power Platform Admin Center → Environments → **`{targetEnvName}`** → Settings → Product → Features → **Blocked Attachments** → remove `{blockedTypesPresent.join(', ')}` → Save. Then re-run `/power-pages:deploy-pipeline`."
 
 **7.6.3 Generic retry/exit prompt** (when 7.6.1 didn't match a known pattern, or the user declined the targeted remediation):
+
+<!-- gate: deploy-pipeline:7.6.3.retry-exit | category=plan | cancel-leaves=validated-stage-run -->
+> 🚦 **Gate (plan · deploy-pipeline:7.6.3.retry-exit):** Failed deploy with no known pattern matched — call RetryFailedDeploymentAsync or exit for manual investigation.
 
 Ask via `AskUserQuestion`:
 > "The deployment failed. What would you like to do?
@@ -792,6 +852,27 @@ Authorization: Bearer {HOST_TOKEN}
 Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
+
+**7.6.5 Verify `environmentvariablevalues` landed on the target** (only if deployment **Succeeded** AND `ENV_VAR_OVERRIDES` was non-empty AND `deploymentsettingsjson` was PATCHed in Phase 5.2):
+
+Even when the stage run reports success, the Power Platform Pipelines handler does not always write `environmentvariablevalues` records for every env var definition in `deploymentsettingsjson` — definitions that aren't bound to an `mspp_sitesetting` (or another consumer the platform recognizes) can land as zero-value on the target. See the caveat note above Phase 6 for the live evidence. This step closes the gap.
+
+For each `SchemaName` in `ENV_VAR_OVERRIDES`:
+
+1. Look up the definition GUID on the target:
+   ```
+   GET {targetEnvUrl}/api/data/v9.2/environmentvariabledefinitions?$filter=schemaname eq '{schemaName}'&$select=environmentvariabledefinitionid
+   ```
+2. Query for a current value record:
+   ```
+   GET {targetEnvUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{definitionId}'&$select=value
+   ```
+3. If `value.length === 0` for ANY of the entries that should have landed:
+   - Log a structured warning into `docs/alm/last-deploy.json` under a new `envVarLandingWarnings[]` array — one entry per missed schemaName.
+   - Surface to the user via the deploy summary: *"`{N}` environment variable values from `deploymentsettingsjson` did not land on `{targetEnvName}`. Most likely cause: the definition isn't yet linked to a site setting on the target. Run `/power-pages:configure-env-variables` against `{targetEnvName}` to create the missing values, then re-deploy or set values via Power Platform Admin Center."*
+4. If `value.length >= 1` for all entries: deploy is fully landed; no warning.
+
+This check uses target-env credentials — PAC CLI is still pointing at the source from the prior phases, so temporarily switch (`pac env select --environment "{targetEnvUrl}"`) then switch back at the end of 7.6.5 so subsequent phases run against the source env by default.
 
 **7.7 Check site activation** (only if deployment **Succeeded** and this is a Power Pages project):
 
@@ -823,6 +904,9 @@ pac env select --environment "{sourceEnvUrl}"
 Evaluate the result and take action based on the outcome. In all cases, **after the outcome is resolved**, update `docs/alm/last-deploy.json` and the deploy history file (described below).
 
 - **`activated: true`**: Site is already live. Set `ACTIVATION_OUTCOME = { status: "Activated", siteUrl: "{result.websiteUrl}" }`.
+
+<!-- gate: deploy-pipeline:7.7.activate | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · deploy-pipeline:7.7.activate):** Site deployed to target but not activated. Offer to invoke activate-site or defer.
 
 - **`activated: false`**: Ask the user via `AskUserQuestion`:
 
@@ -885,6 +969,9 @@ Authorization: Bearer {HOST_TOKEN}
      >
      > To register: open [Power Pages](https://make.powerpages.microsoft.com/) → select the **target environment** → open your site → **Set up** → **Cloud flows** → register each flow listed above."
 
+  <!-- gate: deploy-pipeline:7.cloud-flow-register | category=plan | cancel-leaves=nothing -->
+  > 🚦 **Gate (plan · deploy-pipeline:7.cloud-flow-register):** Cloud flows in deployed solution need manual registration in target env. Acknowledge or defer (non-blocking).
+
   4. Ask via `AskUserQuestion`:
 
      | Question | Header | Options |
@@ -901,13 +988,16 @@ Authorization: Bearer {HOST_TOKEN}
 
 1. **Phase 2**: Target stage selection (which environment to deploy to)
 2. **Phase 2**: Retry confirmation if last deploy to this stage failed
-3. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
-4. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
-5. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-6. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
-7. **Phase 6**: Deployment approval gate — if Pending Approval, wait for user to approve
-8. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
-9. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
+3. **Phase 2.5**: Pre-flight blocked-attachments unblock (`Yes — unblock / No — proceed anyway / Cancel deploy`). Only fires when the target env's `blockedattachments` setting blocks extensions the solution needs (typically `.js` for code sites). Modifies a tenant-wide security setting; explicit consent required.
+4. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
+5. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
+6. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
+7. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
+8. **Phase 6.0**: **Final deploy consent gate** — `Deploy now / Cancel`. Fires immediately before `DeployPackageAsync` (or the `pac pipeline deploy` fallback). Makes the production-promotion moment explicit; without it, Phase 5 → Phase 6.1 could fire without a final confirmation when validation passes cleanly. Treat as the single most important prompt for Production targets.
+9. **Phase 6**: Deployment approval gate — if Pending Approval mid-deploy, wait for user to approve
+10. **Phase 7.6.2**: Reactive blocked-attachments unblock (`Yes — unblock and retry / No — leave settings unchanged / Cancel`). Only fires when the deploy failed with `AttachmentBlocked` and pre-flight (Phase 2.5) was skipped or declined. Same security-setting consent as Phase 2.5.
+11. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
+12. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
 

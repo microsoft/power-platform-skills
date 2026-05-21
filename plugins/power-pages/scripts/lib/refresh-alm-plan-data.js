@@ -49,6 +49,14 @@ const { almPath } = require('./alm-paths');
 const PHASES = new Set([
   'setup-solution',
   'setup-pipeline',
+  // configure-env-variables: invoked when the user runs the standalone
+  // /power-pages:configure-env-variables skill (or when setup-solution
+  // delegates to it). The refresh re-reads docs/alm/last-env-vars.json
+  // (if setup-solution's Phase 6.2b sidecar exists or configure-env-variables
+  // wrote its own equivalent) AND backfills planData.envVars[i].values{}
+  // from the freshly-written deployment-settings.json so the rendered plan
+  // shows both the created definitions and their per-stage values.
+  'configure-env-variables',
   'deploy-pipeline',
   // Manual-path phases (export/import/activate). For PP Pipelines path the
   // deploy is a single 'deploy-pipeline' phase that covers import + activate
@@ -560,16 +568,48 @@ function refreshActivateSite(planData, projectRoot, stageName) {
   return planData;
 }
 
+function refreshConfigureEnvVariables(planData, projectRoot) {
+  // configure-env-variables creates env var definitions (mirrors setup-solution's
+  // Phase 5.4 path) AND writes deployment-settings.json with per-stage values.
+  // Refresh responsibilities:
+  //   1. Re-read docs/alm/last-env-vars.json so newly-created definitions show
+  //      up in planData.envVars[] (same sidecar setup-solution Phase 6.2b uses;
+  //      configure-env-variables should write to it too for consistency).
+  //   2. Backfill values{} from deployment-settings.json (the file the skill
+  //      just wrote — the per-stage matrix is now usable in the rendered plan).
+  //   3. Zero out plannedEnvVarCount — configuration phase is the moment the
+  //      "planned" count converts to "actual".
+  //   4. Drop pre-run "env vars not yet configured" risks (defensive — current
+  //      Phase 3 risks don't include this template, but a future addition is
+  //      protected here).
+  //   5. Step-sync the matching checklist entry.
+  if (typeof planData.plannedEnvVarCount === 'number' && planData.plannedEnvVarCount > 0) {
+    planData.plannedEnvVarCount = 0;
+  }
+  const envVarsMarker = projectRoot ? readJson(almPath(projectRoot, 'lastEnvVars')) : null;
+  if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
+    planData.envVars = envVarsMarker.envVars;
+  }
+  // Backfill is the major payoff for this phase — the user just authored
+  // per-stage values in deployment-settings.json and the rendered plan should
+  // surface them in the Values by Environment matrix immediately.
+  backfillEnvVarValuesFromSettings(planData, projectRoot);
+  planData.risks = dropResolvedRisks(planData.risks, 'configure-env-variables');
+  setStepStatus(planData, { keyword: /\bconfigure\s+env(?:ironment)?\s+var/i, status: 'completed' });
+  return planData;
+}
+
 function applyRefresh(planData, phase, projectRoot, stageName) {
   switch (phase) {
-    case 'setup-solution':  return refreshSetupSolution(planData, projectRoot);
-    case 'setup-pipeline':  return refreshSetupPipeline(planData, projectRoot);
-    case 'deploy-pipeline': return refreshDeployPipeline(planData, projectRoot);
-    case 'export-solution': return refreshExportSolution(planData);
-    case 'import-solution': return refreshImportSolution(planData, projectRoot, stageName);
-    case 'activate-site':   return refreshActivateSite(planData, projectRoot, stageName);
-    case 'test-site':       return refreshTestSite(planData, projectRoot, stageName);
-    case 'finalize':        return refreshFinalize(planData);
+    case 'setup-solution':          return refreshSetupSolution(planData, projectRoot);
+    case 'setup-pipeline':          return refreshSetupPipeline(planData, projectRoot);
+    case 'configure-env-variables': return refreshConfigureEnvVariables(planData, projectRoot);
+    case 'deploy-pipeline':         return refreshDeployPipeline(planData, projectRoot);
+    case 'export-solution':         return refreshExportSolution(planData);
+    case 'import-solution':         return refreshImportSolution(planData, projectRoot, stageName);
+    case 'activate-site':           return refreshActivateSite(planData, projectRoot, stageName);
+    case 'test-site':               return refreshTestSite(planData, projectRoot, stageName);
+    case 'finalize':                return refreshFinalize(planData);
     default: throw new Error('Unknown phase: ' + phase);
   }
 }

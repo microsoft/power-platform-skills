@@ -52,6 +52,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
 
+<!-- gate: setup-solution:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · setup-solution:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -65,6 +68,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: setup-solution:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · setup-solution:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -101,6 +107,9 @@ Steps:
 3. Locate `powerpages.config.json` — read `siteName` and `websiteRecordId`
 4. Confirm `.powerpages-site/` folder exists (required to find component records)
 5. **Check for ALM plan context** — look for `docs/alm/alm-plan-context.json`:
+   <!-- gate: setup-solution:1.preloaded | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · setup-solution:1.preloaded):** Use pre-loaded plan classifications, or re-discover. No write happens before this choice.
+
    - If found, ask via `AskUserQuestion`:
      > "An ALM plan was previously generated for this site. It includes a pre-classified list of site settings (keepAsIs, promoteToEnvVar, authNoValue, excluded). Would you like to use those choices, or re-discover and re-classify everything now?"
    - Options: **"Use pre-loaded choices from plan"** / **"Re-discover and re-classify"**
@@ -109,6 +118,9 @@ Steps:
 6. **Detect sync mode** — check whether `.solution-manifest.json` exists in the project root.
    - **If present**: read it and verify the `solutionId` still exists in the target environment via `GET {envUrl}/api/data/v9.2/solutions({solutionId})?$select=solutionid,uniquename,version,ismanaged`.
      - If the solution is still present and unmanaged in this environment: set `syncMode = true` and store `existingSolution` = the manifest contents.
+     <!-- gate: setup-solution:1.stale-manifest | category=consent | cancel-leaves=nothing -->
+     > 🚦 **Gate (consent · setup-solution:1.stale-manifest):** Manifest references a solution missing from the current env. Start fresh (back up the manifest and create a new solution) or abort.
+
      - If the solution was not found, is managed, or is in a different environment: treat as a **stale manifest**, inform the user, and ask via `AskUserQuestion`:
        > "The existing `.solution-manifest.json` points to solution `{uniqueName}` v{version} which I could not find in the current environment. Would you like to: 1) Start fresh (back up the manifest and create a new solution), 2) Abort so you can investigate?"
        Proceed only after an explicit choice.
@@ -140,6 +152,9 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 ### Phase 2 — Gather Solution Configuration
 
 > **Skip this entire phase when `syncMode = true`.** Use `existingSolution.publisher` and `existingSolution.solution` from the manifest instead. Jump to Phase 5.
+
+<!-- gate: setup-solution:2.publisher-prefix | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · setup-solution:2.publisher-prefix):** Publisher prefix is PERMANENT and prefixed to every component logical name. Must be confirmed explicitly. Cancel exits before any publisher/solution write.
 
 Ask user (via `AskUserQuestion`) for:
 
@@ -383,6 +398,9 @@ Before presenting the final manifest, handle the three non-keepAsIs categories:
 
 **A. `promoteToEnvVar` settings (auth config with values):**
 
+<!-- gate: setup-solution:5.4a.promote | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-solution:5.4a.promote):** Multi-select over auth settings — which to promote to env vars. Leave others as plain site settings.
+
 Ask via `AskUserQuestion` with `multiSelect: true`, listing each `promoteToEnvVar` setting by name + current value:
 
 > "These authentication configuration settings have values set in your dev environment. If any of them should have **different values per environment** (e.g., feature flags, login modes, AzureAD tenant settings), promote them to environment variables — they'll be tracked in the solution and injected per stage at deploy time. Leave others as plain site settings."
@@ -438,13 +456,16 @@ Call `autoClassifyCredential(name)` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/clas
 
 | Default | Matcher in helper | When it fires |
 |---|---|---|
-| **Secret env var** (`type: 100000003`) | `CREDENTIAL_SECRET_REGEX` (`Secret\|Password\|ApiKey\|AppKey`) | Names with these substrings — `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey` |
+| **Secret env var** (`type: 100000005`) | `CREDENTIAL_SECRET_REGEX` (`Secret\|Password\|ApiKey\|AppKey`) | Names with these substrings — `*ClientSecret`, `*AppSecret`, `*Password`, `*ApiKey`, `*AppKey` |
 | **String env var** (`type: 100000000`) | `CREDENTIAL_STRING_REGEX` (`Id\|ConsumerKey`) AND not Secret | Names like `*ClientId`, `*ConsumerKey`, `*TenantId`, `*AppId` |
 | **Secret env var** (fallback) | (helper's defensive default when neither matches) | Anything else — defensive: credential names are sensitive by default |
 
 The helper returns `{ default: 'secret' | 'string', reason }` for each setting. Group the results into `AUTO_CLASSIFY = { secrets: [...], strings: [...] }` and show the user a one-line summary: *"Auto-classified {N} credential-style settings: {S} as Secret env vars (Key Vault per stage), {T} as String env vars (plain text per stage)."*
 
 **Step 5.4.C.2 — Bulk prompt.**
+
+<!-- gate: setup-solution:5.4c.credentials | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · setup-solution:5.4c.credentials):** Bulk credential handling decision — Secret env var (Key Vault per stage), String env var (plain per stage), or skip. Per-credential choice. Determines whether secret values ship in the solution zip.
 
 Ask **one** `AskUserQuestion` covering all N credentials:
 
@@ -461,8 +482,8 @@ Options:
 
 Branching logic:
 
-- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000003`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
-- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000003`.
+- **Option 1 (Auto-classify)**: For each setting in `AUTO_CLASSIFY.secrets`, run the env-var-creation steps below with `--type 100000005`. For each in `AUTO_CLASSIFY.strings`, run with `--type 100000000`. No additional prompts.
+- **Option 2 (All Secret)**: Treat all N as Secret. Same loop with `--type 100000005`.
 - **Option 3 (All String)**: Treat all N as String. Same loop with `--type 100000000`.
 - **Option 4 (Skip all)**: Move all N into a `userOptedOutOfSolution` bucket. Surface in Step 5.5: *"The following credential-style settings were skipped at user request and are NOT in the solution. Configure them manually in each target environment after deployment: `{names}`."*
 - **Option 5 (Pick per credential)**: For each setting, run a 3-option `AskUserQuestion` (Secret env var / String env var / Skip). The auto-classification informs the per-prompt default but the user can override.
@@ -485,7 +506,7 @@ For each setting routed to env-var-backed handling:
      --token "{token}" \
      --schemaName "{schemaName from step 1}" \
      --displayName "{friendlyName}" \
-     --type "{100000003 for Secret, 100000000 for String}"
+     --type "{100000005 for Secret, 100000000 for String}"
    ```
    For Secret env vars, do NOT pass `--defaultValue` — the dev value goes into Key Vault per stage, not into the definition. For String env vars, capture the dev value as the default.
 3. Record the `definitionId` for inclusion in the components list (Step 5.6, `ComponentType: 380`).
@@ -662,6 +683,9 @@ If both are empty, skip and display `(None discovered)`.
 After presenting the manifest summary, add a free-text escape hatch:
 > "If you know of cloud flows or bots that should be in this solution but are not shown above, paste their GUIDs here (comma-separated). Leave blank to continue."
 
+<!-- gate: setup-solution:5.5.manifest-confirm | category=plan | cancel-leaves=partial-manifest -->
+> 🚦 **Gate (plan · setup-solution:5.5.manifest-confirm):** Final manifest confirmation before any `AddSolutionComponent` write. Covers tables, flows, bots, env vars, orphan adoption. Cancel here keeps the in-memory manifest but no Dataverse writes happen.
+
 Ask via `AskUserQuestion`:
 > "Does this look right? You can proceed, or tell me which categories or tables to exclude."
 
@@ -796,6 +820,9 @@ Auth settings included without a dev value (configure in each target env after d
   ⚠ Authentication/OpenAuth/Facebook/AppId
   ⚠ Authentication/Registration/LoginButtonAuthenticationType
 ```
+
+<!-- gate: setup-solution:7.next-step | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-solution:7.next-step):** Routing choice for downstream deployment skill — PP Pipelines, manual export/import, or defer. All Dataverse writes for this skill are already complete; this gate selects what runs next.
 
 **Ask what the user wants to do next** via `AskUserQuestion`:
 

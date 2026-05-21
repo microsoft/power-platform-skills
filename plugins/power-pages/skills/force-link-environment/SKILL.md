@@ -88,6 +88,9 @@ Confirm the *"Using Force Link…"* section's current warnings before proceeding
 
 ## Phase 2 — Identify host + dev env
 
+<!-- not-a-gate: hostEnvUrl fallback prompt — data-gathering when --host arg + marker files all empty -->
+<!-- not-a-gate: dev env BAP GUID fallback prompt — data-gathering when --dev-env arg + pac env confirmation both unavailable -->
+
 Resolution order for `hostEnvUrl`:
 1. `--host <url>` argument, if supplied.
 2. `docs/alm/last-host-check.json` (written by `ensure-pipelines-host`) — read `finalHostEnvUrl`.
@@ -140,6 +143,9 @@ The helper polls `validationstatus` and **throws on Failed** without returning t
 After this phase ends, you must hold a non-null `deploymentEnvironmentId`. If you don't, abort Phase 4 with a clear "could not resolve record on new host" message.
 
 ## Phase 4 — Confirm destructive action
+
+<!-- gate: force-link-environment:4.destructive | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · force-link-environment:4.destructive):** Mandatory consent before `ManageEnvironmentStamp` cross-host stamp move. Previous host loses pipeline access for this env. Reversible only by re-running Force Link from the previous host. **Fires fresh on every skill invocation.** Each invocation force-links exactly one env to one host. If a maker needs to migrate multiple envs across hosts, they invoke this skill once per env — each invocation requires its own consent prompt with its own env identity echoed back. No `--yes` flag, no batch mode, no consent carry-over.
 
 This is the **mandatory** gate. Use `AskUserQuestion` with both options and a clear destructive-action warning in the question text. Required fields to display before asking:
 

@@ -23,6 +23,8 @@ model: opus
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
+<!-- alm-lint-ignore: SKILL-must-read-manifest — this skill manages the Pipelines host environment (deploymentenvironments / deploymentpipelines tables on the host), not the source-env solution. The site's .solution-manifest.json is irrelevant to host lifecycle: a host can be provisioned before any solution exists, and a single host is shared across many solutions. ALM-aware-by-default does not apply. -->
+
 # ensure-pipelines-host
 
 > **Scope:** When no host is bound to the source env, this skill detects any existing host (Custom or PE) for reuse, or — in `NoHost` state — offers three provisioning paths: a new **Platform Host** (recommended; idempotent, ~3–5 min); a new **Custom Host** (admin-only, ~5–10 min); or PPAC manual provisioning (fallback). Implementation details — endpoint names, template names, BAP audience — live in Phase 4.0 / 4.A / 4.C below; user-facing prose stays focused on outcomes.
@@ -205,6 +207,9 @@ Steps:
    ```
 
    Store as `TENANT_DISPLAY_NAME`. On any failure (no Graph permission, network error, multi-tenant ambiguity), fall back to `TENANT_DISPLAY_NAME = null` and continue — Phase 1.4 / 4.0 prompts handle a null display name by showing the tenant GUID alone.
+
+<!-- gate: ensure-pipelines-host:1.4.tenant-identity | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · ensure-pipelines-host:1.4.tenant-identity):** Echo tenant display name + tenant GUID + dev env URL before any host detection. First of the wrong-tenant guards. Cancel exits cleanly before any BAP/Dataverse call.
 
 4. **Tenant identity confirmation gate.** Echo back via `AskUserQuestion`:
 
@@ -469,6 +474,8 @@ For each entry, decorate with project-context labels at presentation time. Match
 
 Envs with no role match show without a label.
 
+<!-- not-a-gate: methodology discussion (how Step 2 formats the prompt list) — no new prompt; the actual env-pick gate is the 3.C / 3.D host-type prompt elsewhere in Phase 3 -->
+
 **Step 2a: rank and cap the eligible-env list.** `AskUserQuestion` becomes unusable past about 7–8 options. Apply a **5-env presentation cap** with role-aware ranking:
 
 1. **Always-visible role-labeled envs** (highest priority): include any eligible env that carries a `dev env`, `source env`, `staging env`, or `production env` label from Step 2's role decoration. Dedupe by URL origin.
@@ -687,6 +694,9 @@ When env-create returns a 409 capacity-related error, the user's tenant doesn't 
    > "Custom Host provisioning failed with `{error.code}`: {error.message}
    >
    > The Pipelines app installs identically on any SKU — only the license allocation differs. You can retry env-create with a smaller SKU, or fall back to installing the Pipelines app on an existing env (Path 4.B)."
+
+   <!-- gate: ensure-pipelines-host:4.A.sku-fallback | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · ensure-pipelines-host:4.A.sku-fallback):** Capacity error on env-create — retry with different SKU, fall back to Path 4.B (install on existing env), or cancel.
 
    `AskUserQuestion` (build the option list dynamically — drop the SKU that just failed, append the caveats inline):
 
