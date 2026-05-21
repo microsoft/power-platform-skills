@@ -182,7 +182,7 @@ Parse the output to find the website record that matches the site name. Extract 
 ### Actions
 
 <!-- gate: activate-site:3.confirm | category=final | cancel-leaves=nothing -->
-> 🚦 **Gate (final · activate-site:3.confirm):** Last-call before the activation API call. All activation parameters echoed back; Cancel exits cleanly before provisioning.
+> 🚦 **Gate (final · activate-site:3.confirm):** Last-call before the activation API call. All activation parameters echoed back; Cancel exits cleanly before provisioning. **Fires fresh on every skill invocation.** When `plan-alm` orchestrates multi-stage activation (Staging + Production), it invokes `activate-site` **once per stage** — each invocation hits this gate fresh with its own `siteName`, `subdomain`, and target env. The Staging activation consent does NOT cover Production. Each stage's site URL is a separate go-live decision (different audiences, different timing).
 
 Present all activation parameters to the user using `AskUserQuestion`:
 

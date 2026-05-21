@@ -515,7 +515,7 @@ Store as `MANUAL_TARGET_COUNT`.
 If option 3: set `MANUAL_TARGET_COUNT = 0`. Proceed to Q5.
 
 <!-- gate: plan-alm:2.q4-manual-target | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · plan-alm:2.q4-manual-target):** Pick the URL for each manual target env (loops per `MANUAL_TARGET_COUNT`). Pre-filled from `pac env list`.
+> 🚦 **Gate (plan · plan-alm:2.q4-manual-target):** Pick the URL for each manual target env. **Fires PER TARGET in the `MANUAL_TARGET_COUNT` loop.** Two targets (Staging + Production) = two separate prompts. Each prompt pre-fills from `pac env list` and accepts a different URL. Do NOT collect all target URLs in a single multi-input prompt — each target is a distinct decision (different audiences, different env characteristics, possibly different SKUs).
 
 **Q4 (one per stage):** For each target environment needed, ask via `AskUserQuestion`:
 

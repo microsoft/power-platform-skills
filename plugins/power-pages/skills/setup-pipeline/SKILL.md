@@ -291,7 +291,7 @@ If `wasBlocked` is non-empty for any env, inform the user:
 > "`.js` files are blocked in `{envUrl}`. This will cause upload/deployment failures for Power Pages code sites. Remove the block? This modifies an environment-level security setting."
 
 <!-- gate: setup-pipeline:4.4.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
-> 🚦 **Gate (consent · setup-pipeline:4.4.blocked-attachments):** Modify env-level `blockedattachments` security setting (tenant-wide impact). Affects all users of the env, not just this skill. Reversible from PPAC.
+> 🚦 **Gate (consent · setup-pipeline:4.4.blocked-attachments):** Modify env-level `blockedattachments` security setting (tenant-wide impact). Affects all users of the env, not just this skill. Reversible from PPAC. **Fires PER ENV that has blocks.** Phase 4.4 checks source + every target env; if M envs out of N have `.js` (or other media extensions) on the blocklist, the gate fires M times — once per env. Each env has its own security setting and its own group of affected makers. Yes for source does NOT cover staging; yes for staging does NOT cover production. **Do NOT batch consent across envs.**
 
 Ask via `AskUserQuestion`: 1. Yes, remove block (recommended) / 2. Skip (I'll fix manually).
 

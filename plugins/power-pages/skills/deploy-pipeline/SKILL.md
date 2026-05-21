@@ -818,7 +818,7 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
    > "The deployment failed because the target environment **`{targetEnvName}`** blocks file types that this solution needs: **`{wasBlocked.join(', ')}`**. This is an environment-level security setting that affects all users of that env. To proceed, the block needs to be removed for these specific types. The change is reversible from the Power Platform Admin Center → Environments → `{targetEnvName}` → Settings → Product → Features → Blocked Attachments."
 
 <!-- gate: deploy-pipeline:7.6.2.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
-> 🚦 **Gate (consent · deploy-pipeline:7.6.2.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC.
+> 🚦 **Gate (consent · deploy-pipeline:7.6.2.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC. **Fires PER FAILURE that matches the AttachmentBlocked pattern.** In MULTI_RUN_MODE this is rare — Phase 2.5 pre-flight typically catches the block before the loop starts — but if iteration N still fails with `AttachmentBlocked` after a successful Phase 2.5, the gate fires again for that failure. Each failure is its own consent decision (different solution, possibly different blocked extensions). Do NOT carry consent across failures.
 
 3. Invoke `AskUserQuestion` (do NOT bury this in chat — the user must answer before any change happens):
 

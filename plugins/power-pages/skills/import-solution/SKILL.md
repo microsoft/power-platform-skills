@@ -248,7 +248,7 @@ Tell the user:
 #### 5b.3 Ask for Permission
 
 <!-- gate: import-solution:5b.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
-> 🚦 **Gate (consent · import-solution:5b.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC.
+> 🚦 **Gate (consent · import-solution:5b.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC. **Fires fresh on every skill invocation that hits the failure.** When `plan-alm` Manual path orchestrates multi-target imports (Staging then Production), it invokes `import-solution` **once per target** — if both targets block the same extensions, the gate fires once per target (each is a separate skill invocation against a separate env). Consent for Staging does NOT cover Production.
 
 Invoke `AskUserQuestion` immediately — do NOT present this as a chat message. The user must answer live before the skill proceeds.
 
