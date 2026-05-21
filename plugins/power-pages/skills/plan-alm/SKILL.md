@@ -1110,7 +1110,7 @@ node -e "const d=require('./docs/alm/last-deploy.json'); process.stdout.write(JS
   Where `{stage.targetEnvironmentUrl}` is the current stage's target environment URL — pulled from `planData.stages[]` (matched by `stage.label === stageName`, then `stage.envUrl`) or equivalently from `docs/alm/last-pipeline.json` `stages[].targetEnvironmentUrl`. Do NOT skip this switch even when only one target stage exists — by the time Step B runs, PAC may already have been switched back to dev by the end of `deploy-pipeline`.
 
   <!-- gate: plan-alm:7.activate-step-b | category=plan | cancel-leaves=nothing -->
-  > 🚦 **Gate (plan · plan-alm:7.activate-step-b):** Per-stage post-deploy activation prompt — Step B second-chance when deploy-pipeline Phase 7.7 was skipped or errored.
+  > 🚦 **Gate (plan · plan-alm:7.activate-step-b):** Per-stage post-deploy activation prompt — Step B second-chance when deploy-pipeline Phase 7.7 was skipped or errored. **Fires PER STAGE in the multi-stage execution loop.** Two stages (Staging + Production) where both need activation = two prompts. The "Yes, activate now" answer for Staging does NOT cover Production — each stage's activation is a distinct decision (different URLs, different audiences, different go-live timing). Do NOT batch.
 
   Then ask via `AskUserQuestion`:
 

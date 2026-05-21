@@ -174,14 +174,18 @@ Otherwise, ask via `AskUserQuestion`:
 Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploymentEnvironmentId`, `targetEnvironmentUrl`).
 
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
-1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → deploy → poll) against the same pipeline.
+1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → **fire Phase 6.0 consent gate** → deploy → poll) against the same pipeline.
 2. If any iteration fails (validation or deployment), halt the loop and report **which solution** failed and which had already landed.
 3. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
+
+> **⚠ Per-iteration gate firing — non-negotiable.** Inside the loop, the **full Phase 3 → 3.5 → 4 → 5 → 6.0 → 6.1 → 6.2 → 7 sequence runs for each solution.** Do NOT batch validation across solutions, do NOT batch the Phase 6.0 consent gate, and do NOT treat any upstream answer (Phase 2 stage selection, `--stage` argument, the previous iteration's "Deploy now") as covering subsequent iterations. The Phase 6.0 gate fires `N` times for `N` non-skipped solutions in `DEPLOYMENT_ORDER`. If you find yourself proceeding from iteration 1's success directly to iteration 2's `DeployPackageAsync` without a fresh Phase 6.0 prompt, you have skipped the gate.
 
 **In `MULTI_PIPELINE_MODE` (v2 — legacy):** The selected stage label (e.g., "Staging") is matched against each pipeline's `stages[]` — each pipeline has its own `stageId` for the same target environment. All subsequent phases (validate, deploy, poll) are looped over `PIPELINES_LIST` in `order`:
 1. Loop iteration i: use `pipelines[i].stageId` where stage label matches `SELECTED_STAGE.name`, `pipelines[i].solutionName`, etc.
 2. If any iteration fails (validation or deployment), halt the loop and report which pipeline failed and which were already deployed.
 3. Write one `docs/alm/last-deploy.json` at the end summarizing all pipeline runs for this stage. Record per-pipeline `status` (`Succeeded` / `Failed` / `NotAttempted`) so a retry can tell which ones still need to run.
+
+> **⚠ Per-iteration gate firing also applies here.** Same rule as MULTI_RUN_MODE: each pipeline in the loop gets its own Phase 4 / 5 / 6.0 / 6.1 / 6.2 sequence. The Phase 6.0 consent gate fires once per pipeline. Do NOT batch.
 
 > **Partial-deploy risk.** When the loop halts (e.g., `Core` succeeded, `WebAssets` failed), the target environment is left in a mixed state — there is no automatic rollback of solutions that already imported. The per-solution (v3) or per-pipeline (v2) `status` in `docs/alm/last-deploy.json` is the source of truth for what landed. When the user re-runs `deploy-pipeline` after fixing the failure, the loop iterates all entries again from the start; rely on the solution-import idempotency (same version = no-op) rather than skipping. Warn the user of this before starting a multi-solution deploy to production.
 
@@ -400,7 +404,7 @@ Surface any `SolutionValidationResults` entries to the user as warnings. Pay spe
 - Missing connection references or environment variable gaps
 
 <!-- gate: deploy-pipeline:4.pending-approval | category=pause | cancel-leaves=external-state-pending -->
-> 🚦 **Gate (pause · deploy-pipeline:4.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` (Pending Approval). User must approve in PPAC. Cancel leaves the run pending on the host.
+> 🚦 **Gate (pause · deploy-pipeline:4.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` (Pending Approval). User must approve in PPAC. Cancel leaves the run pending on the host. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that hits Pending Approval — not once per skill invocation.**
 
 If `stageRunStatus = 200000005` (Pending Approval): inform the user they need to approve in Power Platform (`make.powerapps.com` → Solutions → Pipelines → find this run → Approve). Ask via `AskUserQuestion`: "Have you approved the validation? 1. Yes, continue / 2. No, cancel"
 
@@ -470,7 +474,7 @@ const unconfigured = SOLUTION_ENV_VARS.filter(v =>
 ```
 
 <!-- gate: deploy-pipeline:5.env-vars | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · deploy-pipeline:5.env-vars):** Unconfigured env vars per stage — user supplies values or skips (uses default). Without values, runtime reads default which may be dev-only.
+> 🚦 **Gate (plan · deploy-pipeline:5.env-vars):** Unconfigured env vars per stage — user supplies values or skips (uses default). Without values, runtime reads default which may be dev-only. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that has unconfigured env vars — values supplied for iteration 1 do NOT carry to iteration 2.**
 
 **If there are unconfigured env vars**, present them to the user via `AskUserQuestion`:
 
@@ -532,9 +536,11 @@ Response is HTTP 204. If the PATCH fails with a version conflict error, check bo
 ### Phase 6 — Deploy and Monitor
 
 <!-- gate: deploy-pipeline:6.0.final-consent | category=final | cancel-leaves=validated-stage-run -->
-> 🚦 **Gate (final · deploy-pipeline:6.0.final-consent):** Last-call before `DeployPackageAsync` / `pac pipeline deploy`. Validation already passed. Non-transactional import — partial failure leaves whatever already imported on the target.
+> 🚦 **Gate (final · deploy-pipeline:6.0.final-consent):** Last-call before **each** `DeployPackageAsync` / `pac pipeline deploy` call. Validation already passed. Non-transactional import — partial failure leaves whatever already imported on the target.
+>
+> **⚠ Fires PER LOOP ITERATION in MULTI_RUN_MODE / MULTI_PIPELINE_MODE.** Three solutions in `deploymentOrder` → three Phase 6.0 prompts (one before each iteration's `DeployPackageAsync`). The upstream Phase 2 stage selection — whether via interactive `AskUserQuestion` or via the `--stage` argument — covers only **stage choice**, NOT individual deploy authorization. **Never batch the deploy loop.** Skipping the per-iteration prompt and proceeding straight from Phase 5 → Phase 6.1 for solutions 2..N is the documented strategy violation this gate exists to prevent.
 
-**6.0 Final deploy consent gate.** Before kicking off the actual deployment — whether via `DeployPackageAsync` (6.1) or the `pac pipeline deploy` PAC CLI fallback — confirm with the user explicitly. The earlier gates (Phase 2 stage pick, Phase 2.5 unblock, Phase 3.5 completeness, Phase 5 env var values) each cover their own decision, but none of them is a final "ready to ship?" prompt and the deploy itself is not transactional — partial failures leave whatever has already imported on the target. This gate makes the production-promotion moment explicit. Use `AskUserQuestion`:
+**6.0 Final deploy consent gate.** Before kicking off **each** deployment — whether via `DeployPackageAsync` (6.1) or the `pac pipeline deploy` PAC CLI fallback, and whether this is the first solution or the Nth in MULTI_RUN_MODE — confirm with the user explicitly. The earlier gates (Phase 2 stage pick, Phase 2.5 unblock, Phase 3.5 completeness, Phase 5 env var values) each cover their own decision, but none of them is a per-iteration "ready to ship this one?" prompt and the deploy itself is not transactional — partial failures leave whatever has already imported on the target. This gate makes **every** production-promotion moment explicit. Use `AskUserQuestion`:
 
 > "Ready to deploy `{ARTIFACT_SOLUTION_NAME}` (v`{newVersion}`) to **`{SELECTED_STAGE.name}`** (`{targetEnvUrl}`)?
 >
@@ -604,7 +610,7 @@ The script polls `msdyn_stagerunstatus` until a terminal state:
 - `200000105` = Deploying Artifact (actively installing solution)
 
 <!-- gate: deploy-pipeline:6.pending-approval | category=pause | cancel-leaves=external-state-pending -->
-> 🚦 **Gate (pause · deploy-pipeline:6.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` mid-deploy. User approves in PPAC. Cancel here PATCHes `iscanceled: true` on the run.
+> 🚦 **Gate (pause · deploy-pipeline:6.pending-approval):** External wait — PP Pipelines `stagerunstatus=200000005` mid-deploy. User approves in PPAC. Cancel here PATCHes `iscanceled: true` on the run. **In MULTI_RUN_MODE / MULTI_PIPELINE_MODE this gate fires per loop iteration that hits Pending Approval.**
 
 **Approval gate handling**: If `result.status === 'Awaiting'` (`msdyn_stagerunstatus = 200000005`):
 - Inform user: "This deployment is waiting for approval. Please approve it in Power Platform: `make.powerapps.com` → Solutions → Pipelines → find deployment for `{STAGE_RUN_ID}` → Approve."

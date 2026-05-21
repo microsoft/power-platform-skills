@@ -341,7 +341,7 @@ If the script's stderr (case-insensitively) contains any of these substrings, th
 Match all of these case-insensitively (`String.prototype.toLowerCase()` before `.includes()`) so backend wording drift between Pipelines package versions doesn't silently break detection. If none match but the script exited with the underlying Dataverse error code `0x80048d18` (or a wrapped `errormessage` containing that hex code), treat it as the same pattern — that's the stable signal even when the message wording shifts.
 
 <!-- gate: setup-pipeline:5a.pattern-15 | category=consent | cancel-leaves=nothing -->
-> 🚦 **Gate (consent · setup-pipeline:5a.pattern-15):** Target env stamped to a different Pipelines host. Offer force-link as documented auto-fix — DESTRUCTIVE: previous host loses pipeline access for this env. Cancel here exits setup-pipeline cleanly.
+> 🚦 **Gate (consent · setup-pipeline:5a.pattern-15):** Target env stamped to a different Pipelines host. Offer force-link as documented auto-fix — DESTRUCTIVE: previous host loses pipeline access for this env. Cancel here exits setup-pipeline cleanly. **Fires PER ENV that triggers Pattern 15.** Phase 5 loops over source + each target env when registering with the host; if two target envs both turn out to be stamped to different hosts, this gate fires twice — once per env. Do NOT batch the consent across envs; the destructive blast radius is per-env (each env carries its own previous-host stamp and its own group of makers losing access).
 
 This is **Pattern 15** in `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md`. Do NOT silently retry. Surface the raw `errormessage` to the user verbatim and offer the documented auto-fix via `AskUserQuestion`:
 

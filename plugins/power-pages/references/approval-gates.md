@@ -110,6 +110,33 @@ Each gate fits one of six categories. Each gets a one-word prefix in the marker 
 
 ---
 
+### 3.7 Loop semantics — when a gate sits inside a loop
+
+> **The single biggest runtime failure mode of this strategy:** the LLM interprets the user's answer at the top of a loop as covering the *entire loop*, then proceeds through subsequent iterations without re-prompting. Documented runtime example: `deploy-pipeline` Phase 6.0 was skipped for iterations 2 and 3 of a 3-solution `MULTI_RUN_MODE` deploy after the user answered "staging" once at the top. The gate marker was present; the lint passed; the agent simply did not call `AskUserQuestion` again.
+
+The default behavior **per category** when a gate is inside a loop:
+
+| Category | Default when inside a loop | Override? |
+|---|---|---|
+| `intent` | **Once per skill invocation, before the loop.** Entry gates protect the skill from running with wrong project state — the project state doesn't change between iterations. | Not applicable. |
+| `plan` | **Depends on what the gate is choosing.** A "pick a strategy" plan gate runs once before the loop. A "confirm this iteration's parameters" plan gate runs **once per iteration.** Each catalog row must state which. | SKILL.md prose. |
+| `progress` | **Per occurrence of the triggering delta.** If sync mode runs twice in a loop, this gate fires twice. If a delta is detected only on iteration 2, it fires only on iteration 2. | Not applicable. |
+| `consent` | **PER ITERATION when the destructive action repeats.** Each instance of the destructive call gets its own consent. A consent given for iteration 1 does NOT cover iteration 2 even if the destruction is the same shape. | Hard rule — never override. |
+| `final` | **PER ITERATION, full stop.** The whole point of `final` is "fire immediately before the destructive call." If the destructive call runs `N` times in a loop, the gate fires `N` times. | Hard rule — never override. |
+| `pause` | **Per occurrence of the external pending state.** Polling can re-enter PendingApproval after a retry; each entry gets its own pause prompt. | Not applicable. |
+
+**Required prose in SKILL.md** for any gate that sits inside a loop:
+
+1. The gate marker block (`> 🚦 **Gate (...)**`) must include an explicit line stating *"Fires PER LOOP ITERATION"* (or equivalent) and naming the loop variable. Example: *"Three solutions in `deploymentOrder` → three Phase 6.0 prompts."*
+2. The loop description elsewhere in the SKILL.md must call out the gate by name in the per-iteration sequence. Example: *"For each entry in `DEPLOYMENT_ORDER`: ... fire Phase 6.0 consent gate ... call `DeployPackageAsync`."*
+3. The marker block must explicitly negate the most common shortcut: *"The upstream Phase 2 stage selection (whether via interactive prompt or `--stage` argument) does NOT cover subsequent iterations."*
+
+**Why prose, not lint?** The lint catches the *presence* of a marker. It cannot prove the agent actually *fired* the `AskUserQuestion` call at runtime. Loop-semantics prose narrows the LLM's interpretation space so the shortcut becomes textually impossible — *"the gate fires N times for N iterations"* leaves no room to read it as *"once is enough"*.
+
+**Future hardening (out of scope for v2):** runtime telemetry on gate firing — a `gate-fire-log.js` helper the skill calls before each `AskUserQuestion`, with a validator that asserts the expected pattern post-run. That would let us detect runtime non-firing empirically instead of just structurally.
+
+---
+
 ## 4. Marker syntax (proposed)
 
 Every gate gets a structural marker in SKILL.md. The marker has two parts: a **machine-readable HTML comment** (lint anchor) and a **human-readable block** (documentation).
