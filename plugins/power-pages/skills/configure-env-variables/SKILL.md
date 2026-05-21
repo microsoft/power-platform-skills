@@ -63,6 +63,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), classifies which site settings should become environment variables, and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
 
+<!-- gate: configure-env-variables:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · configure-env-variables:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -76,6 +79,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: configure-env-variables:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · configure-env-variables:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true` (solution-modified-since-plan). Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -142,6 +148,9 @@ Ask the user which site settings should be backed by environment variables. Pres
 - `Authentication/Registration/LocalLoginEnabled` — may differ in dev vs prod
 - Any `Authentication/Registration/OpenRegistrationEnabled` — open sign-up policy
 - Custom site settings the user has added
+
+<!-- gate: configure-env-variables:2.selection | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · configure-env-variables:2.selection):** User picks which site settings get promoted to env vars. Multi-select. Cancel exits before any env var definitions are created.
 
 Ask via `AskUserQuestion`:
 > "Which site settings should be backed by environment variables? I'll create an env var for each and guide you through linking them.

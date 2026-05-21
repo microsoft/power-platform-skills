@@ -86,6 +86,8 @@ If no URL was provided, attempt auto-detection:
 
 #### 1.4 Ask the User
 
+<!-- not-a-gate: site-URL fallback prompt — data-gathering when auto-detection fails; no Dataverse/state change -->
+
 If auto-detection failed or was inconclusive, use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -167,6 +169,9 @@ Review the browser snapshot from Phase 2.4 and the current browser URL for signs
 
 #### 3.2 Handle Private Site Gate
 
+<!-- gate: test-site:3.2.private-gate-login | category=pause | cancel-leaves=nothing -->
+> 🚦 **Gate (pause · test-site:3.2.private-gate-login):** External wait — site redirected to identity provider; skill pauses until user completes login or cancels.
+
 If a private site gate is detected, use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -177,6 +182,9 @@ If a private site gate is detected, use `AskUserQuestion`:
 
 1. Use `browser_snapshot` to verify the user is now on the actual site (site content visible, navigation present, URL is back on the `SITE_URL` domain).
 2. If still on the identity provider login page:
+   <!-- gate: test-site:3.2.login-retry | category=pause | cancel-leaves=nothing -->
+   > 🚦 **Gate (pause · test-site:3.2.login-retry):** Login not yet complete — re-prompt or cancel.
+
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 3. Once confirmed, re-run Phase 2.5 and 2.6 (capture console errors and network requests on the now-loaded homepage).
@@ -203,6 +211,9 @@ If neither a private site gate nor site-level authentication indicators are foun
 
 #### 3.5 Handle Site-Level Authentication
 
+<!-- gate: test-site:3.5.public-vs-auth | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · test-site:3.5.public-vs-auth):** Site has Sign-in UI — test as authenticated user, skip auth-gated pages, or cancel.
+
 If site-level authentication indicators are detected (login links in navigation, etc.), use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -213,6 +224,9 @@ If site-level authentication indicators are detected (login links in navigation,
 
 1. Use `browser_snapshot` to verify the user is now logged in (login link replaced with user name/profile, or authenticated content is visible).
 2. If the login form is still showing:
+   <!-- gate: test-site:3.5.login-retry | category=pause | cancel-leaves=nothing -->
+   > 🚦 **Gate (pause · test-site:3.5.login-retry):** Site-level login not yet complete — re-prompt or cancel.
+
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 3. Create an additional task for testing authenticated scenarios using `TaskCreate`:

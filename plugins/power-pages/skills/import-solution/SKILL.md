@@ -52,6 +52,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
 
+<!-- gate: import-solution:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · import-solution:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -65,6 +68,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: import-solution:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · import-solution:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -153,6 +159,9 @@ Present the selected zip file details (name, size, path), any pre-import warning
 
 ### Phase 3 — Configure Import
 
+<!-- gate: import-solution:3.config | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:3.config):** Staged vs Direct import, overwrite options. Cancel exits before any target-env mutation.
+
 Ask user (via `AskUserQuestion`):
 
 > **Key Decision Point**: **Staged vs Direct import**
@@ -238,6 +247,9 @@ Tell the user:
 
 #### 5b.3 Ask for Permission
 
+<!-- gate: import-solution:5b.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
+> 🚦 **Gate (consent · import-solution:5b.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC.
+
 Invoke `AskUserQuestion` immediately — do NOT present this as a chat message. The user must answer live before the skill proceeds.
 
 | Question | Header | Options |
@@ -308,6 +320,9 @@ For each definition found, check if a value already exists in the target:
 GET {envUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{id}'&$select=value
 ```
 
+<!-- gate: import-solution:6b.env-vars | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:6b.env-vars):** Imported env var definitions need per-target values. User supplies values or skips (uses default). Without values, runtime reads default which may be dev-only.
+
 **If any definitions have no existing value**, present them to the user via `AskUserQuestion`:
 
 > "The imported solution contains **{N} environment variable(s)** with no value set in this environment. Enter the target value for each (leave blank to skip and use the default):
@@ -355,6 +370,9 @@ If cloud flow files are found:
    >
    > Direct link: `https://make.powerpages.microsoft.com/`
 
+   <!-- gate: import-solution:6c.cloud-flow-register | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:6c.cloud-flow-register):** Cloud flows in imported solution need manual registration in target env. Acknowledge / defer.
+
 3. Invoke `AskUserQuestion`:
 
    | Question | Header | Options |
@@ -382,6 +400,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot ".
 Evaluate the result:
 
 - **`activated: true`**: Store `siteUrl` for the Phase 7 summary. No further action needed.
+
+<!-- gate: import-solution:6d.activate | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:6d.activate):** Site imported but not activated in target env. Offer to invoke activate-site now or defer.
+
 - **`activated: false`**: Ask the user via `AskUserQuestion`:
 
   | Question | Header | Options |

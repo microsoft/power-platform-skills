@@ -126,6 +126,9 @@ Present all findings in a table:
 
 For each Error finding with `autoFixAvailable: true`, in order:
 
+<!-- gate: diagnose-deployment:6.auto-fix | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · diagnose-deployment:6.auto-fix):** Per-finding consent before applying any auto-fix. Loops once per Error finding with `autoFixAvailable: true`. Pattern ID surfaces in the prompt; user can decline per-finding or skip all.
+
 1. Explain the issue and proposed fix
 2. Ask explicit permission via `AskUserQuestion`:
    > "Issue: {message}

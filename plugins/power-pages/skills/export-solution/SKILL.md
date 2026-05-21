@@ -56,6 +56,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 
 > "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
 
+<!-- gate: export-solution:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · export-solution:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
 `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -69,6 +72,9 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 **Step 4 — Stale plan.** Tell the user:
 
 > "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: export-solution:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · export-solution:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
 
 `AskUserQuestion`:
 
@@ -155,6 +161,9 @@ Then:
   > - **{Z}** environment variable definitions with your publisher prefix
   > - **{W}** custom tables"
 
+  <!-- gate: export-solution:2.5.completeness | category=progress | cancel-leaves=nothing -->
+  > 🚦 **Gate (progress · export-solution:2.5.completeness):** Source solution incomplete vs live site. Sync first, export as-is (gap recorded), or abort.
+
   Then ask via `AskUserQuestion`:
   > "How would you like to proceed?
   > 1. **Run `/power-pages:setup-solution` in sync mode now** — adopts missing components, bumps the solution version, then re-confirms with you before exporting (Recommended)
@@ -166,6 +175,9 @@ Then:
     2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
     3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 2.5 prompt above.
     4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
+    <!-- gate: export-solution:2.5.post-sync | category=progress | cancel-leaves=nothing -->
+    > 🚦 **Gate (progress · export-solution:2.5.post-sync):** Post-sync re-confirm. Solution version bumped + components adopted — user inspects delta before export proceeds.
+
     5. **Re-confirm with the user before proceeding to Phase 3** — the solution about to be exported is now different from what the user originally saw when they started the export. Use `AskUserQuestion`:
 
        > "Sync complete.
@@ -193,6 +205,9 @@ Then:
 > **Why Phase 2.5 exists in the first place**: historically, components created after `setup-solution` (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` / `setup-auth`) were silently left out of the export zip and didn't travel to target environments. The ALM-aware-by-default principle in `AGENTS.md` requires this check at every gate where a solution leaves its source environment.
 
 ### Phase 3 — Configure Export
+
+<!-- gate: export-solution:3.export-type | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · export-solution:3.export-type):** Managed vs Unmanaged — irreversible for the produced zip. Managed cannot be edited in target; Unmanaged can. Mismatch with stage strategy ships the wrong artifact downstream.
 
 Invoke `AskUserQuestion` immediately — do NOT describe this choice as chat text. The user must answer live before export proceeds.
 

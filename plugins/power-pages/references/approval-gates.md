@@ -262,10 +262,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `setup-solution:5.4c.credentials` | gate | consent | 5.4C.2 | Bulk credential handling — *"Secret env var / String env var / Skip per credential"* | nothing |
 | `setup-solution:5.4b.orphan-envvars` | gate | plan | 5.4b | `DEFAULT-ONLY` env vars found — *"Which to adopt?"* (multiSelect) | nothing |
 | `setup-solution:5.4c.orphan-ppcs` | gate | plan | 5.4c | Orphan ppcs found (incl. siteLanguages) — *"Which to adopt?"* (multiSelect) | nothing |
-| `setup-solution:5.5a.tables` | gate | plan | 5.5 | Custom tables discovered — *"Include all / per-table / exclude all"* (multiSelect) | nothing |
-| `setup-solution:5.5b.flows` | gate | plan | 5.5 | Cloud flows discovered — *"Include all / per-flow / exclude all"* (multiSelect) | nothing |
-| `setup-solution:5.5c.bots` | gate | plan | 5.5 | Bot components discovered — *"Include all / per-bot / exclude all"* (multiSelect) | nothing |
-| `setup-solution:5.5d.manifest-confirm` | gate | plan | 5.5 | Manifest assembled — *"Proceed / change something"* | partial-manifest |
+| `setup-solution:5.5.manifest-confirm` | gate | plan | 5.5 | Manifest assembly + final confirmation. Covers sub-prompts: tables multi-select, flows multi-select, bots multi-select, and the closing *"Proceed / change something"* gate. Single marker covers all four because the lint regex matches the closing prompt; the multi-select sub-prompts share the same gate semantics. | partial-manifest |
 | `setup-solution:7.next-step` | gate | plan | 7 | *"How to deploy: pipeline / manual / later"* | nothing |
 | `setup-solution:1.no-config` | not-a-gate | — | 1 | Free-text "site name" if `powerpages.config.json` missing — data-gathering | — |
 | `setup-solution:1.no-website-record` | not-a-gate | — | 1 | Free-text "website record ID" fallback — data-gathering | — |
@@ -412,14 +409,13 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.12 `diagnose-deployment` (2 calls + per-finding loop)
+### 6.12 `diagnose-deployment` (1 loop-style gate)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `diagnose-deployment:6.fix-001` | gate | consent | 6 | Per-finding: each suggested auto-fix has its own prompt | varies by fix |
-| `diagnose-deployment:6.fix-N` | gate | consent | 6 | (One marker template; `N` is replaced with the pattern ID at SKILL.md authoring time. Pattern IDs are stable: see `references/deployment-error-catalog.md`.) | varies by fix |
+| `diagnose-deployment:6.auto-fix` | gate | consent | 6 | Per-finding: each suggested auto-fix loops through this same prompt template, surfacing the pattern ID and the proposed fix. User answers Yes / No / Skip-all per finding. | varies by fix |
 
-The two raw `AskUserQuestion` counts in `diagnose-deployment` come from one template prompt that fires per-finding. **Resolves the v1 wildcard problem:** instead of `diagnose-deployment:6.*`, the catalog requires one marker per concrete pattern-ID that may be offered. When `deployment-error-catalog.md` adds a pattern, a row is added here. Lint enforces.
+The single `AskUserQuestion` template fires once per Error finding with `autoFixAvailable: true`. **Resolves the v1 wildcard problem (`diagnose-deployment:6.*`)** by collapsing all per-pattern loops under one gate ID. The prompt's content varies by pattern; the gate identity does not. Pattern IDs themselves are stable: see `references/deployment-error-catalog.md`.
 
 ---
 
