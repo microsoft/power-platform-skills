@@ -170,11 +170,38 @@ function parseCustomizationReport(csvPath) {
       type: type,
       guidance: record['Guidance'] || record['guidance'] || '',
       snippet: record['Snippet'] || record['snippet'] || '',
-      location: record['Location'] || record['location'] || ''
+      location: normalizeLocationPath(record['Location'] || record['location'] || ''),
     });
   });
 
   return grouped;
+}
+
+/**
+ * Normalize a Location path from PAC's customization-report CSV.
+ *
+ * PAC writes paths to its internal scan temp directory in the Location column, prefixed with
+ * the Windows extended-path marker (`\\?\` or `\\?\UNC\`). Two problems:
+ *  1. The `\\?\` prefix breaks Node's URL parser (the `?` becomes `%3F` in pathToFileURL),
+ *     which crashes any agent flow that tries to render the path as a markdown file:// link.
+ *  2. The temp-dir part is meaningless to the user — they never operate on PAC's scratch dir.
+ *
+ * This function strips both:
+ *  - Extended-path prefix (`\\?\` / `\\?\UNC\`)
+ *  - The leading temp-folder portion (`...\Temp\<site-slug>\`) when present, returning only
+ *    the relative path within the site (e.g., `web-templates\X\Y.html`)
+ *
+ * If no temp-dir segment is present, returns the cleaned absolute path as-is.
+ */
+function normalizeLocationPath(loc) {
+  if (!loc) return '';
+  // 1. Strip the Windows extended-path prefix.
+  let cleaned = loc.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
+  // 2. If the path passes through a `*\Temp\<single-segment>\<rest>` pattern (PAC's temp
+  //    scratch dir + per-run site-slug folder), keep only `<rest>` — that's the relative
+  //    path within the site source tree that the user can map to their downloaded site.
+  const tempMatch = cleaned.match(/[\\/]Temp[\\/][^\\/]+[\\/](.+)$/i);
+  return tempMatch ? tempMatch[1] : cleaned;
 }
 
 /**
@@ -476,7 +503,7 @@ function generateExecutionReportHtml(args, remediationResults = null, customizat
     </div>
     <div class="phase">
       <div class="command-label">Step 3: Download Customization Report</div>
-      <div class="command-block">pac pages migrate-datamodel --webSiteId "{{WEBSITE_ID}}" --siteCustomizationReportPath "./migration-report"</div>
+      <div class="command-block">pac pages migrate-datamodel --webSiteId "{{WEBSITE_ID}}" --siteCustomizationReportPath "./migration-reports"</div>
       <div class="result-item success">
         <div class="result-title">✓ Success</div>
         <div class="result-description">Customization report downloaded and analyzed</div>
@@ -516,7 +543,7 @@ function generateExecutionReportHtml(args, remediationResults = null, customizat
       title: 'Analyze Customization Report',
       description: 'Customization report downloaded and analyzed',
       details: [
-        '✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath ./migration-report',
+        '✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath ./migration-reports',
         '✓ SiteCustomization.csv downloaded successfully',
         '✓ Parsed 3 customization categories from report',
         '✓ Identified: Liquid contains adx references (1 instance)',

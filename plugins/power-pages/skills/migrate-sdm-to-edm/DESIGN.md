@@ -20,7 +20,7 @@ This skill guides the user through migrating an existing Power Pages site from t
 
 - PAC CLI version and authentication validation
 - Site discovery via `pac pages list -v` (Portal Id auto-captured from verbose output)
-- **In-flight migration detection** (Phase 4) — handles already-running, completed, failed, and reverted prior migrations
+- **In-flight migration detection** (step 1.4) — handles already-running, completed, failed, and reverted prior migrations
 - Dependency and template-package validation
 - Environment-aware migration mode recommendation (Dev → `all`, Test/UAT/Prod → `configurationData`)
 - Customization report generation (always, for any environment)
@@ -41,7 +41,7 @@ This skill guides the user through migrating an existing Power Pages site from t
 
 ## Supported Templates
 
-All Power Pages and D365 portal templates can be migrated, provided the corresponding V2 EDM solution is installed in the target environment. Phase 6 validates installation per template.
+All Power Pages and D365 portal templates can be migrated, provided the corresponding V2 EDM solution is installed in the target environment. step 1.6 validates installation per template.
 
 **Power Pages templates:**
 
@@ -60,56 +60,152 @@ All Power Pages and D365 portal templates can be migrated, provided the correspo
 - Employee Self-Service Portal
 - Partner Portal
 
-Each template maps to a specific V2 solution `UniqueName` (see SKILL.md Phase 6 for the full mapping). Older PAC CLI builds may still reject D365 portal templates — confirm with `pac --version`.
+Each template maps to a specific V2 solution `UniqueName` (see SKILL.md step 1.6 for the full mapping). Older PAC CLI builds may still reject D365 portal templates — confirm with `pac --version`.
 
 ---
 
 ## Phase Breakdown
 
-| # | Phase | Description | Primary PAC Command(s) | Automated? |
-| --- | --- | --- | --- | --- |
-| 1 | **Establish CLI Context** | Verify PAC CLI ≥ 1.31.6, auth profile, environment URL, cloud type | `pac --version`, `pac auth list/who` | Yes |
-| 2 | **Identify Site Context** | Parse local `website.yml` or prompt user for site name/GUID | — | Guided |
-| 3 | **Site Discovery & Validate Data Model** | List sites, locate target, capture WebSiteId / Portal Id / ModelVersion / URL slug; stop if already EDM; confirm template | `pac pages list -v` | Yes |
-| 4 | **Check Existing Migration Status** | Detect in-flight, completed, failed, or reverted prior migrations. Branch accordingly (wait / reset / short-circuit) | `pac pages migrate-datamodel --checkMigrationStatus --verbose` | Yes |
-| 5 | **Validate Required Dependencies** | Verify `MicrosoftCRMPortalBase ≥ 9.3.2307.x` and `PowerPagesCore ≥ 1.0.2309.63` | `pac solution list` | Yes |
-| 6 | **Validate Template & V2 Package** | Look up V2 solution `UniqueName` for the captured template, verify installed via `pac solution list`; install `PowerPages_Core` if missing | `pac solution list`, `pac application install` | Yes |
-| 7 | **Determine Env Type & Migration Mode** | Ask Dev/Test-UAT/Prod; recommend mode (Dev → `all`, others → `configurationData`) | — | Guided |
-| 8 | **Generate Customization Report** | Download CSV from PAC, render HTML report via JS script | `pac pages migrate-datamodel --siteCustomizationReportPath`, `node generate-migration-reports.js` | Yes |
-| 9 | **Customization Remediation** | FetchXML auto-rewrite (incl. link-entity) and Liquid `entities['adx_*']` semi-auto annotation in downloaded site files; per-finding Liquid/plugin categorization; per-table DME checklists; user reviews diffs, approves, then `pac pages upload`; final readiness gate before Phase 10 | `pac pages download`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload` | Mixed |
-| 10 | **Migrate Site Data Model** | Run migrate command, poll every 1 min × 30. On timeout: wait/reset/exit | `pac pages migrate-datamodel --mode <…>`, `--checkMigrationStatus` | Yes |
-| 11 | **Update Data Model Version** | Flip SDM → EDM using captured Portal Id (or manual fallback) | `pac pages migrate-datamodel --updateDatamodelVersion --portalId` | Yes |
-| 12 | **Post-Migration Validation & Summary** | Validation checklist, optional rollback, success summary, execution report | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (if rollback) | Guided |
+The skill is organized into **4 high-level phases**. Each phase contains numbered sub-steps for granular execution and progress tracking.
 
-### Why Customization Remediation moved before Migration (Phase 9, was post-migration)
+| # | Phase | Description | Sub-steps |
+| --- | --- | --- | --- |
+| 1 | **Pre-flight Setup** | Gather all context needed to plan and execute migration safely. CLI context, site identification, prior migration state detection, dependency verification, template validation, migration mode selection. | 1.1 Establish CLI Context · 1.2 Identify Site Context · 1.3 Site Discovery & Validate Data Model · 1.4 Check Existing Migration Status · 1.5 Validate Required Dependencies · 1.6 Validate Template & V2 Package · 1.7 Determine Env Type & Migration Mode |
+| 2 | **Customization Remediation** | Identify customizations, apply auto-rewrites where safe (FetchXML + Liquid), surface per-finding guidance for manual fixes, gate the transition to migration. | 2.1 Generate Customization Report · 2.2 Remediate Customizations (download → rewrite → review → upload → readiness gate) |
+| 3 | **Migration Execution** | Run the SDM→EDM migration with the selected mode and flip the data model version. | 3.1 Migrate Site Data Model · 3.2 Update Data Model Version |
+| 4 | **Post-Migration Validation** | Validate the migrated site, optionally rollback, produce final execution report. | 4.1 Validation, Optional Rollback, and Final Summary |
+
+### Sub-step → PAC command mapping
+
+| Sub-step | Key Commands |
+| --- | --- |
+| 1.1 | `pac --version`, `pac auth list/who` |
+| 1.2 | `Test-Path .\website.yml` + AskUserQuestion |
+| 1.3 | `pac pages list -v` |
+| 1.4 | `pac pages migrate-datamodel --webSiteId <…> --checkMigrationStatus [--verbose]` |
+| 1.5 | `pac solution list --includeSystemSolutions` |
+| 1.6 | `pac solution list --includeSystemSolutions`, `pac application install --application-name <…>` |
+| 1.7 | AskUserQuestion |
+| 2.1 | `pac pages migrate-datamodel --webSiteId <…> --siteCustomizationReportPath <OUTPUT_DIR>`, `node generate-migration-reports.js` |
+| 2.2 | `pac pages download --webSiteId <…> --path ./mysite`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload --path <SITE_ROOT> --modelVersion 1` |
+| 3.1 | `pac pages migrate-datamodel --webSiteId <…> --mode <SELECTED>`, `--checkMigrationStatus` (polling) |
+| 3.2 | `pac pages migrate-datamodel --webSiteId <…> --updateDatamodelVersion --portalId <…>` |
+| 4.1 | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (only if rollback), `node generate-migration-reports.js` (final report) |
+
+### Why Customization Remediation (Phase 2) sits before Migration (Phase 3)
 
 The previous design placed remediation after migration. The current design fixes customizations **before** migration for three reasons:
 
 1. **File-level rewrites are safer on SDM source.** Both Liquid and FetchXML rewrites operate on the downloaded source files (`.html` / `.yml`); editing SDM-source files and re-uploading via `pac pages upload` is well-understood, with `pac pages download` providing a clean rollback point.
-2. **Data Model Extensions need a clean target before metadata moves.** Per the migration doc, the correct fix for a custom column on an `adx_*` table is to create a new custom table with a lookup to `powerpagecomponent`. If this happens before Phase 10, the data migration is straightforward; if deferred to post-migration the user has to navigate the new EDM `content` JSON structure.
-3. **Plugins/workflows are deferrable.** These are also recommended pre-migration (so EDM has working plugins from day 1) but can be safely deferred — the Phase 9 final-readiness gate makes that choice explicit.
+2. **Data Model Extensions need a clean target before metadata moves.** Per the migration doc, the correct fix for a custom column on an `adx_*` table is to create a new custom table with a lookup to `powerpagecomponent`. If this happens before step 3.1, the data migration is straightforward; if deferred to post-migration the user has to navigate the new EDM `content` JSON structure.
+3. **Plugins/workflows are deferrable.** These are also recommended pre-migration (so EDM has working plugins from day 1) but can be safely deferred — the step 2.2 final-readiness gate makes that choice explicit.
 
 The Microsoft doc places all fixes post-migration. The skill deviates here intentionally for the reasons above; the deviation is documented in SKILL.md and DESIGN.md.
 
-Moving remediation to Phase 9 means the migration runs against a cleaner customization surface.
+Moving remediation to step 2.2 means the migration runs against a cleaner customization surface.
 
-### Why Phase 4 was added
+### Why step 1.4 was added
 
 The skill needs to be re-entrant. A user may:
 
 - Trigger a migration outside of this skill, then run the skill later
 - Exit the skill mid-migration and re-invoke after hours
-- Hit the Phase 10 polling timeout and need to choose wait/reset/exit
+- Hit the step 3.1 polling timeout and need to choose wait/reset/exit
 
-A single early status check in Phase 4 detects any of these and routes the flow appropriately — including short-circuiting to Phase 11 if a prior migration completed but the data-model version wasn't flipped.
+A single early status check in step 1.4 detects any of these and routes the flow appropriately — including short-circuiting to step 3.2 if a prior migration completed but the data-model version wasn't flipped.
+
+---
+
+## Directory Layout
+
+The skill operates against two resolved paths captured in step 1.2:
+
+- **`<SITE_ROOT>`** — directory containing `website.yml` (the site source files)
+- **`<OUTPUT_DIR>`** — directory for all migration artifacts (CSV, HTML reports, diffs, state files)
+
+These are kept **separate** so site source stays clean: a user can `git diff` or commit `<SITE_ROOT>` without migration artifacts contaminating the change set.
+
+### Two scenarios
+
+**Scenario A — cwd is a working directory** (no `website.yml` in cwd; site lives in a subdirectory or will be downloaded):
+
+```text
+cwd/
+├── mysite/                            ← site download lands here (step 2.2 if absent)
+│   └── site-1---site-k5s85/           ← <SITE_ROOT> — actual site root, has website.yml
+│       ├── website.yml
+│       ├── web-templates/
+│       │   └── migration-check-demo/
+│       │       ├── Migration-Demo-check.webtemplate.source.html
+│       │       └── Migration-Demo-check.webtemplate.source.html.pre-edm.bak   ← backup
+│       └── ...
+└── migration-reports/                 ← <OUTPUT_DIR> — all migration artifacts
+    ├── SiteCustomization.csv          ← PAC writes here
+    ├── customization-report.html      ← script writes here
+    ├── skill-execution-report.html
+    ├── fetchxml-rewrites.diff
+    └── liquid-suggestions.diff
+```
+
+**Scenario B — cwd IS the site** (`website.yml` directly in cwd):
+
+```text
+parent/
+├── contoso-portal/                    ← cwd; <SITE_ROOT> = "."
+│   ├── website.yml
+│   ├── web-templates/
+│   └── ...
+└── migration-reports/                 ← <OUTPUT_DIR> = "..\migration-reports"
+    └── (same contents as above)
+```
+
+The "go one step back" rule keeps the site dir clean for source control.
+
+### Resolution algorithm (step 1.2)
+
+```text
+Test-Path .\website.yml
+├── True  → <SITE_ROOT> = "."        ; <OUTPUT_DIR> = "..\migration-reports"
+└── False → look for subdir with website.yml
+    ├── Exactly one subdir → <SITE_ROOT> = .\<subdir>   ; <OUTPUT_DIR> = ".\migration-reports"
+    └── Zero or multiple   → download to .\mysite\<auto-slug> in step 2.2;
+                              <OUTPUT_DIR> = ".\migration-reports"
+```
+
+`<SITE_ROOT>` and `<OUTPUT_DIR>` resolved once in step 1.2 and used as durable values across all subsequent phases.
+
+### Output artifacts
+
+| File | Producer | Location |
+| --- | --- | --- |
+| `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
+| `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
+| `skill-execution-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
+| `fetchxml-rewrites.diff` | `generate-migration-reports.js --automate-fetchxml` | `<OUTPUT_DIR>` |
+| `liquid-suggestions.diff` | `generate-migration-reports.js --automate-liquid` | `<OUTPUT_DIR>` |
+| `<file>.pre-edm.bak` (per-file backups) | rewriter | Sibling of each modified file inside `<SITE_ROOT>` (in-place revert) |
+
+### CSV Location-column path handling
+
+PAC writes paths to its internal scan temp directory in the CSV's `Location` column (e.g., `\\?\C:\Users\...\Temp\<site-slug>\web-templates\X\Y.html`). These paths are unusable as-is because:
+
+1. The `\\?\` Windows extended-path prefix breaks Node's URL parser (used by Claude Code when rendering markdown file links — the `?` becomes `%3F` in `pathToFileURL`).
+2. The temp directory may be cleaned up after the scan; it's not where the user should operate.
+
+The script's `normalizeLocationPath()` sanitizes at the parse boundary:
+
+- Strips `\\?\` and `\\?\UNC\` prefixes
+- Strips everything up to and including the `*\Temp\<site-slug>\` segment, returning only the relative path within the site (`web-templates\X\Y.html`)
+
+Downstream consumers (HTML reports, markdown links, log messages) always get clean relative paths that map directly to the user's `<SITE_ROOT>`.
 
 ---
 
 ## Customization Remediation Categories
 
-The customization report (Phase 8) categorizes findings into five types. Phase 9 applies a mix of auto-rewrites, per-finding categorization, and per-table manual checklists. The rule is: **fix what the official doc shows as a mechanical rewrite; categorize and recommend everything else**.
+The customization report (step 2.1) categorizes findings into five types. step 2.2 applies a mix of auto-rewrites, per-finding categorization, and per-table manual checklists. The rule is: **fix what the official doc shows as a mechanical rewrite; categorize and recommend everything else**.
 
-| Type | Sub-pattern | Phase 9 action |
+| Type | Sub-pattern | step 2.2 action |
 | --- | --- | --- |
 | **FetchXml contains adx references** | `<entity name='adx_*'>` | **Auto-rewritten** — rename to `powerpagecomponent`, inject `powerpagecomponenttype` filter |
 | **FetchXml contains adx references** | `<link-entity name='adx_*'>` | **Auto-rewritten** — same logic, two-pass to avoid nested-filter collision |
@@ -122,12 +218,12 @@ The customization report (Phase 8) categorizes findings into five types. Phase 9
 | **Liquid contains adx references** | `snippets[...]` / `weblinks[...]` lookup keys | Categorized as **false positive** — index is a user-defined name, not an attribute |
 | **Data Model Extensions** | Custom columns on `adx_*` tables | **Per-table checklist** — grouped by source table; checklist suggests new custom table name, lookup-to-`powerpagecomponent` column, and data-migration steps. **No Dataverse API calls** — schema decisions stay with the user |
 | **Plugins registered on adx entities** | `Microsoft.*` system plugins | Categorized as **no action needed** (Power Pages Core handles on EDM) |
-| **Plugins registered on adx entities** | `Adxstudio.*` framework plugins | Recommendation: verify V2 EDM-compatible solution installed (Phase 6 check) |
+| **Plugins registered on adx entities** | `Adxstudio.*` framework plugins | Recommendation: verify V2 EDM-compatible solution installed (step 1.6 check) |
 | **Plugins registered on adx entities** | Custom plugins | Per-finding refactor recommendation with original entity + step name |
 | **Custom workflow** | Any | Generic doc guidance (no per-finding info available without Dataverse queries) |
 | **Relationships between custom and adx tables** | (not in sample reports) | Manual guidance in SKILL.md if encountered |
 
-### Phase 9 workflow
+### Phase 2 workflow
 
 ```text
 1. Has cwd got the site downloaded?    Yes → confirm work is committed
@@ -137,7 +233,7 @@ The customization report (Phase 8) categorizes findings into five types. Phase 9
 4. Review diffs                        → user approves / cancels / edits further
 5. pac pages upload                    → push rewritten source back to Dataverse
 6. Show manual reminders               → DME per-table checklists, plugin recs, etc.
-7. Final readiness gate                → user confirms before Phase 10 (migration)
+7. Final readiness gate                → user confirms before step 3.1 (migration)
 ```
 
 The auto-rewriter is non-destructive: every modified file gets a `<file>.pre-edm.bak` sibling so the user can revert. Diffs (unified format) are written to `<output-dir>/fetchxml-rewrites.diff` and `liquid-suggestions.diff`.
@@ -203,6 +299,9 @@ pac auth create -u <Dataverse URL>
 pac auth who
 pac pages list -v
 
+# Dependency & template-package verification (first-party solutions — flag is required)
+pac solution list --includeSystemSolutions
+
 # Existing migration state
 pac pages migrate-datamodel --webSiteId <GUID> --checkMigrationStatus --verbose
 pac pages migrate-datamodel --webSiteId <GUID> --resetMigration
@@ -235,7 +334,7 @@ From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constan
 | --- | --- | --- |
 | `NotStarted` | 746610000 | No prior migration; proceed normally |
 | `Running` | 746610001 | Prompt user: Wait / Reset / Exit |
-| `Completed` | 746610002 | Prior migration done; skip to Phase 11 if version not yet flipped |
+| `Completed` | 746610002 | Prior migration done; skip to step 3.2 if version not yet flipped |
 | `Failed` | 746610003 | Show last step + errors; offer Retry / Stop |
 | `Reverted` | 746610004 | Site was rolled back; proceed as fresh start |
 | `Unknown` | 0 | Warn user; ask whether to proceed |
@@ -248,9 +347,9 @@ From PAC source (`bolt.module.paportal/sitecustomizations/configurations/Constan
 
 1. **5K record batch limit** — Migration processes records in batches of 5,000. Large sites can take hours.
 2. **Preview feature** — Not GA; behavior may change.
-3. **EDM template solutions required** — Every template needs its corresponding V2 solution installed in the environment (see SKILL.md Phase 6 mapping). Missing V2 solutions can be provisioned by creating a dummy EDM site with the same template (the dummy can be deleted after).
+3. **EDM template solutions required** — Every template needs its corresponding V2 solution installed in the environment (see SKILL.md step 1.6 mapping). Missing V2 solutions can be provisioned by creating a dummy EDM site with the same template (the dummy can be deleted after).
 4. **PAC CLI version dependency for D365 portals** — Migration of D365 portal templates (Community, Customer Self-Service, Employee Self-Service, Partner) requires a recent PAC CLI build. Older builds may still reject these templates.
-5. **Portal Id column** — Available in `pac pages list -v` output only on PAC CLI builds with the 2026-02-24 commit (PR 14824169) or later. Older builds fall back to manual `_services/about` lookup in Phase 11.
+5. **Portal Id column** — Available in `pac pages list -v` output only on PAC CLI builds with the 2026-02-24 commit (PR 14824169) or later. Older builds fall back to manual `_services/about` lookup in step 3.2.
 6. **30-minute polling ceiling** — The skill polls migration status for 30 minutes, then escalates to a wait/reset/exit prompt. PAC's own server-side migration continues regardless of skill polling.
 
 ---
@@ -273,8 +372,9 @@ The skill surfaces this as advisory guidance only. Environment copy is an admin-
 
 ## Future Work
 
-- **ALM integration**: Phase 7 captures environment type but does not yet branch on it for ALM-aware mode selection or remediation deployment. Plan: integrate with a future ALM-deployment skill so Test/UAT/Prod can consume fixes from Dev via managed solutions.
-- **Resumable polling**: Persist a `.migration-state.json` keyed by WebSiteId so multi-session migrations can resume without re-running pre-checks. Currently Phase 4 detects in-flight state from PAC's server-side tracker, which is sufficient for most cases.
+- **ALM integration**: step 1.7 captures environment type but does not yet branch on it for ALM-aware mode selection or remediation deployment. Plan: integrate with a future ALM-deployment skill so Test/UAT/Prod can consume fixes from Dev via managed solutions.
+- **Resumable polling**: Persist a `.migration-state.json` keyed by WebSiteId so multi-session migrations can resume without re-running pre-checks. Currently step 1.4 detects in-flight state from PAC's server-side tracker, which is sufficient for most cases.
 - **Bulk-site migration**: Currently single-site. A wrapper skill could iterate `pac pages list -v` output and sequence migrations.
-- **Data Model Extension table-creation automation**: Phase 9 currently produces per-table checklists with suggested table names. A future enhancement could pre-populate Dataverse via API given publisher prefix and column-type input — but schema decisions remain user-driven, so this is deliberately deferred.
+- **Data Model Extension table-creation automation**: step 2.2 currently produces per-table checklists with suggested table names. A future enhancement could pre-populate Dataverse via API given publisher prefix and column-type input — but schema decisions remain user-driven, so this is deliberately deferred.
 - **Per-workflow guidance**: Custom workflow remediation is generic doc-text today. Adding Dataverse queries to fetch each workflow's primary entity and step bindings would let us emit per-finding guidance, similar to plugins.
+- **Automated post-migration validation test cases (Phase 4)**: The current Phase 4 surfaces a manual validation checklist (browse pages, test forms, verify auth, etc.). A future enhancement could add automated functional tests — Playwright-driven smoke tests for page rendering, form submission, web API calls, and authentication flows — so the user gets pass/fail signal instead of a manual to-do list.
