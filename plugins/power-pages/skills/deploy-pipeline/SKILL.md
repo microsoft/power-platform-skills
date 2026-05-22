@@ -493,6 +493,41 @@ If Yes: write/update `deployment-settings.json` with the collected values under 
 
 **If all env vars are pre-configured** (or there are none): skip the prompt, use `preconfigured` directly.
 
+**5.1b Pre-PATCH validation of `deployment-settings.json` Secret references.**
+
+> **Why this gate exists.** The Power Platform Pipelines handler validates the `deploymentsettingsjson` PATCH at import time, AFTER the stage run has been queued and potentially after a long wait behind serialized imports. A bad Secret reference value — placeholder syntax like `@KeyVault(vaultName=...;secretName=...)`, raw secret values committed to the file, malformed URIs — fails the import with *"ImportAsHolding failed: The value provided as a secret reference does not match a valid secret reference format."* Live evidence: a 4h41m queue wait + fail in a recent session. Catching the bad reference here turns hours of wasted compute into a sub-second hard stop with a precise remediation pointer.
+
+Skip this step entirely when `ENV_VAR_OVERRIDES` is empty AND `deployment-settings.json` is absent — there's nothing to validate.
+
+Otherwise, run the shared helper:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+  --settingsFile "./deployment-settings.json" \
+  --envUrl "{sourceEnvUrl}" \
+  --stageLabel "{SELECTED_STAGE.name}"
+```
+
+Capture stdout as JSON. The helper classifies each `EnvironmentVariables[]` entry by `valueFormat` (`kv-uri` / `kv-resource-id` / `kv-placeholder` / `empty` / `plain-text` / `invalid-uri`) and `status` (`valid` / `invalid` / `unknown-type` / `skipped`). When `--envUrl` is provided (as above), Secret-type entries are validated against the canonical Key Vault reference formats; other types are structurally validated.
+
+Branch on `summary`:
+
+- **`summary.invalid === 0`** → all entries valid, proceed to Phase 5.2.
+- **`summary.invalid > 0`** → STOP. Display the invalid `findings[]` to the user with each entry's `schemaName`, `valueFormat`, `value`, and `message`. Then surface a remediation message:
+
+  > "Pre-deploy validation found `{summary.invalid}` invalid env var value(s) in `deployment-settings.json`. The Power Platform Pipelines handler would reject these during import (potentially after a long queue wait). Fix the file before re-running this skill.
+  >
+  > Canonical formats for Secret env vars:
+  >   1. Key Vault Secret Identifier URI: `https://<vault>.vault.azure.net/secrets/<name>[/<version>]`
+  >   2. Azure resource ID: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>`
+  >   3. Empty (use the env var definition's default)
+  >
+  > See `configure-env-variables` Phase 3.B and `add-server-logic` Phase 7.2a for the end-to-end flow (vault selection → secret storage → URI handoff)."
+
+  Do NOT prompt for "proceed anyway" — there's no partial-validity case where forcing the bad PATCH leads to a successful import. The deploy will fail; only the wait time changes.
+
+- **`summary.invalid === 0 && summary.['unknown-type'] > 0`** → log a one-line warning about the schemas whose types couldn't be looked up (probably auth or transient errors) and proceed. The downstream handler will still reject obvious garbage; the pre-PATCH gate is a fast-path, not the only line of defense.
+
 **5.2 PATCH stage run with artifact version, deployment notes, and environment variables** (always run):
 
 First, determine the current solution version in the **source (dev) environment** — this must match exactly:
@@ -855,24 +890,29 @@ If **Exit**: stop and present the failure summary above.
 
 **7.6.5 Verify `environmentvariablevalues` landed on the target** (only if deployment **Succeeded** AND `ENV_VAR_OVERRIDES` was non-empty AND `deploymentsettingsjson` was PATCHed in Phase 5.2):
 
-Even when the stage run reports success, the Power Platform Pipelines handler does not always write `environmentvariablevalues` records for every env var definition in `deploymentsettingsjson` — definitions that aren't bound to an `mspp_sitesetting` (or another consumer the platform recognizes) can land as zero-value on the target. See the caveat note above Phase 6 for the live evidence. This step closes the gap.
+Even when the stage run reports success, the Power Platform Pipelines handler does not always write `environmentvariablevalues` records for every env var definition in `deploymentsettingsjson` — definitions that aren't bound to an `mspp_sitesetting` (or another consumer the platform recognizes) can land as zero-value on the target. See the caveat note above Phase 6 for the live evidence. This step closes the gap by querying the target post-deploy and surfacing any missed landings.
 
-For each `SchemaName` in `ENV_VAR_OVERRIDES`:
+Use the shared helper `scripts/lib/verify-env-var-values.js`. It reads schema names + per-stage expected values from `deployment-settings.json` and returns a structured JSON result per schema (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`):
 
-1. Look up the definition GUID on the target:
-   ```
-   GET {targetEnvUrl}/api/data/v9.2/environmentvariabledefinitions?$filter=schemaname eq '{schemaName}'&$select=environmentvariabledefinitionid
-   ```
-2. Query for a current value record:
-   ```
-   GET {targetEnvUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{definitionId}'&$select=value
-   ```
-3. If `value.length === 0` for ANY of the entries that should have landed:
-   - Log a structured warning into `docs/alm/last-deploy.json` under a new `envVarLandingWarnings[]` array — one entry per missed schemaName.
-   - Surface to the user via the deploy summary: *"`{N}` environment variable values from `deploymentsettingsjson` did not land on `{targetEnvName}`. Most likely cause: the definition isn't yet linked to a site setting on the target. Run `/power-pages:configure-env-variables` against `{targetEnvName}` to create the missing values, then re-deploy or set values via Power Platform Admin Center."*
-4. If `value.length >= 1` for all entries: deploy is fully landed; no warning.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+  --envUrl "{targetEnvUrl}" \
+  --settingsFile "./deployment-settings.json" \
+  --stageLabel "{SELECTED_STAGE.name}"
+```
 
-This check uses target-env credentials — PAC CLI is still pointing at the source from the prior phases, so temporarily switch (`pac env select --environment "{targetEnvUrl}"`) then switch back at the end of 7.6.5 so subsequent phases run against the source env by default.
+Capture `stdout` as JSON: `const verifyResult = JSON.parse(output)`. The helper acquires its own token via Azure CLI scoped to `{targetEnvUrl}` — you do NOT need to switch PAC CLI for this call (the helper is fully read-only and bypasses PAC entirely).
+
+Branch on `verifyResult.summary`:
+
+- **`summary.missing === 0 && summary.mismatched === 0`** → all env var values landed cleanly. No warning. Proceed.
+- **`summary.missing > 0` OR `summary.mismatched > 0`** → log a structured warning into `docs/alm/last-deploy.json` under a new `envVarLandingWarnings[]` array. Build the array from the non-`landed` entries in `verifyResult.results` — preserve `schemaName`, `status`, and (when present) `expected` / `value` fields. Then surface to the user via the deploy summary:
+
+  > "`{summary.missing + summary.mismatched}` environment variable value(s) from `deploymentsettingsjson` did not land cleanly on `{targetEnvName}`. Most likely cause for `missing-value-record`: the definition isn't yet linked to a site setting on the target. Most likely cause for `value-mismatch`: the per-stage value in `deployment-settings.json` differs from what's now in the target's `environmentvariablevalues` table (someone may have edited it post-deploy via PPAC). Run `/power-pages:configure-env-variables` against `{targetEnvName}` to reconcile, or set values via Power Platform Admin Center → Solutions → Environment Variables."
+
+- **`summary.error > 0`** (auth, transient, 5xx) → log a one-line note: *"Env var landing check was inconclusive ({summary.error} schema queries errored). Verify manually in PPAC."* Do NOT block the deploy summary on inconclusive results — the deploy itself succeeded.
+
+> **Why the helper instead of inline OData?** The earlier inline-prose version was brittle: each agent run reconstructed the queries by hand, PAC CLI env-switching was manual, and the result-shape was never structured. The helper has 21 tests covering all the result-status branches (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`), reads `deployment-settings.json` directly to avoid drift between caller and helper, and produces a stable JSON contract callers can persist into `last-deploy.json` without re-parsing prose.
 
 **7.7 Check site activation** (only if deployment **Succeeded** and this is a Power Pages project):
 

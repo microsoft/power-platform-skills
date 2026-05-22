@@ -186,26 +186,26 @@ Setting: Authentication/Registration/LocalLoginEnabled
 
 ## Phase 3 — Create Environment Variable Definitions
 
-For each planned env var:
+For each planned env var, branch on `typeCode`:
 
-**3.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
+### 3.A — String env vars (`typeCode = 100000000`)
+
+Definition-only flow — per-stage values come later from `deployment-settings.json` via `deploymentsettingsjson` PATCH at deploy time.
+
+**3.A.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
   --envUrl "{devEnvUrl}" \
   --token "{TOKEN}" \
   --schemaName "{schemaName}" \
   --displayName "{displayName}" \
-  --type {typeCode} \
+  --type 100000000 \
   --defaultValue "{devValue}"
 ```
 
-Type codes:
-- `100000000` = String (use for all site settings — runtime resolves as string)
-- `100000005` = Secret (for credentials — value stored in Azure Key Vault or encrypted)
-
 Capture output as JSON; extract `.definitionId` (store as `envVarDefId`) and check `.created` (true = newly created, false = already existed). If already existed, confirm the existing definition matches expectations before proceeding.
 
-**3.3 Create the current-environment value** (the live dev value, separate from defaultvalue):
+**3.A.2 Create the current-environment value** (the live dev value, separate from defaultvalue):
 ```
 POST {devEnvUrl}/api/data/v9.2/environmentvariablevalues
 Content-Type: application/json
@@ -217,6 +217,74 @@ Content-Type: application/json
 ```
 
 Response: **HTTP 204**.
+
+### 3.B — Secret env vars (`typeCode = 100000005`) when a Key Vault Secret URI is available
+
+#### Acceptable Secret reference formats
+
+Dataverse / the Power Platform Pipelines handler accept exactly three formats for a Secret-type env var value. Anything else is rejected at import time with *"ImportAsHolding failed: The value provided as a secret reference does not match a valid secret reference format"* — and the rejection can come hours after the deploy queues, since the host serializes imports. The pre-deploy validator (`deploy-pipeline` Phase 5.1b, helper at `scripts/lib/validate-deployment-settings.js`) catches these formats upfront, but they're documented here so SKILL.md authors writing to `deployment-settings.json` use the right shape from the start.
+
+**Accepted:**
+
+1. **Key Vault Secret Identifier URI** — what `store-keyvault-secret.js` emits in its `secretUri` output:
+   ```
+   https://<vault>.vault.azure.net/secrets/<name>
+   https://<vault>.vault.azure.net/secrets/<name>/<32-char-hex-version>
+   ```
+   Vault name must be 3–24 chars, lowercase alphanumeric + hyphens, start with a letter, end with a letter or digit. This is the canonical form and the one `add-server-logic` Phase 7.2a hands back via the user-visible "share the secretUri output" step.
+
+2. **Azure resource ID** — the full ARM-style path, when the maker doesn't have the URI form handy:
+   ```
+   /subscriptions/<subscriptionId>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>
+   ```
+   Both `resourceGroups` and `resourcegroups` casings are accepted by Dataverse.
+
+3. **Empty string `""`** — legitimate when the env var has a sensible default-value baked into the definition. Per-stage `Value: ""` in `deployment-settings.json` means *"use the definition default in this stage."*
+
+**Rejected (validator flags these):**
+
+- `@KeyVault(vaultName=<vault>;secretName=<name>)` — a templating-style placeholder. **NOT recognized by Dataverse.** Real-world failure case from a live session: this exact pattern caused a 4h41m queue wait + ImportAsHolding failure. Replace with form (1) or (2).
+- `<TODO>`, `<KEY_VAULT_URI>`, `<PLACEHOLDER>`, `${ENV_VAR}` — any angle-bracketed or shell-style placeholder. Same story; these are maker conventions Dataverse does not parse.
+- Plain-text secret values — both insecure (the file is committed to git) AND rejected by Dataverse when the env var type is Secret. If the maker intended plain text, the env var type should be String (`100000000`), not Secret (`100000005`).
+- HTTPS URLs that look like Key Vault URIs but miss the canonical shape (`.com` host suffix instead of `.net`, missing `/secrets/` segment, short version suffix). The validator flags these specifically as `invalid-uri` so the maker can fix the typo rather than re-coining the value.
+
+#### Implementation
+
+When the user has already stored the secret in Azure Key Vault and has a Secret Identifier URI in canonical form, use the atomic deep-insert path — the same flow `add-server-logic` Phase 7.2a uses:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}" \
+  --schemaName "{schemaName}" \
+  --displayName "{displayName}" \
+  --type secret \
+  --value "{secretUri}"
+```
+
+This script POSTs a single deep-insert that creates the `environmentvariabledefinition` (type 100000005) AND the `environmentvariablevalues` row with the Key Vault URI in `value` — Dataverse resolves the secret at runtime by dereferencing the URI. The script is ALM-aware and adds the new definition to the target solution via `AddSolutionComponent` (same `resolve-target-solution.js` resolution order as the rest of the family).
+
+> **Cross-reference: see `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/SKILL.md` Phase 7.2a** for the full Key Vault end-to-end: vault selection (`list-azure-keyvaults.js` / `create-azure-keyvault.js`), secret storage (`store-keyvault-secret.js` with stdin to keep the secret out of the conversation), and the URI handoff back to env-var creation. The implementation is identical; we re-use the same helper scripts.
+
+### 3.C — Secret env vars without a Key Vault URI (legacy / deferred)
+
+When the user has not chosen Key Vault yet or hasn't stored the secret, create the definition with an empty value placeholder and instruct the user to wire the value via Power Platform Admin Center after import:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+  --envUrl "{devEnvUrl}" \
+  --token "{TOKEN}" \
+  --schemaName "{schemaName}" \
+  --displayName "{displayName}" \
+  --type 100000005
+```
+
+(omit `--defaultValue` — Dataverse stores Secret-type definitions with no default until a `environmentvariablevalues` row is added). Tell the user the value must be set per target environment via PPAC → Solutions → Environment Variables → select → set value. This path is the legacy fallback; the dedicated `configure-secrets` skill (queued for a follow-up PR) will eventually orchestrate 3.B for credential-style settings end-to-end.
+
+### Type-code reference
+
+- `100000000` = String — flows via path 3.A.
+- `100000005` = Secret — flows via path 3.B (preferred when Key Vault URI is available) or 3.C (deferred / legacy).
+
+Other canonical types (`100000001` Number, `100000002` Boolean, `100000003` JSON, `100000004` DataSource) follow path 3.A with the appropriate `--type` code.
 
 Track created env var IDs: `{ schemaName, envVarDefId, siteSettingName, devValue, stageValues: { stageName: value } }`.
 
@@ -304,6 +372,16 @@ After upload, check the updated YAML file — it should now contain `source: 1` 
 ```
 GET {devEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq {solutionId} and componenttype eq 380
 ```
+
+**7.2b Verify values landed on dev env.** After creating the definitions + values, query the dev env to confirm each `environmentvariablevalues` row exists. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+  --envUrl "{devEnvUrl}" \
+  --schemaNames "{comma-separated schema names just created}"
+```
+
+Capture stdout as JSON. If `summary.landed === summary.total`, the local definition+value chain is healthy and `deploy-pipeline` Phase 5.2's `deploymentsettingsjson` PATCH will have what it needs. If `summary.missing > 0`, log a one-line warning and recommend re-running configure-env-variables — most likely cause is a transient OData write failure that left a definition without its paired value. The same helper runs at deploy time (deploy-pipeline Phase 7.6.5) against the target env; centralizing the check keeps the diagnostic shape consistent across the dev-side write and the target-side landing.
 
 **7.3 Commit:**
 ```bash
