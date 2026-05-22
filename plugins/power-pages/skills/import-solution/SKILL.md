@@ -345,6 +345,16 @@ POST {envUrl}/api/data/v9.2/environmentvariablevalues
 If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
 `https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`
 
+**6b.verify — Confirm values landed.** After the per-variable POSTs complete, verify each `environmentvariablevalues` record actually exists on the target. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check and returns a structured JSON result per schema (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+  --envUrl "{targetEnvUrl}" \
+  --schemaNames "{comma-separated schema names that the user supplied values for}"
+```
+
+Capture stdout as JSON. If `summary.missing > 0` or `summary.error > 0`, surface a single warning to the user with the affected schema names — but do not block the import summary, the import itself succeeded. The same helper is used at deploy time (deploy-pipeline Phase 7.6.5) and at configure time (configure-env-variables Phase 7); centralizing the check keeps the user-visible message consistent across skills.
+
 ### Phase 6c — Detect Cloud Flows (if any)
 
 After import succeeds, check whether the solution contains cloud flow JSON files. Use the zip path located in Phase 2.

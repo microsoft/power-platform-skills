@@ -186,26 +186,26 @@ Setting: Authentication/Registration/LocalLoginEnabled
 
 ## Phase 3 — Create Environment Variable Definitions
 
-For each planned env var:
+For each planned env var, branch on `typeCode`:
 
-**3.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
+### 3.A — String env vars (`typeCode = 100000000`)
+
+Definition-only flow — per-stage values come later from `deployment-settings.json` via `deploymentsettingsjson` PATCH at deploy time.
+
+**3.A.1 Check and create if needed** using `create-env-var-definition.js` (the script checks for an existing definition by `schemaName` before posting):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
   --envUrl "{devEnvUrl}" \
   --token "{TOKEN}" \
   --schemaName "{schemaName}" \
   --displayName "{displayName}" \
-  --type {typeCode} \
+  --type 100000000 \
   --defaultValue "{devValue}"
 ```
 
-Type codes:
-- `100000000` = String (use for all site settings — runtime resolves as string)
-- `100000005` = Secret (for credentials — value stored in Azure Key Vault or encrypted)
-
 Capture output as JSON; extract `.definitionId` (store as `envVarDefId`) and check `.created` (true = newly created, false = already existed). If already existed, confirm the existing definition matches expectations before proceeding.
 
-**3.3 Create the current-environment value** (the live dev value, separate from defaultvalue):
+**3.A.2 Create the current-environment value** (the live dev value, separate from defaultvalue):
 ```
 POST {devEnvUrl}/api/data/v9.2/environmentvariablevalues
 Content-Type: application/json
@@ -217,6 +217,44 @@ Content-Type: application/json
 ```
 
 Response: **HTTP 204**.
+
+### 3.B — Secret env vars (`typeCode = 100000005`) when a Key Vault Secret URI is available
+
+When the user has already stored the secret in Azure Key Vault and has a Secret Identifier URI (shape: `https://<vault>.vault.azure.net/secrets/<name>/<version>`), use the atomic deep-insert path — the same flow `add-server-logic` Phase 7.2a uses:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}" \
+  --schemaName "{schemaName}" \
+  --displayName "{displayName}" \
+  --type secret \
+  --value "{secretUri}"
+```
+
+This script POSTs a single deep-insert that creates the `environmentvariabledefinition` (type 100000005) AND the `environmentvariablevalues` row with the Key Vault URI in `value` — Dataverse resolves the secret at runtime by dereferencing the URI. The script is ALM-aware and adds the new definition to the target solution via `AddSolutionComponent` (same `resolve-target-solution.js` resolution order as the rest of the family).
+
+> **Cross-reference: see `${CLAUDE_PLUGIN_ROOT}/skills/add-server-logic/SKILL.md` Phase 7.2a** for the full Key Vault end-to-end: vault selection (`list-azure-keyvaults.js` / `create-azure-keyvault.js`), secret storage (`store-keyvault-secret.js` with stdin to keep the secret out of the conversation), and the URI handoff back to env-var creation. The implementation is identical; we re-use the same helper scripts.
+
+### 3.C — Secret env vars without a Key Vault URI (legacy / deferred)
+
+When the user has not chosen Key Vault yet or hasn't stored the secret, create the definition with an empty value placeholder and instruct the user to wire the value via Power Platform Admin Center after import:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-env-var-definition.js" \
+  --envUrl "{devEnvUrl}" \
+  --token "{TOKEN}" \
+  --schemaName "{schemaName}" \
+  --displayName "{displayName}" \
+  --type 100000005
+```
+
+(omit `--defaultValue` — Dataverse stores Secret-type definitions with no default until a `environmentvariablevalues` row is added). Tell the user the value must be set per target environment via PPAC → Solutions → Environment Variables → select → set value. This path is the legacy fallback; the dedicated `configure-secrets` skill (queued for a follow-up PR) will eventually orchestrate 3.B for credential-style settings end-to-end.
+
+### Type-code reference
+
+- `100000000` = String — flows via path 3.A.
+- `100000005` = Secret — flows via path 3.B (preferred when Key Vault URI is available) or 3.C (deferred / legacy).
+
+Other canonical types (`100000001` Number, `100000002` Boolean, `100000003` JSON, `100000004` DataSource) follow path 3.A with the appropriate `--type` code.
 
 Track created env var IDs: `{ schemaName, envVarDefId, siteSettingName, devValue, stageValues: { stageName: value } }`.
 
@@ -304,6 +342,16 @@ After upload, check the updated YAML file — it should now contain `source: 1` 
 ```
 GET {devEnvUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq {solutionId} and componenttype eq 380
 ```
+
+**7.2b Verify values landed on dev env.** After creating the definitions + values, query the dev env to confirm each `environmentvariablevalues` row exists. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+  --envUrl "{devEnvUrl}" \
+  --schemaNames "{comma-separated schema names just created}"
+```
+
+Capture stdout as JSON. If `summary.landed === summary.total`, the local definition+value chain is healthy and `deploy-pipeline` Phase 5.2's `deploymentsettingsjson` PATCH will have what it needs. If `summary.missing > 0`, log a one-line warning and recommend re-running configure-env-variables — most likely cause is a transient OData write failure that left a definition without its paired value. The same helper runs at deploy time (deploy-pipeline Phase 7.6.5) against the target env; centralizing the check keeps the diagnostic shape consistent across the dev-side write and the target-side landing.
 
 **7.3 Commit:**
 ```bash
