@@ -12,7 +12,7 @@ Usage:
   node build-review-data.js --reportName <name> --inputDir <dir> --siteName <name> --goalLabel <label> --scopeLabel <label> --output <path> [--summary <text>] [--nextStepsFile <path>]
 
 Flags:
-  --reportName     Top-bar report title (e.g., "Security Review", "Code Scan", "Site Scan") (required)
+  --reportName     Top-bar report title (e.g., "Security Review", "Site Scan") (required)
   --inputDir       Directory containing per-skill review JSON files (required)
   --siteName       Site display name (required)
   --goalLabel      Plain-language goal label (required)
@@ -60,7 +60,6 @@ if (!fs.existsSync(inputDir)) {
 }
 
 const SECTION_MAP = {
-  'scan-code.json':         { id: 'code-scan',   label: 'Code & Packages',          icon: '▦' },
   'scan-site.json':         { id: 'site-scan',   label: 'Live Site Scan',           icon: '◐' },
   'manage-headers.json':    { id: 'headers',     label: 'Browser Headers',          icon: '◑' },
   'manage-firewall.json':   { id: 'firewall',    label: 'Web Application Firewall', icon: '◆' },

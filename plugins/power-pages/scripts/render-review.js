@@ -3,8 +3,8 @@
  * render-review.js — Renders a security-review HTML report (consolidated or single-section)
  * from a JSON data file produced by build-review-data.js.
  *
- * Used by the security-review skill (multi-section) and by scan-code / scan-site for their
- * standalone reports (single-section). Same template, same UX.
+ * Used by the security-review skill (multi-section) and by scan-site for its
+ * standalone report (single-section). Same template, same UX.
  *
  * Usage:
  *   node render-review.js --output <path> --data <json-file>

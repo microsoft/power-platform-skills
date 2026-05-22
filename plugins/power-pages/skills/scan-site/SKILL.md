@@ -22,7 +22,7 @@ model: opus
 
 Run a security scan on a deployed Power Pages site, fetch the latest scan report, and surface findings in a plain-language summary. The scan runs server-side; duration depends on site size — small sites finish in minutes, large sites can take hours.
 
-This skill scans the live deployed site, not local source code. Pair with `/scan-code` for source-level analysis.
+This skill scans the live deployed site, not local source code.
 
 **Initial request:** $ARGUMENTS
 
@@ -218,7 +218,7 @@ Group findings by which downstream skill can help:
 - WAF / firewall issues (block bots, rate-limit pages, restrict IPs/countries) → `/manage-firewall`
 - Permission issues → `/audit-permissions` to review existing table permissions, and/or `/create-webroles` to set up role-based access
 - Login or external identity issues → `/setup-auth`
-- Code-level issues (exposed debug pages, information leakage, source visible publicly) → suggest a manual code fix; do NOT route to `/scan-code` (that skill scans local source code, it does not fix live-site findings)
+- Code-level issues (exposed debug pages, information leakage, source visible publicly) → suggest a manual code fix; there is no routed skill for these findings
 
 Suggest only the skills that match findings actually present in the report. If a finding does not map to any skill, surface it as a manual follow-up the user can act on. If no meaningful follow-up exists, end the skill — do not ask just to ask.
 

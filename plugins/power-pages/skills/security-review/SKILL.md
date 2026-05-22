@@ -2,11 +2,11 @@
 name: security-review
 description: >-
   Runs a guided, end-to-end security review of a Power Pages site by
-  delegating to the focused security skills (code and dependencies, live
-  site scan, browser headers, web application firewall, authentication,
-  and table permissions) and consolidating every finding into one
-  HTML report. Use when the user wants a full security
-  review, a release-readiness check before publishing, a code scan during
+  delegating to the focused security skills (live site scan, browser
+  headers, web application firewall, authentication, and table
+  permissions) and consolidating every finding into one HTML report.
+  Use when the user wants a full security review, a release-readiness
+  check before publishing, an access-and-config check during
   development, live site monitoring, or asks open-ended questions like
   "review my site security", "is my site safe to ship", "do a security
   check", "monitor my site" — even if they do not name the individual
@@ -27,28 +27,27 @@ The skill never asks the user technical questions. The conversation stays in pla
 
 **Initial request:** $ARGUMENTS
 
-## High-level flow (the seven steps)
+## High-level flow (the six steps)
 
-The conversation always follows the same seven steps. Each step maps to a row in the workflow table below.
+The conversation always follows the same six steps. Each step maps to a row in the workflow table below.
 
 1. **Ask the goal** — one question, three answers, plain language
-2. **Choose scope and depth** — one follow-up for code-and-config; release defaults to all checks at advanced depth; monitor skips this step
-3. **Confirm and start** — show a one-line plan, give the user a chance to back out
-4. **Scan in progress** — run the matching skills, surface progress
-5. **Results summary** — totals across all findings
-6. **Findings and remediation** — group findings by section, offer to fix
-7. **Next steps and guidance** — concrete recommendations, link the next action
+2. **Confirm and start** — show a one-line plan, give the user a chance to back out
+3. **Scan in progress** — run the matching skills, surface progress
+4. **Results summary** — totals across all findings
+5. **Findings and remediation** — group findings by section, offer to fix
+6. **Next steps and guidance** — concrete recommendations, link the next action
 
 ## Workflow
 
 | Step | What happens | Maps to |
 |------|--------------|---------|
 | 1 — Prerequisites | Prerequisites and working folders | (setup) |
-| 2 — Scope | Capture goal and scope | Steps 1 and 2 |
-| 3 — Confirm | Confirm the plan | Step 3 |
-| 4 — Skills | Run the matching skills | Step 4 |
-| 5 — Report | Build the consolidated report | Steps 5 and 6 |
-| 6 — Present | Present and offer follow-ups | Step 7 |
+| 2 — Scope | Capture goal | Step 1 |
+| 3 — Confirm | Confirm the plan | Step 2 |
+| 4 — Skills | Run the matching skills | Step 3 |
+| 5 — Report | Build the consolidated report | Steps 4 and 5 |
+| 6 — Present | Present and offer follow-ups | Step 6 |
 | 7 — Cleanup | Clean up temporary files | (closing) |
 
 ## Task Tracking
@@ -67,7 +66,7 @@ Only this one task. Do not create any other tasks until prerequisites complete.
 
 | Task subject | activeForm |
 |--------------|------------|
-| Capture goal and scope | Capturing goal and scope |
+| Capture goal | Capturing goal |
 | Confirm the plan | Confirming the plan |
 
 **Group 3 — create after the user confirms the plan:**
@@ -89,7 +88,7 @@ Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user 
 
 For the `monitor` and `release` goals (any goal that delegates to `scan-site` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
 
-For the `code-config` goal, the deploy check is not required: code and package scanning works on local source files alone.
+For the `access-config` goal, the deploy check is not required: authentication, web roles, and table permissions are read from local YAML alone.
 
 ### 1.2 Prepare a temporary working folder
 
@@ -103,19 +102,17 @@ The final HTML always lives at `<PROJECT_ROOT>/docs/security-review-<YYYY-MM-DD-
 
 ---
 
-## 2. Capture goal and scope
+## 2. Capture goal
 
-**IMPORTANT:** Each question below is a **separate** `AskUserQuestion` call. Do NOT combine them into one multi-step form. Wait for the user's answer to one question before deciding whether to ask the next.
+### 2.1 Ask the goal
 
-### 2.1 Step 1 — Ask the goal
+Ask the user with a single `AskUserQuestion` call. If the user's initial request already answers it, skip and continue.
 
-Ask the following in order. Each is a **separate** `AskUserQuestion` call — do NOT combine. If the user's initial request already answers a question, skip it and move to the next.
-
-**Question 1 — What to review?**
+**Question — What to review?**
 
 | Label | Description |
 |-------|-------------|
-| Code and config | Check code, packages, and access control. Works on local files only. |
+| Access & config | Check authentication, web roles, and table permissions. Works on local files only. |
 | Release readiness | Full review before publishing — checks everything. (Recommended) |
 | Deployed site | Check the live site for issues. Requires deployment. |
 
@@ -123,26 +120,13 @@ Goal mapping (internal):
 
 | Label | Goal id | Skills |
 |-------|---------|------------|
-| Code and config | `code-config` | scan-code, audit-permissions, setup-auth (read-only) |
-| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
+| Access & config | `access-config` | audit-permissions, setup-auth (read-only) |
+| Release readiness | `release` | scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
 | Deployed site | `monitor` | scan-site |
 
-### 2.2 Step 2 — Choose depth
+### 2.2 Capture the chosen skill set
 
-**Only if goal is `code-config`:**
-
-| Label | Description |
-|-------|-------------|
-| Advanced | Covers common risks and deeper code weaknesses. (Recommended) |
-| Basic | Covers common risks only. Faster. |
-
-**For `monitor`:** skip — the scan runs at default depth.
-
-**For `release`:** skip — runs all skills at Advanced depth automatically.
-
-### 2.3 Capture the chosen skill set
-
-Build a `selectedSkills` list based on the answers. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see 4.4 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `access-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 4.2 below). This is the **Access & Data Security Validation** component.
 
 ---
 
@@ -164,11 +148,11 @@ Spawn each selected skill as a background subagent via the `Agent` tool. Each su
 
 ### 4.1 Skill invocation via subagents
 
-Skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scans first so they get a head start, then launch the remaining checks immediately after.
+Skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scan first so it gets a head start, then launch the remaining checks immediately after.
 
-**Wave 1 — long-running scans (launch first):**
+**Wave 1 — long-running scan (launch first):**
 
-Spawn background subagents for `scan-code` and `scan-site` (when selected). These skills take the most time and benefit from an early start.
+Spawn a background subagent for `scan-site` (when selected). This skill takes the most time and benefits from an early start.
 
 **Wave 2 — remaining checks (launch immediately after Wave 1):**
 
@@ -194,8 +178,8 @@ Example subagent call:
 
 ```
 Agent({
-  description: "Run scan-code",
-  prompt: "Invoke the skill `scan-code` with argument `--review <SYSTEM_TEMP>/security-review/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write the **transform script stdout verbatim** to <SYSTEM_TEMP>/security-review/scan-code.json. Do NOT synthesize, augment, or re-classify the findings. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
+  description: "Run scan-site",
+  prompt: "Invoke the skill `scan-site` with argument `--review <SYSTEM_TEMP>/security-review/`. The Power Pages project root is <PROJECT_ROOT>. <any additional scope parameters>. Write the **transform script stdout verbatim** to <SYSTEM_TEMP>/security-review/scan-site.json. Do NOT synthesize, augment, or re-classify the findings. If the skill fails, write { \"status\": \"skipped\", \"reason\": \"<plain-language reason>\" } instead.",
   run_in_background: true
 })
 ```
@@ -208,7 +192,6 @@ After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-revie
 
 ```text
 <SYSTEM_TEMP>/security-review/
-├── scan-code.json
 ├── scan-site.json
 ├── manage-headers.json
 ├── manage-firewall.json
@@ -223,7 +206,6 @@ Only findings that come from a tool that genuinely outputs severity may carry a 
 
 | Section | Source | Severity allowed? |
 |---------|--------|-------------------|
-| `scan-code` | opengrep, trivy | Yes |
 | `scan-site` | deep-scan (ZAP) | Yes |
 | `manage-headers` | `transform-headers.js` (inventory) | **No** |
 | `manage-firewall` | `transform-firewall.js` (inventory) | **No** |
@@ -324,7 +306,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms.
-- **Parallel subagent delegation** — skills run as parallel subagents via the `Agent` tool. Launch `scan-code` and `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
+- **Parallel subagent delegation** — skills run as parallel subagents via the `Agent` tool. Launch `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
@@ -332,4 +314,4 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 ## References
 
-- `references/flow.md` — the seven-step conversation in detail
+- `references/flow.md` — the six-step conversation in detail
