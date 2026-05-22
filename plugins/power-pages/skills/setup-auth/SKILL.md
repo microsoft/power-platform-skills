@@ -1,17 +1,16 @@
 ---
 name: setup-auth
-description: >
-  This skill should be used when the user asks to "set up authentication",
-  "add login", "add logout", "configure Entra ID", "set up Azure AD auth",
-  "add Microsoft login", "enable authentication", "set up sign in",
-  "add role-based access", "add authorization", "protect routes",
-  "add auth to my site", "configure identity provider", or wants to set up
-  authentication (login/logout via Microsoft Entra ID) and role-based
-  authorization for their Power Pages code site.
+description: >-
+  Sets up authentication (login/logout via Microsoft Entra ID) and role-based authorization
+  for a Power Pages code site. Configures identity providers, protected routes, and access
+  control. Use when the user wants to add login, configure Entra ID, enable authentication,
+  or add role-based access to their site.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill
 model: opus
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Set Up Authentication & Authorization
 
@@ -337,7 +336,7 @@ Find the site's navigation component and integrate the auth button:
 
 Stage and commit the auth files:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add authentication service and auth UI component"
 ```
@@ -400,7 +399,7 @@ Based on the user's choices, wrap the appropriate components:
 
 Stage and commit:
 
-```powershell
+```bash
 git add -A
 git commit -m "Add role-based access control to site components"
 ```
@@ -439,7 +438,7 @@ Read each file and verify it contains the expected exports and functions:
 
 Run the project build to catch any import errors, type errors, or missing dependencies:
 
-```powershell
+```bash
 npm run build
 ```
 
@@ -449,7 +448,7 @@ If the build fails, fix the issues before proceeding.
 
 Start the dev server and verify the auth button appears in the navigation:
 
-```powershell
+```bash
 npm run dev
 ```
 
@@ -481,7 +480,7 @@ The site needs the `Authentication/Registration/ProfileRedirectEnabled` setting 
 
 Check if `.powerpages-site/site-settings/` exists. If it does, create the site setting file:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 

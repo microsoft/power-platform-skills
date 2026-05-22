@@ -30,7 +30,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 /* Top Bar */
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
-.logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);letter-spacing:-0.5px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
 
@@ -158,7 +158,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   <!-- Top Bar -->
   <div class="topbar">
     <div class="topbar-left">
-      <div class="logo">PP</div>
+      <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
       <div>
         <div class="topbar-title">Data Model Plan</div>
         <div class="topbar-sub">__SITE_NAME__</div>
@@ -389,7 +389,9 @@ function buildErDiagram(compact) {
       : (t.columns || []);
 
     cols.forEach(col => {
-      const type = col.type.replace(/[.\s]/g, '_');
+      // Strip any char that isn't valid in a mermaid ATTRIBUTE_WORD — e.g. the
+      // slash in Dataverse "Yes/No" breaks the erDiagram parser.
+      const type = col.type.replace(/[^A-Za-z0-9_]/g, '_');
       const key = col.key || '';
       lines.push('        ' + type + ' ' + col.logicalName + (key ? ' ' + key : ''));
     });
@@ -422,7 +424,7 @@ function buildErDiagram(compact) {
 }
 
 // Apply status-based colors to rendered SVG entity boxes
-// Mermaid v11 uses <path> elements inside g.node groups with IDs like "entity-CONTACT-0"
+// Mermaid v11 prefixes node IDs with the SVG element ID (e.g. "erSvg1-entity-CONTACT-0")
 function colorErDiagram(container) {
   const svg = container.querySelector('svg');
   if (!svg) return;
@@ -439,18 +441,18 @@ function colorErDiagram(container) {
     entityStatusMap[eid] = t.status;
   });
 
-  // Find entity nodes by their IDs (pattern: entity-{NAME}-{index})
+  // Find entity nodes — use suffix match since Mermaid v11 prepends the SVG ID to node IDs
   svg.querySelectorAll('g.node').forEach(node => {
     const id = node.getAttribute('id') || '';
-    const match = id.match(/^entity-(.+)-\d+$/);
+    const match = id.match(/entity-(.+)-\d+$/);
     if (!match) return;
 
     const entityName = match[1];
     const status = entityStatusMap[entityName];
     if (!status) return;
 
-    // First child <g> contains two <path>: header fill + header outline
-    const headerGroup = node.children[0];
+    // .outer-path <g> contains two <path>: entity fill + entity outline
+    const headerGroup = node.querySelector('.outer-path') || node.children[0];
     if (headerGroup && headerGroup.tagName === 'g') {
       const paths = headerGroup.querySelectorAll('path');
       if (paths[0]) paths[0].setAttribute('fill', headerFills[status]);
@@ -462,6 +464,11 @@ function colorErDiagram(container) {
       const isOdd = row.classList.contains('row-rect-odd');
       const fillPath = row.querySelector('path');
       if (fillPath) fillPath.setAttribute('fill', isOdd ? rowOddFills[status] : rowEvenFills[status]);
+    });
+
+    // Update divider stroke colors to match the status
+    node.querySelectorAll('.divider path').forEach(p => {
+      if (p.getAttribute('stroke') !== 'none') p.setAttribute('stroke', strokes[status]);
     });
   });
 }

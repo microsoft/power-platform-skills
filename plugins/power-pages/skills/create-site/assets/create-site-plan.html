@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __SITE_NAME__</title>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --warn:#ca5010; --warn-bg:#ca50100a; --warn-border:#ca501020;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.topbar-sep{opacity:0.5;}
+.topbar-right{display:flex;gap:6px;flex-wrap:wrap;}
+.pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:0.2px;border:1px solid transparent;}
+.pill-aesthetic{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-border);}
+.pill-mood{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-border);}
+.pill-framework{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
+.layout{display:flex;min-height:calc(100vh - 65px);}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;padding:32px 40px 72px;max-width:1060px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--purple);}
+.stat-card:nth-child(3)::after{background:var(--warn);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--text-bright);}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);margin:0 4px 4px 0;}
+.chip-accent{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);}
+
+/* Design tab */
+.type-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.type-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow-4);}
+.type-role{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+.type-sample{font-size:32px;font-weight:700;color:var(--text-bright);line-height:1.1;margin-bottom:6px;}
+.type-name{font-size:13px;color:var(--text);font-family:var(--mono);margin-bottom:10px;}
+.type-reason{font-size:12px;color:var(--text-dim);line-height:1.55;}
+.palette-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;}
+.swatch-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-4);}
+.swatch{height:80px;width:100%;display:block;}
+.swatch-body{padding:10px 14px 14px;}
+.swatch-var{font-size:11px;font-family:var(--mono);color:var(--text);}
+.swatch-hex{font-size:13px;font-weight:700;color:var(--text-bright);font-family:var(--mono);margin-top:2px;}
+.swatch-desc{font-size:11px;color:var(--text-dim);margin-top:4px;}
+.list-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 4px;}
+.list-item{display:flex;gap:14px;padding:14px 18px;border-bottom:1px solid var(--border);}
+.list-item:last-child{border-bottom:none;}
+.list-item-icon{flex-shrink:0;width:28px;height:28px;border-radius:50%;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:14px;}
+.list-item-label{font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:2px;}
+.list-item-desc{font-size:12px;color:var(--text-dim);line-height:1.55;}
+
+/* Pages tab */
+.page-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);padding:18px 22px;margin-bottom:10px;box-shadow:var(--shadow-4);}
+.page-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px;}
+.page-name{font-size:15px;font-weight:700;color:var(--text-bright);}
+.page-route{font-size:12px;font-family:var(--mono);color:var(--accent);background:var(--accent-bg);padding:2px 8px;border-radius:4px;}
+.page-desc{font-size:13px;color:var(--text-dim);margin-bottom:12px;}
+.page-subsection{margin-top:10px;}
+.bullet-list{list-style:none;padding:0;margin:6px 0 0;}
+.bullet-list li{position:relative;padding-left:16px;font-size:12px;color:var(--text);margin-bottom:4px;}
+.bullet-list li::before{content:'';position:absolute;left:4px;top:8px;width:5px;height:5px;border-radius:50%;background:var(--accent);}
+.component-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:8px;}
+.component-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap;}
+.component-name{font-size:14px;font-weight:700;color:var(--text-bright);}
+.component-purpose{font-size:12px;color:var(--text-dim);margin-bottom:8px;}
+.routes-table{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+.routes-table th{text-align:left;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}
+.routes-table td{font-size:13px;padding:10px 16px;border-bottom:1px solid var(--border);}
+.routes-table tr:last-child td{border-bottom:none;}
+.routes-table td.path{font-family:var(--mono);color:var(--accent);}
+
+/* Deployment tab */
+.checklist{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 4px;}
+.checklist-item{display:flex;align-items:flex-start;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text);}
+.checklist-item:last-child{border-bottom:none;}
+.checklist-check{flex-shrink:0;width:18px;height:18px;border:1.5px solid var(--border-light);border-radius:4px;margin-top:1px;}
+.deploy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
+.deploy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow-4);position:relative;}
+.deploy-card.recommended{border-color:var(--accent-border);background:linear-gradient(135deg,var(--accent-bg),transparent);}
+.deploy-card.recommended::before{content:'Recommended';position:absolute;top:-9px;right:14px;font-size:10px;font-weight:700;color:#fff;background:var(--accent);padding:3px 10px;border-radius:999px;letter-spacing:0.5px;text-transform:uppercase;}
+.deploy-title{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;}
+.deploy-desc{font-size:12px;color:var(--text-dim);line-height:1.55;}
+
+.empty-note{font-size:12px;color:var(--text-dim);font-style:italic;padding:12px 0;}
+
+@media (max-width:900px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;padding:8px;}
+  .nav-group-label{width:100%;}
+  .nav-btn{width:auto;border-left:none;border-bottom:2px solid transparent;padding:10px 14px;}
+  .nav-btn.active{border-left:none;border-bottom-color:var(--accent);}
+  .content{padding:20px;}
+  .type-grid{grid-template-columns:1fr;}
+  .stats-grid{grid-template-columns:repeat(3,1fr);}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
+    <div>
+      <div class="topbar-title">__PLAN_TITLE__</div>
+      <div class="topbar-sub">
+        <span>__SITE_NAME__</span>
+        <span class="topbar-sep">&middot;</span>
+        <span class="pill pill-framework">__FRAMEWORK__</span>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="pill pill-aesthetic">__AESTHETIC__</span>
+    <span class="pill pill-mood">__MOOD__</span>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="nav-group-label">Plan</div>
+    <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+    <button class="nav-btn" data-tab="design"><span class="nav-icon">&#9728;</span> Design</button>
+    <button class="nav-btn" data-tab="pages"><span class="nav-icon">&#9638;</span> Pages &amp; Components</button>
+    <button class="nav-btn" data-tab="deploy"><span class="nav-icon">&#10003;</span> Deployment &amp; Review</button>
+  </div>
+
+  <div class="content">
+    <!-- Overview Tab -->
+    <div class="section active" id="tab-overview">
+      <h2>Overview</h2>
+      <p class="section-desc">Implementation plan for <code>__SITE_NAME__</code></p>
+
+      <div class="summary-box" id="summaryBox"></div>
+      <script id="summaryData" type="application/json">__SUMMARY_DATA__</script>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-num" id="statPages">0</div><div class="stat-label">Pages</div></div>
+        <div class="stat-card"><div class="stat-num" id="statComponents">0</div><div class="stat-label">Shared Components</div></div>
+        <div class="stat-card"><div class="stat-num" id="statRoutes">0</div><div class="stat-label">Routes</div></div>
+      </div>
+
+      <h3>What happens next</h3>
+      <div class="list-card" id="nextStepsList"></div>
+    </div>
+
+    <!-- Design Tab -->
+    <div class="section" id="tab-design">
+      <h2>Design</h2>
+      <p class="section-desc">Typography, palette, motion, and background treatments</p>
+
+      <h3>Typography</h3>
+      <div class="type-grid" id="typographyContainer"></div>
+
+      <h3>Color palette</h3>
+      <div class="palette-grid" id="paletteContainer"></div>
+
+      <h3>Motion &amp; animation</h3>
+      <div class="list-card" id="motionContainer"></div>
+
+      <h3>Background treatment</h3>
+      <div class="list-card" id="backgroundsContainer"></div>
+    </div>
+
+    <!-- Pages & Components Tab -->
+    <div class="section" id="tab-pages">
+      <h2>Pages &amp; Components</h2>
+      <p class="section-desc">Pages to build, their content outline, and the shared components they rely on</p>
+
+      <h3>Pages</h3>
+      <div id="pagesContainer"></div>
+
+      <h3>Shared components</h3>
+      <div id="componentsContainer"></div>
+
+      <h3>Routing</h3>
+      <table class="routes-table" id="routesTable">
+        <thead><tr><th>Path</th><th>Page</th></tr></thead>
+        <tbody id="routesBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Deployment & Review Tab -->
+    <div class="section" id="tab-deploy">
+      <h2>Deployment &amp; Review</h2>
+      <p class="section-desc">Verification checklist and deployment options</p>
+
+      <h3>Before handoff &mdash; verify</h3>
+      <div class="checklist" id="reviewContainer"></div>
+
+      <h3>Deployment options</h3>
+      <div class="deploy-grid" id="deploymentContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script id="typographyData" type="application/json">__TYPOGRAPHY_DATA__</script>
+<script id="paletteData" type="application/json">__PALETTE_DATA__</script>
+<script id="motionData" type="application/json">__MOTION_DATA__</script>
+<script id="backgroundsData" type="application/json">__BACKGROUNDS_DATA__</script>
+<script id="pagesData" type="application/json">__PAGES_DATA__</script>
+<script id="componentsData" type="application/json">__COMPONENTS_DATA__</script>
+<script id="routesData" type="application/json">__ROUTES_DATA__</script>
+<script id="reviewData" type="application/json">__REVIEW_DATA__</script>
+<script id="deploymentData" type="application/json">__DEPLOYMENT_DATA__</script>
+
+<script>
+function readJsonData(id){
+  const node = document.getElementById(id);
+  return node ? JSON.parse(node.textContent) : null;
+}
+
+const TYPOGRAPHY = readJsonData('typographyData');
+const PALETTE = readJsonData('paletteData');
+const MOTION = readJsonData('motionData');
+const BACKGROUNDS = readJsonData('backgroundsData');
+const PAGES = readJsonData('pagesData');
+const COMPONENTS = readJsonData('componentsData');
+const ROUTES = readJsonData('routesData');
+const REVIEW = readJsonData('reviewData');
+const DEPLOYMENT = readJsonData('deploymentData');
+
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+
+// --- Load chosen Google Fonts for the typography preview ---
+(function loadFonts(){
+  const names=[TYPOGRAPHY && TYPOGRAPHY.primary && TYPOGRAPHY.primary.name, TYPOGRAPHY && TYPOGRAPHY.secondary && TYPOGRAPHY.secondary.name].filter(Boolean);
+  if(!names.length)return;
+  const families=names.map(n=>'family='+encodeURIComponent(n).replace(/%20/g,'+')+':wght@400;600;700').join('&');
+  const link=document.createElement('link');
+  link.rel='stylesheet';
+  link.href='https://fonts.googleapis.com/css2?'+families+'&display=swap';
+  document.head.appendChild(link);
+})();
+
+// --- Tab navigation ---
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// --- Summary ---
+document.getElementById('summaryBox').textContent = JSON.parse(document.getElementById('summaryData').textContent).text || '';
+
+// --- Overview stats ---
+document.getElementById('statPages').textContent = PAGES.length;
+document.getElementById('statComponents').textContent = COMPONENTS.length;
+document.getElementById('statRoutes').textContent = ROUTES.length;
+
+const nextSteps = [
+  { icon:'&#9998;', label:'Apply design tokens', desc:'Fonts, palette, motion, and backgrounds written into your theme' },
+  { icon:'&#9638;', label:'Build shared components', desc:COMPONENTS.length+' reusable component'+(COMPONENTS.length===1?'':'s')+' used across pages' },
+  { icon:'&#128196;', label:'Create pages', desc:PAGES.length+' page'+(PAGES.length===1?'':'s')+' with routing and navigation' },
+  { icon:'&#10003;', label:'Verify &amp; accessibility', desc:'axe-core audit, Playwright checks, and user review' },
+];
+document.getElementById('nextStepsList').innerHTML = nextSteps.map(s =>
+  '<div class="list-item"><div class="list-item-icon">'+s.icon+'</div><div><div class="list-item-label">'+s.label+'</div><div class="list-item-desc">'+s.desc+'</div></div></div>'
+).join('');
+
+// --- Design: typography ---
+const typeContainer = document.getElementById('typographyContainer');
+const typeSlots = [
+  { slot:'primary', role:'Primary &mdash; body &amp; UI' },
+  { slot:'secondary', role:'Secondary &mdash; headings' },
+];
+typeContainer.innerHTML = typeSlots.map(s => {
+  const t = TYPOGRAPHY && TYPOGRAPHY[s.slot];
+  if(!t) return '';
+  const fam = t.name ? "'"+t.name.replace(/'/g, "\\'")+"', var(--sans)" : 'var(--sans)';
+  return '<div class="type-card">'
+    + '<div class="type-role">'+s.role+'</div>'
+    + '<div class="type-sample" style="font-family:'+fam+';">'+esc(t.sample || 'Aa Bb Cc')+'</div>'
+    + '<div class="type-name">'+esc(t.name || '')+'</div>'
+    + '<div class="type-reason">'+esc(t.reason || '')+'</div>'
+    + '</div>';
+}).join('');
+
+// --- Design: palette ---
+document.getElementById('paletteContainer').innerHTML = PALETTE.map(c =>
+  '<div class="swatch-card">'
+  + '<div class="swatch" style="background:'+esc(c.hex)+';"></div>'
+  + '<div class="swatch-body">'
+  + '<div class="swatch-var">'+esc(c.var || '')+'</div>'
+  + '<div class="swatch-hex">'+esc(c.hex)+'</div>'
+  + (c.description ? '<div class="swatch-desc">'+esc(c.description)+'</div>' : '')
+  + '</div></div>'
+).join('');
+
+// --- Design: motion & backgrounds ---
+function renderList(arr) {
+  if(!arr || !arr.length) return '<div class="empty-note" style="padding:12px 18px;">None specified.</div>';
+  return arr.map(item =>
+    '<div class="list-item"><div class="list-item-icon">&#9672;</div>'
+    + '<div><div class="list-item-label">'+esc(item.label || '')+'</div>'
+    + '<div class="list-item-desc">'+esc(item.description || '')+'</div></div></div>'
+  ).join('');
+}
+document.getElementById('motionContainer').innerHTML = renderList(MOTION);
+document.getElementById('backgroundsContainer').innerHTML = renderList(BACKGROUNDS);
+
+// --- Pages ---
+document.getElementById('pagesContainer').innerHTML = PAGES.map(p => {
+  const content = (p.content && p.content.length)
+    ? '<div class="page-subsection"><div class="field-label">Content</div><ul class="bullet-list">'
+      + p.content.map(c => '<li>'+esc(c)+'</li>').join('')
+      + '</ul></div>'
+    : '';
+  const comps = (p.components && p.components.length)
+    ? '<div class="page-subsection"><div class="field-label">Components used</div>'
+      + p.components.map(c => '<span class="chip">'+esc(c)+'</span>').join('')
+      + '</div>'
+    : '';
+  return '<div class="page-card">'
+    + '<div class="page-head">'
+    + '<div class="page-name">'+esc(p.name)+'</div>'
+    + '<div class="page-route">'+esc(p.route || '')+'</div>'
+    + '</div>'
+    + (p.description ? '<div class="page-desc">'+esc(p.description)+'</div>' : '')
+    + content + comps
+    + '</div>';
+}).join('');
+
+// --- Components ---
+const compsContainer = document.getElementById('componentsContainer');
+if (!COMPONENTS.length) {
+  compsContainer.innerHTML = '<div class="empty-note">No shared components planned yet.</div>';
+} else {
+  compsContainer.innerHTML = COMPONENTS.map(c =>
+    '<div class="component-card">'
+    + '<div class="component-head"><div class="component-name">'+esc(c.name)+'</div></div>'
+    + (c.purpose ? '<div class="component-purpose">'+esc(c.purpose)+'</div>' : '')
+    + (c.usedBy && c.usedBy.length
+        ? '<div><div class="field-label">Used by</div>'+c.usedBy.map(u => '<span class="chip chip-accent">'+esc(u)+'</span>').join('')+'</div>'
+        : '')
+    + '</div>'
+  ).join('');
+}
+
+// --- Routes ---
+document.getElementById('routesBody').innerHTML = ROUTES.map(r =>
+  '<tr><td class="path">'+esc(r.path)+'</td><td>'+esc(r.page)+'</td></tr>'
+).join('');
+
+// --- Review checklist ---
+document.getElementById('reviewContainer').innerHTML = REVIEW.map(item =>
+  '<div class="checklist-item"><div class="checklist-check"></div><div>'+esc(item)+'</div></div>'
+).join('');
+
+// --- Deployment options ---
+document.getElementById('deploymentContainer').innerHTML = DEPLOYMENT.map(d =>
+  '<div class="deploy-card'+(d.recommended ? ' recommended' : '')+'">'
+  + '<div class="deploy-title">'+esc(d.title)+'</div>'
+  + '<div class="deploy-desc">'+esc(d.description || '')+'</div>'
+  + '</div>'
+).join('');
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+</body>
+</html>

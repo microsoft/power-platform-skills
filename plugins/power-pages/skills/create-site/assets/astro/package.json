@@ -9,6 +9,6 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "astro": "^5.2.0"
+    "astro": "^6.1.6"
   }
 }

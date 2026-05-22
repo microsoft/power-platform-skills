@@ -1,15 +1,15 @@
 ---
 name: add-seo
-description: >
-  This skill should be used when the user asks to "add SEO", "add meta tags",
-  "add robots.txt", "add sitemap", "improve SEO", "search engine optimization",
-  "add open graph tags", "add favicon", "make site searchable",
-  or wants to add SEO essentials (robots.txt, sitemap.xml, meta tags) to their
-  Power Pages code site after creating it with /create-site.
+description: >-
+  Adds SEO essentials to a Power Pages code site, including robots.txt, sitemap.xml,
+  meta tags, Open Graph tags, and favicon configuration. Use when the user wants to
+  improve search engine optimization or make their site more searchable.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_close
 model: sonnet
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add SEO
 
@@ -45,22 +45,13 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 
 #### 1.1 Locate Project
 
-Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root.
-
-```powershell
-# Check current directory and subdirectories
-Get-ChildItem -Path . -Filter "powerpages.config.json" -Recurse -Depth 1
-```
+Look for `powerpages.config.json` in the current directory or immediate subdirectories to find the project root. Use your file-search tool (e.g., `Glob` with patterns `powerpages.config.json` and `*/powerpages.config.json`) rather than a shell-specific command.
 
 **If not found**: Tell the user to create a site first with `/create-site`.
 
 #### 1.2 Read Existing Config
 
-Read `powerpages.config.json` to get the site name and config:
-
-```powershell
-Get-Content "<PROJECT_ROOT>/powerpages.config.json" | ConvertFrom-Json
-```
+Read `powerpages.config.json` to get the site name and config.
 
 #### 1.3 Detect Framework & Discover Routes
 
@@ -315,7 +306,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 Stage the specific SEO files and commit:
 
-```powershell
+```bash
 git add public/robots.txt public/sitemap.xml public/favicon.svg index.html
 git commit -m "Add SEO: robots.txt, sitemap.xml, meta tags, favicon"
 ```

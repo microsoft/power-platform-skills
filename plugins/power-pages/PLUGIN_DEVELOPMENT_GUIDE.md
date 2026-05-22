@@ -226,7 +226,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 
 Skills invoke scripts via `node` with CLI arguments:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --permissionName "<Permission Name>" \
@@ -242,9 +242,8 @@ Scripts that call Dataverse APIs import `getAuthToken` and `makeRequest` from `s
 
 Every script must have test coverage in `scripts/tests/`. Run tests with:
 
-```powershell
-$files = Get-ChildItem .\plugins\power-pages\scripts\tests\*.test.js | ForEach-Object { $_.FullName }
-node --test $files
+```bash
+node --test plugins/power-pages/scripts/tests/
 ```
 
 > **Acceptance criterion:** All file creation, YAML generation, UUID generation, and Dataverse API calls must use shared scripts. No skill may use LLM-generated inline commands for operations that have a shared script. New scripts must ship with test coverage.

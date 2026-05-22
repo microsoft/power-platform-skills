@@ -1,14 +1,15 @@
 ---
 name: create-webroles
-description: >
-  This skill should be used when the user asks to "create web roles", "add web roles",
-  "set up web roles", "add roles", "create roles for my site", "manage web roles",
-  "add authenticated role", "add anonymous role", or wants to create web roles for
-  their Power Pages code site. Web roles control access and permissions for site users.
+description: >-
+  Creates and configures web roles for a Power Pages code site. Web roles control access
+  and permissions for site users, including authenticated and anonymous roles. Use when the
+  user wants to create, add, set up, or manage web roles for their site.
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Create Web Roles
 
@@ -47,11 +48,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
-3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create it:
-
-   ```powershell
-   New-Item -ItemType Directory -Path "<PROJECT_ROOT>/.powerpages-site/web-roles" -Force
-   ```
+3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create the `<PROJECT_ROOT>/.powerpages-site/web-roles/` directory.
 
 4. **If both exist:** Proceed to Phase 2.
 
@@ -132,7 +129,7 @@ For each new web role the user approved, create a YAML file in `.powerpages-site
 
 For each role, generate a UUID using the Node script. **NEVER generate UUIDs yourself — always use the script.**
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js"
 ```
 

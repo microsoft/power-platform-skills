@@ -1,0 +1,56 @@
+name: validate-plugin-names
+
+on:
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+jobs:
+    validate-plugin-names:
+        name: validate-plugin-names
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: validate-kebab-case-plugin-names
+              shell: bash
+              run: |
+                  python3 <<'PY'
+                  import json
+                  import re
+                  from pathlib import Path
+
+                  KEBAB_CASE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+                  def validate_name(name, source):
+                      if KEBAB_CASE_PATTERN.fullmatch(name):
+                          return None
+                      return f"{source}: '{name}' is not kebab-case"
+
+
+                  errors = []
+
+                  marketplace_path = Path(".claude-plugin/marketplace.json")
+                  marketplace = json.loads(marketplace_path.read_text())
+                  for index, plugin in enumerate(marketplace.get("plugins", [])):
+                      error = validate_name(plugin["name"], f"{marketplace_path} plugins[{index}].name")
+                      if error:
+                          errors.append(error)
+
+                  for plugin_manifest_path in sorted(Path("plugins").glob("*/.claude-plugin/plugin.json")):
+                      plugin_manifest = json.loads(plugin_manifest_path.read_text())
+                      error = validate_name(plugin_manifest["name"], f"{plugin_manifest_path} name")
+                      if error:
+                          errors.append(error)
+
+                  if errors:
+                      print("Found plugin names that are not kebab-case:")
+                      for error in errors:
+                          print(f"- {error}")
+                      raise SystemExit(1)
+
+                  print("All plugin names are kebab-case.")
+                  PY

@@ -1,15 +1,15 @@
 ---
 name: add-sample-data
-description: >
-  This skill should be used when the user asks to "add sample data",
-  "populate tables", "seed data", "add test records", "generate sample records",
-  "insert demo data", "fill tables with data", "create test data",
-  or wants to populate their Dataverse tables with sample records
-  so they can test and demo their Power Pages site.
+description: >-
+  Populates Dataverse tables with sample records for testing and demoing a Power Pages site.
+  Use when the user wants to add sample data, seed data, generate test records, or insert
+  demo data into their tables.
 user-invocable: true
 allowed-tools: Read, Write, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_code_sample_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: sonnet
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Add Sample Data
 
@@ -32,7 +32,7 @@ Populate Dataverse tables with sample records via OData API so users can test an
 **Actions**:
 
 1. Create todo list with all 6 phases (see [Progress Tracking](#progress-tracking) table)
-2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Store the environment URL as `$envUrl`.
+2. Follow the prerequisite steps in `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md` to verify PAC CLI auth, acquire an Azure CLI token, and confirm API access. Note the environment URL as `<envUrl>` for subsequent script calls.
 
 **Output**: Authenticated session with valid token and confirmed API access
 
@@ -47,11 +47,6 @@ Populate Dataverse tables with sample records via OData API so users can test an
 ### Path A: Read `.datamodel-manifest.json` (Preferred)
 
 Check if `.datamodel-manifest.json` exists in the project root (written by the `setup-datamodel` skill). If it exists, read it -- it already contains table logical names, display names, and column info.
-
-```powershell
-# Check if manifest exists
-Test-Path ".datamodel-manifest.json"
-```
 
 See `${CLAUDE_PLUGIN_ROOT}/references/datamodel-manifest-schema.md` for the full manifest schema.
 

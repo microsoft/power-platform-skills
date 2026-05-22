@@ -1,11 +1,17 @@
 ---
 name: create-site
-description: This skill should be used when the user asks to "create a power pages site", "build a code site", "scaffold a website", "create a portal", "make a new site", or wants to create a new Power Pages code site (SPA) using React, Angular, Vue, or Astro.
+description: >-
+  Creates a new Power Pages code site (SPA) using React, Angular, Vue, or Astro. Guides through
+  the full process from initial concept to deployed site: requirements discovery, scaffolding,
+  component planning, design, implementation, validation, and deployment. Use when the user
+  wants to create, build, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Create Power Pages Code Site
 
@@ -17,12 +23,44 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
 - **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
+- **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
 - **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
 **Initial request:** $ARGUMENTS
+
+---
+
+## Live Preview Status Protocol
+
+While the scaffold loading screen is visible (from Phase 2.6 until the Home page itself is replaced in Phase 5), the loader polls `GET /scaffold-status.json` every 1.5 seconds. The `message` you write into `<PROJECT_ROOT>/public/scaffold-status.json` appears as the label under the progress bar, and `awaitingInput` controls the "waiting for your input" banner. The decorative spinner above the progress bar continues its built-in phrase cycle; keep the progress-bar label current so the loader still reflects what is actually happening.
+
+**Why this matters**: When the browser with the loader takes over the user's screen, a prompt in the terminal can sit unanswered for a long time because the user doesn't realize anything is waiting. The banner makes it obvious.
+
+**File shape** (all fields optional — omit any field you don't want to change):
+
+```json
+{
+  "message": "Creating Contact page",
+  "awaitingInput": false,
+  "inputPrompt": "Please check your terminal to respond."
+}
+```
+
+- `message` — one short present-participle phrase shown as the status line under the progress bar in the loader (replacing the default "Getting started…" / "Setting up infrastructure…" cycle). Include the grouping context inline when it helps (e.g., `"Creating Footer component (shared components)"`).
+- `awaitingInput` — when `true`, a prominent pulsing banner appears at the top of the loader and stays visible until this field is cleared. Set this **before** every `AskUserQuestion` call and clear it (`false`) **immediately after** the user answers.
+- `inputPrompt` — short context for the banner (e.g., `"Choose a framework"`). Optional.
+
+**When to update the file**:
+
+1. **After scaffold launches (end of Phase 2)**: write an initial status like `{ "message": "Planning your site", "awaitingInput": false }`.
+2. **Before any `AskUserQuestion` that runs while the scaffold is visible** (Phases 3, 4, and any in-scaffold prompt in Phase 5): set `awaitingInput: true` with a short `inputPrompt`. After the user answers, write again with `awaitingInput: false`.
+3. **Before each implementation step in Phase 5** — applying design tokens, creating each shared component, creating each page, updating the router, updating navigation — update `message` to the specific action. Examples: `"Applying design tokens"`, `"Creating Navbar component"`, `"Creating Contact page"`.
+4. **At the end of Phase 5, after the Home page has been replaced**: delete `public/scaffold-status.json` so it isn't deployed with the site.
+
+Write the file with the `Write` tool (atomic overwrite). You do not need to read it first.
 
 ---
 
@@ -95,6 +133,18 @@ Read and copy all files from the matching asset template to the project director
 
 Use `Glob` to discover all files in the asset directory, `Read` each file, then `Write` to the project directory preserving the relative path structure.
 
+**Also copy the shared loader icon** that the scaffold references from its CSS (`url('/power-pages-icon.png')`):
+
+`Read` the binary file `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/shared/power-pages-icon.png` and `Write` it to `<PROJECT_ROOT>/public/power-pages-icon.png`. (All four supported frameworks serve `public/` at the web root, so the same `/power-pages-icon.png` URL works for every framework.)
+
+**Seed the live status file** so the loader shows a real message the moment it mounts. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
+
+```json
+{ "message": "Planning your site", "awaitingInput": false }
+```
+
+See [Live Preview Status Protocol](#live-preview-status-protocol) for the full contract — from here on, update this file before every `AskUserQuestion` and before each Phase 5 implementation step.
+
 ### 2.2 Replace Placeholders
 
 After copying, replace all `__PLACEHOLDER__` tokens in every file. Use `Edit` with `replace_all: true` on each file.
@@ -111,7 +161,7 @@ Rename `gitignore` → `.gitignore` in the project root (stored without dot pref
 
 Run `npm install` **before** initializing git so that `package-lock.json` is included in the initial commit:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm install
 ```
@@ -120,7 +170,7 @@ npm install
 
 Initialize a git repo and make the first commit. This captures all template files AND `package-lock.json` in one clean baseline:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 git init
 git add -A
@@ -133,7 +183,7 @@ From this point, **commit after every significant milestone** so any breaking ch
 
 **This MUST happen now — before any planning or customization begins.** The dev server gives the user a live preview while features and design are being planned:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm run dev
 ```
@@ -169,7 +219,15 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 **Actions**:
 
-1. Use `AskUserQuestion` to collect feature and design requirements:
+1. **Raise the "awaiting input" banner** so the user notices the terminal prompt even while the browser loader is full-screen. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
+
+   ```json
+   { "message": "Planning your site", "awaitingInput": true, "inputPrompt": "Features, aesthetic, and mood — please answer in the terminal." }
+   ```
+
+   Immediately after the user answers, `Write` the same file again with `"awaitingInput": false` so the banner disappears.
+
+2. Use `AskUserQuestion` to collect feature and design requirements:
 
    | Question | Header | Options |
    |----------|--------|---------|
@@ -184,9 +242,9 @@ Immediately after the dev server starts, verify the scaffold is working:
    >
    > Always generate options that make sense for the specific site — never reuse a fixed list.
 
-2. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
-3. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
-4. Analyze requirements and determine needed components. Present component plan to user as a table:
+3. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+4. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
+5. Analyze requirements and determine needed components. Present component plan to user as a table:
 
    ```
    | Component Type      | Count | Details |
@@ -197,7 +255,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
-5. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
+6. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
 
    | CSS Variable | Description | Value |
    |-------------|-------------|-------|
@@ -214,39 +272,86 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 ## Phase 4: Plan Approval
 
-**Goal**: Get user approval on the implementation plan
+**Goal**: Render the implementation plan as an HTML document, open it in the user's default browser, and get approval before starting implementation.
 
-**Actions**:
+> **Why HTML instead of a chat message**: A structured HTML plan (like the ones produced by `/integrate-backend`, `/add-server-logic`, and `/add-cloud-flow`) lets the user skim sections, compare swatches, and preview typography — all impossible in a terminal. The scaffold loader in their browser may also be full-screen, so surfacing the plan in a new tab puts it where they can actually read it.
 
-1. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
-2. Present the implementation plan directly to the user as a formatted message. **The plan MUST have ALL of the following sections:**
+### 4.1 Read the Design Reference
 
-   **Section A — Design & Pages**
-   - Pages to create (with content outline for each)
-   - Components needed for each page
-   - Routing and navigation structure
-   - Design decisions (from the chosen design direction):
-     - Typography: specific Google Fonts chosen
-     - Color palette: full CSS variable set with hex values (replacing the scaffold defaults)
-     - Motion/animation plan: page load, hover states, transitions
-     - Background treatment: gradients, patterns, effects
+Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Every field you populate below should be justified by the chosen aesthetic + mood from Phase 3.
 
-   **Section B — Review & Deployment**
-   - What to verify before handoff
-   - Deployment options
+### 4.2 Build the Plan Data
 
-   > **CRITICAL:** The plan is written for the user — do NOT reference internal phase numbers, tool names, or implementation details. Describe what will be built and what it will look like. The scaffold is already running — this plan covers what will be built on top of it.
+Assemble a single JSON object with the following keys. The plan template rejects any data that's missing a required key, so include all of them.
 
-3. Use `AskUserQuestion` to get approval:
+| Key | Type | Content |
+|-----|------|---------|
+| `SITE_NAME` | string | Title-case site name from Phase 1 |
+| `PLAN_TITLE` | string | Always `"Implementation Plan"` |
+| `FRAMEWORK` | string | `React` / `Vue` / `Angular` / `Astro` |
+| `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
+| `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
+| `SUMMARY` | string | One paragraph describing what the site is and who it serves |
+| `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` — `name` must be a real Google Font family |
+| `PALETTE_DATA` | array | `[{ var, hex, description }]` — one entry per CSS variable (primary, secondary, bg, surface, text, text-muted) |
+| `MOTION_DATA` | array | `[{ label, description }]` — page transitions, hover states, etc. |
+| `BACKGROUNDS_DATA` | array | `[{ label, description }]` — hero backgrounds, section treatments, patterns |
+| `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
+| `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
+| `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
+| `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
+| `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Does this plan look good? | Plan | Approve and start building (Recommended), I'd like to make changes |
+**Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
 
-   - **If "Approve"**: Proceed to Phase 5.
-   - **If "I'd like to make changes"**: Ask what they want changed, update the plan, and re-present for approval.
+### 4.3 Render the HTML Plan
 
-**Output**: Approved implementation plan
+Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
+```
+
+Use `--data-inline` so no temp JSON file is written. If the JSON is too large for a single shell argument, write it to a temp file and use `--data <path>` instead, then delete the temp file after the render succeeds.
+
+The script prints `{"status":"ok","output":"<path>"}` on success. Capture and use that actual output path for the next step.
+
+### 4.4 Open the Plan in the Default Browser
+
+Open `<OUTPUT_PATH>` in the default browser using the platform-appropriate file opener for the current environment. For example, use `open` on macOS, `xdg-open` on Linux, or the equivalent default-browser opener available on Windows.
+
+### 4.5 Present a Brief Summary in the Terminal
+
+Keep the terminal message short — **the full plan lives in the HTML file now**. Include:
+
+- One sentence confirming the plan was rendered and where (the output path).
+- A 3-5 line bullet summary: framework, page count, component count, palette primary + mood.
+- A pointer: "See the open browser tab for pages, color swatches, typography samples, and deployment options."
+
+Do NOT dump the full plan contents into the terminal — that defeats the purpose of the HTML view.
+
+### 4.6 Raise the "Awaiting Input" Banner
+
+The user may still be looking at the full-screen scaffold loader when you ask for approval. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
+
+```json
+{ "message": "Ready to build", "awaitingInput": true, "inputPrompt": "Plan approval needed — review the plan in your browser and answer in the terminal." }
+```
+
+Immediately after the user answers, `Write` the same file again with `"awaitingInput": false`.
+
+### 4.7 Ask for Approval
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Does this plan look good? | Plan | Approve and start building (Recommended), I'd like to make changes |
+
+- **If "Approve"**: Proceed to Phase 5.
+- **If "I'd like to make changes"**: Ask what they want changed, update the JSON, and re-render to a new filename (the render script won't overwrite). Re-open that new file in the browser and repeat 4.5–4.7.
+
+**Output**: Approved implementation plan, with an HTML copy committed alongside the project for the user to reference during and after implementation.
 
 ---
 
@@ -276,10 +381,12 @@ Each todo should have a clear `subject`, `activeForm`, and `description` that in
 
 The scaffold is a temporary loading screen — it must be **completely replaced** during this phase. Do NOT build on top of it or try to modify the loading animation into a real page. Start fresh with the user's chosen design.
 
-1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step.
-2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure.
-3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use
-4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely
+> **Narrate progress in the loader**: Before each of the steps below, update `<PROJECT_ROOT>/public/scaffold-status.json` so the user — who may still be watching the Home page loader — sees what's actually happening instead of the hardcoded placeholder cycle. Use a short present-participle `message` (e.g., `"Creating Navbar component"`, `"Creating Contact page"`). Include any useful grouping context inline in the message itself. The loader picks up changes within ~1.5 seconds. Updates become no-ops once step 4 replaces the Home page.
+
+1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
+2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
+3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
+4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced — no further status updates are needed after that.*
 5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
 6. **Navigation** — Add links to the new Layout/Header component
 7. **Entry HTML** — Update `index.html` (or `Layout.astro` for Astro) to load the chosen Google Fonts instead of the scaffold's DM Sans + Outfit
@@ -315,7 +422,7 @@ Use high-quality photos from Unsplash wherever the site needs visual content. Do
 
 Commit after **every individual page and component** so breaking changes can be reverted. Each page and each component gets its own commit — do NOT batch multiple pages or components into a single commit.
 
-```powershell
+```bash
 git add -A
 git commit -m "<short description of what was added/changed>"
 ```
@@ -330,7 +437,7 @@ git commit -m "<short description of what was added/changed>"
 
 **If something breaks**, revert to the last good commit:
 
-```powershell
+```bash
 git revert HEAD
 ```
 
@@ -343,6 +450,10 @@ After each significant change (new page or component), browse the site via Playw
 3. If something looks wrong in the snapshot, fix it before proceeding
 
 The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
+
+### 5.6 Clean Up the Live Status File
+
+Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
 > **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
 
@@ -362,7 +473,7 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 Install `playwright` as a dev dependency in the project so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
 
-```powershell
+```bash
 cd "<PROJECT_ROOT>"
 npm install --save-dev playwright
 ```
@@ -371,7 +482,7 @@ npm install --save-dev playwright
 
 Run the audit script via `Bash`, passing the dev server URL and all site routes:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
@@ -396,7 +507,7 @@ For each violation found, identify the source file and apply the fix:
 
 After fixing each group of related violations, commit:
 
-```powershell
+```bash
 git add -A
 git commit -m "Fix accessibility: <violation description>"
 ```
@@ -569,7 +680,10 @@ Every site must meet these standards before completion:
 
 ### Phase 4: Plan Approval
 
-- Plan presented inline with design & pages + review & deployment sections
+- Plan data assembled as a single JSON object
+- Rendered to `docs/create-site-plan.html` via `render-createsite-plan.js`
+- Opened in the user's default browser
+- Brief summary shown in terminal with a pointer to the browser tab
 - User approved via AskUserQuestion
 
 ### Phase 5: Implementation

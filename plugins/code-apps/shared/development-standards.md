@@ -1,0 +1,26 @@
+# Development Standards
+
+Standards that apply to all Power Apps code app skills.
+
+## Theme
+
+- Default to dark theme (`backgroundColor: '#1e1e1e'`, `color: '#fff'`)
+- User can override theme preference
+
+## Node.js
+
+- **Node.js 22+ is required** -- `npx power-apps add-data-source` rejects Node 20 and earlier
+- Check with `node --version` before starting
+- If the user has multiple versions, suggest `nvm use 22`
+
+## Build & Deploy
+
+- **Always** run `npm run build` before `npx power-apps push` -- never skip the build step
+- Verify `dist/` folder contains `index.html` and `assets/` before deploying
+- When adding multiple connectors: do **NOT** deploy after each one — run `npm run build` to verify, then deploy once after all connectors are added
+
+## TypeScript
+
+- The template uses strict mode -- unused imports cause build failures (TS6133)
+- Remove any imports you don't use before building
+- Don't edit generated files in `src/generated/`

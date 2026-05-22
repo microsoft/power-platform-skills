@@ -1,5 +1,5 @@
 ---
-import { ViewTransitions } from 'astro:transitions'
+import { ClientRouter } from 'astro:transitions'
 import '../styles/theme.css'
 
 interface Props {
@@ -20,7 +20,7 @@ const pageTitle = title === 'Home' ? '__SITE_NAME__' : `${title} | __SITE_NAME__
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Outfit:wght@200;300;400;500;600;700&display=swap" rel="stylesheet" />
-    <ViewTransitions />
+    <ClientRouter />
   </head>
   <body>
     <slot />

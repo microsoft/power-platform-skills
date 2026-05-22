@@ -1,15 +1,15 @@
 ---
 name: activate-site
-description: >
-  This skill should be used when the user asks to "activate site",
-  "provision website", "activate a Power Pages website", "activate portal",
-  "provision portal", "turn on my site", "enable website",
-  or wants to activate/provision a Power Pages website in their
-  Power Platform environment via the Power Platform REST API.
+description: >-
+  Activates and provisions a Power Pages website in a Power Platform environment
+  via the Power Platform REST API. Use when the user wants to activate, provision,
+  turn on, or enable a Power Pages website or portal.
 user-invocable: true
 allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: sonnet
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Activate Power Pages Site
 
@@ -45,7 +45,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 
 Run `pac help` to check if the PAC CLI is installed and available on the system PATH.
 
-```powershell
+```bash
 pac help
 ```
 
@@ -53,7 +53,7 @@ pac help
 
 1. Tell the user: "PAC CLI is not installed. You can install it by running:"
 
-   ```powershell
+   ```bash
    dotnet tool install --global Microsoft.PowerApps.CLI.Tool
    ```
 
@@ -64,7 +64,7 @@ pac help
 
 Run `pac auth who` to check current authentication status.
 
-```powershell
+```bash
 pac auth who
 ```
 
@@ -80,17 +80,17 @@ pac auth who
 
 Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
 
-```powershell
+```bash
 az account show
 ```
 
-**If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login`.
+**If `az` is not installed or not logged in**: Instruct the user to install Azure CLI and run `az login --allow-no-subscriptions` (this form works whether or not the user has an Azure subscription — the activation flow only needs an AAD token).
 
 #### 1.4 Check If Already Activated
 
 Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
@@ -132,7 +132,7 @@ Read the file and extract the `siteName` field. If not found, ask the user for t
 
 Run the subdomain generator script to create a random suggestion:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/generate-subdomain.js"
 ```
 
@@ -158,7 +158,7 @@ Present the generated subdomain to the user and ask them to accept or enter thei
 
 Run `pac pages list` to get the website record ID:
 
-```powershell
+```bash
 pac pages list
 ```
 
@@ -204,7 +204,7 @@ Present all activation parameters to the user using `AskUserQuestion`:
 
 Run the shared activation script, passing all parameters gathered in Phases 1–2:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
 ```
 
@@ -222,7 +222,7 @@ Evaluate the JSON output:
 |---|---|---|
 | **`Succeeded`** | — | Provisioning complete. The result includes `siteUrl`. Proceed to Phase 5. |
 | **`Failed`** | `400` + `SubdomainConflict` (or error message mentions subdomain) | Subdomain already taken. Loop back to Phase 2 action 2.2 for a new subdomain, then re-run the script. |
-| **`Failed`** | `401` | Token expired. Ask the user to run `az login` and retry. |
+| **`Failed`** | `401` | Token expired. Ask the user to run `az login --allow-no-subscriptions` and retry. |
 | **`Failed`** | `403` | Insufficient permissions. Inform user they need the "Power Pages site creator" or "System Administrator" role. |
 | **`Failed`** | `409` | Website already exists. Inform user and suggest using `/deploy-site` instead. |
 | **`Failed`** | `429` or `5xx` | Throttling or server error. Wait 5 seconds and re-run the script once. |

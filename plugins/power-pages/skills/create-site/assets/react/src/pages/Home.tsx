@@ -49,29 +49,8 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 36px; padding: 40px 40px 48px; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 .center-stage::-webkit-scrollbar { display: none; }
 .orbit-system { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; }
-.core-shape { position: absolute; width: 72px; height: 72px; z-index: 5; }
-.core-shape .slab { position: absolute; width: 72px; height: 48px; border-radius: 14px; left: 50%; top: 50%; transform-origin: center center; box-shadow: 0 4px 20px rgba(139, 111, 192, 0.2); }
-.core-shape .slab:nth-child(1) { background: linear-gradient(135deg, var(--pp-lavender), var(--pp-periwinkle)); animation: slabTop 4s ease-in-out infinite; z-index: 3; }
-.core-shape .slab:nth-child(2) { background: linear-gradient(135deg, var(--pp-purple), var(--pp-sky)); animation: slabMid 4s ease-in-out infinite; z-index: 2; }
-.core-shape .slab:nth-child(3) { background: linear-gradient(135deg, var(--pp-violet), var(--pp-purple)); animation: slabBot 4s ease-in-out infinite; z-index: 1; }
-@keyframes slabTop {
-  0%, 100% { transform: translate(-50%, -80%) rotate(-15deg) scale(1); opacity: 0.95; }
-  25% { transform: translate(-50%, -80%) rotate(-20deg) scale(1.05); }
-  50% { transform: translate(-50%, -75%) rotate(-10deg) scale(0.95); opacity: 1; }
-  75% { transform: translate(-50%, -85%) rotate(-18deg) scale(1.02); }
-}
-@keyframes slabMid {
-  0%, 100% { transform: translate(-50%, -50%) rotate(-5deg) scale(1); opacity: 0.85; }
-  25% { transform: translate(-50%, -48%) rotate(-8deg) scale(1.03); }
-  50% { transform: translate(-50%, -52%) rotate(0deg) scale(0.97); opacity: 0.9; }
-  75% { transform: translate(-50%, -50%) rotate(-3deg) scale(1.01); }
-}
-@keyframes slabBot {
-  0%, 100% { transform: translate(-50%, -20%) rotate(5deg) scale(1); opacity: 0.75; }
-  25% { transform: translate(-50%, -18%) rotate(8deg) scale(0.97); }
-  50% { transform: translate(-50%, -22%) rotate(2deg) scale(1.04); opacity: 0.8; }
-  75% { transform: translate(-50%, -16%) rotate(6deg) scale(0.99); }
-}
+.core-shape { position: absolute; width: 120px; height: 120px; z-index: 5; background: url('/power-pages-icon.png') center/contain no-repeat; animation: coreFloat 4s ease-in-out infinite; }
+@keyframes coreFloat { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.025); } }
 .core-glow { position: absolute; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(circle, rgba(167, 139, 219, 0.18) 0%, transparent 70%); z-index: 3; animation: coreGlow 3s ease-in-out infinite alternate; filter: blur(25px); }
 @keyframes coreGlow { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0.9; } }
 .orbit-ring { position: absolute; border: 1px solid rgba(139, 111, 192, 0.15); border-radius: 50%; animation: ringRotate linear infinite; }
@@ -127,7 +106,17 @@ html, body { overflow: hidden; background: var(--pp-bg); color: var(--pp-text); 
 @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 .center-stage.complete .main-heading { animation: completePulse 2s ease-in-out infinite alternate; }
 @keyframes completePulse { 0% { filter: brightness(1); } 100% { filter: brightness(1.15); } }
-@media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } }
+.input-banner { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, #FFF4D6 0%, #FFE9B3 100%); border: 1px solid #F5B800; color: #5C3D00; padding: 12px 14px 12px 22px; border-radius: 999px; font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 500; box-shadow: 0 4px 16px rgba(245, 184, 0, 0.25); max-width: min(360px, calc(100vw - 48px)); animation: bannerEnter 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+.input-banner[hidden] { display: none; }
+.input-banner-icon { font-size: 18px; animation: bannerPulse 1.5s ease-in-out infinite; flex-shrink: 0; }
+.input-banner-text { line-height: 1.4; flex: 1; min-width: 0; }
+.input-banner-text b { font-weight: 600; display: block; letter-spacing: 0.3px; }
+.input-banner-text small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; }
+.input-banner-close { width: 24px; height: 24px; border: none; border-radius: 50%; background: rgba(92, 61, 0, 0.12); color: #5C3D00; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; flex-shrink: 0; transition: background 0.2s ease, transform 0.2s ease; }
+.input-banner-close:hover { background: rgba(92, 61, 0, 0.2); transform: scale(1.05); }
+@keyframes bannerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
+@keyframes bannerEnter { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 180px; height: 180px; } .input-banner { top: 12px; right: 12px; padding: 10px 12px 10px 16px; font-size: 13px; max-width: calc(100vw - 24px); } }
 `
 
 export default function Home() {
@@ -140,6 +129,7 @@ export default function Home() {
     const statusArea = document.getElementById('statusArea')
     const progressLabel = document.getElementById('progressLabel')
     const tipTextEl = document.getElementById('tipText')
+    const inputBannerClose = document.getElementById('inputBannerClose')
 
     // Particles
     function createParticle() {
@@ -190,8 +180,20 @@ export default function Home() {
     ]
 
     let currentStatusIndex = 0
+    let liveOverride = false
+    let lastLiveMessage: string | null = null
+    let lastAwaiting = false
+    let lastPrompt: string | null = null
+    let dismissedPrompt: string | null = null
 
-    function showStatus(index: number) {
+    const dismissInputBanner = () => {
+      const banner = document.getElementById('inputBanner')
+      dismissedPrompt = lastPrompt || 'Please check your terminal to respond.'
+      if (banner) banner.hidden = true
+    }
+    inputBannerClose?.addEventListener('click', dismissInputBanner)
+
+    function renderStatusMessage(text: string) {
       if (!statusArea) return
       const existing = statusArea.querySelector('.status-message')
       if (existing) {
@@ -204,15 +206,22 @@ export default function Home() {
       const icon = document.createElement('div')
       icon.classList.add('status-icon', 'working')
       msg.appendChild(icon)
-      const text = document.createElement('span')
-      text.textContent = statuses[index].text
-      msg.appendChild(text)
+      const textEl = document.createElement('span')
+      textEl.textContent = text
+      msg.appendChild(textEl)
       statusArea.appendChild(msg)
       requestAnimationFrame(() => requestAnimationFrame(() => msg.classList.add('active')))
-      if (progressLabel) {
-        const phaseIndex = Math.min(Math.floor((index / statuses.length) * phaseLabels.length), phaseLabels.length - 1)
-        progressLabel.textContent = phaseLabels[phaseIndex]
-      }
+    }
+
+    function updatePhaseLabel(text: string) {
+      if (progressLabel) progressLabel.textContent = text
+    }
+
+    function showStatus(index: number) {
+      renderStatusMessage(statuses[index].text)
+      if (liveOverride) return
+      const phaseIndex = Math.min(Math.floor((index / statuses.length) * phaseLabels.length), phaseLabels.length - 1)
+      updatePhaseLabel(phaseLabels[phaseIndex])
     }
 
     function advanceStatus() {
@@ -225,6 +234,54 @@ export default function Home() {
     }
 
     timeouts.push(window.setTimeout(() => advanceStatus(), 2000))
+
+    async function pollStatus() {
+      const banner = document.getElementById('inputBanner')
+      const promptEl = document.getElementById('inputBannerPrompt')
+      try {
+        const res = await fetch('/scaffold-status.json?t=' + Date.now(), { cache: 'no-store' })
+        if (!res.ok) throw new Error('no status')
+        const data = await res.json() as { message?: string; awaitingInput?: boolean; inputPrompt?: string }
+        if (data.message) {
+          liveOverride = true
+          if (data.message !== lastLiveMessage) {
+            lastLiveMessage = data.message
+            updatePhaseLabel(data.message)
+          }
+        } else {
+          if (liveOverride) {
+            const phaseIndex = Math.min(Math.floor((currentStatusIndex / statuses.length) * phaseLabels.length), phaseLabels.length - 1)
+            updatePhaseLabel(phaseLabels[phaseIndex])
+          }
+          liveOverride = false
+          lastLiveMessage = null
+        }
+        const awaiting = !!data.awaitingInput
+        const prompt = data.inputPrompt || 'Please check your terminal to respond.'
+        const awaitingChanged = awaiting !== lastAwaiting
+        const promptChanged = prompt !== lastPrompt
+        if (!awaiting) dismissedPrompt = null
+        if (awaitingChanged || promptChanged) {
+          lastAwaiting = awaiting
+          lastPrompt = prompt
+          if (promptEl) promptEl.textContent = prompt
+        }
+        if (banner) banner.hidden = !awaiting || dismissedPrompt === prompt
+      } catch {
+        if (liveOverride) {
+          const phaseIndex = Math.min(Math.floor((currentStatusIndex / statuses.length) * phaseLabels.length), phaseLabels.length - 1)
+          updatePhaseLabel(phaseLabels[phaseIndex])
+        }
+        liveOverride = false
+        lastLiveMessage = null
+        if (!lastAwaiting) {
+          lastPrompt = null
+          if (banner) banner.hidden = true
+        }
+      }
+    }
+    pollStatus()
+    intervals.push(window.setInterval(pollStatus, 1500))
 
     // Feature cards
     timeouts.push(window.setTimeout(() => {
@@ -261,6 +318,7 @@ export default function Home() {
     intervals.push(window.setInterval(showTip, 12000))
 
     return () => {
+      inputBannerClose?.removeEventListener('click', dismissInputBanner)
       intervals.forEach(id => clearInterval(id))
       timeouts.forEach(id => clearTimeout(id))
     }
@@ -276,13 +334,19 @@ export default function Home() {
         <div className="particles" id="particles" />
         <div className="connector-lines" id="connectors" />
 
+        <div className="input-banner" id="inputBanner" hidden>
+          <span className="input-banner-icon">{ '⚠️' }</span>
+          <div className="input-banner-text">
+            <b>Waiting for your input</b>
+            <small id="inputBannerPrompt">Please check your terminal to respond.</small>
+          </div>
+          <button type="button" className="input-banner-close" id="inputBannerClose" aria-label="Dismiss notification">{'\u00d7'}</button>
+        </div>
+
         <div className="center-stage" id="centerStage">
           <div className="orbit-system">
             <div className="core-glow" />
             <div className="core-shape">
-              <div className="slab" />
-              <div className="slab" />
-              <div className="slab" />
             </div>
             <div className="orbit-ring" />
             <div className="orbit-ring" />

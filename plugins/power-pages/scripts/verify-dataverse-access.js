@@ -16,7 +16,7 @@ async function main() {
 
   const token = getAuthToken(envUrl);
   if (!token) {
-    process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
+    process.stderr.write('Failed to get Azure CLI token. Run `az login --allow-no-subscriptions` first.\n');
     process.exit(1);
   }
 
@@ -31,7 +31,7 @@ async function main() {
   }
 
   if (res.statusCode === 401 || res.statusCode === 403) {
-    process.stderr.write(`Authentication failed (${res.statusCode}). Token may be expired — run \`az login\` again.\n`);
+    process.stderr.write(`Authentication failed (${res.statusCode}). Token may be expired — run \`az login --allow-no-subscriptions\` again.\n`);
     process.exit(1);
   }
 

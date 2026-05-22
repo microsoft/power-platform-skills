@@ -12,25 +12,31 @@ const path = require('path');
 
 /**
  * @param {Object} options
- * @param {string} options.templatePath - Absolute path to the HTML template
- * @param {string} options.outputPath   - Absolute path for the rendered output
- * @param {string} options.dataPath     - Absolute path to the JSON data file
- * @param {string[]} options.requiredKeys - Keys that must be present in the data file
+ * @param {string} options.templatePath  - Absolute path to the HTML template
+ * @param {string} options.outputPath    - Absolute path for the rendered output
+ * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
+ * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
+ * @param {string[]} options.requiredKeys - Keys that must be present in the data
+ * @param {boolean} [options.escapeStringValues=false] - Escape string values for HTML text contexts
  */
-function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, escapeStringValues = false }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
     process.exit(1);
   }
-  if (!fs.existsSync(dataPath)) {
+  if (!dataObject && !dataPath) {
+    console.error('Either dataPath or dataObject must be provided');
+    process.exit(1);
+  }
+  if (dataPath && !fs.existsSync(dataPath)) {
     console.error(`Data file not found: ${dataPath}`);
     process.exit(1);
   }
 
   // Read template and data
   const template = fs.readFileSync(templatePath, 'utf8');
-  const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  const data = dataObject ?? JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
   // Validate required keys
   const missing = requiredKeys.filter((k) => !(k in data));
@@ -39,11 +45,17 @@ function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
     process.exit(1);
   }
 
-  // Replace all __KEY__ placeholders with corresponding values from the data object
+  // Replace all __KEY__ placeholders with corresponding values from the data object.
+  // For non-string values (arrays/objects serialized to JSON), escape `<` as `\u003c`
+  // so a literal `</script>` inside string data cannot close a containing <script> tag.
+  // Templates that place string placeholders in HTML text contexts can opt in to
+  // string escaping with escapeStringValues.
   let result = template;
   for (const [key, value] of Object.entries(data)) {
     const placeholder = `__${key}__`;
-    const replacement = typeof value === 'string' ? value : JSON.stringify(value);
+    const replacement = typeof value === 'string'
+      ? (escapeStringValues ? escapeHtml(value) : value)
+      : JSON.stringify(value).replace(/</g, '\\u003c');
     result = result.split(placeholder).join(replacement);
   }
 
@@ -60,8 +72,39 @@ function renderTemplate({ templatePath, outputPath, dataPath, requiredKeys }) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
+  // Never overwrite an existing file — the caller must choose a unique name
+  if (fs.existsSync(outputPath)) {
+    console.error(
+      `Error: Output file already exists: ${outputPath}\n` +
+      'Choose a different filename to avoid overwriting the previous plan.'
+    );
+    process.exit(1);
+  }
+
   fs.writeFileSync(outputPath, result, 'utf8');
+
+  // Silently copy the shared Power Pages icon next to the rendered HTML so the
+  // template's <img src="./power-pages-icon.png"> reference resolves when the
+  // file is opened directly (or served from docs/). Copy is best-effort —
+  // rendering still succeeds if the icon is missing.
+  const iconSrc = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
+  const iconDest = path.join(outputDir, 'power-pages-icon.png');
+  try {
+    if (fs.existsSync(iconSrc)) {
+      fs.copyFileSync(iconSrc, iconDest);
+    }
+  } catch {
+    // non-fatal
+  }
+
   console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+}
+
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function parseArgs(argv) {

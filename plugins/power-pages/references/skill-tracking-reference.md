@@ -10,7 +10,7 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 
 Run the shared tracking script:
 
-```powershell
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 
@@ -19,6 +19,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PR
 - `--authoringTool`: Your agent name (e.g., `ClaudeCode`, `GitHubCopilot`). The script normalizes this value — any name containing "claude" becomes `ClaudeCode`, any name containing "github" or "copilot" becomes `GitHubCopilot`.
 
 The script exits silently if `.powerpages-site/site-settings/` does not exist, so it is safe to call unconditionally.
+
+If the tracking script creates or updates site setting YAML files, include those tracking changes in the next git commit for the current phase or final summary commit.
 
 ## Skill Name Mapping
 
@@ -35,6 +37,9 @@ The script exits silently if `.powerpages-site/site-settings/` does not exist, s
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 | test-site | TestSite | Site/AI/Skills/TestSite |
 | audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
+| add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
+| add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
+| integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
 | migrate-sdm-to-edm | MigrateSdmToEdm | Site/AI/Skills/MigrateSdmToEdm |
 
 ## YAML Format
