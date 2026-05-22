@@ -493,6 +493,41 @@ If Yes: write/update `deployment-settings.json` with the collected values under 
 
 **If all env vars are pre-configured** (or there are none): skip the prompt, use `preconfigured` directly.
 
+**5.1b Pre-PATCH validation of `deployment-settings.json` Secret references.**
+
+> **Why this gate exists.** The Power Platform Pipelines handler validates the `deploymentsettingsjson` PATCH at import time, AFTER the stage run has been queued and potentially after a long wait behind serialized imports. A bad Secret reference value — placeholder syntax like `@KeyVault(vaultName=...;secretName=...)`, raw secret values committed to the file, malformed URIs — fails the import with *"ImportAsHolding failed: The value provided as a secret reference does not match a valid secret reference format."* Live evidence: a 4h41m queue wait + fail in a recent session. Catching the bad reference here turns hours of wasted compute into a sub-second hard stop with a precise remediation pointer.
+
+Skip this step entirely when `ENV_VAR_OVERRIDES` is empty AND `deployment-settings.json` is absent — there's nothing to validate.
+
+Otherwise, run the shared helper:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+  --settingsFile "./deployment-settings.json" \
+  --envUrl "{sourceEnvUrl}" \
+  --stageLabel "{SELECTED_STAGE.name}"
+```
+
+Capture stdout as JSON. The helper classifies each `EnvironmentVariables[]` entry by `valueFormat` (`kv-uri` / `kv-resource-id` / `kv-placeholder` / `empty` / `plain-text` / `invalid-uri`) and `status` (`valid` / `invalid` / `unknown-type` / `skipped`). When `--envUrl` is provided (as above), Secret-type entries are validated against the canonical Key Vault reference formats; other types are structurally validated.
+
+Branch on `summary`:
+
+- **`summary.invalid === 0`** → all entries valid, proceed to Phase 5.2.
+- **`summary.invalid > 0`** → STOP. Display the invalid `findings[]` to the user with each entry's `schemaName`, `valueFormat`, `value`, and `message`. Then surface a remediation message:
+
+  > "Pre-deploy validation found `{summary.invalid}` invalid env var value(s) in `deployment-settings.json`. The Power Platform Pipelines handler would reject these during import (potentially after a long queue wait). Fix the file before re-running this skill.
+  >
+  > Canonical formats for Secret env vars:
+  >   1. Key Vault Secret Identifier URI: `https://<vault>.vault.azure.net/secrets/<name>[/<version>]`
+  >   2. Azure resource ID: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>`
+  >   3. Empty (use the env var definition's default)
+  >
+  > See `configure-env-variables` Phase 3.B and `add-server-logic` Phase 7.2a for the end-to-end flow (vault selection → secret storage → URI handoff)."
+
+  Do NOT prompt for "proceed anyway" — there's no partial-validity case where forcing the bad PATCH leads to a successful import. The deploy will fail; only the wait time changes.
+
+- **`summary.invalid === 0 && summary.['unknown-type'] > 0`** → log a one-line warning about the schemas whose types couldn't be looked up (probably auth or transient errors) and proceed. The downstream handler will still reject obvious garbage; the pre-PATCH gate is a fast-path, not the only line of defense.
+
 **5.2 PATCH stage run with artifact version, deployment notes, and environment variables** (always run):
 
 First, determine the current solution version in the **source (dev) environment** — this must match exactly:

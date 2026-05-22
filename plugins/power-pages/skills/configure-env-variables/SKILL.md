@@ -220,7 +220,37 @@ Response: **HTTP 204**.
 
 ### 3.B — Secret env vars (`typeCode = 100000005`) when a Key Vault Secret URI is available
 
-When the user has already stored the secret in Azure Key Vault and has a Secret Identifier URI (shape: `https://<vault>.vault.azure.net/secrets/<name>/<version>`), use the atomic deep-insert path — the same flow `add-server-logic` Phase 7.2a uses:
+#### Acceptable Secret reference formats
+
+Dataverse / the Power Platform Pipelines handler accept exactly three formats for a Secret-type env var value. Anything else is rejected at import time with *"ImportAsHolding failed: The value provided as a secret reference does not match a valid secret reference format"* — and the rejection can come hours after the deploy queues, since the host serializes imports. The pre-deploy validator (`deploy-pipeline` Phase 5.1b, helper at `scripts/lib/validate-deployment-settings.js`) catches these formats upfront, but they're documented here so SKILL.md authors writing to `deployment-settings.json` use the right shape from the start.
+
+**Accepted:**
+
+1. **Key Vault Secret Identifier URI** — what `store-keyvault-secret.js` emits in its `secretUri` output:
+   ```
+   https://<vault>.vault.azure.net/secrets/<name>
+   https://<vault>.vault.azure.net/secrets/<name>/<32-char-hex-version>
+   ```
+   Vault name must be 3–24 chars, lowercase alphanumeric + hyphens, start with a letter, end with a letter or digit. This is the canonical form and the one `add-server-logic` Phase 7.2a hands back via the user-visible "share the secretUri output" step.
+
+2. **Azure resource ID** — the full ARM-style path, when the maker doesn't have the URI form handy:
+   ```
+   /subscriptions/<subscriptionId>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>
+   ```
+   Both `resourceGroups` and `resourcegroups` casings are accepted by Dataverse.
+
+3. **Empty string `""`** — legitimate when the env var has a sensible default-value baked into the definition. Per-stage `Value: ""` in `deployment-settings.json` means *"use the definition default in this stage."*
+
+**Rejected (validator flags these):**
+
+- `@KeyVault(vaultName=<vault>;secretName=<name>)` — a templating-style placeholder. **NOT recognized by Dataverse.** Real-world failure case from a live session: this exact pattern caused a 4h41m queue wait + ImportAsHolding failure. Replace with form (1) or (2).
+- `<TODO>`, `<KEY_VAULT_URI>`, `<PLACEHOLDER>`, `${ENV_VAR}` — any angle-bracketed or shell-style placeholder. Same story; these are maker conventions Dataverse does not parse.
+- Plain-text secret values — both insecure (the file is committed to git) AND rejected by Dataverse when the env var type is Secret. If the maker intended plain text, the env var type should be String (`100000000`), not Secret (`100000005`).
+- HTTPS URLs that look like Key Vault URIs but miss the canonical shape (`.com` host suffix instead of `.net`, missing `/secrets/` segment, short version suffix). The validator flags these specifically as `invalid-uri` so the maker can fix the typo rather than re-coining the value.
+
+#### Implementation
+
+When the user has already stored the secret in Azure Key Vault and has a Secret Identifier URI in canonical form, use the atomic deep-insert path — the same flow `add-server-logic` Phase 7.2a uses:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-environment-variable.js" "{devEnvUrl}" \
