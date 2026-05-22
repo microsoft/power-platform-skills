@@ -12,6 +12,8 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Migrate Power Pages Site from Standard to Enhanced Data Model
 
 Guide the user through a comprehensive migration of an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The skill is organized into **four high-level phases** — Pre-flight Setup, Customization Remediation, Migration Execution, and Post-Migration Validation. Each phase contains numbered sub-steps for granular execution and progress tracking.
