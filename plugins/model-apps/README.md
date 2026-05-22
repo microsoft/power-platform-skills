@@ -22,7 +22,10 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) >= 2.3.1 | Schema generation, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) >= 2.7.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
+
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
 
 ## Skills
 
@@ -33,12 +36,14 @@ The plugin provides a single skill that covers the full lifecycle of a generativ
 Creates, updates, and deploys generative pages for model-driven Power Apps. Handles the complete workflow in a single session:
 
 1. **Validate prerequisites** — checks Node.js and PAC CLI version
-2. **Authenticate** — verifies PAC CLI auth and environment selection
+2. **Authenticate** — verifies PAC CLI auth (and `az` if entity creation is needed)
 3. **Gather requirements** — asks about page type, data source, and specific features
-4. **Generate schema** — runs `pac model genpage generate-types` for Dataverse entity pages
-5. **Generate code** — produces a complete single-file `.tsx` component
-6. **Deploy** — uploads via `pac model genpage upload` to the selected app
-7. **Verify** — optionally opens the page in Playwright for interactive testing
+4. **Create entities** (optional) — uses the plugin's Node.js Web API scripts to create Dataverse tables, columns, relationships, and choice columns when the requested entities don't exist. Asks which solution to land them in
+5. **Create app** (optional) — runs `pac model create` if no model-driven app is targeted
+6. **Generate schema** — runs `pac model genpage generate-types` for Dataverse entity pages
+7. **Generate code** — produces a complete single-file `.tsx` component (parallel page-builders for multi-page requests)
+8. **Deploy** — uploads via `pac model genpage upload` to the selected app
+9. **Verify** — optionally opens the page in Playwright for interactive testing
 
 **Usage:** Invoke directly with `/genpage`, or use any of the keywords below to trigger the skill automatically:
 
@@ -62,7 +67,8 @@ The plugin invokes multiple tools during a session. To reduce approval prompts:
     "allow": [
       "Bash(pac *)",
       "Bash(node *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(az *)"
     ]
   }
 }
