@@ -604,19 +604,29 @@ This pushes the rewritten source files back to the SDM site's Dataverse records,
 
 ### 7. Manual remediation reminders (for non-automatable categories)
 
-Show user the following before proceeding to step 3.1:
+Two customization categories are NOT modified directly by this skill — instead the script generates **paste-ready augmented prompts** that the user takes to a fresh Claude Code session. This is intentional: customer-owned plugin source and Dataverse schema changes should be reviewed and approved before execution.
 
-**Data Model Extensions** — for each custom column found on `adx_*` tables, the user must, in the Data workspace:
+**Plugins on `adx_*` tables** — augmented prompt at `<OUTPUT_DIR>/plugin-remediation-prompt.txt` (and embedded in `skill-execution-report.html`). The prompt:
 
-1. Create a new custom table (e.g., `contoso_webpage`)
-2. Add the custom column (e.g., `contoso_pagetype`) to the new table
-3. Add a lookup column on the new table pointing to `powerpagecomponent`
-4. Migrate data from the old column to the new table
-5. Update any Liquid/FetchXML to reference the new table
+- Includes the verbatim plugin findings from the report (name, target entity, step name)
+- Categorizes each as Microsoft / Adxstudio / custom and includes the refactor pattern only for custom plugins
+- Instructs the receiving Claude session to locate plugin source, refactor to target `powerpagecomponent`, generate a diff for review, get user approval, and only then build
+- Explicit guardrails: no production push, no guessing at file locations, no rewriting `adx_*` attribute references
 
-**Custom-to-adx relationships** — create a new relationship between the custom table and `powerpagecomponent` (e.g., `powerpagecomponent_contoso_pagelogs`).
+To use: tell the user to open a new Claude Code session in their plugin source repo (`claude` command) and paste the contents of the prompt file as the first message.
 
-**Plugins/Workflows on `adx_*` tables** — refactor code to target `powerpagecomponent`, update attribute references, re-register on the new table.
+**Data Model Extensions** — augmented prompt at `<OUTPUT_DIR>/dme-remediation-prompt.txt`. The prompt:
+
+- Includes the per-table groupings from the customization report
+- Instructs the receiving Claude session to ask for a publisher prefix, build a Dataverse **solution package** containing new custom tables, columns, and lookups to `powerpagecomponent`
+- Documents the import + data-migration steps the user runs separately
+- Explicit guardrails: NO direct Dataverse API calls, user must approve schema before pack
+
+To use: tell the user to open a new Claude Code session in any working directory (`claude` command) and paste the contents of the prompt file as the first message. The session produces a reviewable `.zip` for `pac solution import`.
+
+**Custom-to-adx relationships** — currently bundled into the DME prompt. The receiving session can be asked to add the relationship to the same solution package.
+
+**Custom workflows** — no augmented prompt today (would need Dataverse queries to fetch per-workflow primary-entity info). For now, generic guidance shown in the execution report: refactor the workflow to target `powerpagecomponent` and re-register.
 
 Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#considerations-for-site-customization-when-migrating-sites-from-standard-to-enhanced-data-model>
 

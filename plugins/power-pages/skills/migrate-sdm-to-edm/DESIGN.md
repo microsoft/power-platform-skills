@@ -246,9 +246,61 @@ The skill executes local-only analysis (no Dataverse API) for every customizatio
 - **`categorizePlugin(snippet)`** — name-prefix match on `Microsoft.*` / `Adxstudio.*` / custom; emits per-finding action including original entity and step name.
 - **`buildDataModelExtensionChecklists(items)`** — groups column findings by source `adx_*` table; produces one checklist per source table with suggested new-table name and step-by-step guidance from the migration doc.
 
-Output is rendered in `skill-execution-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", and "Data Model Extensions — Per-table Remediation Checklists" sections.
+Output is rendered in `skill-execution-report.html` under the "Liquid Findings — Categorized", "Plugin Findings — Categorized", "Auto-applied Rewrites", "Data Model Extensions — Per-table Remediation Checklists", and the augmented-prompts sections.
 
 See `assets/skill-execution-report.html` for the rendered remediation guidance shown to users.
+
+---
+
+## Augmented Prompts for Customer-Owned Code
+
+Two customization categories — **custom plugins** and **Data Model Extensions** — involve modifying code or schema that the skill does NOT own:
+
+- **Plugins** live in the customer's plugin source repo (often a separate code repository)
+- **DME (custom columns on adx_* tables)** require Dataverse schema changes that should land via a reviewable solution package, not direct API calls
+
+For both, the skill follows a **paste-ready augmented-prompt** pattern:
+
+1. The script generates a complete, self-contained prompt tailored to the user's actual findings
+2. The prompt is written to a `.txt` file in `<OUTPUT_DIR>/` and embedded in `skill-execution-report.html`
+3. The user opens a fresh Claude Code session pointed at the relevant working directory (their plugin repo for plugins; any working dir for DME)
+4. The user pastes the prompt as the first message
+5. The receiving session performs the work — refactoring plugin code OR building a Dataverse solution package — and surfaces a diff or artifact for the user to review before applying
+
+### Why this design
+
+| Concern | Direct execution from this skill | Augmented prompt approach |
+| --- | --- | --- |
+| Customer-owned plugin source | Skill would need access to the plugin repo — not available | User runs the prompt where the repo is — clean separation |
+| Dataverse schema changes | Direct API calls are hard to undo, hard to review, bypass ALM | Solution package is a reviewable artifact; user imports it themselves |
+| Decision-making (publisher prefix, column types, on-delete behavior) | Lots of interactive prompts in our skill | Batched in the receiving session |
+| Source control | Changes hit Dataverse / customer repo invisibly | All artifacts version-controllable as files |
+
+### Template storage
+
+Prompt templates live as static text files under `scripts/prompts/`:
+
+- `plugin-remediation.template.txt` — placeholder: `{{PLUGIN_FINDINGS_BLOCK}}`
+- `dme-remediation.template.txt` — placeholder: `{{DME_TABLE_GROUPS_BLOCK}}`
+
+The script's `loadPromptTemplate()` reads the file and substitutes the placeholder with the actual findings (markdown-formatted tables / groupings) before writing to `<OUTPUT_DIR>/plugin-remediation-prompt.txt` and `<OUTPUT_DIR>/dme-remediation-prompt.txt`.
+
+### Surfacing to the user
+
+All three locations cover different user contexts:
+
+1. **Terminal output** at the end of script run — visual separator banner with file paths and copy-paste instructions
+2. **Standalone `.txt` files** in `<OUTPUT_DIR>/` — for users who want the prompts without keeping the HTML open
+3. **HTML execution report** — embedded inside collapsible `<details>` blocks with copy-to-clipboard buttons (uses `navigator.clipboard.writeText` — self-contained, no external JS)
+
+### What's covered today
+
+| Category | Prompt? | Notes |
+| --- | --- | --- |
+| Custom plugins | ✅ Yes | Refactor pattern, build/test/deploy guidance, no production push |
+| Data Model Extensions | ✅ Yes | Solution-package output; data-migration step documented but not packaged |
+| Custom-to-adx relationships | ✅ (within DME prompt) | Receiving session can add relationships to the same solution |
+| Custom workflows | ❌ No (yet) | Would require per-workflow Dataverse queries to be useful; generic doc guidance in HTML report for now |
 
 ---
 

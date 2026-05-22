@@ -497,7 +497,7 @@
         </div>
         <div class="metadata-item">
           <span class="metadata-label">Report Generated</span>
-          <span class="metadata-value">2026-05-13</span>
+          <span class="metadata-value">2026-05-22</span>
         </div>
         <div class="metadata-item">
           <span class="metadata-label">Total Execution Time</span>
@@ -571,7 +571,7 @@
     </div>
     <div class="phase">
       <div class="command-label">Step 3: Download Customization Report</div>
-      <div class="command-block">pac pages migrate-datamodel --webSiteId "{{WEBSITE_ID}}" --siteCustomizationReportPath "./migration-report"</div>
+      <div class="command-block">pac pages migrate-datamodel --webSiteId "{{WEBSITE_ID}}" --siteCustomizationReportPath "./migration-reports"</div>
       <div class="result-item success">
         <div class="result-title">✓ Success</div>
         <div class="result-description">Customization report downloaded and analyzed</div>
@@ -699,7 +699,7 @@
         <div class="phase-description">Customization report downloaded and analyzed</div>
         <div class="phase-logs">
           
-        <div class="phase-log-item">✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath ./migration-report</div>
+        <div class="phase-log-item">✓ Executed: pac pages migrate-datamodel --webSiteId [GUID] --siteCustomizationReportPath ./migration-reports</div>
     
         <div class="phase-log-item">✓ SiteCustomization.csv downloaded successfully</div>
     
@@ -939,11 +939,11 @@
       <div class="remediation-steps" style="margin-top: 12px;">
         <div class="remediation-title">FetchXML rewriter</div>
         <ul class="remediation-list">
-          <li>Files scanned: <strong>6</strong></li>
+          <li>Files scanned: <strong>4</strong></li>
           <li>Files modified: <strong>4</strong></li>
           <li>Entity / link-entity rewrites: <strong>4</strong></li>
           <li>Skipped (manual review needed): <strong>0</strong></li>
-          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\output\fetchxml-rewrites.diff</code></li>
+          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\output\fetchxml-rewrites.diff</code></li>
         </ul>
     
         <div class="table-container" style="margin-top: 8px;">
@@ -954,28 +954,28 @@
             <tbody>
               
                 <tr>
-                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</small></td>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</small></td>
                   <td>&lt;entity&gt;</td>
                   <td><code>adx_entitylist</code></td>
                   <td><code>17</code></td>
                 </tr>
               
                 <tr>
-                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\footer\Footer.webtemplate.source.html</small></td>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\mysite\web-templates\footer\Footer.webtemplate.source.html</small></td>
                   <td>&lt;entity&gt;</td>
                   <td><code>adx_contentsnippet</code></td>
                   <td><code>7</code></td>
                 </tr>
               
                 <tr>
-                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\profile\Profile.webtemplate.source.html</small></td>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\mysite\web-templates\profile\Profile.webtemplate.source.html</small></td>
                   <td>&lt;entity&gt;</td>
                   <td><code>adx_webrole</code></td>
                   <td><code>11</code></td>
                 </tr>
               
                 <tr>
-                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</small></td>
+                  <td><small>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</small></td>
                   <td>&lt;entity&gt;</td>
                   <td><code>adx_webpage</code></td>
                   <td><code>2</code></td>
@@ -988,10 +988,10 @@
       <div class="remediation-steps" style="margin-top: 12px;">
         <div class="remediation-title">Liquid <code>entities['adx_*']</code> annotator</div>
         <ul class="remediation-list">
-          <li>Files scanned: <strong>6</strong></li>
+          <li>Files scanned: <strong>4</strong></li>
           <li>Files annotated: <strong>2</strong></li>
           <li>Suggestions inserted: <strong>2</strong></li>
-          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build\output\liquid-suggestions.diff</code></li>
+          <li>Diff file: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\output\liquid-suggestions.diff</code></li>
         </ul>
         <p><em>Suggestions are inserted as <code>{%- comment -%}</code> blocks above each <code>entities['adx_*']</code> usage. Review and replace the original line — or accept the comment and leave the original (Liquid will ignore comments).</em></p>
       </div>
@@ -999,6 +999,380 @@
       <p style="margin-top: 12px;"><strong>Next step:</strong> review the diff files, then run <code>pac pages upload --path &lt;site-path&gt; --webSiteId &lt;GUID&gt;</code> to push the rewritten source back to Dataverse.</p>
     </div>
   
+      <div class="remediation-section" style="margin-top: 16px;">
+        <h3>🔌 Plugin Remediation — Augmented Prompt</h3>
+        <p>Custom plugins on <code>adx_*</code> entities need code-level refactoring. The skill does NOT touch your plugin source — instead, this is a paste-ready prompt for a fresh Claude Code session pointed at your plugin source repo.</p>
+        <p><strong>How to use:</strong></p>
+        <ol>
+          <li>Open a new Claude Code session: <code>claude</code> in your plugin source repo</li>
+          <li>Click <strong>Copy prompt</strong> below and paste as your first message</li>
+          <li>The receiving session will locate plugins, refactor, and show a diff for your approval</li>
+        </ol>
+        <p>Saved at: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\output\plugin-remediation-prompt.txt</code></p>
+        <details>
+          <summary><strong>Show / copy prompt</strong></summary>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('plugin-prompt').textContent).then(() => this.textContent = 'Copied ✓')" style="margin: 8px 0; padding: 6px 12px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer;">Copy prompt</button>
+          <pre id="plugin-prompt" style="background: #f5f5f5; padding: 12px; border-radius: 4px; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px;">You are an expert in Power Apps plugin development for Power Pages. The user has
+a Power Pages site being migrated from the Standard Data Model (SDM) to the
+Enhanced Data Model (EDM). A customization scan identified custom plugin
+assemblies registered against `adx_*` entities that need to be refactored to
+target the EDM model (`powerpagecomponent`).
+
+## Findings (verbatim from the customization report)
+
+| Plugin name | Target entity | Step name | Category |
+| --- | --- | --- | --- |
+| `Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin` | `adx_websitelanguage` | Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin: Create of adx_websitelanguage | Adxstudio (verify V2) |
+| `Microsoft.Crm.ObjectModel.SyncWorkflowExecutionPlugin` | `adx_webrole` | ? | Microsoft (no action) |
+| `Contoso.Plugins.WebPageAuditPlugin` | `adx_webpage` | Contoso.Plugins.WebPageAuditPlugin: Update of adx_webpage | Custom (refactor) |
+| `Contoso.Plugins.ContentSnippetCachePlugin` | `adx_contentsnippet` | Contoso.Plugins.ContentSnippetCachePlugin: Create of adx_contentsnippet | Custom (refactor) |
+| `Contoso.Plugins.EntityFormSubmitPlugin` | `adx_entityform` | Contoso.Plugins.EntityFormSubmitPlugin: Create of adx_entityform | Custom (refactor) |
+| `Contoso.Plugins.WebRoleAssignmentPlugin` | `adx_webrole` | Contoso.Plugins.WebRoleAssignmentPlugin: Associate of adx_webrole | Custom (refactor) |
+
+Plugins prefixed with `Microsoft.*` are platform plugins — no action needed.
+Plugins prefixed with `Adxstudio.*` are legacy framework plugins typically
+handled by the V2 EDM solution upgrade; verify the V2 solution is installed
+in the target environment. Custom plugins (everything else) need code-level
+refactoring.
+
+## Your task
+
+1. **Locate the plugin source.** Look in the current working directory for:
+   - A C# class library project (`*.csproj`) whose assembly name matches
+     the plugin assembly name from the findings, OR
+   - A `Plugins/`, `src/Plugins/`, or similar folder containing one
+   If not found, ASK the user where their plugin source repo lives. Do not
+   guess.
+
+2. **For each custom finding above, refactor the plugin code:**
+
+   a. Find the plugin class. Identify the entity reference. Common patterns:
+      - Set in constructor: `this.EntityName = &quot;adx_webpage&quot;;`
+      - In a `[CrmPluginRegistration(...)]` attribute: target entity is one
+        of the parameters
+      - In a separate registration XML (`*.crmregister`, `RegisterFile.xml`):
+        `PrimaryEntityName=&quot;adx_webpage&quot;`
+
+   b. Change the target entity name from `adx_*` to `powerpagecomponent`.
+
+   c. If the plugin queries the entity via `RetrieveMultiple` / FetchXML /
+      QueryExpression, add a filter on the `powerpagecomponenttype` attribute.
+      Use this mapping:
+
+      Publishing State = 1, Web Page = 2, Web File = 3, Web Link Set = 4,
+      Web Link = 5, Page Template = 6, Content Snippet = 7, Web Template = 8,
+      Site Setting = 9, Web Page Access Control Rule = 10, Web Role = 11,
+      Website Access = 12, Site Marker = 13, Basic Form = 15,
+      Basic Form Metadata = 16, List = 17, Table Permission = 18,
+      Advanced Form = 19, Advanced Form Step = 20, Advanced Form Metadata = 21,
+      Poll Placement = 24, Ad Placement = 26, Bot Consumer = 27,
+      Column Permission Profile = 28, Column Permission = 29, Redirect = 30,
+      Publishing State Transition Rule = 31, Shortcut = 32, Cloud Flow = 33,
+      UX Component = 34
+
+   d. Attribute references (`adx_name`, `adx_partialurl`, etc.) STAY AS-IS.
+      PAC&#039;s EDM `powerpagecomponent` table exposes the legacy adx_* names as
+      logical attribute names. You do NOT need to rename
+      `GetAttributeValue&lt;T&gt;(&quot;adx_name&quot;)` calls.
+
+   e. Update plugin step registration metadata (`*.crmregister`,
+      `RegisterFile.xml`, or solution-embedded `SdkMessageProcessingStep`)
+      to reference `powerpagecomponent` for `PrimaryEntityName`.
+
+3. **Generate a diff for user review** BEFORE saving any changes. Show what
+   you&#039;re changing and why for each plugin.
+
+4. **Get explicit user approval** before writing changes to disk.
+
+5. **After changes are approved:**
+   - Build: `dotnet build` (or `msbuild` for old-style projects)
+   - Run existing tests: `dotnet test`
+   - Surface any build/test failures — do NOT proceed with broken code
+
+6. **Deployment guidance** (print, do not run):
+   - `pac plugin push --pluginAssemblyPath &lt;build-output&gt;/&lt;Assembly&gt;.dll`
+   - Or, if plugins are part of a solution: re-pack and re-import the solution
+
+## References
+
+- SDM to EDM migration: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model
+- Plugin development: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/plug-ins
+- pac plugin commands: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/plugin
+
+## Constraints
+
+- DO NOT modify code without showing the user a diff first
+- DO NOT push to a deployed environment — only build locally
+- DO NOT guess at file locations — ask the user
+- DO NOT change attribute references like `GetAttributeValue&lt;T&gt;(&quot;adx_name&quot;)`
+- If the source is in Git, suggest the user commit current state first so
+  they can revert easily
+- Leave `Microsoft.*` and `Adxstudio.*` plugins alone — they are not the
+  customer&#039;s code
+</pre>
+        </details>
+      </div>
+    
+
+      <div class="remediation-section" style="margin-top: 16px;">
+        <h3>🗂️ Data Model Extension Remediation — Augmented Prompt</h3>
+        <p>Custom columns on <code>adx_*</code> tables need to move into new custom tables with lookups to <code>powerpagecomponent</code>. The skill does NOT make schema changes directly — instead, this is a paste-ready prompt for a fresh Claude Code session that will produce a Dataverse solution package (.zip) for you to review and import.</p>
+        <p><strong>How to use:</strong></p>
+        <ol>
+          <li>Open a new Claude Code session: <code>claude</code> in any working directory</li>
+          <li>Click <strong>Copy prompt</strong> below and paste as your first message</li>
+          <li>The receiving session will ask for your publisher prefix, build a solution package, and document the import + data migration steps</li>
+          <li>Review the generated solution before <code>pac solution import</code></li>
+        </ol>
+        <p>Saved at: <code>C:\Users\ashwanikumar\AppData\Local\Temp\sample-build2\output\dme-remediation-prompt.txt</code></p>
+        <details>
+          <summary><strong>Show / copy prompt</strong></summary>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('dme-prompt').textContent).then(() => this.textContent = 'Copied ✓')" style="margin: 8px 0; padding: 6px 12px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer;">Copy prompt</button>
+          <pre id="dme-prompt" style="background: #f5f5f5; padding: 12px; border-radius: 4px; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px;">You are an expert in Power Platform solution packaging. The user has a Power
+Pages site being migrated from SDM to EDM. A customization scan identified
+custom columns on `adx_*` metadata tables that need to be moved into new
+custom tables (per Microsoft&#039;s migration guidance — `adx_*` tables become
+`powerpagecomponent` in EDM, so custom columns can&#039;t stay where they are).
+
+The correct fix is to deliver a Dataverse solution package containing:
+- One new custom table per affected `adx_*` table
+- Each custom column moved to the corresponding new table
+- A lookup column on each new table pointing to `powerpagecomponent` (so each
+  new-table row is associated with its EDM component)
+
+The user will import this solution into their environment and run a separate
+data-migration step (covered at the end of this prompt).
+
+## Findings (per-table groupings from the customization report)
+
+### Source: `annotation` → suggested target: `&lt;your_prefix&gt;_annotation`
+
+Custom columns to move:
+
+- `iscompressedName`
+- `IsCompressed`
+- `isautonomouslycreatedName`
+- `isAutonomouslyCreated`
+- `DummyRegarding`
+- `DummyFileName`
+
+### Source: `adx_poll` → suggested target: `&lt;your_prefix&gt;_poll`
+
+Custom columns to move:
+
+- `mspp_webtemplateidName`
+- `mspp_webtemplateid`
+- `mspp_websiteidName`
+- `mspp_websiteid`
+
+### Source: `adx_ad` → suggested target: `&lt;your_prefix&gt;_ad`
+
+Custom columns to move:
+
+- `mspp_webtemplateidName`
+- `mspp_webtemplateid`
+- `mspp_websiteidName`
+- `mspp_websiteid`
+- `mspp_webpageidName`
+- `mspp_webpageid`
+- `mspp_webfileidName`
+- `mspp_webfileid`
+- `mspp_redirectwebfileidName`
+- `mspp_redirectwebfileid`
+- `mspp_publishingstateidName`
+- `mspp_publishingstateid`
+
+### Source: `adx_webpage` → suggested target: `&lt;your_prefix&gt;_webpage`
+
+Custom columns to move:
+
+- `contoso_redirecturl`
+- `contoso_expirydate`
+
+### Source: `adx_entityform` → suggested target: `&lt;your_prefix&gt;_entityform`
+
+Custom columns to move:
+
+- `contoso_successredirecturl`
+
+### Source: `adx_webform` → suggested target: `&lt;your_prefix&gt;_webform`
+
+Custom columns to move:
+
+- `contoso_completionmessage`
+
+### Source: `adx_contentsnippet` → suggested target: `&lt;your_prefix&gt;_contentsnippet`
+
+Custom columns to move:
+
+- `contoso_snippettype`
+
+### Source: `adx_sitesetting` → suggested target: `&lt;your_prefix&gt;_sitesetting`
+
+Custom columns to move:
+
+- `contoso_environment`
+
+## Your task
+
+1. **Ask the user for their publisher prefix** (e.g., `contoso`, `acme`).
+   This prefix is applied to all new table and column names. If they have an
+   existing publisher in Dataverse, use it; otherwise help them pick one.
+
+2. **Ask the user for the solution unique name** (e.g.,
+   `&lt;prefix&gt;_PowerPagesEdmMigration`). This is the solution package name.
+
+3. **Confirm the plan** with the user BEFORE building anything. Show the
+   list of new tables and the columns/lookups each contains. Wait for
+   approval.
+
+4. **Initialize a new solution project:**
+
+       pac solution init --publisher-name &quot;&lt;Publisher Display Name&gt;&quot; `
+                         --publisher-prefix &quot;&lt;prefix&gt;&quot; `
+                         --outputDirectory &quot;./edm-migration-solution&quot;
+
+5. **For each grouping in the findings, create:**
+
+   a. **A new custom table.** Naming: `&lt;prefix&gt;_&lt;original-suffix&gt;` (e.g.,
+      `adx_webpage` → `contoso_webpage`). Conventions:
+      - Display name: title-cased original suffix (e.g., &quot;Webpage&quot;)
+      - Primary name column: `&lt;prefix&gt;_name`, string, MaxLength 100
+
+   b. **Each custom column from the finding** added to the new table.
+      Use the SAME column logical name as the original (just on the new
+      table — `contoso_redirecturl` stays `contoso_redirecturl`, not
+      renamed).
+
+      For column data types, infer from the column logical name (heuristic
+      only — confirm with user when ambiguous):
+      - Ends in `name`, contains `text|description|title|code|url|mimetype`:
+        String, MaxLength 100
+      - Starts with `is`, `has`, contains `enabled|compressed`: TwoOption
+      - Contains `count|number` (and not an id): Integer
+      - Ends in `id` and refers to a Dataverse entity: Lookup (ask user for
+        the target entity)
+      - Contains `date|time`: DateTime
+      - Ambiguous: ASK the user
+
+   c. **A lookup column** on the new table pointing to `powerpagecomponent`:
+      - Logical name: `&lt;prefix&gt;_powerpagecomponentid`
+      - Display name: &quot;Power Pages Component&quot;
+      - Required: Yes (each row belongs to exactly one component)
+      - On-delete behavior: ASK the user (Cascade cleans up extension rows
+        when the component is deleted; Remove Link sets to null and leaves
+        orphan rows. Default suggestion: Cascade for tighter coupling.)
+
+6. **Show the user the solution structure** before packing. Show the
+   directory tree and the entity XML for at least one new table.
+
+7. **Pack the solution:**
+
+       pac solution pack --zipfile &quot;./edm-migration-solution.zip&quot; `
+                         --folder &quot;./edm-migration-solution&quot; `
+                         --packagetype Unmanaged
+
+   Default to Unmanaged so the user can inspect/modify after import. If the
+   user plans to deploy to a production environment, ASK whether they want
+   Managed instead (cleaner uninstall, prevents post-import editing).
+
+8. **Document the import + data migration steps** (print, do NOT run):
+
+   a. Import the solution:
+
+          pac solution import --path &quot;./edm-migration-solution.zip&quot;
+
+   b. After import, migrate row data from the old `adx_*` tables into the
+      new custom tables. For each finding:
+      - Read rows from the source `adx_*` table
+      - For each row, find the corresponding `powerpagecomponent` row
+        (joined by primary key — `powerpagecomponent` rows preserve the
+        original adx_* row ID in EDM)
+      - Create a row in the new custom table with:
+        - The lookup column set to the matching `powerpagecomponent`
+        - The custom column values copied verbatim
+
+      Provide TWO sample data-migration approaches:
+
+      **Approach 1 — Power Automate flow (low volumes, &lt; 1000 rows):**
+
+      Skeleton:
+        Trigger: Manual / Recurrence
+        Step 1: List rows from &lt;adx_source_table&gt; via Dataverse connector
+        Step 2: For each row → Create a new row in &lt;new_custom_table&gt; with
+                &lt;prefix&gt;_powerpagecomponentid = item().&lt;primary_key&gt; and
+                &lt;custom_columns&gt; copied verbatim
+
+      **Approach 2 — C# console app (higher volumes, batched):**
+
+      Skeleton:
+
+          using Microsoft.Xrm.Sdk;
+          using Microsoft.Xrm.Sdk.Messages;
+          using Microsoft.Xrm.Sdk.Query;
+          // ... auth setup omitted ...
+
+          var sourceQuery = new QueryExpression(&quot;adx_&lt;source&gt;&quot;) {
+              ColumnSet = new ColumnSet(&quot;&lt;custom_column1&gt;&quot;, &quot;&lt;custom_column2&gt;&quot;, &quot;&lt;source&gt;id&quot;)
+          };
+          var sourceRows = service.RetrieveMultiple(sourceQuery);
+
+          var batch = new ExecuteMultipleRequest {
+              Requests = new OrganizationRequestCollection(),
+              Settings = new ExecuteMultipleSettings { ContinueOnError = false, ReturnResponses = false }
+          };
+
+          foreach (var src in sourceRows.Entities) {
+              var newRow = new Entity(&quot;&lt;prefix&gt;_&lt;target&gt;&quot;);
+              newRow[&quot;&lt;prefix&gt;_powerpagecomponentid&quot;] = new EntityReference(
+                  &quot;powerpagecomponent&quot;, src.Id);
+              newRow[&quot;&lt;custom_column1&gt;&quot;] = src[&quot;&lt;custom_column1&gt;&quot;];
+              // ... copy remaining custom columns ...
+              batch.Requests.Add(new CreateRequest { Target = newRow });
+
+              if (batch.Requests.Count == 1000) {
+                  service.Execute(batch);
+                  batch.Requests.Clear();
+              }
+          }
+          if (batch.Requests.Count &gt; 0) service.Execute(batch);
+
+      Adapt the placeholders to the user&#039;s actual table/column names.
+
+   c. After data migration, the user must:
+      - Update any Liquid/FetchXML references to the old adx_* custom
+        columns to instead query the new custom table via its lookup.
+        (The SDM-to-EDM skill&#039;s FetchXML rewriter handles entity-level
+        changes; custom-column references need this manual update.)
+      - Then run the actual SDM-to-EDM migration via PAC CLI (a separate
+        step in the migration skill, not in this remediation prompt).
+
+## References
+
+- SDM to EDM migration: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model
+- pac solution commands: https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/solution
+- Solution / ALM concepts: https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm
+- Power Pages component types (for understanding the EDM model):
+  https://learn.microsoft.com/en-us/power-pages/configure/enhanced-data-model
+
+## Constraints
+
+- DO NOT make any direct Dataverse API calls. Generate the solution package
+  only — the user imports it themselves
+- ALL schema decisions (table names, column types, display names, on-delete
+  behavior) must be reviewed by the user before pack
+- Default to Unmanaged solutions for iteration; offer Managed for production
+- DO NOT pack until the user has approved the structure
+- If the user already has a publisher in their Dataverse environment, prefer
+  using it rather than creating a new one — ask first
+- Generate the solution as a separate directory (`./edm-migration-solution/`)
+  so it doesn&#039;t pollute cwd
+- The data-migration step is OUTSIDE the solution import scope — the user
+  runs it separately. Do NOT include data migration in the solution package
+</pre>
+        </details>
+      </div>
+    
       <div class="remediation-section">
         <h3>💧 Liquid Findings — Categorized by Pattern</h3>
         <p>The customization report flags any <code>adx_*</code> occurrence in Liquid files, but most are false positives. Per-finding breakdown:</p>
@@ -1123,9 +1497,9 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\default-studio-template\Default-studio-template.webtemplate.source.html</small>
+            <small>Location: web-templates\default-studio-template\Default-studio-template.webtemplate.source.html</small>
             <br><small>Snippet: {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
-      {% editable page &#039;adx_copy&#039; type: &#039;h...</small>
+      {% editable page &#039;adx_copy&#039; type: &#039;...</small>
           </div>
         </div>
       
@@ -1133,10 +1507,10 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\header\Header.webtemplate.source.html</small>
+            <small>Location: web-templates\header\Header.webtemplate.source.html</small>
             <br><small>Snippet: {% assign homeurl = website.adx_partialurl %}
 {% assign homeurl = website.adx_partialurl %}
-{% assig...</small>
+{% ass...</small>
           </div>
         </div>
       
@@ -1144,9 +1518,9 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-header\Page-Header.webtemplate.source.html</small>
+            <small>Location: web-templates\page-header\Page-Header.webtemplate.source.html</small>
             <br><small>Snippet: &lt;h1&gt;{% editable page &#039;adx_title&#039; type: &#039;html&#039;, liquid: true %}&lt;/h1&gt;
-    &lt;h1&gt;{% editable page &#039;adx_ti...</small>
+    &lt;h1&gt;{% editable page &#039;adx_t...</small>
           </div>
         </div>
       
@@ -1154,9 +1528,9 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `{% editable obj 'adx_X' %}` — the attribute parameter uses the logical name and works on EDM.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-copy\Page-Copy.webtemplate.source.html</small>
+            <small>Location: web-templates\page-copy\Page-Copy.webtemplate.source.html</small>
             <br><small>Snippet: {% editable page &#039;adx_copy&#039; type: &#039;html&#039;, liquid: true %}
-    {% editable page &#039;adx_copy&#039; type: &#039;htm...</small>
+    {% editable page &#039;adx_copy&#039; type: &#039;ht...</small>
           </div>
         </div>
       
@@ -1164,9 +1538,9 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
+            <small>Location: web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
             <br><small>Snippet: {% assign botConfig = botconsumer.adx_configjson %}
-{% assign botConfig = botconsumer.adx_configjson...</small>
+{% assign botConfig = botconsumer.adx_configjso...</small>
           </div>
         </div>
       
@@ -1174,9 +1548,9 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
+            <small>Location: web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html</small>
             <br><small>Snippet: &quot;botSchemaName&quot;: &quot;{{ botconsumer.adx_botschemaname }}&quot;,
-            &quot;botSchemaName&quot;: &quot;{{ botconsumer...</small>
+            &quot;botSchemaName&quot;: &quot;{{ botconsume...</small>
           </div>
         </div>
       
@@ -1184,10 +1558,10 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `snippets['adx_X']` / `weblinks['adx_X']` / similar — the index is a user-defined snippet/link/setting name, not an attribute.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\search\Search.webtemplate.source.html</small>
+            <small>Location: web-templates\search\Search.webtemplate.source.html</small>
             <br><small>Snippet: {% assign snippet = snippets[&#039;adx_name&#039;] %}
 {% assign snippet = snippets[&#039;adx_name&#039;] %}
-{% assign sn...</small>
+{% assign ...</small>
           </div>
         </div>
       
@@ -1195,10 +1569,10 @@
           <div class="result-title">⚠ Liquid contains adx references</div>
           <div class="result-description">Likely no action needed. Reason: `object.adx_X` — documented `[logical_name]` accessor on Liquid objects (page, website, entity, etc.); resolves on EDM via runtime virtualization.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\navigation\Navigation.webtemplate.source.html</small>
+            <small>Location: web-templates\navigation\Navigation.webtemplate.source.html</small>
             <br><small>Snippet: {% assign url = page.adx_partialurl %}
   {% assign url = page.adx_partialurl %}
-  {% assign url = pa...</small>
+  {% assign url = ...</small>
           </div>
         </div>
       
@@ -1206,34 +1580,10 @@
           <div class="result-title">⚠ FetchXml contains adx references</div>
           <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\profile\Profile.webtemplate.source.html</small>
+            <small>Location: web-templates\profile\Profile.webtemplate.source.html</small>
             <br><small>Snippet: {% fetchxml roles %}
 &lt;fetch version=&quot;1.0&quot;&gt;
   &lt;entity name=&quot;adx_webrole&quot;&gt;
-    &lt;attribute name=&quot;adx_na...</small>
-          </div>
-        </div>
-      
-        <div class="result-item warning">
-          <div class="result-title">⚠ FetchXml contains adx references</div>
-          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
-          <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html</small>
-            <br><small>Snippet: {% fetchxml pages %}
-&lt;fetch version=&quot;1.0&quot; top=&quot;10&quot;&gt;
-  &lt;entity name=&quot;adx_webpage&quot;&gt;
-    &lt;attribute nam...</small>
-          </div>
-        </div>
-      
-        <div class="result-item warning">
-          <div class="result-title">⚠ FetchXml contains adx references</div>
-          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
-          <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html</small>
-            <br><small>Snippet: {% fetchxml lists %}
-&lt;fetch version=&quot;1.0&quot;&gt;
-  &lt;entity name=&quot;adx_entitylist&quot;&gt;
     &lt;attribute name=&quot;adx...</small>
           </div>
         </div>
@@ -1242,11 +1592,35 @@
           <div class="result-title">⚠ FetchXml contains adx references</div>
           <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
           <div class="result-details">
-            <small>Location: \\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\footer\Footer.webtemplate.source.html</small>
+            <small>Location: web-templates\sitemap\Sitemap.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml pages %}
+&lt;fetch version=&quot;1.0&quot; top=&quot;10&quot;&gt;
+  &lt;entity name=&quot;adx_webpage&quot;&gt;
+    &lt;attribute ...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: web-templates\entity-list\Entity-List.webtemplate.source.html</small>
+            <br><small>Snippet: {% fetchxml lists %}
+&lt;fetch version=&quot;1.0&quot;&gt;
+  &lt;entity name=&quot;adx_entitylist&quot;&gt;
+    &lt;attribute name=&quot;...</small>
+          </div>
+        </div>
+      
+        <div class="result-item warning">
+          <div class="result-title">⚠ FetchXml contains adx references</div>
+          <div class="result-description">Use `--automate-fetchxml` to rewrite `<entity name='adx_*'>` and `<link-entity name='adx_*'>` to `powerpagecomponent` + `powerpagecomponenttype` filter automatically.</div>
+          <div class="result-details">
+            <small>Location: web-templates\footer\Footer.webtemplate.source.html</small>
             <br><small>Snippet: {% fetchxml snippets %}
 &lt;fetch version=&quot;1.0&quot;&gt;
   &lt;entity name=&quot;adx_contentsnippet&quot;&gt;
-    &lt;attribute na...</small>
+    &lt;attribute...</small>
           </div>
         </div>
       
@@ -1664,7 +2038,7 @@
     </tr>
     <tr>
       <td>Migration Date</td>
-      <td>2026-05-13</td>
+      <td>2026-05-22</td>
     </tr>
   
           </tbody>

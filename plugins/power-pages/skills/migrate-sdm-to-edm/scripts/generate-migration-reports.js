@@ -442,6 +442,62 @@ function generateAutoRewriteSection(fetchXmlResults, liquidResults) {
 }
 
 /**
+ * Generate the augmented-prompts section for the execution HTML report.
+ * Renders the plugin and DME prompts in scrollable <pre> blocks with
+ * copy-to-clipboard buttons. Returns empty string if no prompts were produced.
+ */
+function generateAugmentedPromptsSection(promptResults) {
+  if (!promptResults || (!promptResults.pluginPrompt && !promptResults.dmePrompt)) return '';
+
+  const promptCards = [];
+
+  if (promptResults.pluginPrompt) {
+    promptCards.push(`
+      <div class="remediation-section" style="margin-top: 16px;">
+        <h3>🔌 Plugin Remediation — Augmented Prompt</h3>
+        <p>Custom plugins on <code>adx_*</code> entities need code-level refactoring. The skill does NOT touch your plugin source — instead, this is a paste-ready prompt for a fresh Claude Code session pointed at your plugin source repo.</p>
+        <p><strong>How to use:</strong></p>
+        <ol>
+          <li>Open a new Claude Code session: <code>claude</code> in your plugin source repo</li>
+          <li>Click <strong>Copy prompt</strong> below and paste as your first message</li>
+          <li>The receiving session will locate plugins, refactor, and show a diff for your approval</li>
+        </ol>
+        <p>Saved at: <code>${escapeHtml(promptResults.pluginPath || '')}</code></p>
+        <details>
+          <summary><strong>Show / copy prompt</strong></summary>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('plugin-prompt').textContent).then(() => this.textContent = 'Copied ✓')" style="margin: 8px 0; padding: 6px 12px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer;">Copy prompt</button>
+          <pre id="plugin-prompt" style="background: #f5f5f5; padding: 12px; border-radius: 4px; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px;">${escapeHtml(promptResults.pluginPrompt)}</pre>
+        </details>
+      </div>
+    `);
+  }
+
+  if (promptResults.dmePrompt) {
+    promptCards.push(`
+      <div class="remediation-section" style="margin-top: 16px;">
+        <h3>🗂️ Data Model Extension Remediation — Augmented Prompt</h3>
+        <p>Custom columns on <code>adx_*</code> tables need to move into new custom tables with lookups to <code>powerpagecomponent</code>. The skill does NOT make schema changes directly — instead, this is a paste-ready prompt for a fresh Claude Code session that will produce a Dataverse solution package (.zip) for you to review and import.</p>
+        <p><strong>How to use:</strong></p>
+        <ol>
+          <li>Open a new Claude Code session: <code>claude</code> in any working directory</li>
+          <li>Click <strong>Copy prompt</strong> below and paste as your first message</li>
+          <li>The receiving session will ask for your publisher prefix, build a solution package, and document the import + data migration steps</li>
+          <li>Review the generated solution before <code>pac solution import</code></li>
+        </ol>
+        <p>Saved at: <code>${escapeHtml(promptResults.dmePath || '')}</code></p>
+        <details>
+          <summary><strong>Show / copy prompt</strong></summary>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('dme-prompt').textContent).then(() => this.textContent = 'Copied ✓')" style="margin: 8px 0; padding: 6px 12px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer;">Copy prompt</button>
+          <pre id="dme-prompt" style="background: #f5f5f5; padding: 12px; border-radius: 4px; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px;">${escapeHtml(promptResults.dmePrompt)}</pre>
+        </details>
+      </div>
+    `);
+  }
+
+  return promptCards.join('\n');
+}
+
+/**
  * Generate execution report HTML with placeholder structure
  */
 function generateExecutionReportHtml(args, remediationResults = null, customizations = {}, autoRewriteResults = {}) {
@@ -723,13 +779,18 @@ function generateExecutionReportHtml(args, remediationResults = null, customizat
     autoRewriteResults.liquid,
   );
 
+  // Augmented-prompts section (Plugin + DME). The skill does NOT modify customer-owned plugin
+  // code or Dataverse schema directly — instead it produces paste-ready prompts that the user
+  // takes to a fresh Claude session.
+  const augmentedPromptsSection = generateAugmentedPromptsSection(autoRewriteResults.prompts);
+
   // Generate remediation results section
   const remediationCategorization = remediationResults
     ? generateRemediationResultsSection(remediationResults)
     : '<div class="result-item success"><div class="result-title">✓ No findings to categorize</div><div class="result-description">No customizations were found in this run.</div></div>';
 
-  const remediationSection = `${autoRewriteSection}${remediationCategorization}`;
-  const showRemediationBlock = autoRewriteSection || remediationResults;
+  const remediationSection = `${autoRewriteSection}${augmentedPromptsSection}${remediationCategorization}`;
+  const showRemediationBlock = autoRewriteSection || augmentedPromptsSection || remediationResults;
 
   // Replace placeholders
   template = template
@@ -937,12 +998,20 @@ function categorizeLiquidFinding(snippet) {
  * (anything else) → custom user plugin; needs code refactor + re-registration
  */
 function categorizePlugin(snippet) {
-  const pluginMatch = snippet.match(/Plugin name\s*:\s*([^\s]+)/i);
-  const entityMatch = snippet.match(/Entity Name\s*:\s*(\w+)/i);
-  const stepMatch = snippet.match(/Step name\s*:\s*([^\n]*?)(?:\s\s+Entity Name|$)/i);
-  const pluginName = (pluginMatch && pluginMatch[1]) || 'unknown';
-  const entity = (entityMatch && entityMatch[1]) || null;
-  const stepName = (stepMatch && stepMatch[1].trim()) || null;
+  // CSV snippet format from PAC:
+  //   "Plugin name : <name>   Step name : <step>  Entity Name : <entity>"
+  // Fields are separated by 2+ whitespace characters. Split-based parsing is more
+  // robust than overlapping regex alternations (which mis-handle the empty-step
+  // case where input is "Step name :   Entity Name : <entity>").
+  const parts = (snippet || '').split(/\s{2,}/);
+  const pickField = (label) => {
+    const part = parts.find((p) => p.startsWith(label));
+    if (!part) return null;
+    return part.slice(label.length).replace(/^\s*:\s*/, '').trim() || null;
+  };
+  const pluginName = pickField('Plugin name') || 'unknown';
+  const entity = pickField('Entity Name');
+  const stepName = pickField('Step name');
 
   let category;
   let action;
@@ -1561,6 +1630,145 @@ function executeLiquidRewrites(sitePath, outputDir) {
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// Augmented prompts for customer-owned code (Plugin + DME remediation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Load a prompt template from scripts/prompts/.
+ * Templates contain `{{TOKEN}}` placeholders that are filled in at runtime.
+ */
+function loadPromptTemplate(templateName) {
+  const templatePath = path.join(__dirname, 'prompts', templateName);
+  if (!fs.existsSync(templatePath)) {
+    throw new Error(`Prompt template not found: ${templatePath}`);
+  }
+  return fs.readFileSync(templatePath, 'utf-8');
+}
+
+/**
+ * Format the plugin findings as a markdown table block for the prompt.
+ * Categorizes each finding using the same logic as categorizePlugin().
+ */
+function formatPluginFindingsBlock(pluginFindings) {
+  if (!pluginFindings || pluginFindings.length === 0) {
+    return '*(No plugin findings — this prompt was generated empty. Skip plugin remediation.)*';
+  }
+
+  const rows = pluginFindings.map((item) => {
+    const cat = categorizePlugin(item.snippet || '');
+    const category = cat.category === 'system'
+      ? 'Microsoft (no action)'
+      : cat.category === 'adxstudio'
+        ? 'Adxstudio (verify V2)'
+        : 'Custom (refactor)';
+    return `| \`${cat.pluginName}\` | \`${cat.entity || '?'}\` | ${cat.stepName || '?'} | ${category} |`;
+  });
+
+  return [
+    '| Plugin name | Target entity | Step name | Category |',
+    '| --- | --- | --- | --- |',
+    ...rows,
+  ].join('\n');
+}
+
+/**
+ * Format the DME findings as a markdown table block grouped by source table.
+ */
+function formatDmeTableGroupsBlock(dmeChecklists) {
+  if (!dmeChecklists || dmeChecklists.length === 0) {
+    return '*(No Data Model Extension findings — this prompt was generated empty. Skip DME remediation.)*';
+  }
+
+  const sections = dmeChecklists.map((group) => {
+    const columnList = group.columns.map((c) => `- \`${c}\``).join('\n');
+    return [
+      `### Source: \`${group.sourceTable}\` → suggested target: \`${group.suggestedNewTable}\``,
+      '',
+      'Custom columns to move:',
+      '',
+      columnList,
+    ].join('\n');
+  });
+
+  return sections.join('\n\n');
+}
+
+/**
+ * Generate the plugin remediation prompt by filling the template with findings.
+ * Returns the full prompt text. Caller is responsible for writing it to disk.
+ */
+function generatePluginRemediationPrompt(pluginFindings) {
+  const template = loadPromptTemplate('plugin-remediation.template.txt');
+  const findingsBlock = formatPluginFindingsBlock(pluginFindings);
+  return template.replace('{{PLUGIN_FINDINGS_BLOCK}}', findingsBlock);
+}
+
+/**
+ * Generate the DME remediation prompt by filling the template with checklists.
+ */
+function generateDmeRemediationPrompt(dmeChecklists) {
+  const template = loadPromptTemplate('dme-remediation.template.txt');
+  const tableGroupsBlock = formatDmeTableGroupsBlock(dmeChecklists);
+  return template.replace('{{DME_TABLE_GROUPS_BLOCK}}', tableGroupsBlock);
+}
+
+/**
+ * Write augmented prompts to .txt files in <output-dir> and return paths +
+ * the prompt strings (so the caller can also embed them in the HTML report).
+ */
+function writeAugmentedPrompts(customizations, remediationResults, outputDir) {
+  const pluginFindings = customizations['Plugins registered on adx entities'] || [];
+  const dmeChecklists = (remediationResults && remediationResults.dataModelChecklists) || [];
+
+  const result = { pluginPath: null, dmePath: null, pluginPrompt: '', dmePrompt: '' };
+
+  if (pluginFindings.length > 0) {
+    result.pluginPrompt = generatePluginRemediationPrompt(pluginFindings);
+    result.pluginPath = path.join(outputDir, 'plugin-remediation-prompt.txt');
+    fs.writeFileSync(result.pluginPath, result.pluginPrompt, 'utf-8');
+  }
+
+  if (dmeChecklists.length > 0) {
+    result.dmePrompt = generateDmeRemediationPrompt(dmeChecklists);
+    result.dmePath = path.join(outputDir, 'dme-remediation-prompt.txt');
+    fs.writeFileSync(result.dmePath, result.dmePrompt, 'utf-8');
+  }
+
+  return result;
+}
+
+/**
+ * Print the augmented prompts to the console with clear visual separators
+ * so the user knows where to copy from.
+ */
+function printAugmentedPromptsToConsole(promptResults) {
+  if (!promptResults.pluginPrompt && !promptResults.dmePrompt) return;
+
+  const banner = '═'.repeat(75);
+  console.log('');
+  console.log(banner);
+  console.log('  MANUAL REMEDIATION — augmented prompts ready');
+  console.log(banner);
+  console.log('');
+  console.log('The customization scan flagged manual remediation in two categories that');
+  console.log('this skill does NOT modify directly (your code stays yours):');
+  console.log('');
+  if (promptResults.pluginPath) {
+    console.log(`  → Plugin remediation prompt: ${promptResults.pluginPath}`);
+  }
+  if (promptResults.dmePath) {
+    console.log(`  → DME remediation prompt:    ${promptResults.dmePath}`);
+  }
+  console.log('');
+  console.log('Both prompts are also embedded in skill-execution-report.html.');
+  console.log('Paste each into a new Claude Code session pointed at the relevant');
+  console.log('working directory (your plugin source repo, or any empty dir for DME).');
+  console.log('');
+  console.log(banner);
+  console.log('');
+}
+
 /**
  * Main function
  */
@@ -1641,18 +1849,31 @@ async function main() {
       console.log(`  Diff: ${liquidRewriteResults.diffPath}`);
     }
 
+    // Generate augmented prompts for plugin and DME findings (customer-owned code
+    // is not modified by this skill — instead, paste-ready prompts are produced for
+    // the user to take to a fresh Claude session that can act on their plugin source
+    // or build a Dataverse solution package).
+    const promptResults = writeAugmentedPrompts(customizations, remediationResults, args['output-dir']);
+    if (promptResults.pluginPath) {
+      console.log(`✓ Plugin remediation prompt: ${promptResults.pluginPath}`);
+    }
+    if (promptResults.dmePath) {
+      console.log(`✓ DME remediation prompt:    ${promptResults.dmePath}`);
+    }
+
     // Generate customization report
     const customizationHtml = generateCustomizationReportHtml(args, customizations);
     const customizationPath = path.join(args['output-dir'], 'customization-report.html');
     fs.writeFileSync(customizationPath, customizationHtml, 'utf-8');
     console.log(`✓ Customization report generated: ${customizationPath}`);
 
-    // Generate execution report (include auto-rewrite results so the report shows what was applied).
+    // Generate execution report (include auto-rewrite results AND augmented prompts
+    // so the report shows everything that was produced).
     const executionHtml = generateExecutionReportHtml(
       args,
       remediationResults,
       customizations,
-      { fetchXml: fetchXmlRewriteResults, liquid: liquidRewriteResults },
+      { fetchXml: fetchXmlRewriteResults, liquid: liquidRewriteResults, prompts: promptResults },
     );
     const executionPath = path.join(args['output-dir'], 'skill-execution-report.html');
     fs.writeFileSync(executionPath, executionHtml, 'utf-8');
@@ -1660,6 +1881,9 @@ async function main() {
 
     console.log('\nReports generated successfully!');
     console.log(`Open in browser: file://${path.resolve(customizationPath)}`);
+
+    // Print the augmented-prompt handoff to the terminal with clear visual separators.
+    printAugmentedPromptsToConsole(promptResults);
   } catch (error) {
     console.error(`Error: ${error.message}`);
     process.exit(1);
