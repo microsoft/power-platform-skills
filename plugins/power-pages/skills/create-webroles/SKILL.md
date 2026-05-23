@@ -91,6 +91,8 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 **Goal**: Decide which new web roles to create based on site needs and user input
 
+> **Migration mode.** When invoked from `migrate-traditional-site-to-spa-implement` Phase 7.3.b, the caller's `inputContext` includes a path to `canonical-site-model.json#/preservation/webRoles[]`. In that case, skip the suggestion logic in step 1 below and treat the preservation list as the authoritative input: every entry with `source: true` must produce a role file (Phase 4); every entry with `source: false` is a justified addition that must also be created. Do **not** drop, rename, or change the `default` / `anonymous` / `authenticated` flags on a `source: true` entry; if a target collision exists, fail loudly. Skip Phase 3's interactive questions entirely in this mode — the migration's plan already settled them.
+
 **Actions**:
 
 1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
@@ -217,7 +219,15 @@ name: <Role Name>
 
    > "No problem! Remember to deploy your site using `/deploy-site` when you're ready to apply the new web roles to your Power Pages environment."
 
-**Output**: Summary presented and deployment offered
+6. **After `/deploy-site` returns (only when the user chose to deploy), clear the runtime cache.** Power Pages caches web-role records for 2–5 minutes; without an explicit flush, role assignments on the next request still resolve against the old cache.
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+   ```
+
+   The script reads the target website record id from `.powerpages-site/website.yml#id` so it cannot restart the wrong site when the migrated SPA shares a `siteName` with another website in the tenant.
+
+**Output**: Summary presented, deployment offered, runtime cache flushed when deploy ran
 
 ---
 

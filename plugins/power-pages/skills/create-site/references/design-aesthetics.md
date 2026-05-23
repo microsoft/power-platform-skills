@@ -62,6 +62,18 @@ Use this table to map aesthetic + mood preferences to concrete design choices:
 
 If the user provides a specific inspiration reference, adapt the design choices to match while maintaining the site's functionality.
 
+### Dark backgrounds: avoid thin serifs on small text
+
+When the aesthetic is **Dark & Moody** (or any palette whose `--color-bg` is darker than `#222`), navigation labels and other small / dense text **must use a sans-serif or monospace family**, not a serif. Thin serifs (Fraunces, Playfair, Newsreader, etc.) at 14–16px on a near-black background render as wispy strokes that look visually inactive — they pass automated AA contrast checks (luminance contrast is high) but fail perceptual stroke contrast because the strokes themselves are sub-pixel-thin against the dark field. axe-core does not catch this; the rule below does.
+
+Concretely:
+
+- For Dark & Moody + Elegant (default pairing `Playfair Display + Source Sans 3`), use **Source Sans 3** for nav labels, footer links, table headers, button text, and form labels. Reserve Playfair Display for display headings (h1, h2) at 28px or larger.
+- For Dark & Moody + Technical (default pairing `JetBrains Mono + Space Grotesk`), use **either** family for nav (both are sans/monospace).
+- If the user requests a different serif pairing for Dark & Moody, override the nav label font to a sans-serif companion (Source Sans 3, Inter, or Space Grotesk) and document the override in the rendered theme.
+
+The generated `theme.css` must encode this: at minimum a CSS custom property `--font-nav` that defaults to the sans/mono family, and every nav/footer/button selector references `var(--font-nav)` instead of `var(--font-body)`. Light-aesthetic builds may set `--font-nav: var(--font-body)` to keep the previous behavior.
+
 ---
 
 ## Design Application Steps

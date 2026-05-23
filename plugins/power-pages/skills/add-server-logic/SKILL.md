@@ -1178,11 +1178,19 @@ Use `AskUserQuestion`:
 
 **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
 
-After deployment succeeds, use `AskUserQuestion`:
+After `/deploy-site` returns, **clear the runtime cache** before any other follow-up step (including `/test-site`). Power Pages caches site settings and server-logic operation metadata for 2–5 minutes; without this flush, the first `/_api/serverlogics/<name>` request after deploy can still 404 or return the pre-deploy operation shape:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+The script reads the target website record id from `.powerpages-site/website.yml#id` so it restarts the right site even when the SPA's `siteName` collides with another website in the tenant.
+
+After the cache clear, use `AskUserQuestion`:
 
 | Question | Options |
 |----------|---------|
-| The site has been deployed. Would you like me to run `/test-site` to validate it now? | Yes, run `/test-site` (Recommended), No, skip testing |
+| The site has been deployed and the runtime cache cleared. Would you like me to run `/test-site` to validate it now? | Yes, run `/test-site` (Recommended), No, skip testing |
 
 **If "Yes, run `/test-site`"**: Invoke the `/test-site` skill.
 

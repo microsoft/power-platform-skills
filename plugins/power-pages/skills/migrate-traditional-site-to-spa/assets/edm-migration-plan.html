@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__PLAN_TITLE__ - __SITE_NAME__</title>
+<style>
+:root{
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020; --warn:#ff8c00; --warn-bg:#ff8c000a; --warn-border:#ff8c0020; --alert:#ca5010; --alert-bg:#ca50100a; --alert-border:#ca501020;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
+  --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.layout{display:flex;min-height:calc(100vh - 65px);}
+.sidebar{width:200px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.9;}
+.content{flex:1;min-width:0;padding:32px 40px 72px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+.section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
+.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
+.stat-card:nth-child(1)::after{background:var(--accent);}
+.stat-card:nth-child(2)::after{background:var(--pass);}
+.stat-card:nth-child(3)::after{background:var(--purple);}
+.stat-card:nth-child(4)::after{background:var(--alert);}
+.stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+.table-wrapper{overflow-x:auto;margin-top:12px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+thead{background:var(--surface2);border-bottom:2px solid var(--border);}
+th{padding:12px 8px;text-align:left;font-weight:700;color:var(--text-bright);}
+td{padding:10px 8px;border-bottom:1px solid var(--border-light);}
+tbody tr:hover{background:var(--accent-bg);}
+.confidence-high{background:var(--pass-bg);border-left:3px solid var(--pass);}
+.confidence-medium{background:var(--warn-bg);border-left:3px solid var(--warn);}
+.confidence-low{background:var(--alert-bg);border-left:3px solid var(--alert);}
+.badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:0.5px;}
+.badge-high{background:var(--pass-bg);color:var(--pass);border:1px solid #107c1040;}
+.badge-medium{background:var(--warn-bg);color:var(--warn);border:1px solid #ff8c0040;}
+.badge-low{background:var(--alert-bg);color:var(--alert);border:1px solid #ca501040;}
+.badge-status{background:var(--purple-bg);color:var(--purple);border:1px solid #8764b840;}
+.reason-box{font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;}
+.gap-item{background:var(--alert-bg);border:1px solid #ca501040;border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:10px;}
+.gap-title{font-weight:700;color:var(--text-bright);margin-bottom:4px;}
+.gap-description{font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.6;}
+.gap-impact{font-size:12px;color:var(--text-dim);font-style:italic;}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+.design-headline{margin:6px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;}
+.design-headline-aesthetic{font-size:18px;font-weight:700;color:var(--text-bright);}
+.design-headline-mood{font-size:13px;color:var(--text-dim);font-style:italic;}
+.design-headline-mood::before{content:"·";margin-right:8px;color:var(--text-dim);font-style:normal;}
+.design-meta{display:flex;flex-wrap:wrap;gap:18px;font-size:13px;color:var(--text);margin:6px 0 14px;}
+.design-meta-item strong{color:var(--text-bright);font-weight:700;}
+.palette-name{font-size:13px;color:var(--text-dim);margin:8px 0 10px;}
+.palette-name code{font-family:var(--mono);color:var(--text-bright);font-weight:600;font-size:12px;}
+.palette-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:22px;}
+.palette-swatch{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;display:flex;align-items:center;gap:10px;}
+.palette-color{width:34px;height:34px;border-radius:var(--radius-sm);flex-shrink:0;border:1px solid var(--border);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.18);}
+.palette-meta{display:flex;flex-direction:column;font-size:11px;line-height:1.3;min-width:0;}
+.palette-color-name{font-weight:600;color:var(--text-bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.palette-hex{color:var(--text-dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;}
+td.comp-cell{vertical-align:top;}
+.comp-line{font-size:12px;line-height:1.55;padding:4px 0;}
+.comp-line + .comp-line{border-top:1px dashed var(--border-light);}
+td.rationale-cell{vertical-align:top;font-size:12px;line-height:1.55;color:var(--text-dim);max-width:320px;}
+.comp-edm{color:var(--text);}
+.comp-target-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.comp-target{font-family:var(--mono);font-size:11px;color:var(--text-bright);background:var(--surface2);padding:2px 7px;border-radius:3px;border:1px solid var(--border);}
+.badge-component{background:var(--pass-bg);color:var(--pass);border:1px solid #107c1040;}
+.badge-content{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.badge-server-logic{background:var(--purple-bg);color:var(--purple);border:1px solid #8764b840;}
+.badge-webapi{background:var(--accent-bg);color:var(--accent);border:1px solid #0078d440;}
+.badge-static-asset{background:var(--warn-bg);color:var(--warn);border:1px solid #ff8c0040;}
+.badge-manualgap{background:var(--alert-bg);color:var(--alert);border:1px solid #ca501040;}
+.er-container{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin:8px 0 22px;overflow-x:auto;}
+.er-empty{font-size:13px;color:var(--text-dim);font-style:italic;text-align:center;padding:28px 12px;}
+.er-fallback{font-size:12px;color:var(--text-dim);text-align:center;padding:10px 12px 0;}
+.er-container .mermaid{display:flex;justify-content:center;}
+.er-container svg{max-width:100%;height:auto;}
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px 72px;}
+  .stats-grid,.meta-grid{grid-template-columns:1fr;}
+  .palette-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));}
+  .table-wrapper{margin-right:-8px;margin-left:-8px;}
+}
+</style>
+</head>
+<body>
+
+<div id="mainApp">
+  <div class="topbar">
+    <div class="topbar-left">
+      <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
+      <div>
+        <div class="topbar-title">__PLAN_TITLE__</div>
+        <div class="topbar-sub">__SITE_NAME__</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar">
+      <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
+      <button class="nav-btn" data-tab="routes"><span class="nav-icon">&#9638;</span> Routes</button>
+      <button class="nav-btn" data-tab="datamodel"><span class="nav-icon">&#128202;</span> Data Model</button>
+      <button class="nav-btn" data-tab="security"><span class="nav-icon">&#128274;</span> Auth & Security</button>
+      <button class="nav-btn" data-tab="gaps"><span class="nav-icon">&#9888;</span> Gaps & Manual Work</button>
+    </div>
+
+    <div class="content">
+      <div class="section active" id="tab-overview">
+        <h2>Migration Plan Overview</h2>
+        <p class="section-desc">Migration plan for <code>__SITE_NAME__</code></p>
+
+        <h3 id="functionalHeading" style="display:none;">What this site does</h3>
+        <div class="summary-box" id="functionalPurpose" style="display:none;"></div>
+
+        <h3 id="featuresHeading" style="display:none;">Features</h3>
+        <ul id="featuresList" style="display:none;"></ul>
+
+        <h3 id="audiencesHeading" style="display:none;">Audiences</h3>
+        <div id="audiencesContainer" style="display:none;"></div>
+
+        <h3 id="constraintsHeading" style="display:none;">Migration constraints &mdash; what we will preserve</h3>
+        <p class="section-desc" id="constraintsSubheading" style="display:none;">The migration is preservation-by-default. Source data model, table permissions, and web roles are copied verbatim (fresh GUIDs); modifications are forbidden. Additions appear separately below with a justification.</p>
+        <div id="constraintsContainer" style="display:none;"></div>
+
+        <h3 id="additionsHeading" style="display:none;">Proposed additions</h3>
+        <p class="section-desc" id="additionsSubheading" style="display:none;">New tables, columns, table permissions, or web roles the migration is proposing on top of the source. Each carries a justification. Reject any you do not want before approving the plan.</p>
+        <div id="additionsContainer" style="display:none;"></div>
+
+        <h3 id="reusableHeading" style="display:none;">Reusable components</h3>
+        <p class="section-desc" id="reusableSubheading" style="display:none;">Source content snippets, web templates, and weblink-sets that are reused across multiple pages. Each becomes one SPA component in the migrated site; inlining is forbidden.</p>
+        <div id="reusableContainer" style="display:none;"></div>
+
+        <h3>Migration plan summary</h3>
+        <div class="summary-box" id="summaryBox">__SUMMARY__</div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-num" style="color:var(--accent);" id="statRoutes">0</div><div class="stat-label">Routes</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--pass);" id="statComponents">0</div><div class="stat-label">Components</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--purple);" id="statTables">0</div><div class="stat-label">Dataverse Tables</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--alert);" id="statGaps">0</div><div class="stat-label">Manual Gaps</div></div>
+        </div>
+
+        <h3>Design System</h3>
+        <div class="design-headline" id="designHeadline"></div>
+        <div class="design-meta" id="designMetaContainer"></div>
+        <div class="palette-name" id="paletteName"></div>
+        <div class="palette-grid" id="paletteGrid"></div>
+
+        <h3>Design Rationale</h3>
+        <div id="rationaleContainer"></div>
+
+        <h3>EDM vs. SPA — What's Different</h3>
+        <p class="section-desc">A quick reference for users new to the SPA code-site model. Each row shows how a Power Pages concept changes when the site moves off the classic Enhanced Data Model runtime.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Concept</th>
+                <th>Classic EDM (today)</th>
+                <th>Static SPA (target)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Rendering</strong></td>
+                <td>Server-rendered HTML built by the portal runtime from Web Pages, Web Templates, and Liquid.</td>
+                <td>Client-rendered React/Vue/Angular/Astro. Static assets ship to the CDN; the browser fetches data via the Dataverse Web API.</td>
+              </tr>
+              <tr>
+                <td><strong>Pages &amp; routes</strong></td>
+                <td>Pages live as <code>web-pages/</code> records with hierarchical parent/child relationships; the portal maps URLs to pages at runtime.</td>
+                <td>Routes are defined in the framework's router (e.g., React Router, Vue Router). The hierarchy is code, not Dataverse data.</td>
+              </tr>
+              <tr>
+                <td><strong>Layouts &amp; composition</strong></td>
+                <td>Web Templates with Liquid <code>{% include %}</code> directives compose the page server-side.</td>
+                <td>Component composition via JSX/SFC/Astro syntax. Shared layouts are AppShell/Layout components, not Liquid includes.</td>
+              </tr>
+              <tr>
+                <td><strong>Reusable content</strong></td>
+                <td>Content Snippets — records in Dataverse, referenced via <code>{{ snippets['name'] }}</code>.</td>
+                <td>Content constants, content modules, or localization resources imported at build time.</td>
+              </tr>
+              <tr>
+                <td><strong>Data access</strong></td>
+                <td>Liquid Dataverse helpers (<code>{% fetchxml %}</code>, <code>{% entityview %}</code>) execute server-side; entity lists/forms read from Dataverse implicitly.</td>
+                <td>Explicit client-side <code>fetch</code> calls to the Power Pages Web API (<code>/_api/&lt;table&gt;</code>) using table permissions and the anti-forgery token from <code>/_layout/tokenhtml</code>.</td>
+              </tr>
+              <tr>
+                <td><strong>Forms</strong></td>
+                <td>Basic Forms / Advanced Forms are server-rendered. Validation, anti-forgery, and CRUD are wired by the portal runtime.</td>
+                <td>Client-side form components (e.g., React Hook Form) backed by Web API <code>POST</code>/<code>PATCH</code> calls. CAPTCHA, attachments, and multi-step flows are explicit caveats.</td>
+              </tr>
+              <tr>
+                <td><strong>Authentication</strong></td>
+                <td>Configured via Site Settings + identity provider records; the portal handles the redirect flow.</td>
+                <td>Wired by <code>/setup-auth</code> — MSAL.js (or framework equivalent), sign-in/sign-out routes, <code>AuthButton</code> in the AppShell, route guards.</td>
+              </tr>
+              <tr>
+                <td><strong>Authorization</strong></td>
+                <td>Web Roles + Table Permissions enforced by the portal runtime; <code>{% if user.roles contains 'X' %}</code> in Liquid.</td>
+                <td>Server-enforced still — table permissions in Dataverse remain the authority. Client-side <code>RequireRole</code> guards are UX hints, not security boundaries.</td>
+              </tr>
+              <tr>
+                <td><strong>Server-side logic</strong></td>
+                <td>Liquid blocks that read privileged context or use server-only helpers.</td>
+                <td><code>/add-server-logic</code> deploys server endpoints; the SPA calls them like any other service.</td>
+              </tr>
+              <tr>
+                <td><strong>Site settings &amp; metadata</strong></td>
+                <td>Aggregate YAML records (<code>sitesetting.yml</code>, <code>webrole.yml</code>, <code>sitemarker.yml</code>) — many records per file.</td>
+                <td>Granular per-record files under <code>.powerpages-site/</code> (one file per setting / role / marker). Same data, different shape.</td>
+              </tr>
+              <tr>
+                <td><strong>Assets &amp; images</strong></td>
+                <td><code>web-files/</code> records with binaries attached; served by the portal runtime.</td>
+                <td>Files copied to <code>public/</code> (or <code>src/assets/</code> for bundler-imported), referenced by static paths or import statements.</td>
+              </tr>
+              <tr>
+                <td><strong>Customization</strong></td>
+                <td>Custom JS sidecars on web pages / lists / forms; jQuery, <code>Page_Validators</code>, portal-runtime globals.</td>
+                <td>First-class component source under <code>src/</code>; standard ESM modules; framework idioms (hooks, composables, signals).</td>
+              </tr>
+              <tr>
+                <td><strong>Deployment</strong></td>
+                <td><code>pac pages download</code> / <code>pac pages upload</code> against Dataverse records.</td>
+                <td><code>npm run build</code> + <code>pac pages upload-code-site</code>; hydrates <code>.powerpages-site/</code> metadata once activated.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section" id="tab-routes">
+        <h2>SPA Routes & Component Mapping</h2>
+        <p class="section-desc">Routes to be implemented in the target SPA, mapped from EDM pages and templates. The <strong>EDM Today</strong> column lists what exists in the classic site; <strong>Target Replacement</strong> lists what each EDM artifact becomes in the SPA; the <strong>Rationale</strong> column explains why the agent recommended that mapping.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>SPA Route</th>
+                <th>Source EDM Page(s)</th>
+                <th>EDM Today</th>
+                <th>Target Replacement</th>
+                <th>Data Needs</th>
+                <th>Rationale</th>
+                <th>Migration Confidence</th>
+              </tr>
+            </thead>
+            <tbody id="routesTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section" id="tab-datamodel">
+        <h2>Dataverse Data Model</h2>
+        <p class="section-desc">Dataverse tables, relationships, and operations required by the SPA</p>
+
+        <h3>Entity Relationship Diagram</h3>
+        <div class="er-container" id="erContainer">
+          <div class="er-empty">Loading diagram&hellip;</div>
+        </div>
+        <div class="er-fallback" id="erFallback"></div>
+
+        <h3>Tables &amp; Operations</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Table</th>
+                <th>EDM Source</th>
+                <th>Operations</th>
+                <th>Site Settings / Permissions</th>
+                <th>Follow-up Skill</th>
+              </tr>
+            </thead>
+            <tbody id="datamodelTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section" id="tab-security">
+        <h2>Auth & Security</h2>
+        <p class="section-desc">Authentication, authorization, and security configuration</p>
+        
+        <h3>Web Roles</h3>
+        <div id="rolesContainer"></div>
+
+        <h3>Security Constraints</h3>
+        <div id="constraintsContainer"></div>
+      </div>
+
+      <div class="section" id="tab-gaps">
+        <h2>Manual Gaps & Unsupported Features</h2>
+        <p class="section-desc">Features that cannot be migrated automatically and require manual implementation</p>
+        <div id="gapsContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SITE_STATS = __SITE_STATS__;
+const ROUTES_DATA = __ROUTES_DATA__;
+const DATAVERSE_DATA = __DATAVERSE_DATA__;
+const SECURITY_DATA = __SECURITY_DATA__;
+const GAPS_DATA = __GAPS_DATA__;
+const RATIONALE_DATA = __RATIONALE_DATA__;
+const DESIGN_DATA = __DESIGN_DATA__;
+// Functionality-first sections at the top of the Overview tab. The render script
+// requires all three keys; empty arrays / null fields cause the corresponding card
+// to stay hidden so a site without (e.g.) any reusable components doesn't show a
+// blank section.
+const FUNCTIONAL_UNDERSTANDING = __FUNCTIONAL_UNDERSTANDING__;
+const PRESERVATION = __PRESERVATION__;
+const REUSABLE_COMPONENTS = __REUSABLE_COMPONENTS__;
+
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+function getConfidenceBadge(confidence) {
+  const badges = {
+    high: '<span class="badge badge-high">High</span>',
+    medium: '<span class="badge badge-medium">Medium</span>',
+    low: '<span class="badge badge-low">Low</span>'
+  };
+  return badges[confidence] || '';
+}
+
+function getStatusBadge(status) {
+  return `<span class="badge badge-status">${esc(status)}</span>`;
+}
+
+const TARGET_KIND_META = {
+  component:   { label: 'Component',   cls: 'badge-component'    },
+  content:     { label: 'Content',     cls: 'badge-content'      },
+  webApi:      { label: 'Web API',     cls: 'badge-webapi'       },
+  serverLogic: { label: 'Server Logic',cls: 'badge-server-logic' },
+  staticAsset: { label: 'Static Asset',cls: 'badge-static-asset' },
+  manualGap:   { label: 'Manual Gap',  cls: 'badge-manualgap'    }
+};
+
+function renderTargetCell(pair) {
+  const target = pair.target || '';
+  const kind = pair.targetKind || 'component';
+  const meta = TARGET_KIND_META[kind] || TARGET_KIND_META.component;
+  const badge = `<span class="badge ${meta.cls}">${esc(meta.label)}</span>`;
+  const value = target ? `<code class="comp-target">${esc(target)}</code>` : '';
+  return `<div class="comp-line"><div class="comp-target-line">${badge}${value ? ' ' + value : ''}</div></div>`;
+}
+
+// Populate stats
+document.getElementById('statRoutes').textContent = SITE_STATS.routeCount || 0;
+document.getElementById('statComponents').textContent = SITE_STATS.componentCount || 0;
+document.getElementById('statTables').textContent = SITE_STATS.tableCount || 0;
+document.getElementById('statGaps').textContent = SITE_STATS.manualGapCount || 0;
+
+// Show/hide helper — each functionality-first card stays hidden when its data slot is
+// empty so a site with (say) no proposed additions doesn't render an empty section.
+function show(id) { const el = document.getElementById(id); if (el) el.style.display = ''; }
+
+// ----- Functional Understanding ----------------------------------------------
+if (FUNCTIONAL_UNDERSTANDING) {
+  const purpose = FUNCTIONAL_UNDERSTANDING.purpose;
+  if (purpose && typeof purpose === 'string' && purpose.trim()) {
+    document.getElementById('functionalPurpose').textContent = purpose.trim();
+    show('functionalHeading'); show('functionalPurpose');
+  }
+  const features = Array.isArray(FUNCTIONAL_UNDERSTANDING.features) ? FUNCTIONAL_UNDERSTANDING.features : [];
+  if (features.length) {
+    const list = document.getElementById('featuresList');
+    list.innerHTML = features.map(f => `<li>${esc(f)}</li>`).join('');
+    show('featuresHeading'); show('featuresList');
+  }
+  const audiences = Array.isArray(FUNCTIONAL_UNDERSTANDING.audiences) ? FUNCTIONAL_UNDERSTANDING.audiences : [];
+  if (audiences.length) {
+    const container = document.getElementById('audiencesContainer');
+    container.innerHTML = audiences.map(a => `<span class="badge badge-status" style="margin-right:0.5rem;">${esc(a)}</span>`).join('');
+    show('audiencesHeading'); show('audiencesContainer');
+  }
+}
+
+// ----- Preservation Contract (Constraints + Additions) ----------------------
+if (PRESERVATION) {
+  // Source counts give the user a one-look "what's being preserved" view.
+  const sourceTablesCount = (PRESERVATION.dataModel && Array.isArray(PRESERVATION.dataModel.tables))
+    ? PRESERVATION.dataModel.tables.filter(t => t.source).length : 0;
+  const sourcePermCount = (Array.isArray(PRESERVATION.tablePermissions) ? PRESERVATION.tablePermissions : [])
+    .filter(p => p.source).length;
+  const sourceRoleCount = (Array.isArray(PRESERVATION.webRoles) ? PRESERVATION.webRoles : [])
+    .filter(r => r.source).length;
+  if (sourceTablesCount || sourcePermCount || sourceRoleCount || (Array.isArray(PRESERVATION.constraints) && PRESERVATION.constraints.length)) {
+    const rows = [
+      ['Source tables preserved', sourceTablesCount, 'verbatim — no renames, no retypes, no drops'],
+      ['Source table permissions ported (fresh GUIDs)', sourcePermCount, 'identical entity / scope / privileges / role assignments'],
+      ['Source web roles ported (fresh GUIDs)', sourceRoleCount, 'identical name / default / anonymous / authenticated flags'],
+    ];
+    const constraintsHtml = (PRESERVATION.constraints || [])
+      .map(c => `<li>${esc(c)}</li>`).join('');
+    document.getElementById('constraintsContainer').innerHTML =
+      `<table style="margin-bottom:1rem;"><thead><tr><th>What we preserve</th><th>Count</th><th>How</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${esc(r[0])}</td><td><strong>${r[1]}</strong></td><td>${esc(r[2])}</td></tr>`).join('') +
+      `</tbody></table>` +
+      (constraintsHtml ? `<ul>${constraintsHtml}</ul>` : '');
+    show('constraintsHeading'); show('constraintsSubheading'); show('constraintsContainer');
+  }
+
+  // Additions surface every proposed new column/table/permission/role with a
+  // justification so the user can challenge each one before approving the plan.
+  const additions = [];
+  if (PRESERVATION.dataModel && Array.isArray(PRESERVATION.dataModel.additions)) {
+    for (const a of PRESERVATION.dataModel.additions) {
+      additions.push({ kind: a.kind || 'data-model', name: a.logicalName || a.name || '', justification: a.justification || '' });
+    }
+    // Per-table column additions
+    for (const t of (PRESERVATION.dataModel.tables || [])) {
+      for (const a of (t.additions || [])) {
+        additions.push({ kind: 'column', name: `${t.logicalName}.${a.logicalName || a.name}`, justification: a.justification || '' });
+      }
+    }
+  }
+  for (const p of (PRESERVATION.tablePermissions || [])) {
+    if (p.source === false) additions.push({ kind: 'table-permission', name: p.sourceName || p.name || '', justification: p.justification || '' });
+  }
+  for (const r of (PRESERVATION.webRoles || [])) {
+    if (r.source === false) additions.push({ kind: 'web-role', name: r.sourceName || r.name || '', justification: r.justification || '' });
+  }
+  if (additions.length) {
+    document.getElementById('additionsContainer').innerHTML =
+      `<table><thead><tr><th>Kind</th><th>Name</th><th>Justification</th></tr></thead><tbody>` +
+      additions.map(a => `<tr><td><span class="badge badge-status">${esc(a.kind)}</span></td><td><code>${esc(a.name)}</code></td><td>${esc(a.justification)}</td></tr>`).join('') +
+      `</tbody></table>`;
+    show('additionsHeading'); show('additionsSubheading'); show('additionsContainer');
+  }
+}
+
+// ----- Reusable Components ---------------------------------------------------
+if (Array.isArray(REUSABLE_COMPONENTS) && REUSABLE_COMPONENTS.length) {
+  // Only surface entries with reuseCount >= 2 in the user-facing summary; single-use
+  // entries are a long tail that don't help the user decide anything.
+  const reused = REUSABLE_COMPONENTS.filter(c => (c.reuseCount || 0) >= 2);
+  if (reused.length) {
+    document.getElementById('reusableContainer').innerHTML =
+      `<table><thead><tr><th>Source kind</th><th>Source artifact</th><th>Reuse count</th><th>SPA component</th></tr></thead><tbody>` +
+      reused.map(c =>
+        `<tr><td><span class="badge badge-status">${esc(c.sourceKind || '')}</span></td>` +
+        `<td><code>${esc(c.sourceArtifact || '')}</code></td>` +
+        `<td><strong>${c.reuseCount || 0}</strong></td>` +
+        `<td><code>${esc((c.spaTarget && c.spaTarget.componentName) || '')}</code></td></tr>`
+      ).join('') +
+      `</tbody></table>`;
+    show('reusableHeading'); show('reusableSubheading'); show('reusableContainer');
+  }
+}
+
+// Populate design system (aesthetic+mood headline, derived meta, and palette)
+const designHeadline = document.getElementById('designHeadline');
+const designMetaContainer = document.getElementById('designMetaContainer');
+const paletteName = document.getElementById('paletteName');
+const paletteGrid = document.getElementById('paletteGrid');
+if (DESIGN_DATA) {
+  if (DESIGN_DATA.aesthetic || DESIGN_DATA.mood) {
+    const parts = [];
+    if (DESIGN_DATA.aesthetic) parts.push(`<span class="design-headline-aesthetic">${esc(DESIGN_DATA.aesthetic)}</span>`);
+    if (DESIGN_DATA.mood)      parts.push(`<span class="design-headline-mood">${esc(DESIGN_DATA.mood)}</span>`);
+    designHeadline.innerHTML = parts.join('');
+  }
+  const metaItems = [];
+  if (DESIGN_DATA.framework)      metaItems.push(`<div class="design-meta-item"><strong>Framework:</strong> ${esc(DESIGN_DATA.framework)}</div>`);
+  if (DESIGN_DATA.layout)         metaItems.push(`<div class="design-meta-item"><strong>Layout:</strong> ${esc(DESIGN_DATA.layout)}</div>`);
+  if (DESIGN_DATA.navigation)     metaItems.push(`<div class="design-meta-item"><strong>Navigation:</strong> ${esc(DESIGN_DATA.navigation)}</div>`);
+  if (DESIGN_DATA.weblinkLayout)  metaItems.push(`<div class="design-meta-item"><strong>Weblink Layout:</strong> ${esc(DESIGN_DATA.weblinkLayout.charAt(0).toUpperCase() + DESIGN_DATA.weblinkLayout.slice(1))}</div>`);
+  if (DESIGN_DATA.typography)     metaItems.push(`<div class="design-meta-item"><strong>Typography:</strong> ${esc(DESIGN_DATA.typography)}</div>`);
+  if (DESIGN_DATA.motion)         metaItems.push(`<div class="design-meta-item"><strong>Motion:</strong> ${esc(DESIGN_DATA.motion)}</div>`);
+  designMetaContainer.innerHTML = metaItems.join('');
+
+  const palette = DESIGN_DATA.palette;
+  if (palette && palette.colors && palette.colors.length > 0) {
+    paletteName.innerHTML = `Palette: <code>${esc(palette.name || 'Custom')}</code>`;
+    paletteGrid.innerHTML = palette.colors.map(c => {
+      const safeHex = /^#[0-9a-fA-F]{3,8}$/.test(c.hex || '') ? c.hex : '#cccccc';
+      return `
+        <div class="palette-swatch">
+          <div class="palette-color" style="background:${esc(safeHex)};"></div>
+          <div class="palette-meta">
+            <div class="palette-color-name">${esc(c.name || 'Color')}</div>
+            <div class="palette-hex">${esc(safeHex)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } else {
+    paletteName.textContent = 'No palette specified.';
+  }
+}
+
+// Populate rationale
+const rationaleContainer = document.getElementById('rationaleContainer');
+if (RATIONALE_DATA && RATIONALE_DATA.length > 0) {
+  RATIONALE_DATA.forEach(item => {
+    const box = document.createElement('div');
+    box.className = 'reason-box';
+    box.innerHTML = `<strong>${esc(item.title)}</strong><br/>${esc(item.description)}`;
+    rationaleContainer.appendChild(box);
+  });
+}
+
+// Populate routes table
+const routesBody = document.getElementById('routesTableBody');
+if (ROUTES_DATA && ROUTES_DATA.length > 0) {
+  ROUTES_DATA.forEach(route => {
+    const row = document.createElement('tr');
+    row.className = `confidence-${route.confidence}`;
+    const mapping = Array.isArray(route.componentMapping) ? route.componentMapping : [];
+    const edmCell = mapping.length === 0
+      ? '<span style="color:var(--text-dim);font-style:italic;">&mdash;</span>'
+      : mapping.map(p => `<div class="comp-line comp-edm">${esc(p.edm || '')}</div>`).join('');
+    const targetCell = mapping.length === 0
+      ? '<span style="color:var(--text-dim);font-style:italic;">&mdash;</span>'
+      : mapping.map(renderTargetCell).join('');
+    const rationaleCell = route.rationale && String(route.rationale).trim()
+      ? esc(route.rationale)
+      : '<span style="color:var(--text-dim);font-style:italic;">&mdash;</span>';
+    row.innerHTML = `
+      <td><code>${esc(route.path)}</code></td>
+      <td>${esc((route.sourcePages || []).join(', '))}</td>
+      <td class="comp-cell">${edmCell}</td>
+      <td class="comp-cell">${targetCell}</td>
+      <td>${esc((route.dataNeeds || []).join(', '))}</td>
+      <td class="rationale-cell">${rationaleCell}</td>
+      <td>${getConfidenceBadge(route.confidence)}</td>
+    `;
+    routesBody.appendChild(row);
+  });
+}
+
+// Populate dataverse table
+const datamodelBody = document.getElementById('datamodelTableBody');
+if (DATAVERSE_DATA && DATAVERSE_DATA.length > 0) {
+  DATAVERSE_DATA.forEach(table => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><code>${esc(table.name)}</code></td>
+      <td>${esc(table.source)}</td>
+      <td>${esc((table.operations || []).join(', '))}</td>
+      <td>${esc((table.siteSettings || []).join(', '))}</td>
+      <td>${esc(table.followUpSkill || '')}</td>
+    `;
+    datamodelBody.appendChild(row);
+  });
+}
+
+// Build Mermaid ER diagram from DATAVERSE_DATA
+function sanitizeId(s) {
+  const cleaned = String(s == null ? '' : s).replace(/[^a-zA-Z0-9_]/g, '_');
+  return cleaned || 'entity';
+}
+
+function mapCardinality(type) {
+  switch (String(type || '').toLowerCase()) {
+    case 'lookup':
+    case 'manytoone':
+    case 'many-to-one':
+      return '}o--||';
+    case 'onetomany':
+    case 'one-to-many':
+      return '||--o{';
+    case 'manytomany':
+    case 'many-to-many':
+      return '}o--o{';
+    case 'onetoone':
+    case 'one-to-one':
+      return '||--||';
+    default:
+      return '}o--||';
+  }
+}
+
+function buildMermaidErd(tables) {
+  if (!Array.isArray(tables) || tables.length === 0) return null;
+  const lines = ['erDiagram'];
+  const knownIds = new Set(tables.map(t => sanitizeId(t.name)));
+  tables.forEach(t => {
+    const id = sanitizeId(t.name);
+    const fields = Array.isArray(t.fields) ? t.fields.slice(0, 8) : [];
+    if (fields.length > 0) {
+      lines.push(`  ${id} {`);
+      fields.forEach(f => {
+        const fname = sanitizeId(typeof f === 'string' ? f : (f && f.name) || '');
+        const ftype = typeof f === 'string'
+          ? 'string'
+          : sanitizeId((f && f.type) || 'string');
+        lines.push(`    ${ftype} ${fname}`);
+      });
+      lines.push('  }');
+    } else {
+      lines.push(`  ${id} { string id }`);
+    }
+  });
+  let relCount = 0;
+  tables.forEach(t => {
+    const sourceId = sanitizeId(t.name);
+    (t.relationships || []).forEach(r => {
+      const targetId = sanitizeId(r.target || '');
+      if (!targetId) return;
+      const card = mapCardinality(r.type);
+      const labelRaw = r.label || r.field || r.type || 'rel';
+      const label = String(labelRaw).replace(/"/g, '').slice(0, 60);
+      lines.push(`  ${sourceId} ${card} ${targetId} : "${label}"`);
+      relCount++;
+    });
+  });
+  return { mermaid: lines.join('\n'), relCount };
+}
+
+const erContainer = document.getElementById('erContainer');
+const erFallback = document.getElementById('erFallback');
+const erd = buildMermaidErd(DATAVERSE_DATA);
+
+// Lazy Mermaid render state. Rendering happens only when the Data Model tab is
+// visible because Mermaid cannot measure element dimensions inside a
+// display:none container — when it tries, the SVG falls back to a misleading
+// "Syntax error in text" message even though the diagram source is valid.
+const erState = { rendered: false, rendering: false, src: erd ? erd.mermaid : null };
+
+if (!erd) {
+  erContainer.innerHTML = '<div class="er-empty">No Dataverse tables found in plan. ER diagram will appear when tables are mapped.</div>';
+} else {
+  // Keep the raw Mermaid source available as a data attribute. Mermaid
+  // overwrites pre.textContent with the rendered SVG, so the data attribute is
+  // our source of truth for re-rendering or showing a raw-syntax fallback.
+  const pre = document.createElement('pre');
+  pre.className = 'mermaid';
+  pre.setAttribute('data-mermaid-src', erd.mermaid);
+  pre.textContent = erd.mermaid;
+  erContainer.innerHTML = '';
+  erContainer.appendChild(pre);
+  if (erd.relCount === 0) {
+    erFallback.innerHTML = '<em>No relationships were captured from the EDM source. Diagram shows tables only.</em>';
+  }
+}
+
+function showRawMermaidFallback(message) {
+  if (!erd) return;
+  const safeMsg = esc(message || 'Diagram could not be rendered.');
+  const safeSrc = esc(erState.src || '');
+  erContainer.innerHTML =
+    '<div class="er-empty">' + safeMsg + ' Showing raw <code>erDiagram</code> syntax below.</div>' +
+    '<pre style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--surface2);padding:12px;border-radius:var(--radius-sm);overflow:auto;">' + safeSrc + '</pre>';
+}
+
+async function renderErdOnce() {
+  if (!erd || erState.rendered || erState.rendering) return;
+  if (!window.mermaid || typeof window.mermaid.run !== 'function') {
+    // Mermaid script hasn't loaded yet (likely CDN slow/unreachable). Leave
+    // erState.rendered = false so a later tab activation can retry once the
+    // script finishes loading.
+    return;
+  }
+  erState.rendering = true;
+  const pre = erContainer.querySelector('pre.mermaid');
+  if (!pre) { erState.rendering = false; return; }
+  try {
+    // Validate first. Mermaid.parse throws on syntax errors with an
+    // explanatory message; surfacing the raw source is more useful than the
+    // generic bomb-icon error.
+    if (typeof window.mermaid.parse === 'function') {
+      await window.mermaid.parse(erState.src);
+    }
+    // Mermaid.run mutates the pre element in place. Ensure the source is
+    // present in textContent at the moment of render.
+    pre.textContent = erState.src;
+    pre.removeAttribute('data-processed');
+    await window.mermaid.run({ nodes: [pre] });
+    erState.rendered = true;
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    showRawMermaidFallback('Mermaid could not render the ER diagram (' + message + ').');
+    erState.rendered = true;
+  } finally {
+    erState.rendering = false;
+  }
+}
+
+// Populate security section
+const rolesContainer = document.getElementById('rolesContainer');
+if (SECURITY_DATA && SECURITY_DATA.webRoles && SECURITY_DATA.webRoles.length > 0) {
+  SECURITY_DATA.webRoles.forEach(role => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+        <strong>${esc(role.name)}</strong>
+        ${getStatusBadge(role.status)}
+      </div>
+      <div style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">${esc(role.description)}</div>
+      <div style="font-size:12px;"><strong>Permissions:</strong> ${esc((role.permissions || []).join(', '))}</div>
+    `;
+    rolesContainer.appendChild(card);
+  });
+}
+
+const constraintsContainer = document.getElementById('constraintsContainer');
+if (SECURITY_DATA && SECURITY_DATA.constraints && SECURITY_DATA.constraints.length > 0) {
+  SECURITY_DATA.constraints.forEach(constraint => {
+    const box = document.createElement('div');
+    box.className = 'reason-box';
+    box.innerHTML = `<strong>${esc(constraint.title)}</strong><br/>${esc(constraint.description)}`;
+    constraintsContainer.appendChild(box);
+  });
+}
+
+// Populate gaps
+const gapsContainer = document.getElementById('gapsContainer');
+if (GAPS_DATA && GAPS_DATA.length > 0) {
+  GAPS_DATA.forEach(gap => {
+    const item = document.createElement('div');
+    item.className = 'gap-item';
+    item.innerHTML = `
+      <div class="gap-title">&#9888; ${esc(gap.feature)}</div>
+      <div class="gap-description">${esc(gap.description)}</div>
+      <div class="gap-impact"><strong>Impact:</strong> ${esc(gap.impact)}</div>
+      <div style="margin-top:8px;font-size:12px;"><strong>Recommended action:</strong> ${esc(gap.recommendedAction)}</div>
+    `;
+    gapsContainer.appendChild(item);
+  });
+} else {
+  gapsContainer.innerHTML = '<div class="reason-box">No manual gaps identified. All EDM features have direct SPA equivalents or will be handled by follow-up skills.</div>';
+}
+
+// Tab switching
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    const tabName = e.currentTarget.getAttribute('data-tab');
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    e.currentTarget.classList.add('active');
+    document.getElementById(`tab-${tabName}`).classList.add('active');
+    if (tabName === 'datamodel') {
+      // Render on the next frame so layout has settled (the section just
+      // transitioned from display:none to block).
+      requestAnimationFrame(() => { renderErdOnce(); });
+    }
+  });
+});
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+if (window.mermaid && typeof window.mermaid.initialize === 'function') {
+  // startOnLoad must be false: the ER diagram lives in a display:none tab at
+  // page load. Auto-running mermaid against a hidden element produces a
+  // misleading "Syntax error in text" rendering even when the source is
+  // valid. renderErdOnce() handles the actual render when the tab becomes
+  // visible.
+  window.mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' });
+}
+// If the user is already on the Data Model tab when this script finishes
+// loading (e.g., they navigated via a deep link), render immediately.
+if (typeof renderErdOnce === 'function') {
+  const datamodelSection = document.getElementById('tab-datamodel');
+  if (datamodelSection && datamodelSection.classList.contains('active')) {
+    requestAnimationFrame(() => { renderErdOnce(); });
+  }
+}
+</script>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+
+</body>
+</html>

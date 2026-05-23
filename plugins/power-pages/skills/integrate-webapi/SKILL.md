@@ -192,7 +192,15 @@ For each table, use the `Task` tool to invoke the `webapi-integration` agent at 
 
 ### 4.2 Process First Table, Then Parallelize Remaining
 
-The **first table** must be processed alone — it creates the shared `powerPagesApi.ts` client that all other tables depend on. After the first table completes and the shared client exists:
+The **first table** must be processed alone — it creates the shared `powerPagesApi.ts` client that all other tables depend on. The shared client encodes Power Pages OData runtime rules (lookup-filter rewrite, OData annotation stripping, sensitive-PK blocklist) so every generated service inherits them through it — no service has to re-implement a rule.
+
+The rules themselves live in `${CLAUDE_PLUGIN_ROOT}/scripts/lib/powerpages-odata.js` (Node module, exported pure functions). The shared `powerPagesApi.ts` client either ports the rule logic directly into TypeScript or imports it from a small SPA-side mirror (the rules are platform-agnostic — copy, don't shell out). Specifically the shared client must:
+
+- Auto-rewrite `$filter` clauses on lookup columns: `<lookup> eq <value>` → `_<lookup>_value eq <value>`. The lookup-column list per table comes from the type-aware Dataverse snapshot (`attributeType === 'Lookup' | 'Customer' | 'Owner'`). See `rewriteLookupFilter`.
+- Strip every `@`-keyed property from any `body` argument before sending a `POST` / `PATCH`. See `stripODataAnnotations`. The `<Table>Update` type already excludes annotations at compile time, but this runtime guard catches dynamic spreads the type checker missed.
+- Refuse to include `contactid` / `accountid` / `<sensitive>_id` columns in `$select` for the tables listed in `SENSITIVE_PK_BLOCKLIST`. Generated service methods that expose a column-selector to callers must call into the filter helper before building the URL.
+
+After the first table completes and the shared client exists:
 
 - **Verify** the shared API client was created at `src/shared/powerPagesApi.ts`
 - **Then invoke all remaining tables in parallel** using multiple `Task` calls — each table creates independent files (its own types in `src/types/`, service in `src/shared/services/`, and hook/composable), so there are no conflicts
@@ -230,7 +238,7 @@ git commit -m "Add Web API integration for [table names]"
 
 For each integrated table, confirm the following files exist:
 
-- **Type definition** in `src/types/` (e.g., `src/types/product.ts`)
+- **Type definition** in `src/types/` (e.g., `src/types/product.ts`) — must export **two interfaces per table**: `<Table>` for reads and `<Table>Update` for writes. See [Two types per table](#two-types-per-table) below.
 - **Service file** in `src/shared/services/` or `src/services/` (e.g., `productService.ts`)
 - **Framework-specific hook/composable** (e.g., `src/shared/hooks/useProducts.ts` for React, `src/composables/useProducts.ts` for Vue)
 
@@ -239,6 +247,19 @@ Also verify:
 - **Shared API client** at `src/shared/powerPagesApi.ts` exists
 - Each service file references `/_api/` endpoints
 - Each service file imports from the shared API client
+
+#### Two types per table
+
+Every table's `src/types/<table>.ts` must export two interfaces:
+
+| Interface | Used for | Includes | Excludes |
+|---|---|---|---|
+| `<Table>` | `GET` responses, `useTable()` return type | every column the snapshot reports with `readable: true`, plus optional OData annotation fields (`'@odata.etag'?`, `_<lookup>_value@OData.Community.Display.V1.FormattedValue?`) | columns with `readable: false` |
+| `<Table>Update` | `PATCH` / `POST` body type, service method signatures that mutate | columns where the snapshot reports `creatable: true` OR `writable: true`, with `attributeType`-correct TS types | `isPrimaryId: true`, `isLogical: true`, every OData annotation, every `_<lookup>_value@…` formatted-value field |
+
+`PATCH` / `POST` service methods must accept **only** `<Table>Update`, never `<Table>` or `Partial<Table>`. This makes the common bug — `apiClient.patch(..., { ...readResponse, modifiedField })` — a compile-time error: `<Table>` contains annotation fields that `<Table>Update` rejects, so the spread fails to typecheck.
+
+The `attributeType` from the snapshot maps to TS types as: `Boolean → boolean`, `Picklist|State|Status|Integer|BigInt → number`, `Money|Decimal|Double → number`, `String|Memo → string`, `DateTime → string` (ISO 8601), `Uniqueidentifier → string`, `Lookup|Customer|Owner → string` (the `_<lookup>_value` form on writes; the bound form `<lookup>@odata.bind` on creates). Never default a column to `string` when its `attributeType` is known.
 
 ### 5.2 Verify Build
 
@@ -316,7 +337,15 @@ If the user chooses to upload an existing diagram:
    - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto), parent permission and relationship name (if Parent scope)
    - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields normally list specific column logical names; only use `*` when the site relies on aggregate OData queries (`$apply`/aggregate) that otherwise fail with 403**
 
-3. **Validate column names against Dataverse** — Even when using a user-provided diagram, query Dataverse for each table's column LogicalNames and verify that every column in the `Webapi/<table>/fields` values uses the exact Dataverse LogicalName (case-sensitive). Correct any mismatches before creating files.
+3. **Validate column names against Dataverse — deterministically, via the shared metadata script.** Do not rely on agent inference here; that's how hallucinated names (e.g. `faq_body` instead of `faq_articlebody`, or `faq_isfeatured` for a column that does not exist) have shipped to deployed sitesettings and surfaced as runtime 400s. For each table that will get a `Webapi/<table>/fields` setting:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/list-table-columns.js" --table "<table>"
+   ```
+
+   Parse the JSON output. Every column in the proposed `Webapi/<table>/fields` value must appear in the script's `columns[].logicalName` set (case-sensitive, lowercase). If any does not, **do not write the sitesetting** — surface the mismatched name to the user with the closest match from the script's output and ask them to correct the diagram, then re-run this check.
+
+   When invoked from `migrate-traditional-site-to-spa-implement` Phase 7.3, the caller passes `inputContext.dataverseSchemaSnapshot` pointing at the target-tenant snapshot already captured by `snapshot-dataverse-schema.js`. Prefer reading column lists from that snapshot (no extra round trip) — fall back to `list-table-columns.js` only when the snapshot is absent.
 
 4. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
 
@@ -484,13 +513,23 @@ Use `AskUserQuestion`:
 |----------|---------|
 | The Web API integration and permissions are ready. To make everything live, the site needs to be deployed. Would you like to deploy now? | Yes, deploy now (Recommended), No, I'll deploy later |
 
-**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.
+**If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site, then run the cache flush in 7.4.
 
 **If "No, I'll deploy later"**: Acknowledge and remind:
 
 > "No problem! Remember to deploy your site using `/deploy-site` when you're ready. The Web API calls will not work until the site is deployed with the new permissions."
 
-### 7.4 Post-Deploy Notes
+### 7.4 Clear Site Cache
+
+Power Pages caches site settings, table permissions, and webpage records for 2–5 minutes after a deploy. Without an explicit flush, the next request keeps seeing the old metadata for that window — exactly the failure mode behind defects #9 and #10 in the migration retrospective (Web API still 403'd after deploy because the runtime hadn't picked up the new sitesetting yet). Run the flush immediately after `/deploy-site` returns:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+The script reads the target website record id from `.powerpages-site/website.yml#id` so it restarts the right site even when the SPA's `siteName` collides with another website in the tenant. Pass `--websiteRecordId <guid>` explicitly only when the YAML is unavailable (rare; deploy writes it).
+
+### 7.5 Post-Deploy Notes
 
 After deployment (or if skipped), remind the user:
 
