@@ -2973,6 +2973,44 @@ The `__External` cookie has a **5-minute TTL**. If the user lingers between IdP 
 
 In SPAs, page navigation is client-side — no server requests are made. The session cookie's `SlidingExpiration` only renews when the browser sends a request to the server. Without a keepalive, the session silently expires even while the user is actively using the SPA.
 
+### Provider-agnostic by design
+
+The keepalive operates on the **Power Pages `ApplicationCookie`** — the same session cookie that's issued for every authenticated user regardless of provider (local password, Entra External ID, generic OIDC, SAML2, social). The hook calls `isAuthenticated()` which reads from `window.Microsoft.Dynamic365.Portal.User`, populated for any signed-in user. No provider-specific branches are needed.
+
+| Layer | Local auth | External auth (Entra External ID, OIDC, SAML2, social) |
+|---|---|---|
+| Session cookie | `ApplicationCookie` set by server on `/SignIn` POST | `ApplicationCookie` set by server on `/Account/Login/ExternalLoginCallback` |
+| Ping endpoint | `/_layout/tokenhtml` (refreshes the cookie via OWIN middleware) | Same |
+| Activity tracking | Mouse / keyboard / touch / scroll | Same |
+| On expiry | Redirect to `/login?sessionExpired=true` → user re-enters email/password | Redirect to `/login?sessionExpired=true` → user clicks external provider button → IdP round-trip (silent if IdP SSO is still valid) → back in |
+
+### Two independent clocks for external providers
+
+External providers add a second token lifetime to be aware of:
+
+1. **Power Pages `ApplicationCookie`** — what this keepalive touches. Controlled by `Authentication/ApplicationCookie/ExpireTimeSpan` site setting.
+2. **IdP token** (Entra External ID ID token / refresh token, etc.) — controlled entirely by the IdP. Power Pages does NOT re-verify with the IdP on every request; once the session cookie is issued post-callback, it's independent of the IdP token.
+
+What this means in practice:
+- **Power Pages session expires, IdP token still valid** (common): user redirected to `/login?sessionExpired=true` → clicks external provider button → IdP responds silently (SSO cookie still valid in browser) → new Power Pages session issued. No credential re-entry. Smooth UX.
+- **IdP token expires, Power Pages session still valid**: user keeps using the site fine — Power Pages doesn't care about the IdP token after the initial sign-in.
+
+The keepalive is responsible for the first clock only. The IdP's own session management handles the second.
+
+### Detection limitation
+
+`/_layout/tokenhtml` is **anonymous-accessible** by design — it's the endpoint the unauthenticated login form uses to fetch an anti-forgery token. When the Power Pages session expires server-side, the next `fetchAntiForgeryToken()` call **may still succeed** (returns an anonymous-context token), and the hook's catch block won't fire. `onSessionExpired` won't run.
+
+In practice, this means the keepalive is **highly effective at PREVENTING expiry** (by touching the cookie before it expires) but **less reliable at DETECTING expiry** once it has happened.
+
+Robust expiry detection in the field typically happens when:
+- The user attempts a protected action (e.g., data fetch via the WebAPI client from `/integrate-webapi`) → server returns 401 → SPA catches and redirects to `/login?sessionExpired=true`
+- The user reloads the page → SPA reads `window.Microsoft.Dynamic365.Portal.User` → empty → effectively logged out
+
+If your site uses the WebAPI client from the `/integrate-webapi` skill, that client treats 401 as a session-expired signal and triggers the same redirect. The two mechanisms together (keepalive prevention + WebAPI 401 detection) give the best practical coverage.
+
+This limitation applies equally to local and external auth — it's a property of the cookie-based session model + the choice of `/_layout/tokenhtml` as the ping endpoint, not a provider issue. Switching to an authenticated-only ping endpoint would catch expiry reliably but Power Pages doesn't expose a built-in "is my session valid?" endpoint; building one would require server-side custom code (out of scope for this skill).
+
 ### React: useSessionKeepAlive Hook
 
 Create `src/hooks/useSessionKeepAlive.ts`:

@@ -966,6 +966,10 @@ The mock should return a fake user with configurable roles so developers can tes
 
 > **SPA session expiry problem:** In SPAs, page navigation is client-side — no server requests are made. The session cookie's `SlidingExpiration` only renews when the browser sends a request to the server. Without a keepalive, the session silently expires even while the user is actively using the SPA. The default `ExpireTimeSpan` is 24 hours with renewal at the halfway point (12 hours), but this can be configured shorter.
 
+> **Provider-agnostic — works for local AND external auth.** Power Pages issues the same `ApplicationCookie` session cookie regardless of how the user signed in (local password, Entra External ID, generic OIDC, SAML2, social). The keepalive operates on that cookie, so the same hook covers every provider. `isAuthenticated()` reads from `window.Microsoft.Dynamic365.Portal.User` which is populated for any authenticated user. No provider-specific branches are needed.
+
+> **External providers — two independent clocks.** For external auth, the Power Pages session cookie and the IdP token (e.g., Entra External ID's ID token / refresh token) have separate lifetimes. The Power Pages session is what the SPA needs to keep alive; the IdP token is invisible to the SPA. When the Power Pages session does expire and the user is redirected to `/login?sessionExpired=true`, clicking the external provider button kicks off the IdP round-trip — but if the IdP's SSO cookie is still valid (typical), the round-trip is silent (no credential re-entry). The user lands back in the site signed in. This is the expected UX and requires no extra handling.
+
 Create a session keepalive hook that periodically pings `/_layout/tokenhtml` to renew the session cookie:
 
 - **React**: Create `src/hooks/useSessionKeepAlive.ts`
