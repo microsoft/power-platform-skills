@@ -1209,7 +1209,10 @@ The password strength validation matches the default Power Pages password policy
 
 #### 5.1.5 Create Terms and Conditions Page (When Terms Enabled)
 
-**If the user enabled Terms and Conditions in Phase 2**, create a `/terms` SPA page. This page is shown when the server redirects to the terms page after login or registration — the SPA intercepts the redirect and shows this page instead of the server-rendered one.
+**If the user enabled Terms and Conditions in Phase 2**, create a `/terms` SPA page. **This page works for ALL auth flows** — local sign-in, local registration, AND external providers (Entra External ID, OIDC, social) — via two complementary mechanisms:
+
+1. **Local auth flows** (`loginLocal`, `register`): use `fetch()` so the SPA stays in-page. The auth service detects the server's `TermsAndConditions` redirect from `response.url` and throws `TermsRequiredError`. The login/registration page catches it and navigates to `/terms`.
+2. **External auth flows** (`loginExternal`, `loginWithProvider` external branch): use `form.submit()` so the browser leaves the SPA during the IdP round-trip. After IdP callback, the server may redirect to `/Account/Login/TermsAndConditions?ReturnUrl=/&UseExternalSignInAsync=True&IsFacebook=False&IsInternalAADUser=False`. The Code-Site-Shell-Header script (Phase 5.1.6) catches this URL and redirects to the SPA `/terms` route, preserving the query string so `acceptTerms()` knows which sign-in completion path the server expects.
 
 The terms page must:
 
@@ -1221,19 +1224,53 @@ The terms page must:
   const TERMS_BUTTON_TEXT = '<value from Phase 2 or default>'
   ```
 - Display the heading, terms content (rendered as HTML via `dangerouslySetInnerHTML`), checkbox with agreement text, and confirm button
-- The confirm button calls `acceptTerms('/')` from authService — this fetches the server terms page to get the anti-forgery token, then POSTs the acceptance
+- The confirm button calls `acceptTerms('/')` from authService — this reads the query string from `window.location.search`, fetches the server terms page (with the same query string preserved) to get the anti-forgery token, then POSTs the acceptance back to the same URL with the flags from the query string in the body
 - The confirm button is disabled until the checkbox is checked
 - Display server errors inline if `acceptTerms()` throws
 - Include a "Back to sign in" link to `/login`
 
-**Both Login and Registration pages must catch `TermsRequiredError`:**
+**Login and Registration pages must catch `TermsRequiredError` (local auth path):**
 - In the Login page's `loginLocal()` catch block: if `err instanceof TermsRequiredError`, navigate to `/terms`
 - In the Registration page's `register()` catch block: if `err instanceof TermsRequiredError`, navigate to `/terms`
 
-**How the server triggers terms:**
-- **Login flow**: Server redirects to `/Account/Login/TermsAndConditions` after auth
-- **Registration flow**: Server redirects to `/TermsAndConditions?ReturnUrl=%2F` after registration (different URL!)
-- Both are detected by `response.url.includes('TermsAndConditions')` in the auth service
+**No SPA code changes needed in `loginExternal` for the external auth path** — the header-template redirect (Phase 5.1.6) handles it transparently. The external user lands at `/terms?ReturnUrl=/&UseExternalSignInAsync=True&...` after the IdP round-trip; the SPA renders the Terms page; `acceptTerms()` uses the query string to POST back with the correct `UseExternalSignInAsync` / `IsFacebook` / `IsInternalAADUser` flags.
+
+**How the server triggers terms (for reference):**
+- **Local login flow**: Server redirects to `/Account/Login/TermsAndConditions` after auth — caught via `response.url.includes('TermsAndConditions')` in `loginLocal()`
+- **Local registration flow**: Server redirects to `/TermsAndConditions?ReturnUrl=%2F` after registration — caught via `response.url.includes('TermsAndConditions')` in `register()`
+- **External login flow**: Server redirects from `/Account/Login/ExternalLoginCallback` to `/Account/Login/TermsAndConditions?ReturnUrl=/&UseExternalSignInAsync=True&IsFacebook=False&IsInternalAADUser=False` — caught via header-template redirect
+
+**`acceptTerms()` must be query-string-aware** (required when external providers are configured alongside terms):
+
+```typescript
+export async function acceptTerms(returnUrl?: string): Promise<void> {
+  // Parse the flags from window.location.search — set by the server's redirect URL.
+  // For local-auth users (no query string), defaults apply.
+  const params = new URLSearchParams(window.location.search);
+  const useExternalSignInAsync = params.get('UseExternalSignInAsync') || 'False';
+  const isFacebook = params.get('IsFacebook') || 'False';
+  const isInternalAADUser = params.get('IsInternalAADUser') || 'False';
+
+  // Fetch the server terms page WITH the original query string preserved
+  const serverTermsUrl = `/Account/Login/TermsAndConditions${window.location.search}`;
+  const pageResponse = await fetch(serverTermsUrl, { credentials: 'same-origin', redirect: 'follow' });
+
+  // ... extract anti-forgery token from rendered HTML ...
+
+  // POST back to the same URL with body flags matching the query-string flags.
+  // DO NOT hardcode UseExternalSignInAsync=False — external users need True.
+  const body = new URLSearchParams();
+  body.set('__RequestVerificationToken', antiForgeryToken);
+  body.set('IsTermsAndConditionsAccepted', 'true');
+  body.set('UseExternalSignInAsync', useExternalSignInAsync);
+  body.set('IsFacebook', isFacebook);
+  body.set('IsInternalAADUser', isInternalAADUser);
+  body.set('InvitationCode', '');
+  // ... POST and handle response ...
+}
+```
+
+See `authentication-reference.md` for the full implementation.
 
 **Framework-specific implementation:**
 - **React**: Create `src/pages/Terms.tsx` and add `<Route path="/terms" element={<Terms />} />` to the router
@@ -1294,6 +1331,7 @@ name: Code-Site-Shell-Header
 | `'/account/login/resetpassword': '/reset-password'` | Local auth + `ResetPasswordEnabled = true` (Phase 5.1.6) |
 | `'/account/login/redeeminvitation': '/redeem-invitation'` | `REGISTRATION_MODE` is `Invitation-only` or `Both` (Phase 5.1.7) |
 | `'/account/login/externallogincallback': '/external-login-confirmation'` | Any external provider is configured (Phase 5.1.8) — captures first-time external sign-in into the SPA |
+| `'/account/login/termsandconditions': '/terms'` | Terms & Conditions are enabled (any auth flow — see Phase 5.1.5) — captures the server's post-auth Terms redirect for external providers |
 
 Then update **`website.yml`** to point `headerwebtemplateid` to the new template's ID:
 

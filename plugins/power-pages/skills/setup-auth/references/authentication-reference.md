@@ -2020,10 +2020,18 @@ IsTermsAndConditionsEnabled():
 ```
 
 If enabled, the server redirects to the terms page instead of the ReturnUrl:
-- **Login**: redirects to `/Account/Login/TermsAndConditions`
-- **Registration**: redirects to `/TermsAndConditions?ReturnUrl=%2F`
+- **Local login**: redirects to `/Account/Login/TermsAndConditions` (no query string for the local-auth case)
+- **Local registration**: redirects to `/TermsAndConditions?ReturnUrl=%2F`
+- **External login (Entra External ID, OIDC, social)**: redirects from `/Account/Login/ExternalLoginCallback` to `/Account/Login/TermsAndConditions?ReturnUrl=/&UseExternalSignInAsync=True&IsFacebook=False&IsInternalAADUser=False`. The query-string flags tell the server which sign-in completion path to take after acceptance — `UseExternalSignInAsync=True` is the critical one for external users.
 
-The server also sets a `DeferredLocalLoginCookie` — it defers session creation until terms are accepted.
+The server also sets a deferred sign-in cookie (`DeferredLocalLoginCookie` for local, external sign-in deferred cookie for external) — sign-in completes only after terms are accepted.
+
+### SPA coverage
+
+| Auth flow | SPA detection mechanism |
+|---|---|
+| Local login / registration | `fetch()` response URL check → throw `TermsRequiredError` → page navigates to `/terms` |
+| External login (Entra External ID, OIDC, social) | Browser navigates to `/Account/Login/TermsAndConditions` after IdP callback → Code-Site-Shell-Header redirect script catches it → forwards to `/terms` with query string preserved |
 
 ### Auth Service: TermsRequiredError and acceptTerms
 
@@ -2048,7 +2056,9 @@ if (response.url.includes('TermsAndConditions')) {
 }
 ```
 
-**`acceptTerms()` function:**
+**`acceptTerms()` function — query-string-aware:**
+
+The function must read flags from `window.location.search` (set by the server's redirect URL for external auth) instead of hardcoding them. Without this, external users' POST to `/Account/Login/TermsAndConditions` sends `UseExternalSignInAsync=False` and the server won't complete their sign-in.
 
 ```typescript
 export async function acceptTerms(returnUrl?: string): Promise<void> {
@@ -2057,14 +2067,27 @@ export async function acceptTerms(returnUrl?: string): Promise<void> {
     return;
   }
 
-  // Fetch the server terms page to get the anti-forgery token
-  const pageResponse = await fetch('/Account/Login/TermsAndConditions', {
+  // Read flags from the URL the user landed at. For external auth, the server's
+  // redirect URL is /Account/Login/TermsAndConditions?ReturnUrl=/&UseExternalSignInAsync=True&...
+  // For local auth, the SPA navigates here directly with no query string — defaults apply.
+  const params = new URLSearchParams(window.location.search);
+  const useExternalSignInAsync = params.get('UseExternalSignInAsync') || 'False';
+  const isFacebook = params.get('IsFacebook') || 'False';
+  const isInternalAADUser = params.get('IsInternalAADUser') || 'False';
+  const queryReturnUrl = params.get('ReturnUrl') || returnUrl || '/';
+
+  // Preserve the original query string when fetching / POSTing to the server terms page.
+  // The server reads the flags from the URL too, not just the body.
+  const queryString = window.location.search;
+  const serverTermsUrl = `/Account/Login/TermsAndConditions${queryString}`;
+
+  const pageResponse = await fetch(serverTermsUrl, {
     credentials: 'same-origin',
     redirect: 'follow',
   });
 
-  // Use the final URL the server responded from (may differ between login/registration flows)
-  const termsUrl = new URL(pageResponse.url).pathname;
+  // Use the final URL the server responded from (may differ between login/registration flows).
+  const finalTermsUrl = new URL(pageResponse.url).pathname + new URL(pageResponse.url).search;
 
   const pageHtml = await pageResponse.text();
   const parser = new DOMParser();
@@ -2072,21 +2095,27 @@ export async function acceptTerms(returnUrl?: string): Promise<void> {
 
   const antiForgeryToken = (doc.querySelector('input[name="__RequestVerificationToken"]') as HTMLInputElement)?.value || '';
 
+  // Body flags match query-string flags so the server treats this as the correct sign-in flow type.
+  // DO NOT hardcode UseExternalSignInAsync=False — that breaks external auth completion.
   const body = new URLSearchParams();
   body.set('__RequestVerificationToken', antiForgeryToken);
   body.set('InvitationCode', '');
-  body.set('IsFacebook', 'False');
-  body.set('UseExternalSignInAsync', 'False');
-  body.set('IsInternalAADUser', 'False');
+  body.set('IsFacebook', isFacebook);
+  body.set('UseExternalSignInAsync', useExternalSignInAsync);
+  body.set('IsInternalAADUser', isInternalAADUser);
   body.set('IsTermsAndConditionsAccepted', 'true');
 
-  const response = await fetch(termsUrl, {
+  const response = await fetch(finalTermsUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
     credentials: 'same-origin',
     redirect: 'follow',
   });
+
+  // Default to the ReturnUrl from the query string if no explicit one was passed —
+  // that's where the server originally wanted to send the user.
+  returnUrl = returnUrl ?? queryReturnUrl;
 
   if (response.redirected || response.ok) {
     window.location.href = returnUrl || '/';
