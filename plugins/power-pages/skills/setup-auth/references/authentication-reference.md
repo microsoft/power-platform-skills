@@ -112,32 +112,47 @@ If `Authentication/Registration/TermsAgreementEnabled` is `true`, after successf
 
 ### External Authentication Failure (ExternalAuthenticationFailed page)
 
-When an OIDC/SAML2/WS-Fed authentication fails (invalid token, issuer mismatch, IdX errors, user access denied, etc.), the server redirects to a hardcoded path: `/Account/Login/ExternalAuthenticationFailed`. **This path cannot be overridden via site settings or site markers** — it is baked into OWIN startup. The only query parameter ever appended is `?message=access_denied` (for user-denied errors); all other error details are logged to server telemetry only.
+When an OIDC/SAML2/WS-Fed authentication fails (invalid token, issuer mismatch, IdX errors, user access denied, IdP outage, etc.), the server redirects to a hardcoded path: `/Account/Login/ExternalAuthenticationFailed`. **This path cannot be overridden via site settings or site markers** — it is baked into OWIN startup. The only query parameter ever appended is `?message=access_denied` (for user-denied errors); all other error details are logged to server telemetry only.
 
-**SPA workaround — content snippet redirect:** To keep the user inside the SPA on auth failure, edit the Dataverse content snippets used by this page to inject a `<script>` that redirects to an SPA route with the error:
+**SPA handling — Code-Site-Shell-Header redirect (recommended):**
 
-1. In the Power Pages admin center, edit these two content snippets:
-   - `Account/Register/ExternalAuthenticationFailed` (generic auth failure)
-   - `Account/Register/ExternalAuthenticationFailed/AccessDenied` (user-denied case)
+Add this entry to the `Code-Site-Shell-Header` redirect map (Phase 5.1.6):
 
-2. Add this script to the HTML content:
+```js
+'/account/login/externalauthenticationfailed': '/login'
+```
 
-   ```html
-   <script>
-     (function() {
-       var params = new URLSearchParams(window.location.search);
-       var code = params.get('message') === 'access_denied' ? 'access_denied' : 'signin_failed';
-       // Redirect to SPA login page with error code
-       window.location.replace('/login?message=' + code);
-     })();
-   </script>
-   ```
+And add this special-case block right after the redirect map (handles the no-query-string case):
 
-3. The SPA `/login` page's `getAuthError()` will pick up the `?message=` query param and display the error inline (via the AUTH_ERROR_MESSAGES map).
+```js
+if (path === '/account/login/externalauthenticationfailed' && !search) {
+  window.location.replace(spaBase + '/login?message=external_auth_failed');
+  return;
+}
+```
 
-**Limitations:**
-- Only `access_denied` vs. generic `signin_failed` distinction is preserved — rich error codes (`AADSTS*`, `IDX*`) are not available client-side
-- The server-rendered error page briefly flashes before the script redirects
+Then add the error code to `AUTH_ERROR_MESSAGES` in `authService.ts`:
+
+```typescript
+external_auth_failed: 'Sign-in with the external provider failed. Please try again.',
+```
+
+With this in place:
+- **User-denied at IdP** (server appends `?message=access_denied`) → SPA `/login?message=access_denied` → "Access was denied."
+- **Generic failure** (no query string) → SPA `/login?message=external_auth_failed` → "Sign-in with the external provider failed. Please try again."
+
+Either way the user lands on the SPA Login page with an inline error, can retry, and stays in the SPA UX. No content snippet editing required.
+
+**Legacy workaround — content snippet edit (use only if you can't deploy the header template):**
+
+If for some reason you can't ship the header template redirect (e.g., on a site that doesn't use Code-Site-Shell-Header), you can edit content snippets in the Power Pages admin center to inject a redirect script. This is the older approach; prefer the header-template redirect above:
+
+1. Edit content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied`
+2. Add `<script>` that reads `window.location.search` and redirects to `/login?message=...`
+
+**Limitations (apply to both approaches):**
+- Only `access_denied` vs. generic `external_auth_failed` distinction is preserved — rich error codes (`AADSTS*`, `IDX*`) are not available client-side
+- The server-rendered error page briefly flashes before the script redirects (1-2 frames typically)
 - Operators must still use Kusto/telemetry to investigate actual error causes
 
 ### External Password Reset Flow (OIDC Providers with PasswordResetPolicyId)

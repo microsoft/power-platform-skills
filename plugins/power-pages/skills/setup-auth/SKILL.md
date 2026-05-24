@@ -1329,8 +1329,16 @@ name: Code-Site-Shell-Header
       '/register': '/redeem-invitation',
       '/account/login/register': '/registration',
       '/account/login/externallogincallback': '/external-login-confirmation',
-      '/account/login/termsandconditions': '/terms'
+      '/account/login/termsandconditions': '/terms',
+      '/account/login/externalauthenticationfailed': '/login'
     };
+    // Special case: ExternalAuthenticationFailed may arrive with no query string
+    // (generic failure) or with ?message=access_denied (user-denied at IdP).
+    // Ensure the Login page always shows SOME error indication.
+    if (path === '/account/login/externalauthenticationfailed' && !search) {
+      window.location.replace(spaBase + '/login?message=external_auth_failed');
+      return;
+    }
     for (var serverPath in redirects) {
       if (path === serverPath) {
         window.location.replace(spaBase + redirects[serverPath] + search);
@@ -1351,6 +1359,7 @@ name: Code-Site-Shell-Header
 | `'/account/login/register': '/registration'` | `REGISTRATION_MODE` is not `Registration disabled` (Phase 5.1.2). This is the **local Register Web Forms page**. The server redirects here after the RedeemInvitation form is submitted (from `/Register` → `/Account/Login/Register?invitationCode=...`). Catching this keeps the user in the SPA `/registration` page, which itself mirrors the Login page layout — external provider buttons above a divider, local form below — so the user can complete sign-up either way (Phase 5.1.2). |
 | `'/account/login/externallogincallback': '/external-login-confirmation'` | Any external provider is configured (Phase 5.1.8) — captures first-time external sign-in into the SPA |
 | `'/account/login/termsandconditions': '/terms'` | Terms & Conditions are enabled (any auth flow — see Phase 5.1.5) — captures the server's post-auth Terms redirect for external providers |
+| `'/account/login/externalauthenticationfailed': '/login'` | Any external provider is configured. **The server redirects here when external auth fails** — invalid token, issuer mismatch, user-denied at IdP, IdP outage, etc. This path is hardcoded in OWIN startup and cannot be overridden via site settings (per `authentication-reference.md`). The redirect script special-cases this URL: when the server appends `?message=access_denied` (user-denied case), it carries through and `getAuthError()` shows "Access was denied." When the server appends no query string (generic failure), the script injects `?message=external_auth_failed` so the Login page shows "Sign-in with the external provider failed. Please try again." (add this code to `AUTH_ERROR_MESSAGES` in authService). |
 
 > **About the two new entries (`/register` and `/account/login/register`):** these handle a specific external-auth flow that's hard to discover otherwise. When an external user (Entra External ID, OIDC, SAML2, social) clicks the "Sign in" button WITHOUT first clicking an invitation email link, and they don't have an existing contact in Dataverse, the server forces them through a server-rendered invitation flow:
 >
@@ -2279,6 +2288,8 @@ Tell the user to update each placeholder via:
 Present the list of environment variables that need updating (display name and schema name for each).
 
 **Two-Factor Authentication** — when 2FA is requested:
+
+> **Recommendation for external auth sites:** Power Pages 2FA is **server-rendered** (the SMS code entry happens via `/Account/Login/SendCode` and `/Account/Login/VerifyCode` pages that cannot be SPA-ified — the 2FA token state lives in server-side cookies between the credential POST and the code-verification POST). If your site uses an external IdP (Entra External ID, OIDC, etc.), **prefer enabling 2FA at the IdP layer** (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.). IdP-level 2FA is transparent to Power Pages and keeps the entire UX inside the IdP's branded experience. Use Power-Pages-layered 2FA only when local authentication is the primary or only sign-in method.
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
