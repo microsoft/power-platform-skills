@@ -1116,13 +1116,21 @@ See `authentication-reference.md` for full code examples of each layout pattern 
 
 When the `/login` page exists, the AuthButton's "Sign In" must navigate to `/login` (use `<Link to="/login">`) instead of calling any login function directly.
 
-#### 5.1.2 Create Registration Page (Local Auth Only)
+#### 5.1.2 Create Registration Page
 
-**Always create the `/registration` page when local authentication is configured AND `REGISTRATION_MODE` is not `Registration disabled`** — regardless of whether the mode is `Open registration only`, `Invitation-only`, or `Both`. In invitation-only mode the page is reached via the `/redeem-invitation` flow (Phase 5.1.7), not direct navigation — but the SPA route must still exist so React Router can render it.
+**Always create the `/registration` page when `REGISTRATION_MODE` is not `Registration disabled`** — regardless of whether the mode is `Open registration only`, `Invitation-only`, or `Both`, and regardless of whether local or external providers (or both) are configured. The page mirrors the Login page layout when both local and external providers exist: external provider buttons in a horizontal row at the top, an "or sign up with email" divider, and the local registration form below (when local auth is configured). In invitation-only mode the page is reached via the `/redeem-invitation` flow (Phase 5.1.7) or via the server-bouncing flow (Code-Site-Shell-Header catches `/account/login/register`), not direct navigation — but the SPA route must still exist so React Router can render it.
 
-> **Important architectural note:** The server-side registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action. This means it requires `__VIEWSTATE` and uses fully-qualified control names (e.g., `ctl00$...$EmailTextBox`). The `register()` function in authService handles this by first fetching the server page (GET), parsing the ViewState and control names, then POSTing with the correct payload. This is different from login, which is a simple MVC form POST.
+> **Important architectural note:** The server-side registration page (`/Account/Login/Register`) is an ASP.NET Web Forms page, NOT an MVC action. The local `register()` function in authService handles this by first fetching the server page (GET), parsing the ViewState and control names, then POSTing with the correct payload. This only applies when the user submits the local registration form — external provider buttons skip this entirely and go through `loginExternal()`.
 
-The registration page must:
+**External provider buttons (when `EXTERNAL_PROVIDERS.length > 0`):**
+
+Render external provider sign-up buttons in a horizontal row at the top of the page — same layout pattern as the Login page (Phase 5.1.1). Each button calls `loginExternal(providerIdentifier, returnUrl, invitationCode)` from authService — when the user clicks "Sign up with Entra External ID" the SPA initiates external auth with the invitation code (if present) in the URL. The server's `ExternalLoginCallback` then either auto-links via `AllowContactMappingWithEmail`, or surfaces the SPA-ified ExternalLoginConfirmation page (Phase 5.1.8), or redeems the invitation if one was provided. **This is the same code path as the Login page external buttons** — `loginExternal()` doesn't care whether the user came from `/login` or `/registration`; the server creates the contact on first sign-in if one doesn't exist.
+
+If `EXTERNAL_PROVIDERS.length > 0` AND `LOCAL_PROVIDER` exists, show the divider ("or sign up with email") between the external buttons and the local form. If only external providers (no local), show ONLY the external buttons with no divider and no local form — the page becomes effectively "pick a provider to sign up with".
+
+**Local form (when `LOCAL_PROVIDER` exists):**
+
+The local registration form must:
 
 - Call the `register()` function from authService, which handles the Web Forms ViewState pattern (fetch server page → parse → POST with correct control names)
 - Show the correct credential field based on the `LocalLoginByEmail` choice from Phase 2.1:
@@ -1135,6 +1143,8 @@ The registration page must:
 - Include an "Already have an account? Sign in" link back to `/login`
 - **Skip the auth redirect in development mode** — in dev mode the mock user is always "authenticated", which would block testing the registration form. Add: `const isDev = window.location.hostname === 'localhost'` and only redirect if `isAuthenticated && !isDev`.
 - Be styled to match the site's existing sign-in page design (centered card layout)
+
+**Layout** — matches the Login page (Phase 5.1.1). When the user picks `LOGIN_LAYOUT` in Phase 2.1, that layout choice (horizontal row / vertical stack / primary spotlight / tabbed) applies to both `/login` AND `/registration` so users get a consistent experience across the two pages.
 
 **Pre-fill email from invitation (when `InvitationEnabled` is true — i.e., Invitation-only or Both modes):**
 
@@ -1312,7 +1322,10 @@ name: Code-Site-Shell-Header
     var redirects = {
       '/account/login/resetpassword': '/reset-password',
       '/account/login/redeeminvitation': '/redeem-invitation',
-      '/account/login/externallogincallback': '/external-login-confirmation'
+      '/register': '/redeem-invitation',
+      '/account/login/register': '/registration',
+      '/account/login/externallogincallback': '/external-login-confirmation',
+      '/account/login/termsandconditions': '/terms'
     };
     for (var serverPath in redirects) {
       if (path === serverPath) {
@@ -1330,8 +1343,19 @@ name: Code-Site-Shell-Header
 |---|---|
 | `'/account/login/resetpassword': '/reset-password'` | Local auth + `ResetPasswordEnabled = true` (Phase 5.1.6) |
 | `'/account/login/redeeminvitation': '/redeem-invitation'` | `REGISTRATION_MODE` is `Invitation-only` or `Both` (Phase 5.1.7) |
+| `'/register': '/redeem-invitation'` | `REGISTRATION_MODE` is `Invitation-only` or `Both` (Phase 5.1.7). `/Register` is the **alias route for `LoginController.RedeemInvitation`** — the server redirects external users here from `ExternalLoginCallback` when they have no contact AND no invitation context (per `RegistrationManager.cs` gating logic). Catching this preserves the SPA UX for external users who initiated sign-in without an invitation link. |
+| `'/account/login/register': '/registration'` | `REGISTRATION_MODE` is not `Registration disabled` (Phase 5.1.2). This is the **local Register Web Forms page**. The server redirects here after the RedeemInvitation form is submitted (from `/Register` → `/Account/Login/Register?invitationCode=...`). Catching this keeps the user in the SPA `/registration` page, which itself mirrors the Login page layout — external provider buttons above a divider, local form below — so the user can complete sign-up either way (Phase 5.1.2). |
 | `'/account/login/externallogincallback': '/external-login-confirmation'` | Any external provider is configured (Phase 5.1.8) — captures first-time external sign-in into the SPA |
 | `'/account/login/termsandconditions': '/terms'` | Terms & Conditions are enabled (any auth flow — see Phase 5.1.5) — captures the server's post-auth Terms redirect for external providers |
+
+> **About the two new entries (`/register` and `/account/login/register`):** these handle a specific external-auth flow that's hard to discover otherwise. When an external user (Entra External ID, OIDC, SAML2, social) clicks the "Sign in" button WITHOUT first clicking an invitation email link, and they don't have an existing contact in Dataverse, the server forces them through a server-rendered invitation flow:
+>
+> 1. `POST /Account/Login/ExternalLogin` → IdP → `/signin-{provider}` → `/Account/Login/ExternalLoginCallback`
+> 2. `ExternalLoginCallback` finds no contact + no invitation → redirects to `/Register?ReturnUrl=/` (the RedeemInvitation form, server-rendered)
+> 3. User enters invitation code → server validates → redirects to `/Account/Login/Register?invitationCode=...` (the local Register Web Forms page, which has external provider buttons rendered on it)
+> 4. User clicks an external provider button on the Register page → `/Account/Login/ExternalLogin?InvitationCode=...` → external auth round 2 with invitation in URL → contact created + invitation redeemed
+>
+> Without the `/register` and `/account/login/register` redirects, the user sees the server-rendered RedeemInvitation form and the Web Forms Register page — both break the SPA UX. **These redirects apply to ALL external providers, not just Entra External ID, because the server's bouncing logic is provider-agnostic.**
 
 Then update **`website.yml`** to point `headerwebtemplateid` to the new template's ID:
 
@@ -1364,6 +1388,12 @@ The `resetPassword()` function is an MVC form POST (no ViewState) to `/Account/L
 #### 5.1.7 Create Redeem Invitation Page (Invitation Modes Only)
 
 **If `REGISTRATION_MODE` is `Invitation-only` or `Both`**, create a `/redeem-invitation` SPA page. This is the landing page users hit when they click an invitation email link. The link format is `{site-url}/Account/Login/RedeemInvitation?invitation={code}` — the Code-Site-Shell-Header redirect (Phase 5.1.6) catches it and forwards to the SPA route.
+
+**Two paths land users on `/redeem-invitation`:**
+
+1. **Direct invitation link**: User clicks the email link `/Account/Login/RedeemInvitation?invitation={code}` → header script redirects to `/redeem-invitation?invitation={code}`. Clean SPA entry — invitation code in URL from the start.
+
+2. **Server-bounce path (external auth, no contact, no invitation)**: User clicks "Sign in with [external provider]" on the Login page WITHOUT first clicking an invitation link. They complete external auth, the server's `ExternalLoginCallback` finds no contact + no invitation, and redirects them to `/Register?ReturnUrl=...` (the alias for `LoginController.RedeemInvitation`). The header script catches `/register` and redirects to `/redeem-invitation` — same SPA page, no invitation code pre-filled, user types it in. This path applies to **all external providers**, not just Entra External ID — the server-side bouncing logic is provider-agnostic. **Confirmed via HAR analysis on a live site with Entra External ID + Terms.**
 
 **Server flow this replaces:** The server's `LoginController.RedeemInvitation` action (`crm.solutions.portal/Samples/MasterPortal/Areas/Account/Controllers/LoginController.cs` lines 3232-3310) validates the invitation code and branches:
 

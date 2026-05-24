@@ -2575,7 +2575,7 @@ When `REGISTRATION_MODE` is `Invitation-only` or `Both`, update Login.tsx to:
 2. Show an info banner when present: `"Sign in to redeem invitation {code}. The invitation will be linked to your account after you sign in."`
 3. Pass `invitationCode` to `loginLocal(email, password, rememberMe, '/', invitationCode)` on submit.
 
-### Registration page update — email pre-fill
+### Registration page update — email pre-fill + external provider buttons
 
 When `REGISTRATION_MODE` is `Invitation-only` or `Both`, update Registration.tsx to call `fetchInvitationDetails(invitationCode)` on mount and pre-fill the email input. The input must be controlled (`value={email}`) and editable.
 
@@ -2588,16 +2588,50 @@ useEffect(() => {
 }, [invitationCode])
 ```
 
+**Also when `EXTERNAL_PROVIDERS.length > 0`**, render external provider buttons above the local form (same layout as Login page). Each button calls `loginExternal(providerIdentifier, '/', invitationCode)` — the invitation code threads through to the IdP round-trip via `/Account/Login/ExternalLogin?InvitationCode={code}`, and the server's `ExternalLoginCallback` redeems the invitation as part of contact creation.
+
+```tsx
+{EXTERNAL_PROVIDERS.length > 0 && (
+  <div style={styles.externalRow}>
+    {EXTERNAL_PROVIDERS.map(provider => (
+      <button key={provider.id} type="button"
+        onClick={() => loginExternal(provider.providerIdentifier!, '/', invitationCode)}>
+        {`Sign up with ${provider.displayName.replace(/^Sign in with /, '')}`}
+      </button>
+    ))}
+  </div>
+)}
+{EXTERNAL_PROVIDERS.length > 0 && LOCAL_PROVIDER && <Divider label="OR SIGN UP WITH EMAIL" />}
+{LOCAL_PROVIDER && <LocalRegistrationForm ... />}
+```
+
 ### End-to-end flow summary
 
+**Path A — User clicks invitation email link first (clean SPA entry):**
 1. Admin creates an Invitation record in Dataverse (`adx_invitation` table) for an invited contact → captures `adx_invitationcode`
 2. Admin sends user a link: `{site-url}/Account/Login/RedeemInvitation?invitation={code}`
 3. User clicks → browser loads server page → header template script redirects to SPA `/redeem-invitation?invitation={code}`
 4. SPA RedeemInvitation page mounts → code pre-filled → user picks register vs. login → submits
 5. `redeemInvitation()` POSTs → server validates code → returns 302 (register) or 200 (login)
 6. SPA detects branch and navigates to `/registration?invitationCode={code}` or `/login?invitationCode={code}`
-7. **Register path**: Registration page pre-fills email via `fetchInvitationDetails()` → user completes form → POST creates account AND redeems invitation in one server call
-8. **Login path**: Login page shows info banner → user signs in → server redeems invitation in `RedirectOnPostAuthenticate` after auth
+7. **Register path with local auth**: Registration page pre-fills email via `fetchInvitationDetails()` → user completes form → POST creates account AND redeems invitation in one server call
+8. **Register path with external auth**: User clicks external provider button on `/registration` → `loginExternal()` POSTs to `/Account/Login/ExternalLogin?InvitationCode={code}` → IdP → ExternalLoginCallback creates contact + redeems invitation
+9. **Login path**: Login page shows info banner → user signs in (local or external — both thread `invitationCode` through) → server redeems invitation in `RedirectOnPostAuthenticate` after auth
+
+**Path B — User clicks "Sign in with external provider" without invitation context (server-bounce path):**
+1. User clicks external provider button on `/login` (or directly via `loginExternal()` from the Nav) — **no invitation code in URL**
+2. `POST /Account/Login/ExternalLogin?Provider=...` → IdP → `/signin-{providername}` → 302 → `/Account/Login/ExternalLoginCallback?ReturnUrl=/`
+3. **`GET /Account/Login/ExternalLoginCallback`**: server detects no contact + no invitation → 302 → `/Register?ReturnUrl=/` (the alias route for `LoginController.RedeemInvitation`, NOT the local Register page)
+4. Code-Site-Shell-Header script catches `/register` → redirects to SPA `/redeem-invitation`
+5. User enters invitation code → SPA `redeemInvitation()` → server returns 302 → `/Account/Login/Register?returnUrl=/&invitationCode={code}` (the local Register Web Forms page)
+6. Header script catches `/account/login/register` → redirects to SPA `/registration?invitationCode={code}`
+7. SPA Registration page mounts. External provider buttons visible at top. User clicks "Sign up with [external provider]" → `loginExternal(providerIdentifier, '/', invitationCode)`
+8. `POST /Account/Login/ExternalLogin?InvitationCode={code}&Provider=...` → IdP (silent — cookies still valid from step 2) → `/signin-{providername}` → `/Account/Login/ExternalLoginCallback?InvitationCode={code}`
+9. ExternalLoginCallback now has BOTH external auth + invitation → creates contact + redeems → 302 to ReturnUrl (or Terms if enabled)
+
+> **Why the bounce?** The server's `RegistrationManager` enforces that external-authenticated users without a contact MUST either (a) have an invitation, or (b) be in a configuration where `OpenRegistrationEnabled = true` AND `AllowContactMappingWithEmail = true`. Without those, the server forces the invitation flow via the alias `/Register` route. The header redirect catches the bounce and keeps the user in the SPA throughout.
+
+> **Verified via HAR analysis** on a live Power Pages site (smoking-burgers-inc) with Entra External ID + Terms enabled. The two new redirects (`/register` and `/account/login/register`) are critical for any site with external providers AND invitations enabled — without them, users see two server-rendered pages (RedeemInvitation form + local Register Web Forms page) in the middle of the flow.
 
 ---
 
