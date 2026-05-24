@@ -348,11 +348,43 @@ Store as `EXTERNAL_ID_TENANT_SUBDOMAIN` and `EXTERNAL_ID_TENANT_ID`.
 
 ##### Step 2 — App registration
 
+**Confirm the Redirect URI first.** The skill pre-computes a default based on the site URL and `PROVIDER_NAME`, but the user may prefer a different path suffix:
+
+> The Power Pages site needs a Redirect URI registered in your app registration. Based on the site URL and provider name, the default is:
+>
+> **`{REDIRECT_URI}`**
+>
+> (path = `/signin-{ProviderName-lowercased}`, e.g., `/signin-openidconnect_1`)
+>
+> You can keep this default, or customize the path suffix — e.g., `/signin-entra-customer` or `/auth/external-id`.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Use this Redirect URI, or customize the path? | Redirect URI | Use the default (Recommended) — `{REDIRECT_URI}`, Customize the path |
+
+**If "Customize the path"**, ask:
+
+| Question | Options |
+|----------|---------|
+| Enter the path portion (must start with `/`, no spaces, no query string). Example: `/signin-entra-customer`. | *(free text)* |
+
+**Validate** the custom path:
+- Must start with `/`
+- Match `^/[a-zA-Z0-9_\-/]+$` (alphanumeric, hyphen, underscore, additional slashes allowed)
+- Must NOT collide with any `Authentication/OpenIdConnect/*/CallbackPath` already in `.powerpages-site/site-settings/` (from Phase 1.5 discovery)
+- Must NOT be a reserved Power Pages server path (`/Account/...`, `/SignIn`, `/Register`, `/_layout/...`, `/api/...`)
+
+Re-prompt on invalid input. Then update for the rest of the walkthrough:
+- `REDIRECT_URI` = `{SITE_URL}{customPath}`
+- `CALLBACK_PATH` = `{customPath}` (used in Phase 8.1 `CallbackPath` site setting)
+
+If the user kept the default, `CALLBACK_PATH` = `/signin-{ProviderName-lowercased}`.
+
 | Question | Header | Options |
 |----------|--------|---------|
 | Have you registered an app in your Entra External ID tenant for this Power Pages site? | App reg | No — walk me through it (Recommended for first time), Yes — I have the Application (client) ID |
 
-**If "No"**, show step-by-step with the pre-computed Redirect URI verbatim:
+**If "No"**, show step-by-step with the confirmed Redirect URI verbatim:
 
 > Steps to register the app:
 > 1. At https://entra.microsoft.com/, make sure you're in your External ID tenant (top-right picker)
@@ -365,13 +397,21 @@ Store as `EXTERNAL_ID_TENANT_SUBDOMAIN` and `EXTERNAL_ID_TENANT_ID`.
 >    {REDIRECT_URI}
 >    ```
 >
->    (Copy this verbatim — the suffix is `signin-` lowercase + the provider name lowercased. Mismatches cause sign-in to fail silently with a callback URI mismatch error.)
+>    (Copy this verbatim. Any mismatch between this value and the `RedirectUri` site setting causes sign-in to fail with `AADSTS50011: The reply URL specified in the request does not match`.)
 > 6. Click **Register**
 > 7. Open the **Authentication** tab → under "Implicit grant and hybrid flows" check **Access tokens** AND **ID tokens** → **Save**
 > 8. Open the **API permissions** tab → click **Grant admin consent for {your tenant}** → confirm
 > 9. Go back to the **Overview** tab and copy the **Application (client) ID** (it's a GUID)
 >
 > Detailed guide: https://learn.microsoft.com/en-us/entra/external-id/customers/quickstart-register-app
+
+**If "Yes" (existing app)**, before asking for the Client ID, also confirm the user has the matching Redirect URI registered:
+
+> Before continuing, please verify that your existing app registration has the following Redirect URI registered (under **Authentication → Web** in the Entra admin center):
+>
+> **`{REDIRECT_URI}`**
+>
+> If it's missing or different, add it now. An app registration can have multiple Web Redirect URIs registered — adding ours doesn't break any existing integrations. Sign-in will fail if the value in Power Pages doesn't match a registered URI exactly.
 
 Then ask for the value:
 
@@ -455,7 +495,8 @@ Present this summary inline:
 > | Tenant | `{subdomain}.ciamlogin.com` (`{tenantId}`) |
 > | App (Client) ID | `{clientId}` |
 > | User flow | `{userFlowName}` |
-> | Redirect URI | `{redirectUri}` (must already be registered in your app) |
+> | Redirect URI | `{REDIRECT_URI}` (must already be registered in your app) |
+> | Callback path | `{CALLBACK_PATH}` |
 > | Authority | `{authority}` (derived) |
 > | Metadata | `{metadataAddress}` (derived) |
 > | Display name | `{displayName}` |
@@ -1827,19 +1868,23 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
   --description "Provider identifier for ExternalLogin — must match Authority exactly"
 
-# RedirectUri — same value shown to user in Step 2 of walkthrough
+# RedirectUri — confirmed/customized by user in Step 2 of walkthrough
+# Default: <SITE_URL>/signin-{ProviderName-lowercased}
+# User can override the path during the walkthrough — use whatever value was confirmed
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<SITE_URL>/signin-{ProviderName-lowercased}" \
+  --value "<REDIRECT_URI>" \
   --description "OAuth callback URL (must match the URI registered in the app registration)"
 
-# CallbackPath — required to prevent collision when multiple OIDC providers exist
+# CallbackPath — the path portion of RedirectUri. Required to prevent collision
+# when multiple OIDC providers exist. Default: /signin-{ProviderName-lowercased}
+# User can customize during the walkthrough — use whatever value was confirmed (stored as CALLBACK_PATH)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
-  --value "/signin-{ProviderName-lowercased}" \
-  --description "Unique callback path derived from ProviderName"
+  --value "<CALLBACK_PATH>" \
+  --description "OWIN callback path — must match the path portion of RedirectUri"
 
 # ExternalLogoutEnabled — false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
