@@ -132,9 +132,27 @@ Detect existing providers by matching site-setting filenames against these patte
 
 For each detected provider, read its full set of `.sitesetting.yml` files to extract: `Authority` / `MetadataAddress`, `ClientId` / `AppId`, `AuthenticationType` (the providerIdentifier), `Caption` or display name (if present), and the `{Name}` slug used in the keys (e.g., `OpenIdConnect_1`, `EntraExternalId`).
 
-Also distinguish **Entra External ID** from generic **OIDC** by looking at the Authority URL pattern:
-- `*.ciamlogin.com/*` or `login.microsoftonline.com/{guid}/*` with a `RPInitiatedLogout=true` setting → **Entra External ID**
-- Any other OIDC authority → **OIDC (Generic)**
+**Distinguishing Entra ID variants from OIDC** — by Authority URL pattern:
+
+| Authority pattern | Provider type | Notes |
+|---|---|---|
+| `https://login.windows.net/{guid}/` (no `/v2.0/`) — site's parent tenant | **Microsoft Entra ID (workforce)** — `type: 'entra-id'` | Auto-populated by Power Pages on site creation. The `{Name}` slug is usually `AzureAD`. **Set `providerIdentifier` to undefined in AUTH_PROVIDERS** — runtime resolver derives it from `Portal.tenant`. |
+| `https://{subdomain}.ciamlogin.com/{tenantId}` (no trailing `/v2.0/`) | **Entra External ID** — `type: 'oidc'` | Customer tenant. Must include explicit `providerIdentifier` matching the Authority. |
+| `https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/{policy}` | **Azure AD B2C** (legacy) — `type: 'oidc'` | Older B2C product. Must include explicit `providerIdentifier`. |
+| Any other OIDC authority (Okta, Auth0, Ping, etc.) | **OIDC (Generic)** — `type: 'oidc'` | Must include explicit `providerIdentifier`. |
+
+**The Entra ID (workforce) case is special** — when Phase 1.5 discovery detects `Authentication/OpenIdConnect/AzureAD/*` settings on the site (which Power Pages auto-creates for the parent tenant), add a single entry to `EXISTING_PROVIDERS`:
+
+```typescript
+{
+  id: 'entra-id',
+  type: 'entra-id',
+  displayName: existingCaption || 'Sign in with Microsoft',
+  // NO providerIdentifier — resolveProviderIdentifier() derives it from Portal.tenant
+}
+```
+
+Do NOT extract the tenant ID from the existing Authority site setting just to hardcode it back into AUTH_PROVIDERS — the runtime resolver handles it. This keeps the SPA code portable if the site is ever cloned to a different tenant.
 
 **Step 2 — Scan for existing SPA auth code.**
 
@@ -600,7 +618,17 @@ Store this choice as `REGISTRATION_MODE` — it drives:
 - The deterministic set of site settings written in Phase 8.1
 - Whether to default CAPTCHA on (open / both) or off (invitation-only — invitations already filter users)
 
-**For "Microsoft Entra ID"**: No additional configuration needed — configured via Power Pages admin center.
+**For "Microsoft Entra ID"** (workforce / employee tenant): No tenant or client info needed. Power Pages auto-configures the OIDC site settings (`Authentication/OpenIdConnect/AzureAD/*`) for the site's parent tenant when the site is created. The SPA derives the `providerIdentifier` (`https://login.windows.net/{tenantId}/`) at runtime from `window.Microsoft.Dynamic365.Portal.tenant` — no hardcoded values.
+
+Only ask one optional question — the button display name. Provide a sensible default the user can accept:
+
+| Question | Options |
+|----------|---------|
+| What should the login button label say? (default: `Sign in with Microsoft`) | *(free text, defaulted)* |
+
+Store as `ENTRA_ID_DISPLAY_NAME` (default `"Sign in with Microsoft"`). Phase 3.2 adds an entry to `AUTH_PROVIDERS` with `type: 'entra-id'`, this display name, and **no `providerIdentifier`** (runtime-resolved).
+
+> **Why no tenant ID?** The tenant ID is essentially for SPA-button wiring (the value the SPA POSTs to `/Account/Login/ExternalLogin`). Power Pages exposes the site's parent tenant ID at runtime via `window.Microsoft.Dynamic365.Portal.tenant`, so the SPA can construct the providerIdentifier (`https://login.windows.net/{tenantId}/`) without asking the maker. The server-side OIDC settings are already in place from site creation. Compare this to **Entra External ID**, where the tenant is a SEPARATE customer tenant unrelated to the site's parent — there we DO need the maker to provide the tenant ID + subdomain because they can't be derived from `Portal.tenant`.
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
@@ -885,17 +913,19 @@ Create the auth service file based on the detected framework and selected identi
 **All frameworks**: Create `src/services/authService.ts` with these functions and types:
 
 - `AuthProviderType` — string union: `'local' | 'oidc' | 'entra-id' | 'saml2' | 'ws-federation' | 'social'`
-- `AuthProviderConfig` — interface with `id`, `type`, `displayName`, optional `providerIdentifier` (required for non-local), optional `loginByEmail` (local-only)
+- `AuthProviderConfig` — interface with `id`, `type`, `displayName`, optional `providerIdentifier` (required for `'oidc'` / `'saml2'` / `'ws-federation'` / `'social'`; **OMIT for `'entra-id'`** — resolved at runtime), optional `loginByEmail` (local-only)
 - `AUTH_PROVIDERS: AuthProviderConfig[]` — the array (one entry per configured provider, in the order they should appear on the Login page)
 - `LOCAL_PROVIDER` — exported helper: `AUTH_PROVIDERS.find(p => p.type === 'local')` (`undefined` if no local)
 - `EXTERNAL_PROVIDERS` — exported helper: `AUTH_PROVIDERS.filter(p => p.type !== 'local')`
 - `getCurrentUser()` — reads from `window.Microsoft.Dynamic365.Portal.User`
 - `isAuthenticated()` — checks if user exists and has `userName`
+- `getTenantId()` — reads `window.Microsoft.Dynamic365.Portal.tenant` (the site's parent tenant GUID). Returns `undefined` if not yet populated.
 - `getAuthProvider()` — DEPRECATED. For backward compat, returns the first local provider or the first provider overall. Prefer reading `AUTH_PROVIDERS` directly.
 - `fetchAntiForgeryToken()` — fetches from `/_layout/tokenhtml` and parses HTML response
+- `resolveProviderIdentifier(provider)` — returns the value to POST as `provider` to `/Account/Login/ExternalLogin`. For `type='entra-id'`, derives `https://login.windows.net/${getTenantId()}/` at runtime. For other external types, returns `provider.providerIdentifier`. **Never hardcode tenant ID into the AUTH_PROVIDERS array for Entra ID** — this resolver handles it.
 - `loginExternal(providerIdentifier, returnUrl?, invitationCode?)` — Form POST to `/Account/Login/ExternalLogin` for external providers
 - `loginLocal(credential, password, rememberMe?, returnUrl?, invitationCode?)` — fetch POST to `/SignIn` for local
-- `loginWithProvider(provider, { returnUrl?, invitationCode?, credentials? })` — **router**: dispatches to `loginLocal()` or `loginExternal()` based on `provider.type`. This is what UI components should call.
+- `loginWithProvider(provider, { returnUrl?, invitationCode?, credentials? })` — **router**: dispatches to `loginLocal()` or `loginExternal()` based on `provider.type`. Uses `resolveProviderIdentifier()` so Entra ID's runtime resolution works transparently. This is what UI components should call.
 - `logout(returnUrl?)` — redirects to `/Account/Login/LogOff`
 - `getAuthError()` — parses `?message=` or `?error=` query params from server-side auth error redirects and returns a user-friendly error message
 - `getSessionExpiredMessage()` — checks for `?sessionExpired=true` and returns a session-expired message

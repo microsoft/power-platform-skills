@@ -958,6 +958,8 @@ export interface AuthProviderConfig {
    * Provider identifier the server expects in the ExternalLogin form POST.
    * For OIDC: the Authority URL (matches the AuthenticationType site setting).
    * For SAML2/WS-Fed/social: the provider identifier from the site settings.
+   * For Entra ID (workforce): OMIT this — resolveProviderIdentifier() derives it
+   *   at runtime from window.Microsoft.Dynamic365.Portal.tenant.
    * Not used for local.
    */
   providerIdentifier?: string;
@@ -966,10 +968,19 @@ export interface AuthProviderConfig {
 }
 
 export const AUTH_PROVIDERS: AuthProviderConfig[] = [
-  // Each provider gets a stable id — use the ProviderName slug from site settings.
-  // For multiple instances of the same type (e.g., 2 Entra External ID tenants), use
-  // distinct ids: 'entra-external-id-customer', 'entra-external-id-employee'.
+  // Each provider gets a stable id. For multiple instances of the same type
+  // (e.g., 2 Entra External ID tenants), use distinct ids.
   {
+    // Entra ID (workforce) — providerIdentifier is OMITTED. The runtime resolver
+    // computes https://login.windows.net/{site-tenant-id}/ from Portal.tenant.
+    // No tenant ID hardcoded; site can move between tenants without code changes.
+    id: 'entra-id',
+    type: 'entra-id',
+    displayName: 'Sign in with Microsoft',
+  },
+  {
+    // Entra External ID — providerIdentifier IS required. External ID is a
+    // separate tenant from the site's parent, so we can't derive from Portal.tenant.
     id: 'entra-external-id',
     type: 'oidc',
     displayName: 'Sign in with Entra External ID',
@@ -1037,9 +1048,49 @@ export async function loginExternal(
 }
 ```
 
+### `resolveProviderIdentifier()` — runtime-resolves Entra ID, returns hardcoded value for others
+
+The `providerIdentifier` field on `AuthProviderConfig` is **optional** for external providers. For type `'entra-id'`, it's resolved at runtime from the site's parent tenant (exposed via `window.Microsoft.Dynamic365.Portal.tenant`). For other types (`'oidc'`, `'saml2'`, `'ws-federation'`, `'social'`), it must be explicitly configured in the AUTH_PROVIDERS entry because those providers point at external resources unrelated to the Power Pages tenant.
+
+```typescript
+/**
+ * Resolves the providerIdentifier the server expects in /Account/Login/ExternalLogin's
+ * `provider` form field. For Entra ID, derives from the site's parent tenant at runtime
+ * — no need to hardcode the tenant ID in the AUTH_PROVIDERS array. For other external
+ * providers, returns the explicitly-configured providerIdentifier.
+ */
+export function resolveProviderIdentifier(provider: AuthProviderConfig): string {
+  if (provider.type === 'local') {
+    throw new Error(`resolveProviderIdentifier called for local provider ${provider.id}`);
+  }
+
+  if (provider.type === 'entra-id') {
+    const tenantId = getTenantId();
+    if (!tenantId) {
+      throw new Error(
+        `Cannot resolve Entra ID provider identifier — tenant ID not available. ` +
+        `Ensure the site is properly deployed and window.Microsoft.Dynamic365.Portal.tenant is set.`
+      );
+    }
+    return `https://login.windows.net/${tenantId}/`;
+  }
+
+  if (!provider.providerIdentifier) {
+    throw new Error(
+      `Provider ${provider.id} (type ${provider.type}) is missing providerIdentifier.`
+    );
+  }
+  return provider.providerIdentifier;
+}
+```
+
+**Why Entra ID is special-cased**: when Power Pages creates a site in a workforce Entra tenant, it auto-writes `Authentication/OpenIdConnect/AzureAD/AuthenticationType = https://login.windows.net/{site-tenant-id}/` — the server already knows the correct value. The SPA's `providerIdentifier` needs to match this exactly. By computing it at runtime from `Portal.tenant`, we avoid hardcoding the tenant ID into the AUTH_PROVIDERS array (which would break if the site moved between tenants, and required the maker to look up + paste the value during setup-auth).
+
+For non-workforce providers (External ID, generic OIDC, SAML2, etc.), the providerIdentifier points at the THIRD-PARTY tenant or resource — not the Power Pages tenant — so we can't derive it. It must be explicit.
+
 ### `loginWithProvider()` — router that dispatches to local or external
 
-This is the **only function the Login UI should call**. It takes a provider config object and routes correctly based on `type`.
+This is the **only function the Login UI should call**. It takes a provider config object and routes correctly based on `type`. Uses `resolveProviderIdentifier()` so Entra ID's runtime resolution works transparently.
 
 ```typescript
 export async function loginWithProvider(
@@ -1064,10 +1115,8 @@ export async function loginWithProvider(
     );
   }
 
-  if (!provider.providerIdentifier) {
-    throw new Error(`Provider ${provider.id} is missing providerIdentifier.`);
-  }
-  return loginExternal(provider.providerIdentifier, options.returnUrl, options.invitationCode);
+  const providerIdentifier = resolveProviderIdentifier(provider);
+  return loginExternal(providerIdentifier, options.returnUrl, options.invitationCode);
 }
 ```
 
