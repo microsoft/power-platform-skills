@@ -348,37 +348,33 @@ Store as `EXTERNAL_ID_TENANT_SUBDOMAIN` and `EXTERNAL_ID_TENANT_ID`.
 
 ##### Step 2 — App registration
 
-**Confirm the Redirect URI first.** The skill pre-computes a default based on the site URL and `PROVIDER_NAME`, but the user may prefer a different path suffix:
+**Confirm the Redirect URI first.** The skill pre-computes a default based on the site URL and `PROVIDER_NAME`, but the user may prefer a different URI:
 
 > The Power Pages site needs a Redirect URI registered in your app registration. Based on the site URL and provider name, the default is:
 >
 > **`{REDIRECT_URI}`**
 >
-> (path = `/signin-{ProviderName-lowercased}`, e.g., `/signin-openidconnect_1`)
->
-> You can keep this default, or customize the path suffix — e.g., `/signin-entra-customer` or `/auth/external-id`.
+> You can keep this default, or use a different URI — for example, `{SITE_URL}/signin-entra-customer` or `{SITE_URL}/auth/external-id`. The host must be your Power Pages site; only the path can change.
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Use this Redirect URI, or customize the path? | Redirect URI | Use the default (Recommended) — `{REDIRECT_URI}`, Customize the path |
+| Use this Redirect URI? | Redirect URI | Use the default (Recommended) — `{REDIRECT_URI}`, Use a different URI |
 
-**If "Customize the path"**, ask:
+**If "Use a different URI"**, ask:
 
 | Question | Options |
 |----------|---------|
-| Enter the path portion (must start with `/`, no spaces, no query string). Example: `/signin-entra-customer`. | *(free text)* |
+| Enter the Redirect URI (must be on `{SITE_URL}`, must start with `{SITE_URL}/`, no spaces, no query string). Example: `{SITE_URL}/signin-entra-customer`. | *(free text)* |
 
-**Validate** the custom path:
-- Must start with `/`
-- Match `^/[a-zA-Z0-9_\-/]+$` (alphanumeric, hyphen, underscore, additional slashes allowed)
-- Must NOT collide with any `Authentication/OpenIdConnect/*/CallbackPath` already in `.powerpages-site/site-settings/` (from Phase 1.5 discovery)
-- Must NOT be a reserved Power Pages server path (`/Account/...`, `/SignIn`, `/Register`, `/_layout/...`, `/api/...`)
+**Validate** the custom URI:
+- Must start with `{SITE_URL}/`
+- Path portion must match `^/[a-zA-Z0-9_\-/]+$` (alphanumeric, hyphen, underscore, additional slashes allowed)
+- Path must NOT collide with any `Authentication/OpenIdConnect/*/CallbackPath` already in `.powerpages-site/site-settings/` (from Phase 1.5 discovery)
+- Path must NOT be a reserved Power Pages server path (`/Account/...`, `/SignIn`, `/Register`, `/_layout/...`, `/api/...`)
 
-Re-prompt on invalid input. Then update for the rest of the walkthrough:
-- `REDIRECT_URI` = `{SITE_URL}{customPath}`
-- `CALLBACK_PATH` = `{customPath}` (used in Phase 8.1 `CallbackPath` site setting)
+Re-prompt on invalid input. Then store the value as `REDIRECT_URI` for the rest of the walkthrough and Phase 8.1.
 
-If the user kept the default, `CALLBACK_PATH` = `/signin-{ProviderName-lowercased}`.
+> **Note**: The skill writes two site settings derived from this single `REDIRECT_URI`: the user-facing `RedirectUri` (the full URI, sent to the IdP) and the internal `CallbackPath` (just the path portion, used by the OWIN middleware to know which incoming request to handle). The maker doesn't need to think about `CallbackPath` separately — the skill derives it automatically from `REDIRECT_URI` by extracting the path portion.
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -496,7 +492,6 @@ Present this summary inline:
 > | App (Client) ID | `{clientId}` |
 > | User flow | `{userFlowName}` |
 > | Redirect URI | `{REDIRECT_URI}` (must already be registered in your app) |
-> | Callback path | `{CALLBACK_PATH}` |
 > | Authority | `{authority}` (derived) |
 > | Metadata | `{metadataAddress}` (derived) |
 > | Display name | `{displayName}` |
@@ -1868,23 +1863,23 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
   --description "Provider identifier for ExternalLogin — must match Authority exactly"
 
-# RedirectUri — confirmed/customized by user in Step 2 of walkthrough
-# Default: <SITE_URL>/signin-{ProviderName-lowercased}
-# User can override the path during the walkthrough — use whatever value was confirmed
+# RedirectUri — the full URI the maker registered in their Entra app.
+# Confirmed/customized by user in Step 2 of walkthrough (stored as REDIRECT_URI).
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
   --value "<REDIRECT_URI>" \
   --description "OAuth callback URL (must match the URI registered in the app registration)"
 
-# CallbackPath — the path portion of RedirectUri. Required to prevent collision
-# when multiple OIDC providers exist. Default: /signin-{ProviderName-lowercased}
-# User can customize during the walkthrough — use whatever value was confirmed (stored as CALLBACK_PATH)
+# CallbackPath — derived from RedirectUri (just the path portion, extracted via
+# new URL(REDIRECT_URI).pathname). Required to prevent CallbackPath collision when
+# multiple OIDC providers exist (OWIN defaults all OIDC to /signin-oidc otherwise).
+# The maker doesn't see this separately — the skill writes it automatically.
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
-  --value "<CALLBACK_PATH>" \
-  --description "OWIN callback path — must match the path portion of RedirectUri"
+  --value "<path-portion-of-REDIRECT_URI>" \
+  --description "OWIN callback path (derived from RedirectUri)"
 
 # ExternalLogoutEnabled — false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
