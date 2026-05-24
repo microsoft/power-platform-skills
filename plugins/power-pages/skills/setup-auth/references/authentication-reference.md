@@ -2572,6 +2572,109 @@ useEffect(() => {
 
 ---
 
+## Entra External ID — Tenant and App Registration Prerequisites
+
+Entra External ID requires three things to be set up in the Microsoft Entra admin center before Power Pages can use it: a tenant, an app registration, and a user flow. The setup-auth skill walks users through these in Phase 2.1, but here's the complete reference for the four-step process.
+
+> Microsoft Learn: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
+
+### Step 1 — Tenant
+
+Entra External ID tenants are a distinct tenant type from regular workforce Entra ID tenants. **A workforce tenant cannot be used in place of an External ID tenant** — they're different products that share underlying technology.
+
+To create an External ID tenant:
+
+1. Open https://entra.microsoft.com/
+2. Top of left navigation → **Manage tenants** → **Create**
+3. Choose **External (for customers)** — not Workforce
+4. Pick a domain prefix (the "tenant subdomain") — e.g., `contoso` becomes `contoso.ciamlogin.com`
+5. The tenant has a 30-day free trial; attach an Azure subscription later
+
+To verify whether an existing tenant is External or Workforce: tenant picker (top-right of entra.microsoft.com) shows an **External** badge next to External ID tenants.
+
+**Values to capture for the skill:**
+- **Tenant subdomain** — the part before `.ciamlogin.com` (e.g., `contoso`). Validate `^[a-z0-9-]+$`.
+- **Tenant ID** (GUID) — from the tenant's Overview page. Validate UUID v4 regex.
+
+### Step 2 — App registration
+
+Register an app inside the External ID tenant:
+
+1. **Applications → App registrations → New registration**
+2. **Name** — typically `power-pages-{sitename}`
+3. **Supported account types** — **single-tenant** is the recommended default. Multi-tenant configurations cause the Power Pages server to forcibly disable `AllowContactMappingWithEmail` (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`).
+4. **Redirect URI**:
+   - Platform: **Web**
+   - URI: `{SITE_URL}/signin-{ProviderName-lowercased}` — exact string matters, including the `signin-` prefix and the lowercased provider name suffix
+5. **Register**
+6. **Authentication** tab → check **Access tokens** + **ID tokens** under "Implicit grant and hybrid flows" → **Save**
+7. **API permissions** tab → **Grant admin consent for {tenant}**
+
+**Value to capture for the skill:**
+- **Application (client) ID** — from the Overview tab. Validate UUID v4 regex.
+
+**Do NOT create a client secret.** Entra External ID app registrations are public clients using PKCE — the OWIN OpenID Connect middleware in Power Pages performs the auth code exchange with PKCE, no secret needed. Adding one creates a confidential-client scenario that requires Azure Key Vault storage (advanced override; document but don't auto-configure).
+
+### Step 3 — User flow
+
+Without a user flow, sign-in fails after the IdP redirect.
+
+1. **External Identities → User flows → New user flow**
+2. **Name** — typically `{sitename}-signupsignin`. Validate `^[a-zA-Z0-9_-]+$`.
+3. **Identity providers** for sign-in — **Email with password** (most common) or **Email one-time passcode** (passwordless)
+4. **User attributes to collect** — these become the sign-up form fields. The skill should align this with the user's profile mapping choice from Track B:
+   - "Standard" mapping → ☑ Email Address, ☑ Given Name, ☑ Surname
+   - "Standard + phone" → also ☑ Phone Number
+   - "Email only" → just ☑ Email Address
+5. **User attributes to return as claims** — these are the values in the ID token. **Select the same attributes as in step 4** — these power the `RegistrationClaimsMapping` → Dataverse contact field flow. If a user selects an attribute to collect but NOT to return as a claim, the contact field stays empty even though the user provided the value.
+6. **Create**
+7. Open the user flow → **Applications** tab → **Add application** → select the app registered in Step 2
+
+**Value to capture for the skill:**
+- **User flow name** — used to confirm the user has one. Not written to a Power Pages site setting (the user flow is attached to the app, not referenced by name from Power Pages).
+
+### Step 4 — Derived configuration
+
+After collecting tenant subdomain, tenant ID, client ID, and user flow name, derive:
+
+| Field | Value |
+|---|---|
+| Authority | `https://{subdomain}.ciamlogin.com/{tenantId}` — **no trailing `/v2.0/`** |
+| MetadataAddress | `https://{subdomain}.ciamlogin.com/{tenantId}/v2.0/.well-known/openid-configuration` |
+| AuthenticationType | Same as Authority (provider identifier for ExternalLogin POST must match) |
+| RedirectUri | `{SITE_URL}/signin-{ProviderName-lowercased}` (same as Step 2) |
+
+**Authority URL format quirk** — Entra External ID's Authority is the bare tenant path `https://{subdomain}.ciamlogin.com/{tenantId}`, NOT the `/v2.0/` variant. This differs from:
+- **Classic Azure AD B2C** (`https://{tenant}.b2clogin.com/{tenant}.onmicrosoft.com/v2.0/{policy}` with policy in the path)
+- **Generic OIDC** (often `{authority}/v2.0` or `{authority}/oauth2/default`)
+- **Workforce Entra ID** (`https://login.microsoftonline.com/{tenantId}/v2.0/`)
+
+The MetadataAddress, however, DOES include `/v2.0/` before `.well-known/openid-configuration`.
+
+### Common pitfalls
+
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| Wrong tenant type (workforce instead of External ID) | Sign-in works but no External ID-specific features (sign-up, user flows) | Create a separate External ID tenant |
+| Multi-tenant app registration | Contact mapping silently disabled on server | Use single-tenant; or accept new contacts always (the safer default) |
+| Redirect URI mismatch (casing, suffix typo) | "AADSTS50011: The reply URL specified in the request does not match" | Copy the Redirect URI from the skill output verbatim, including lowercase |
+| Missing user flow / not attached to app | After IdP redirect, user sees error or nothing happens | Create user flow + add app to it |
+| Selected attribute to collect but not to return as claim | Contact created with empty `firstname`/`lastname` | Re-edit user flow → check claim boxes for same attributes |
+| Authority URL includes `/v2.0/` for External ID | Sign-in returns "AADSTS900144: The request body must contain..." or metadata loading fails | Remove `/v2.0/` from Authority (keep it in MetadataAddress) |
+
+### Custom domains
+
+External ID supports custom domains (e.g., `login.contoso.com` instead of `contoso.ciamlogin.com`). To use one:
+
+1. Configure the custom domain in the External ID tenant (see Microsoft Learn)
+2. The Authority becomes `https://{custom-domain}/{tenantId}` (same structure, custom hostname)
+3. MetadataAddress becomes `https://{custom-domain}/{tenantId}/v2.0/.well-known/openid-configuration`
+4. The Redirect URI in the app registration must also use the site's custom domain
+
+The setup-auth skill walkthrough doesn't ask about custom domains in the initial flow — those configurations should be edited manually post-setup, or imported via Phase 1.5 discovery if pre-existing.
+
+---
+
 ## External Login Confirmation Flow for SPA Sites
 
 When a user signs in with an external provider (Entra External ID, OIDC, SAML2, etc.) for the first time and no Dataverse contact exists, the server renders `ExternalLoginConfirmation.aspx` at the OIDC callback URL (`/Account/Login/ExternalLoginCallback`). The user confirms/edits their email and the server creates the contact + signs them in. We SPA-ify this with the same pattern as Reset Password and Redeem Invitation.

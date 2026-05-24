@@ -299,19 +299,176 @@ For each provider, also share the relevant Microsoft Learn documentation link so
 
 > Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/openid-settings
 
-**For "Entra External ID"**:
+**For "Entra External ID"** — use the 4-step walkthrough below. Do NOT just ask the user for Authority/ClientId/Metadata upfront — those values come from a tenant + app registration + user flow that the user may not have set up yet. Walk them through each prerequisite before asking for the corresponding value.
 
-All values below come from the Microsoft Entra admin center — **App registrations → {your app} → Endpoints** blade.
+> Reference doc: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
+> See also `${CLAUDE_PLUGIN_ROOT}/skills/setup-auth/references/authentication-reference.md` for the full Entra External ID prerequisites section the steps below cross-reference.
+
+**Pre-computed values for THIS site** — before starting the walkthrough, compute:
+- `SITE_URL` = the deployed site URL (e.g., `https://site-597pv.powerappsportals.com`). Read from `pac env who` + the site name, or from the site's existing settings.
+- `PROVIDER_NAME` = if this is a fresh add, default to `OpenIdConnect_1` (or the next free `OpenIdConnect_N` slug per the CallbackPath uniqueness logic in Phase 8.1). The user can override to a custom slug like `EntraExternalId_Customer` for multi-instance setups.
+- `REDIRECT_URI` = `{SITE_URL}/signin-{PROVIDER_NAME-lowercased}` — e.g., `https://site-597pv.powerappsportals.com/signin-openidconnect_1`. The user pastes this verbatim into the Entra app registration.
+- `APP_NAME_SUGGESTION` = `power-pages-{site-shortname}` — e.g., `power-pages-savoria`
+- `USER_FLOW_NAME_SUGGESTION` = `{site-shortname}-signupsignin` — e.g., `savoria-signupsignin`
+
+Display these to the user before Step 1 so they have them handy.
+
+##### Step 1 — Tenant
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Do you already have a Microsoft Entra External ID tenant? (This is a separate tenant type from a regular workforce Entra ID tenant — sometimes called CIAM.) | Tenant | Yes — I have an External ID tenant, No — help me create one (free 30-day trial), I'm not sure |
+
+**If "No"**, show:
+
+> Steps to create an Entra External ID tenant:
+> 1. Open https://entra.microsoft.com/
+> 2. Sign in with the account that should own the tenant
+> 3. From the top, click **Manage tenants → Create**
+> 4. Choose **External (for customers)** — NOT Workforce
+> 5. Pick a domain prefix (the **tenant subdomain**) — e.g., `contoso` becomes `contoso.ciamlogin.com`. This appears in every login URL.
+> 6. Free 30-day trial: no credit card required. You can attach a paid Azure subscription later.
+>
+> Detailed guide: https://learn.microsoft.com/en-us/entra/external-id/customers/quickstart-tenant-setup
+>
+> When you've created the tenant, switch to it (top-right tenant picker in entra.microsoft.com), then come back here.
+
+**If "I'm not sure"**, show: "At https://entra.microsoft.com/ → top-right tenant picker. Tenants for customers are labeled **External**. Workforce tenants won't work — that's a different product."
+
+Then collect the tenant identifiers:
 
 | Question | Options |
 |----------|---------|
-| What is the Authority URL? (from the Endpoints blade — e.g., `https://contoso.ciamlogin.com/contoso.onmicrosoft.com/v2.0/` or a custom domain like `https://login.contoso.com/{tenant-id}/v2.0/`) | *(free text)* |
-| What is the Client ID (Application ID)? (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) | *(free text)* |
-| What is the OpenID Connect metadata document URL? (from the Endpoints blade — e.g., `https://contoso.ciamlogin.com/{tenant-id}/v2.0/.well-known/openid-configuration`) | *(free text)* |
-| What display name should the login button show? (e.g., `Microsoft Entra External ID` or `Sign in with External ID`. **Do NOT use "Sign in with Microsoft"** — that conflicts with the Microsoft Account social provider.) | *(free text)* |
-| Does your Entra External ID app registration use a client secret? (Entra External ID public clients typically use PKCE without a client secret. Only select Yes if your app registration has one configured.) | No (Recommended for public clients), Yes |
+| What is the tenant **subdomain**? (the part before `.ciamlogin.com` — e.g., `contoso`. Find it in the External ID tenant's Overview page under "Primary domain", removing `.onmicrosoft.com`.) | *(free text)* |
+| What is the tenant **ID** (GUID)? (Find it in the External ID tenant's Overview page under "Tenant ID" — looks like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`.) | *(free text)* |
 
-> Docs: https://learn.microsoft.com/en-us/power-pages/security/authentication/entra-external-id
+**Validate**: subdomain matches `^[a-z0-9-]+$` (no dots, no uppercase, no `.ciamlogin.com` suffix); tenant ID matches the UUID regex. If either fails, show the expected format and re-prompt.
+
+Store as `EXTERNAL_ID_TENANT_SUBDOMAIN` and `EXTERNAL_ID_TENANT_ID`.
+
+##### Step 2 — App registration
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Have you registered an app in your Entra External ID tenant for this Power Pages site? | App reg | No — walk me through it (Recommended for first time), Yes — I have the Application (client) ID |
+
+**If "No"**, show step-by-step with the pre-computed Redirect URI verbatim:
+
+> Steps to register the app:
+> 1. At https://entra.microsoft.com/, make sure you're in your External ID tenant (top-right picker)
+> 2. **Applications → App registrations → New registration**
+> 3. **Name**: `{APP_NAME_SUGGESTION}` (or your own name)
+> 4. **Supported account types**: select **Accounts in this organizational directory only (single tenant)** — recommended for Power Pages. Multi-tenant configurations forcibly disable contact mapping by email for security.
+> 5. **Redirect URI**: select **Web**, paste exactly:
+>
+>    ```
+>    {REDIRECT_URI}
+>    ```
+>
+>    (Copy this verbatim — the suffix is `signin-` lowercase + the provider name lowercased. Mismatches cause sign-in to fail silently with a callback URI mismatch error.)
+> 6. Click **Register**
+> 7. Open the **Authentication** tab → under "Implicit grant and hybrid flows" check **Access tokens** AND **ID tokens** → **Save**
+> 8. Open the **API permissions** tab → click **Grant admin consent for {your tenant}** → confirm
+> 9. Go back to the **Overview** tab and copy the **Application (client) ID** (it's a GUID)
+>
+> Detailed guide: https://learn.microsoft.com/en-us/entra/external-id/customers/quickstart-register-app
+
+Then ask for the value:
+
+| Question | Options |
+|----------|---------|
+| Paste the **Application (client) ID** from the Overview tab. | *(free text)* |
+
+**Validate**: must match UUID v4 format (`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`). Re-prompt on mismatch.
+
+Store as `EXTERNAL_ID_CLIENT_ID`.
+
+**Do NOT ask about client secret.** Entra External ID app registrations are public clients using PKCE — no secret needed. The skill will create site settings without `ClientSecret` and skip Phase 8.1.1 (Key Vault) for this provider. If the user has a confidential-client scenario that requires a secret, they can add it manually via the Power Pages admin center after deploy — document this as an advanced override in Phase 8.5 post-deploy notes.
+
+##### Step 3 — User flow
+
+User flows define what attributes are collected from users and what claims appear in the ID token. Without one, sign-in fails after the IdP redirect.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Have you created a sign-up/sign-in user flow in your Entra External ID tenant and attached it to your app? | User flow | No — walk me through it (Recommended for first time), Yes — I have the user flow name |
+
+**If "No"**, the walkthrough's user-flow-attribute selection must match the `PROFILE_MAPPING_CHOICE` collected later (Track B's profile mapping question). Since this step runs BEFORE that question, ask it now (just for Entra External ID):
+
+> The user flow needs to be told which attributes to collect from users and which claims to return in the token. The skill maps claims → Dataverse contact fields automatically — the attributes you select here determine what's available.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| What user profile info should the sign-up form collect and return as claims? | Profile attributes | Standard (Recommended) — Email, Given Name, Surname, Standard + phone — also Phone Number, Email only — minimal sign-up form |
+
+Store as `PROFILE_ATTRIBUTES_CHOICE` (this also drives `PROFILE_MAPPING_CHOICE` in Track B — they should be consistent; default both to "Standard" unless the user explicitly differs).
+
+Then show:
+
+> Steps to create the user flow:
+> 1. At https://entra.microsoft.com/, in your External ID tenant
+> 2. **External Identities → User flows → New user flow**
+> 3. **Name**: `{USER_FLOW_NAME_SUGGESTION}` (or your own — letters, digits, hyphens, underscores only)
+> 4. **Identity providers** for sign-in: choose **Email with password** (Recommended — most familiar to customers) or **Email one-time passcode** (passwordless)
+> 5. **User attributes to collect** (the sign-up form fields): based on your choice above, select:
+>    - **Standard / Standard + phone**: ☑ Email Address, ☑ Given Name, ☑ Surname{`, ☑ Phone Number` if Standard + phone}
+>    - **Email only**: ☑ Email Address
+> 6. **User attributes to return as claims** (in the ID token): same selections as above — these power profile mapping into Dataverse contact fields
+> 7. Click **Create**
+> 8. Open the user flow you just created → **Applications** tab → **Add application** → select the app you registered in Step 2 → **Select**
+>
+> Detailed guide: https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-user-flow-sign-up-sign-in-customers
+
+Then ask:
+
+| Question | Options |
+|----------|---------|
+| Paste the **user flow name** you created (e.g., `{USER_FLOW_NAME_SUGGESTION}`). | *(free text)* |
+
+**Validate**: matches `^[a-zA-Z0-9_-]+$` (letters, digits, hyphens, underscores). Re-prompt on mismatch.
+
+Store as `EXTERNAL_ID_USER_FLOW`.
+
+##### Step 4 — Display name + Confirmation
+
+| Question | Options |
+|----------|---------|
+| What should the login button label say? Default is **`Sign in with Microsoft Entra External ID`**. Do NOT use "Sign in with Microsoft" — that conflicts with the Microsoft Account social provider. | *(free text, defaulted)* |
+
+Store as `EXTERNAL_ID_DISPLAY_NAME`.
+
+Now derive the configuration and present a summary for confirmation:
+
+- **Authority**: `https://{EXTERNAL_ID_TENANT_SUBDOMAIN}.ciamlogin.com/{EXTERNAL_ID_TENANT_ID}` (NO trailing `/v2.0/` — Entra External ID uses the bare tenant path, NOT the B2C-style URL)
+- **MetadataAddress**: `https://{EXTERNAL_ID_TENANT_SUBDOMAIN}.ciamlogin.com/{EXTERNAL_ID_TENANT_ID}/v2.0/.well-known/openid-configuration`
+- **AuthenticationType** (provider identifier in `AUTH_PROVIDERS` array and ExternalLogin POST): same value as Authority
+- **RedirectUri**: `{REDIRECT_URI}` (computed earlier)
+- **ClientId**: `{EXTERNAL_ID_CLIENT_ID}`
+
+Present this summary inline:
+
+> About to configure:
+>
+> | Field | Value |
+> |---|---|
+> | Provider | Microsoft Entra External ID |
+> | Tenant | `{subdomain}.ciamlogin.com` (`{tenantId}`) |
+> | App (Client) ID | `{clientId}` |
+> | User flow | `{userFlowName}` |
+> | Redirect URI | `{redirectUri}` (must already be registered in your app) |
+> | Authority | `{authority}` (derived) |
+> | Metadata | `{metadataAddress}` (derived) |
+> | Display name | `{displayName}` |
+> | Login button | "{displayName}" |
+> | Client secret | None (public client / PKCE) |
+>
+> Continue to write these site settings?
+
+| Question | Options |
+|----------|---------|
+| Continue? | Yes — write the site settings, No — let me adjust |
+
+If "No", re-prompt for the specific value the user wants to change.
 
 > **Implementation note:** Power Pages server treats Entra External ID as a generic OpenID Connect provider (no special CIAM handling). All settings go under `Authentication/OpenIdConnect/{ProviderName}/`. The `provider` value posted to `/Account/Login/ExternalLogin` must match the `AuthenticationType` site setting, which by default equals the authority URL.
 
@@ -1632,54 +1789,59 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. This value must match what `resolveProviderIdentifier()` returns in the auth service.
 
-**Entra External ID** — uses the authority URL collected in Phase 2.1 (may be `ciamlogin.com` or a custom domain):
+**Entra External ID** — uses values from the 4-step walkthrough in Phase 2.1. Derive `Authority` and `MetadataAddress` from the tenant subdomain + tenant ID — do not ask the user to paste them:
+
+- `Authority` = `https://{EXTERNAL_ID_TENANT_SUBDOMAIN}.ciamlogin.com/{EXTERNAL_ID_TENANT_ID}` — **NO trailing `/v2.0/`**. Entra External ID uses the bare tenant path (different from classic B2C and from generic OIDC providers like Okta which often need `/v2.0/`).
+- `MetadataAddress` = `https://{EXTERNAL_ID_TENANT_SUBDOMAIN}.ciamlogin.com/{EXTERNAL_ID_TENANT_ID}/v2.0/.well-known/openid-configuration`
+- `AuthenticationType` = same as `Authority` (provider identifier in ExternalLogin POST must match)
+- `ClientId` = `EXTERNAL_ID_CLIENT_ID` from Step 2 of walkthrough
+- `RedirectUri` = `{SITE_URL}/signin-{ProviderName-lowercased}` — same Redirect URI shown to user in Step 2
 
 ```powershell
-# Authority — use the exact URL from Phase 2.1 (do NOT hardcode ciamlogin.com)
+# Authority — derived: https://{subdomain}.ciamlogin.com/{tenantId}
+# (do NOT append /v2.0/ — that breaks Entra External ID)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/Authority" \
-  --value "<authority-url-from-user>" \
-  --description "Entra External ID authority URL"
+  --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
+  --description "Entra External ID authority URL (derived)"
 
-# MetadataAddress — REQUIRED for Entra External ID per Microsoft Learn docs
-# Collected from user in Phase 2.1 (from Endpoints blade in Entra admin center)
+# MetadataAddress — derived: Authority + /v2.0/.well-known/openid-configuration
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/MetadataAddress" \
-  --value "<metadata-address-from-user>" \
-  --description "OIDC metadata document URL"
+  --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>/v2.0/.well-known/openid-configuration" \
+  --description "OIDC metadata document URL (derived)"
 
-# ClientId — use value collected in Phase 2.1
+# ClientId — from walkthrough Step 2
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ClientId" \
-  --value "<client-id-from-user>" \
+  --value "<EXTERNAL_ID_CLIENT_ID>" \
   --description "Application client ID"
 
-# AuthenticationType — must match authority URL (used as the 'provider' form value in ExternalLogin POST)
+# AuthenticationType — must match Authority exactly (used as the 'provider' form value in ExternalLogin POST)
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/AuthenticationType" \
-  --value "<authority-url-from-user>" \
-  --description "Provider identifier for ExternalLogin — must match authority URL exactly"
+  --value "https://<EXTERNAL_ID_TENANT_SUBDOMAIN>.ciamlogin.com/<EXTERNAL_ID_TENANT_ID>" \
+  --description "Provider identifier for ExternalLogin — must match Authority exactly"
 
-# RedirectUri — use /signin-{ProviderName-lowercased} for guaranteed uniqueness
+# RedirectUri — same value shown to user in Step 2 of walkthrough
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/RedirectUri" \
-  --value "<site-url>/signin-{ProviderName-lowercased}" \
-  --description "OAuth callback URL — unique per provider (matches CallbackPath)"
+  --value "<SITE_URL>/signin-{ProviderName-lowercased}" \
+  --description "OAuth callback URL (must match the URI registered in the app registration)"
 
 # CallbackPath — required to prevent collision when multiple OIDC providers exist
-# OWIN defaults ALL OIDC providers to /signin-oidc, so a unique path per provider is needed
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/CallbackPath" \
   --value "/signin-{ProviderName-lowercased}" \
   --description "Unique callback path derived from ProviderName"
 
-# ExternalLogoutEnabled — set to false when using RPInitiatedLogout
+# ExternalLogoutEnabled — false when using RPInitiatedLogout
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
@@ -1696,7 +1858,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
-> **ClientSecret for Entra External ID:** Only needed if the user confirmed in Phase 2.1 that their app registration uses a client secret. Public clients using PKCE do NOT need a ClientSecret — skip Phase 8.1.1 for this provider entirely. If a secret is needed, use the same environment variable pattern as OIDC (see Phase 8.1.1).
+> **Custom domains**: If the user is using a custom domain for their Entra External ID tenant (e.g., `https://login.contoso.com/{tenantId}/v2.0/`) instead of `*.ciamlogin.com`, replace the derived values above with the custom domain values. The walkthrough in Phase 2.1 doesn't currently ask about custom domains — when re-running with a custom-domain Authority in existing site settings (Phase 1.5 discovery), preserve those values rather than rebuilding from `EXTERNAL_ID_TENANT_SUBDOMAIN`.
+
+> **NO ClientSecret block for Entra External ID by default.** Public clients using PKCE don't need a client secret — the walkthrough explicitly does not ask for one. **Skip Phase 8.1.1 (Key Vault) entirely for this provider.** If a confidential-client scenario requires a secret post-deploy, document it as an advanced manual step in Phase 8.5 (add via Power Pages admin center → Authentication settings).
+
+> **User flow name (`EXTERNAL_ID_USER_FLOW`) is NOT written as a site setting.** Entra External ID attaches the user flow to the app registration itself, so the user flow runs automatically on sign-in without Power Pages needing to reference it by name in URL/metadata (unlike classic B2C). The walkthrough captures it only to confirm the user has created one. If the user later configures separate password-reset or profile-edit user flows, they can add `PasswordResetPolicyId` / `ProfileEditPolicyId` site settings manually as advanced overrides.
 
 **SAML2** — create settings for the provider:
 
@@ -1879,7 +2045,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 Providers that **may** require a secret:
 - **OpenID Connect (Generic)** — usually yes (confidential client)
-- **Entra External ID** — only if the user confirmed in Phase 2.1 that their app registration uses a client secret. Public clients using PKCE do NOT need a secret — skip for them.
+- **Entra External ID** — **NO by default.** The Phase 2.1 walkthrough configures Entra External ID as a public client using PKCE (no client secret). **Always skip this section for Entra External ID.** If a user later needs a confidential-client setup with a secret, they add `ClientSecret` manually via the Power Pages admin center — covered in Phase 8.5 post-deploy notes.
 - **Microsoft Account / Facebook / Google** — yes (social OAuth requires app secret)
 - **SAML2 / WS-Federation** — no (certificate-based, not secrets)
 - **Local Authentication** — no
