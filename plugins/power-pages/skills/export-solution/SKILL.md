@@ -27,9 +27,15 @@ Triggers an async Dataverse solution export, polls until complete, downloads the
 
 > **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
 
-**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
-- An environment variable / arg flag set by the orchestrator, or
-- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+The helper computes this from `docs/.alm-plan-data.json` — `PLAN_STATUS === "In Execution"` AND `LAST_INVOCATION_AT` within the last 60 minutes. `check-alm-plan.js` refreshes `LAST_INVOCATION_AT` automatically on every invocation that finds the plan in execution, so each in-chain skill keeps the chain alive for the next one — even multi-hour deploys (deploy-pipeline alone can take 60 min per stage) survive the window without the chain incorrectly de-classifying. Stalled chains (no heartbeat for > 60 min) reclassify as `stale-heartbeat` and Phase 0 gates fire normally so an abandoned plan doesn't silently bypass user confirmation.
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
 
 **Step 1 — Run the gate helper.**
 
@@ -171,7 +177,7 @@ Then:
   > 3. **Abort** — I want to investigate before exporting"
 
   - **Option 1 — Sync first, then re-confirm before export:**
-    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion.
+    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion. setup-solution's final refresh step writes `LAST_SYNC_AT` into `docs/.alm-plan-data.json` so subsequent `check-alm-plan.js` calls do NOT falsely flag the plan as stale just because the sync bumped `solutions.modifiedon` past `GENERATED_AT` — the freshness reference becomes `max(GENERATED_AT, LAST_SYNC_AT)`.
     2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
     3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 2.5 prompt above.
     4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
@@ -232,12 +238,13 @@ Before exporting, bump the patch segment (4th segment) of the source solution's 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
-  --uniqueName "{solutionUniqueName}"
+  --uniqueName "{solutionUniqueName}" \
+  --projectRoot "."
 ```
 
-Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION` and `.next` as `EXPORT_VERSION`. Report: "Bumped solution `{solutionUniqueName}` from v{PRE_EXPORT_VERSION} to v{EXPORT_VERSION} for export."
+Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION`, `.next` as `EXPORT_VERSION`, and inspect `.manifestUpdated` / `.manifestUpdateReason` to confirm the manifest sync succeeded. Report: "Bumped solution `{solutionUniqueName}` from v{PRE_EXPORT_VERSION} to v{EXPORT_VERSION} for export."
 
-If `.solution-manifest.json` is present in the project root, update its `solution.version` field to `EXPORT_VERSION` (in-place `Edit`) so the manifest stays consistent if the skill is interrupted between bump and export.
+`--projectRoot "."` makes the helper update `.solution-manifest.json`'s `solution.version` (single-solution) or matching `solutions[].version` (multi-solution) field atomically as part of the bump operation — no separate `Edit` step needed. If the manifest doesn't exist or has no matching entry, `manifestUpdated: false` and `manifestUpdateReason` tells you why (`no-manifest`, `no-matching-entry`, etc.); the bump itself still succeeded.
 
 > **If the bump already happened earlier in this session** (e.g. `setup-solution` sync mode ran with adopted components in Phase 2.5 and bumped the version, then handed back here): the helper still runs and bumps again. This is intentional — sync's bump is paired with new components; export's bump is paired with the produced zip. They're independent concerns and double-bumping is cheap (just an extra patch segment). The skill-skipping logic for "the manifest version already matches the live source version" is intentionally NOT added here; it would create a class of "I edited content but no sync was needed and no bump happened, so the export shipped a stale version" failures.
 

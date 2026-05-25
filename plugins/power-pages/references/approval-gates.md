@@ -180,6 +180,7 @@ Required, normalized vocabulary:
 | `attachment-block-modified` | Env's `blockedattachments` setting modified before Cancel. |
 | `cross-host-stamp-moved` | Pattern 15 force-link partially completed. |
 | `external-state-pending` | Skill cancelled while external system (PP Pipelines) was in `PendingApproval` — the run remains on the host in that state. |
+| `invalid-secret-in-file` | `deployment-settings.json` carries Secret values in invalid formats (e.g. `@KeyVault(...)` short-form). Cancel leaves the file as-is so the user can hand-fix with canonical Key Vault URIs. |
 
 Custom values are allowed when none of the above fits — lint accepts any kebab-case slug but flags duplicate slugs across the catalog for de-duplication.
 
@@ -251,7 +252,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (18 calls; orchestrator)
+### 6.1 `plan-alm` (19 calls; orchestrator)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -272,11 +273,12 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `plan-alm:4.approve` | gate | plan | 4 | *"Approve and execute / save for later / change something"* | nothing |
 | `plan-alm:4.approver-fallback` | not-a-gate | — | 4 | Free-text "approver name" — pure data-gathering | — |
 | `plan-alm:7.manual-checkpoint` | gate | progress | 7 (Manual path) | `MANUAL_CHECKPOINT=true` — *"Export done; proceed to import?"* | partial-manifest |
+| `plan-alm:7.deploy-failure` | gate | plan | 7 (Step A.1) | deploy-pipeline halted before completing — *"Retry / Skip stage / Exit"*. Fires per failed stage. | nothing |
 | `plan-alm:7.activate-step-b` | gate | plan | 7 (Step B) | Post-deploy activation prompt per stage — *"Activate now / skip"* | nothing |
 
 ---
 
-### 6.2 `setup-solution` (16 calls)
+### 6.2 `setup-solution` (13 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -314,7 +316,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.4 `deploy-pipeline` (17 gates / 3 sub-prompts; 20 calls total)
+### 6.4 `deploy-pipeline` (18 gates / 3 sub-prompts; 21 calls total)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -332,6 +334,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:6.pending-approval` | gate | pause | 6 | `stagerunstatus=200000005` mid-deploy — *"Approved? Yes / Cancel"* | `external-state-pending` |
 | `deploy-pipeline:7.6.2.blocked-attachments` | gate | consent | 7.6.2 | Reactive `AttachmentBlocked` — *"Modify `blockedattachments`? Yes / No"* | `attachment-block-modified` |
 | `deploy-pipeline:7.6.3.retry-exit` | gate | plan | 7.6.3 | Failed deploy, no known pattern matched — *"Retry / Exit"* | `validated-stage-run` |
+| `deploy-pipeline:7.6.4.strip-secret-values` | gate | consent | 7.6.4 | Reactive Secret-reference validation failure — *"Strip invalid Secret values from `deployment-settings.json` and retry? Yes / No"* | `invalid-secret-in-file` |
 | `deploy-pipeline:7.7.activate` | gate | plan | 7.7 | Site deployed, not yet activated — *"Activate now / later"* | nothing |
 | `deploy-pipeline:7.cloud-flow-register` | gate | plan | 7 (cloud-flow path) | Cloud flows in solution — *"Registered in target? Yes / Later"* (informational continue) | nothing |
 | `deploy-pipeline:6.1.pac-fallback-consent` | gate | final | 6.1 | `VALIDATE_PACKAGE_UNAVAILABLE=true` path uses `pac pipeline deploy` instead of `DeployPackageAsync` — same shape as `6.0` | `validated-stage-run` |
@@ -373,7 +376,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.7 `configure-env-variables` (4 calls)
+### 6.7 `configure-env-variables` (5 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -381,10 +384,11 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `configure-env-variables:0.stale-plan` | gate | intent | 0 | `check-alm-plan.js` `stale:true` — *"Refresh / Continue / Cancel"* | nothing |
 | `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"* | nothing |
 | `configure-env-variables:6.confirm-matrix` | gate | plan | 6 | `deployment-settings.json` assembled — *"Confirm matrix before write"* | nothing |
+| `configure-env-variables:6.1.invalid-secret-values` | gate | consent | 6.1 | Pre-write validation found Secret refs in invalid formats — hard-stop, *"Fix or abort"* | nothing |
 
 ---
 
-### 6.8 `ensure-pipelines-host` (8 calls)
+### 6.8 `ensure-pipelines-host` (10 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -399,7 +403,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `ensure-pipelines-host:4.B.guid-confirm` | not-a-gate | — | 4.B | Confirm GUID identity when uncertain — data-gathering | — |
 | `ensure-pipelines-host:4.B.admin-check` | not-a-gate | — | 4.B | Single confirm of admin role — informational | — |
 
-(9 entries documented for an 8-call skill: one of the catalog rows `4.B.guid-confirm` is conditional and only fires when GUID is ambiguous — net 8 actual calls in a typical run.)
+(`4.B.guid-confirm` is conditional and only fires when the BAP GUID is ambiguous — a typical run sees ~9 prompts. The header count reflects total catalog rows, not per-run prompt count.)
 
 ---
 

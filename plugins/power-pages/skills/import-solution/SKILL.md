@@ -27,9 +27,15 @@ Imports a solution zip into a target Dataverse environment via `ImportSolutionAs
 
 > **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
 
-**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
-- An environment variable / arg flag set by the orchestrator, or
-- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+The helper computes this from `docs/.alm-plan-data.json` — `PLAN_STATUS === "In Execution"` AND `LAST_INVOCATION_AT` within the last 60 minutes. `check-alm-plan.js` refreshes `LAST_INVOCATION_AT` automatically on every invocation that finds the plan in execution, so each in-chain skill keeps the chain alive for the next one — even multi-hour deploys (deploy-pipeline alone can take 60 min per stage) survive the window without the chain incorrectly de-classifying. Stalled chains (no heartbeat for > 60 min) reclassify as `stale-heartbeat` and Phase 0 gates fire normally so an abandoned plan doesn't silently bypass user confirmation.
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
 
 **Step 1 — Run the gate helper.**
 
@@ -127,7 +133,12 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 2. Otherwise, search for solution zips: `glob('**/*.zip', { ignore: ['**/node_modules/**'] })`
 3. For each found zip, verify it contains `solution.xml`:
    - Use `Bash`: `unzip -l "{zipPath}" 2>/dev/null | grep -qi solution.xml`
-4. If multiple valid zips found: ask user to choose via `AskUserQuestion`
+4. If multiple valid zips found, ask user to choose:
+
+   <!-- gate: import-solution:2.multiple-zips | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:2.multiple-zips):** More than one valid solution zip was discovered under the project root. User picks which one to import. Cancel exits before any target-env interaction.
+
+   Use `AskUserQuestion` with one option per valid zip — show filename + size + modified date so the user can identify the right one (most-recent export is usually the intended target).
 5. If no valid zip found: stop and explain — run `export-solution` first or provide the zip path
 
 **Step 5a — Pre-import content inspection** (run after zip is confirmed, before presenting to user):
@@ -362,10 +373,16 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
      "targetEnvironment": "<envUrl>",
      "asyncOperationId": "<id>",
      "importJobId": "<ImportJobKey value>",
+     "status": "<Succeeded|Failed|Partial>",
      "componentResults": { "success": N, "warning": N, "failure": N },
      "versionSkew": null
    }
    ```
+
+   The `status` field drives `refresh-alm-plan-data.js`'s step-sync (`completed` vs `failed`) for the rendered ALM plan's per-stage checklist. Set it to:
+   - `Succeeded` when the import job's `statecode` is 3 (Succeeded) AND component-results show `failure === 0`.
+   - `Partial` when `statecode` is 3 but `componentResults.failure > 0` (the solution landed but some components didn't import — usually managed-property conflicts or dependency gaps).
+   - `Failed` when `statecode` is 4 (Failed) OR the import never reached terminal state OR all components failed. Without this field, every import shows `completed` in the rendered plan regardless of actual outcome.
 
    **If the user acknowledged a same-version or downgrade import in Step 3.0** (`SKEW_ACK = true`), set `versionSkew` to:
    ```json

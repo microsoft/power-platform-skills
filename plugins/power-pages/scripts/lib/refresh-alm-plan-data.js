@@ -290,6 +290,9 @@ function refreshSetupPipeline(planData, projectRoot) {
     const next = buildHostResolutionFromCheck(hostCheck);
     if (next) planData.hostResolution = next;
   }
+  // Rewrite alm-host-resolution.json so the audit snapshot tracks the
+  // resolved state instead of the pre-run "NoHost" capture.
+  mirrorHostResolutionSnapshot(planData, projectRoot);
 
   if (pipelineMarker) {
     planData.pipelineMeta = {
@@ -317,6 +320,29 @@ function refreshSetupPipeline(planData, projectRoot) {
 }
 
 function refreshDeployPipeline(planData, projectRoot) {
+  // Refresh hostResolution from the most recent host-check (and mirror into
+  // rawDiscovery.hostResolution if the plan was generated with that envelope).
+  // Validation surfaced the case where rawDiscovery.hostResolution stayed at
+  // {ready:false, status:"NoHost"} from the initial Phase 1 scan even though
+  // a successful setup-pipeline or ensure-pipelines-host had since resolved
+  // the host. deploy-pipeline runs AFTER setup-pipeline so by the time we
+  // get here the host is unambiguously bound. Mirror the resolved state into
+  // both top-level and rawDiscovery so the rendered host card and the raw
+  // diagnostic envelope agree.
+  const hostCheck = readJson(almPath(projectRoot, 'lastHostCheck'));
+  if (hostCheck) {
+    const next = buildHostResolutionFromCheck(hostCheck);
+    if (next) {
+      planData.hostResolution = next;
+      // Mirror to rawDiscovery if that envelope exists in the plan.
+      if (planData.rawDiscovery && typeof planData.rawDiscovery === 'object') {
+        planData.rawDiscovery.hostResolution = { ...next };
+      }
+      // Rewrite the audit snapshot too — same logic as refreshSetupPipeline.
+      mirrorHostResolutionSnapshot(planData, projectRoot);
+    }
+  }
+
   const deployMarker = readJson(almPath(projectRoot, 'lastDeploy'));
   if (deployMarker) {
     planData.pipelineMeta = planData.pipelineMeta || {};
@@ -437,6 +463,115 @@ function refreshFinalize(planData) {
   return planData;
 }
 
+// Refresh-phase helper: stamp `LAST_SYNC_AT` on planData so check-alm-plan.js's
+// freshness check correctly accounts for source-solution modifications caused
+// by the just-completed phase. Called by every phase that touches the source
+// solution's modifiedon — setup-solution (bump + AddSolutionComponent),
+// configure-env-variables (env var definition creation + AddSolutionComponent),
+// and export-solution (bump-solution-version.js). Without this stamp, a
+// subsequent Phase 0 check sees `sol.modifiedon > GENERATED_AT` and falsely
+// classifies the plan as stale — even though the modification was caused by
+// the just-completed phase, not by drift. The check uses
+// `max(GENERATED_AT, LAST_SYNC_AT)` as the reference point.
+//
+// Phases that do NOT call this helper: setup-pipeline (only writes to host env),
+// deploy-pipeline (writes to target, not source — though Phase 3.5 may delegate
+// to setup-solution which stamps via its own refresh), import-solution (target),
+// activate-site (no source mod), test-site (read-only), ensure-pipelines-host
+// (host env), force-link-environment (host env).
+function stampLastSyncAt(planData) {
+  planData.LAST_SYNC_AT = new Date().toISOString();
+}
+
+// Refresh-phase helper: copy the post-phase env var snapshot (docs/alm/last-env-vars.json
+// — written by setup-solution Phase 6.2b after each setup-solution run, or by
+// configure-env-variables if it adds a similar sidecar write) over to
+// docs/alm/alm-env-vars.json so the plan-time snapshot stays current.
+//
+// Background: plan-alm Phase 1 Step 10b writes alm-env-vars.json once at
+// plan-generation time. Validation surfaced the case where alm-env-vars.json
+// was {envVars: [], count: 0} long after env vars were actually created —
+// because nothing refreshed the file. last-env-vars.json IS refreshed
+// (setup-solution Phase 6.2b runs the discovery helper post-setup), and
+// refreshSetupSolution / refreshConfigureEnvVariables here ingest it into
+// planData.envVars[]. Mirroring the same content over to alm-env-vars.json
+// closes the audit-file gap so a user inspecting docs/alm/ doesn't see two
+// disagreeing snapshots.
+//
+// Best-effort: a missing last-env-vars.json (rare — both refresh callers
+// only invoke this AFTER checking the sidecar exists) is a no-op rather than
+// an error; alm-env-vars.json simply stays at whatever plan-alm wrote.
+// Refresh-phase helper: rewrite docs/alm/alm-host-resolution.json with the
+// current planData.hostResolution state. Without this, the file persists at
+// whatever plan-alm Phase 1 captured (typically `{ready:false, status:"NoHost"}`
+// for a fresh project) even after setup-pipeline / ensure-pipelines-host has
+// resolved the host. Validation surfaced this case on Citizens portal — the
+// stale "no host" snapshot sat alongside a resolved last-host-check.json,
+// confusing the audit trail.
+function mirrorHostResolutionSnapshot(planData, projectRoot) {
+  if (!projectRoot) return;
+  if (!planData || !planData.hostResolution || typeof planData.hostResolution !== 'object') return;
+  try {
+    const targetPath = almPath(projectRoot, 'hostResolution');
+    const content = JSON.stringify(planData.hostResolution, null, 2);
+    const tmp = targetPath + '.tmp';
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, targetPath);
+  } catch {
+    // Best-effort.
+  }
+}
+
+// Refresh-phase helper: patch `publisherPrefix` and `siteName` fields in
+// docs/alm/alm-size-estimate.json with the post-setup-solution values from
+// .solution-manifest.json. Without this, the estimate file persists at
+// plan-time defaults (e.g. `cr5fe`, the new-project default) even after
+// setup-solution established the actual publisher prefix (`c311`, etc.).
+// Best-effort — a missing or unparseable file is a no-op.
+function patchSizeEstimatePublisherFields(projectRoot, fields) {
+  if (!projectRoot || !fields) return;
+  try {
+    const estPath = almPath(projectRoot, 'sizeEstimate');
+    if (!fs.existsSync(estPath)) return;
+    const raw = fs.readFileSync(estPath, 'utf8');
+    let est;
+    try { est = JSON.parse(raw); } catch { return; }
+    let changed = false;
+    if (fields.publisherPrefix && est.publisherPrefix !== fields.publisherPrefix) {
+      est.publisherPrefix = fields.publisherPrefix;
+      changed = true;
+    }
+    if (fields.siteName && est.siteName !== fields.siteName) {
+      est.siteName = fields.siteName;
+      changed = true;
+    }
+    if (!changed) return;
+    const tmp = estPath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(est, null, 2));
+    fs.renameSync(tmp, estPath);
+  } catch {
+    // Best-effort.
+  }
+}
+
+function mirrorEnvVarsSnapshot(projectRoot) {
+  if (!projectRoot) return;
+  try {
+    const lastEnvVarsPath = almPath(projectRoot, 'lastEnvVars');
+    const almEnvVarsPath = almPath(projectRoot, 'envVars');
+    if (!fs.existsSync(lastEnvVarsPath)) return;
+    const content = fs.readFileSync(lastEnvVarsPath, 'utf8');
+    // Sanity check — only mirror if the source parses as JSON.
+    try { JSON.parse(content); } catch { return; }
+    // Same tmp-file + rename pattern used everywhere else in this module.
+    const tmp = almEnvVarsPath + '.tmp';
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, almEnvVarsPath);
+  } catch {
+    // Best-effort — don't break the broader refresh on a mirror failure.
+  }
+}
+
 function refreshSetupSolution(planData, projectRoot) {
   // After setup-solution runs, the planned-vs-existing distinction the
   // renderer surfaces (Overview stat + Size Analysis signal + Env Variables
@@ -460,6 +595,45 @@ function refreshSetupSolution(planData, projectRoot) {
     // the empty existing state instead of carrying stale planned counts.
     planData.envVars = envVarsMarker.envVars;
   }
+  // Refresh sizeAnalysis.envVarCount so the Overview stat card + Size Analysis
+  // signal reflect the post-setup-solution count (after OAuth promotions,
+  // credential conversions, and orphan adoptions land). Without this, the
+  // pre-setup snapshot from plan generation persists and the Overview shows
+  // a misleading "0 env vars" even after several were created.
+  const postCount = Array.isArray(planData.envVars) ? planData.envVars.length : 0;
+  if (planData.sizeAnalysis && typeof planData.sizeAnalysis === 'object') {
+    planData.sizeAnalysis = {
+      ...planData.sizeAnalysis,
+      envVarCount: {
+        ...(planData.sizeAnalysis.envVarCount || {}),
+        value: postCount,
+      },
+    };
+  }
+  // Mirror the freshly-written last-env-vars.json over to alm-env-vars.json so
+  // the plan-time snapshot stays current. Closes the audit gap where
+  // alm-env-vars.json sat at {envVars:[],count:0} after env vars existed.
+  mirrorEnvVarsSnapshot(projectRoot);
+  // Patch alm-size-estimate.json with the post-setup publisher prefix +
+  // siteName from .solution-manifest.json. Without this, the estimate file
+  // keeps the plan-time defaults (often `cr5fe` for fresh projects) even
+  // after setup-solution established the actual publisher (e.g. `c311`).
+  if (projectRoot) {
+    try {
+      const manifestPath = path.join(projectRoot, '.solution-manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const publisherPrefix = manifest.publisher && manifest.publisher.customizationPrefix;
+        const siteName = manifest.siteName || (planData && planData.SITE_NAME);
+        patchSizeEstimatePublisherFields(projectRoot, { publisherPrefix, siteName });
+      }
+    } catch {
+      // Best-effort — no-op if the manifest is missing or malformed.
+    }
+  }
+  // Mark `LAST_SYNC_AT` so check-alm-plan.js's freshness check accounts for
+  // the source-solution modification this phase just caused.
+  stampLastSyncAt(planData);
   // Step-sync: complete the "Setup solution" checklist entry.
   setStepStatus(planData, { keyword: /\bsetup\s+solution\b/i, status: 'completed' });
   return planData;
@@ -500,6 +674,9 @@ function refreshExportSolution(planData, projectRoot) {
     };
   }
 
+  // export-solution Phase 4 Step 4.0 always-on-bump modifies source `modifiedon`.
+  // Stamp LAST_SYNC_AT so subsequent Phase 0 checks don't falsely flag stale.
+  stampLastSyncAt(planData);
   // Step-sync: a successful invocation of --phase export-solution completes
   // the "Export solution" checklist entry. Independent of marker presence —
   // legacy projects on the manual path may not yet have the marker file even
@@ -652,6 +829,27 @@ function refreshConfigureEnvVariables(planData, projectRoot) {
   // surface them in the Values by Environment matrix immediately.
   backfillEnvVarValuesFromSettings(planData, projectRoot);
   planData.risks = dropResolvedRisks(planData.risks, 'configure-env-variables');
+  // Refresh sizeAnalysis.envVarCount so the Overview stat card + Size Analysis
+  // signal reflect the post-config count, not the pre-setup-solution snapshot
+  // from plan generation. Without this, validation surfaced the case where
+  // sizeAnalysis.envVarCount.value stayed at 0 even after configure-env-variables
+  // had created two definitions.
+  const postCount = Array.isArray(planData.envVars) ? planData.envVars.length : 0;
+  if (planData.sizeAnalysis && typeof planData.sizeAnalysis === 'object') {
+    planData.sizeAnalysis = {
+      ...planData.sizeAnalysis,
+      envVarCount: {
+        ...(planData.sizeAnalysis.envVarCount || {}),
+        value: postCount,
+      },
+    };
+  }
+  // Mirror the latest last-env-vars.json over to alm-env-vars.json so both
+  // snapshots agree after configure-env-variables creates new definitions.
+  mirrorEnvVarsSnapshot(projectRoot);
+  // Env var definition creation + AddSolutionComponent bumps source `modifiedon`.
+  // Stamp LAST_SYNC_AT to keep subsequent Phase 0 checks accurate.
+  stampLastSyncAt(planData);
   setStepStatus(planData, { keyword: /\bconfigure\s+env(?:ironment)?\s+var/i, status: 'completed' });
   return planData;
 }

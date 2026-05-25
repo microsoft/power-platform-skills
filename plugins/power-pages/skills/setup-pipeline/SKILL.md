@@ -38,9 +38,15 @@ GitHub Actions and Azure DevOps Pipeline options are shown in the platform menu 
 
 > **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
 
-**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
-- An environment variable / arg flag set by the orchestrator, or
-- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+The helper computes this from `docs/.alm-plan-data.json` — `PLAN_STATUS === "In Execution"` AND `LAST_INVOCATION_AT` within the last 60 minutes. `check-alm-plan.js` refreshes `LAST_INVOCATION_AT` automatically on every invocation that finds the plan in execution, so each in-chain skill keeps the chain alive for the next one — even multi-hour deploys (deploy-pipeline alone can take 60 min per stage) survive the window without the chain incorrectly de-classifying. Stalled chains (no heartbeat for > 60 min) reclassify as `stale-heartbeat` and Phase 0 gates fire normally so an abandoned plan doesn't silently bypass user confirmation.
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
 
 **Step 1 — Run the gate helper.**
 
@@ -405,7 +411,7 @@ When the manifest is `schemaVersion: 2`, do **not** call `create-deployment-pipe
    - `pipelineName = "{siteName}-Pipeline"` (e.g. `IdeaSphere-Pipeline`).
    - `description` listing the solutions that will deploy through it (e.g. `"Deploys IdeaSphere_Core → IdeaSphere_WebAssets → IdeaSphere_Future in order"`).
    - One `deploymentstages` record per target environment (not per solution).
-2. Build the `deploymentOrder` array from `SOLUTIONS_LIST` sorted by `order`. Each entry has `{ solutionUniqueName, solutionId, order }`. Skip entries where `isFutureBuffer: true` AND `components.length === 0` — an empty Future solution has nothing to deploy; it's created by `setup-solution` but does not participate in the deployment loop until it has content. Keep it in the order array with `status: "skipped-empty"` so the renderer can show the intent.
+2. Build the `deploymentOrder` array from `SOLUTIONS_LIST` sorted by `order`. Each entry has `{ solutionUniqueName, solutionId, order }`. Skip entries where `isFutureBuffer: true` AND `components.length === 0` — an empty Future solution has nothing to deploy; it's created by `setup-solution` but does not participate in the deployment loop until it has content. Keep it in the order array with `status: "SkippedEmpty"` so the renderer can show the intent.
 3. Collect the single `pipelineId` and its `stages[]`. Persist `deploymentOrder` to `docs/alm/last-pipeline.json` (see Phase 7).
 
 ### Phase 7 — Verify, Write Artifacts, Commit
@@ -464,21 +470,24 @@ Confirm `statecode = 0` (Active). If the query fails, report as "verification in
   "deploymentOrder": [
     { "solutionUniqueName": "IdeaSphere_Core", "solutionId": "...", "order": 1 },
     { "solutionUniqueName": "IdeaSphere_WebAssets", "solutionId": "...", "order": 2 },
-    { "solutionUniqueName": "IdeaSphere_Future", "solutionId": "...", "order": 3, "status": "skipped-empty", "isFutureBuffer": true }
+    { "solutionUniqueName": "IdeaSphere_Future", "solutionId": "...", "order": 3, "status": "SkippedEmpty", "isFutureBuffer": true }
   ]
 }
 ```
 
 > **Migration note:** Earlier versions of this skill used `schemaVersion: 2` with a `pipelines[]` array (one Dataverse pipeline record per solution). Projects pinned to v2 continue to work with the old `deploy-pipeline` MULTI_PIPELINE_MODE path; the v3 format should be used for all new setups. When re-running `setup-pipeline` on a v2 project, ask via `AskUserQuestion` whether to migrate (delete the N-1 extra pipelines and collapse to a single one) or keep the legacy layout.
 
-**7.3 Write `docs/pipeline-setup.md`** (create `docs/` directory if needed):
+**7.3 Write (or re-render) `docs/pipeline-setup.md`** (create `docs/` directory if needed).
 
 Contents:
 1. **Pipeline Created** — name, host env URL, pipeline ID
 2. **Environments configured** — source + each target with their deployment environment IDs
-3. **How to trigger a deployment** — Run `/power-pages:deploy-pipeline` or open Power Platform make.powerapps.com → Solutions → Pipelines
-4. **Approval gates** (if applicable) — How to configure in Power Platform Admin Center
-5. **Troubleshooting** — Common validation errors and how to resolve them
+3. **Solutions in deployment order** (multi-solution mode only) — for each entry in `solutionManifest.solutions[]`, list `{uniqueName, version, componentCount}`. Read `componentCount` from each entry's `components.length` if the manifest tracks it, otherwise from a live Dataverse query (`solutioncomponents?$filter=_solutionid_value eq '{solutionId}' and componenttype ne 380&$count=true`) — DO NOT hard-code or carry forward a stale count from a prior invocation.
+4. **How to trigger a deployment** — Run `/power-pages:deploy-pipeline` or open Power Platform make.powerapps.com → Solutions → Pipelines
+5. **Approval gates** (if applicable) — How to configure in Power Platform Admin Center
+6. **Troubleshooting** — Common validation errors and how to resolve them
+
+> **Sync-mode re-render**: when `setup-pipeline` is invoked on a project where `docs/alm/last-pipeline.json` ALREADY exists (re-run after `configure-env-variables`, `setup-solution` sync, or a follow-up env-var addition that bumped component counts), regenerate this file in full from current Dataverse state — do not patch in place. Validated failure: a Citizens portal `pipeline-setup.md` showed Foundation = 13 components while Dataverse had 15 after `configure-env-variables` added 2 env var definitions to that solution; the markdown never updated. The simplest safe behavior is "always re-render in Phase 7.3", because the operation reads current state directly and the file has no user-editable sections worth preserving.
 
 **7.4 Commit:**
 ```bash

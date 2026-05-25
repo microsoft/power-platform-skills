@@ -37,9 +37,15 @@ Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeli
 
 > **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / move to staging / push to prod / release this version*), the orchestrator (`/power-pages:plan-alm`) should run first. Direct invocation of `deploy-pipeline` bypasses the orchestrator's pre-plan completeness check, env-var resolution per stage, activation steps, and validation runs. This gate makes that bypass explicit.
 
-**Skip rule.** If this skill was invoked *by* `plan-alm` (the orchestrator passes `INVOKED_BY_PLAN_ALM = true` in its execution context), skip Phase 0 entirely and proceed to Phase 1. Detect this via either:
-- An environment variable / arg flag set by the orchestrator, or
-- The presence of `docs/.alm-plan-data.json` with `PLAN_STATUS === "In Execution"` AND a recent (`< 5min`) timestamp on the file.
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+The helper computes this from `docs/.alm-plan-data.json` — `PLAN_STATUS === "In Execution"` AND `LAST_INVOCATION_AT` within the last 60 minutes. `check-alm-plan.js` refreshes `LAST_INVOCATION_AT` automatically on every invocation that finds the plan in execution, so each in-chain skill keeps the chain alive for the next one — even multi-hour deploys (deploy-pipeline alone can take 60 min per stage) survive the window without the chain incorrectly de-classifying. Stalled chains (no heartbeat for > 60 min) reclassify as `stale-heartbeat` and Phase 0 gates fire normally so an abandoned plan doesn't silently bypass user confirmation.
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
 
 **Step 1 — Run the gate helper.**
 
@@ -132,7 +138,7 @@ Steps:
    - If `schemaVersion === 2` (legacy), set `MULTI_PIPELINE_MODE = true` and store `pipelines[]` as `PIPELINES_LIST`. The skill falls back to the older "loop over N separate `deploymentpipelines` records" behavior. Advise the user to re-run `setup-pipeline` to migrate to v3.
    - Otherwise read `pipelineId`, `pipelineName`, `hostEnvUrl`, `sourceDeploymentEnvironmentId`, `solutionName`, `stages[]` (single-solution mode — existing behavior).
 
-   **In `MULTI_RUN_MODE`**, resolve `solutionName` + `solutionId` per iteration of `DEPLOYMENT_ORDER`. Entries where `status === "skipped-empty"` (typically the `{Prefix}_Future` buffer) are short-circuited — no stage run is created for them. The single `pipelineId` / `hostEnvUrl` / `sourceDeploymentEnvironmentId` apply to every run.
+   **In `MULTI_RUN_MODE`**, resolve `solutionName` + `solutionId` per iteration of `DEPLOYMENT_ORDER`. Entries where `status === "SkippedEmpty"` (typically the `{Prefix}_Future` buffer) are short-circuited — no stage run is created for them. The single `pipelineId` / `hostEnvUrl` / `sourceDeploymentEnvironmentId` apply to every run.
 
    **In `MULTI_PIPELINE_MODE`** (legacy v2), resolve `solutionName` per pipeline in the loop (not globally). All pipelines share the same `hostEnvUrl` and `sourceDeploymentEnvironmentId`.
 
@@ -184,7 +190,7 @@ Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploym
 
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
 1. **Phase 3.6 runs first** (once, before the loop) — fans out `create-stage-run` + `ValidatePackageAsync` + `poll-validation-status` for every non-skipped solution in parallel. Halts the entire deploy if any solution fails validation. Stores the per-solution `stageRunId` in `VALIDATED_STAGE_RUNS` so the serial deploy loop can reuse them.
-2. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, retrieve its `stageRunId` from `VALIDATED_STAGE_RUNS[solutionUniqueName]`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID` / `STAGE_RUN_ID`, then run Phases 4.4 (fetch deployment notes) → 5 (configure) → 6.0 (**consent gate fires every iteration**) → 6.1 (deploy) → 6.2 (poll) against the same pipeline. **Phase 4.1–4.3 (create stage run + validate + poll-validation) are skipped — Phase 3.6 already did the work in parallel.**
+2. For each entry in `DEPLOYMENT_ORDER` where `status !== "SkippedEmpty"`: resolve its `solutionUniqueName` + `solutionId`, retrieve its `stageRunId` from `VALIDATED_STAGE_RUNS[solutionUniqueName]`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID` / `STAGE_RUN_ID`, then run Phases 4.4 (fetch deployment notes) → 5 (configure) → 6.0 (**consent gate fires every iteration**) → 6.1 (deploy) → 6.2 (poll) against the same pipeline. **Phase 4.1–4.3 (create stage run + validate + poll-validation) are skipped — Phase 3.6 already did the work in parallel.**
 3. If any iteration fails (deployment), halt the loop and report **which solution** failed and which had already landed.
 4. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
 
@@ -315,7 +321,7 @@ Then:
   > 3. **Cancel** — I'll investigate first"
 
   - **Option 1 — Sync first, then re-confirm before deploy:**
-    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion.
+    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion. setup-solution's final refresh step writes `LAST_SYNC_AT` into `docs/.alm-plan-data.json` so subsequent `check-alm-plan.js` calls do NOT falsely flag the plan as stale just because the sync bumped `solutions.modifiedon` past `GENERATED_AT` — the freshness reference becomes `max(GENERATED_AT, LAST_SYNC_AT)`.
     2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
     3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 3.5 prompt above.
     4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.
@@ -359,8 +365,8 @@ The deploy phase (6.1 / 6.2) remains strictly serial — see the **Design ration
 **3.6.1 Build the input file.**
 
 Filter `DEPLOYMENT_ORDER` down to entries that need validation:
-- **Include**: any entry whose `status !== "skipped-empty"` AND `isFutureBuffer !== true`.
-- **Exclude**: `skipped-empty` and `isFutureBuffer: true` entries — the Future buffer is a reserved 0-component placeholder and there's nothing to validate.
+- **Include**: any entry whose `status !== "SkippedEmpty"` AND `isFutureBuffer !== true`.
+- **Exclude**: `SkippedEmpty` and `isFutureBuffer: true` entries — the Future buffer is a reserved 0-component placeholder and there's nothing to validate.
 
 Resolve each remaining entry's `solutionId` from `.solution-manifest.json` (`schemaVersion: 2` `solutions[]`) if not already on the deployment-order entry. Write to a tmp file:
 
@@ -860,6 +866,10 @@ These warnings are informational only — do not block the summary or use `AskUs
 
 Where `{YYYY-MM-DD}` is the date portion of `deployedAt` and `{stageName}` is the stage name with spaces replaced by hyphens (lowercased), e.g. `2026-04-06-staging-1.0.0.3.md`.
 
+> **Retry attempts go as PEER entries in `runs[]`, not nested under `runs[i].lastAttempt`.** In `MULTI_RUN_MODE` (multi-solution) the marker carries a `runs[]` array — one entry per solution per attempt. When the user retries a failed solution (e.g. after fixing an env var value, re-running deploy-pipeline against the same stage), the retry is a NEW peer entry in `runs[]` with its own `artifactVersion` and `attemptedAt`. **Do NOT** nest the retry as `runs[i].lastAttempt: {...}` under the original failed entry — that mixes the schema and makes audit traversal ambiguous (was 1.0.0.4 the deployed version or just the latest attempt?). The flat peer-array shape lets every consumer (refresh-alm-plan-data, the rendered Pipelines tab, the deploy history HTML) walk `runs[]` once and see the full timeline.
+>
+> Marker writers in this skill should append, not mutate. Each retry of a failed solution writes a new `runs[]` entry with status='Succeeded' (or 'Failed' on persistent failure) and the post-bump `artifactVersion`. The original failed entry stays untouched as history.
+
 **7.4 Write deployment history entry (HTML):**
 
 Compute the history filename: `{YYYY-MM-DD}-{stageName}-{artifactVersion}.html` (same derivation as `docs/alm/last-deploy.json`'s `deployHistoryFile` field — replace spaces with hyphens, lowercase stage name).
@@ -971,6 +981,7 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
 | Pattern in error text | Diagnosis | Remediation prompt |
 |---|---|---|
 | `AttachmentBlocked` OR `-2147188706` OR `not a valid type` OR `\.js.*blocked` | **Blocked attachments** — the target env's `blockedattachments` setting rejects file types in the solution | See 7.6.2 below |
+| `secret reference does not match a valid` OR `ImportAsHolding failed.*secret reference` OR `KeyVault.*format` | **Invalid Secret reference** — `deployment-settings.json` carries a Secret value in a non-canonical format (e.g. `@KeyVault(vaultName=...;secretName=...)`, raw secret text, malformed URI) | See 7.6.4 below |
 | `MissingDependency` OR `Missing dependency` | Missing solution dependencies in target | Surface the dependencies; recommend the user install them and retry |
 | (anything else) | Unknown failure | Fall through to the generic retry/exit prompt |
 
@@ -1026,6 +1037,77 @@ Authorization: Bearer {HOST_TOKEN}
 Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
+
+**7.6.4 Invalid Secret reference remediation (gated).** Only run when the diagnostic in 7.6.1 matched the Secret-reference pattern. This is the strip-and-retry path described in the original Citizens-portal validation report: when the import rejects a `deployment-settings.json` Secret value, replace it in-place with `""` (which Dataverse interprets as "use the env var definition's default") and retry the deploy. The file mutation is persisted so the next run doesn't re-ship the broken value.
+
+**This is a backstop.** The pre-write validator in `configure-env-variables` Phase 6.1 and the pre-PATCH validator in this skill's Phase 5.1b should catch most invalid Secret values upstream. Phase 7.6.4 covers the cases where:
+- The user hand-edited `deployment-settings.json` after `configure-env-variables` ran.
+- A legacy file from before Phase 6.1 existed was committed.
+- The pre-PATCH gate returned `status: "unknown-type"` for an entry whose Dataverse type couldn't be resolved at PATCH time, but the host validator rejected at import time.
+
+Steps:
+
+1. **Identify which schema(s) have the bad value.** Run `validate-deployment-settings.js` against the current file (same helper as Phase 5.1b) to surface every invalid entry:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+     --settingsFile "./deployment-settings.json" \
+     --envUrl "{sourceEnvUrl}" \
+     --stageLabel "{SELECTED_STAGE.name}"
+   ```
+   Capture stdout as JSON; collect `findings[]` where `status === "invalid"` AND `valueFormat` is one of `kv-placeholder` / `plain-text` / `invalid-uri`. The collected `schemaName` list is the set of values to strip.
+
+2. **If `validate-deployment-settings.js` finds no invalid entries** (the host error referenced a Secret format but the local file looks fine — possible mid-air edit, or the error matched the pattern but was about a different field), fall through to **7.6.3** (generic retry/exit prompt).
+
+3. **Otherwise, prompt the user for consent.**
+
+   <!-- gate: deploy-pipeline:7.6.4.strip-secret-values | category=consent | cancel-leaves=invalid-secret-in-file -->
+   > 🚦 **Gate (consent · deploy-pipeline:7.6.4.strip-secret-values):** Strip invalid Secret-reference values from `deployment-settings.json` and retry the deploy. The bad values are replaced with empty strings (use definition default) and the file mutation is persisted — the next run won't re-ship the broken values. Cancel leaves the file as-is so the user can fix it manually with canonical Key Vault URIs.
+
+   Use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |---|---|---|
+   | The deploy failed because `deployment-settings.json` carries Secret values in an invalid format: `{list of schema names}`. Strip those values (set to `""` — use definition default) and retry the deploy? The file will be updated; you can supply canonical Key Vault URIs later via `/power-pages:configure-env-variables`. | Strip invalid Secret values | Yes — strip and retry (Recommended), No — exit so I can fix `deployment-settings.json` manually with canonical URIs |
+
+4. Branch on the answer:
+
+   - **Yes — strip and retry**: invoke the file-mutation helper, then re-PATCH the stage run with the corrected `deploymentsettingsjson`, then call `RetryFailedDeploymentAsync` and resume polling from Phase 6.2.
+
+     ```bash
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/strip-invalid-secret-values.js" \
+       --settingsFile "./deployment-settings.json" \
+       --schemaNames "{comma-separated schema names from step 1}" \
+       --stageLabel "{SELECTED_STAGE.name}"
+     ```
+
+     Confirm `stripped.length > 0` and capture the list for the audit summary (Phase 7.5b refresh ingests it into the rendered plan). Re-build `ENV_VAR_OVERRIDES` from the now-corrected `deployment-settings.json` (re-run the same logic as Phase 5.1's "Read deployment-settings.json" step) and PATCH the stage run again:
+
+     ```
+     PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
+     Content-Type: application/json
+     Authorization: Bearer {HOST_TOKEN}
+
+     {
+       "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: ... })}"
+     }
+     ```
+
+     Then retry the import:
+     ```
+     POST {hostEnvUrl}/api/data/v9.1/RetryFailedDeploymentAsync
+     {"StageRunId": "{STAGE_RUN_ID}"}
+     ```
+
+     Resume polling from Phase 6.2. Record the strip action in `docs/alm/last-deploy.json` `secretRemediation[]` so the deploy summary shows which schemas were stripped + what their previous values were.
+
+   - **No — exit**: stop with a remediation pointer. Tell the user the canonical Secret-reference formats and point at `/power-pages:configure-env-variables` for guided remediation:
+
+     > "To fix manually: open `deployment-settings.json` and replace the invalid Secret values with one of:
+     > 1. Key Vault Secret Identifier URI: `https://<vault>.vault.azure.net/secrets/<name>[/<version>]`
+     > 2. Azure resource ID: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>`
+     > 3. Empty string (use the env var definition's default)
+     >
+     > Then re-run `/power-pages:deploy-pipeline`. Or invoke `/power-pages:configure-env-variables` for a guided edit that re-runs Phase 6.1's pre-write validation."
 
 **7.6.5 Verify `environmentvariablevalues` landed on the target** (only if deployment **Succeeded** AND `ENV_VAR_OVERRIDES` was non-empty AND `deploymentsettingsjson` was PATCHed in Phase 5.2):
 

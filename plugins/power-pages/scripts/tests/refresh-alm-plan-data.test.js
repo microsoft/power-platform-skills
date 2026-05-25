@@ -395,6 +395,51 @@ test('refresh export-solution handles malformed last-export.json gracefully', (t
   }
 });
 
+test('refresh export-solution stamps LAST_SYNC_AT — Phase 4.0 bump modifies source modifiedon', (t) => {
+  // Without this stamp, a subsequent Phase 0 check in import-solution or
+  // deploy-pipeline would see sol.modifiedon > GENERATED_AT and falsely flag
+  // the plan as stale because export's always-on bump just modified it.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    GENERATED_AT: '2026-05-25T09:00:00.000Z',
+    PLAN_STATUS: 'In Execution',
+    steps: [{ name: 'Export solution', status: 'in_progress' }],
+  });
+
+  const before = Date.now();
+  refresh({ projectRoot: root, phase: 'export-solution', render: false });
+  const after = Date.now();
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.LAST_SYNC_AT, 'export-solution must stamp LAST_SYNC_AT (Phase 4.0 bumps source modifiedon)');
+  const writtenMs = Date.parse(planData.LAST_SYNC_AT);
+  assert.ok(writtenMs >= before && writtenMs <= after);
+});
+
+test('refresh configure-env-variables stamps LAST_SYNC_AT — env var defs bump source modifiedon', (t) => {
+  // configure-env-variables creates environmentvariabledefinition records and
+  // adds them to the solution via AddSolutionComponent. Each AddSolutionComponent
+  // bumps solutions.modifiedon. Without the stamp, the next Phase 0 check
+  // would falsely flag stale.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    GENERATED_AT: '2026-05-25T09:00:00.000Z',
+    PLAN_STATUS: 'In Execution',
+    steps: [{ name: 'Configure env variables', status: 'in_progress' }],
+  });
+
+  const before = Date.now();
+  refresh({ projectRoot: root, phase: 'configure-env-variables', render: false });
+  const after = Date.now();
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.LAST_SYNC_AT, 'configure-env-variables must stamp LAST_SYNC_AT (env var creation bumps source modifiedon)');
+  const writtenMs = Date.parse(planData.LAST_SYNC_AT);
+  assert.ok(writtenMs >= before && writtenMs <= after);
+});
+
 test('refresh deploy-pipeline ingests batchValidation block from last-deploy.json (MULTI_RUN_MODE)', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
@@ -815,6 +860,35 @@ test('refresh setup-solution accepts an empty envVars[] sidecar (skip-all path)'
   assert.equal(planData.plannedEnvVarCount, 0);
   assert.deepEqual(planData.envVars, [],
     'empty sidecar (user skipped all) should leave planData.envVars empty');
+});
+
+test('refresh setup-solution writes LAST_SYNC_AT so post-sync freshness checks do not falsely flag stale', (t) => {
+  // G3: setup-solution sync mode bumps `solutions.modifiedon` past GENERATED_AT
+  // through its version-PATCH + AddSolutionComponent operations. Without
+  // LAST_SYNC_AT, a subsequent deploy-pipeline Phase 0 check would see
+  // sol.modifiedon > GENERATED_AT and incorrectly fire the stale-plan gate
+  // even though the modification was just-completed sync, not drift.
+  // The refresh-alm-plan-data setup-solution handler writes LAST_SYNC_AT
+  // so check-alm-plan.js's freshness check uses max(GENERATED_AT, LAST_SYNC_AT).
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    GENERATED_AT: '2026-05-25T09:00:00.000Z',
+    PLAN_STATUS: 'In Execution',
+    steps: [{ name: 'Setup solution', status: 'in_progress' }],
+  });
+
+  const before = Date.now();
+  refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+  const after = Date.now();
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.LAST_SYNC_AT, 'LAST_SYNC_AT must be written');
+  const writtenMs = Date.parse(planData.LAST_SYNC_AT);
+  assert.ok(Number.isFinite(writtenMs), 'LAST_SYNC_AT must be a parseable ISO timestamp');
+  assert.ok(writtenMs >= before && writtenMs <= after, 'LAST_SYNC_AT must reflect the current invocation time');
+  // Step-sync still works alongside the marker write
+  assert.equal(planData.steps[0].status, 'completed');
 });
 
 // ── activate-site: ingest docs/alm/last-activate.json into planData.activations ──────
