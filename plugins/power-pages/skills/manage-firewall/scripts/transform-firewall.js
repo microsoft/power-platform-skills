@@ -86,10 +86,14 @@ function transform(statusResponse, rulesResponse, annotations) {
   });
 
   // Rules: { status: "ok", body: { CustomRules: [...], ManagedRules: [...] } }
-  const body = rulesResponse.body;
+  // Defensive defaults — when the WAF policy is absent the orchestrator may pass an empty
+  // body (per SKILL.md § 2.1). Treat missing arrays as no rules rather than throwing.
+  const body = rulesResponse.body || {};
+  const customRules = Array.isArray(body.CustomRules) ? body.CustomRules : [];
+  const managedRules = Array.isArray(body.ManagedRules) ? body.ManagedRules : [];
   const ruleAnnotations = annotations.rules || {};
 
-  const sortedCustom = [...body.CustomRules].sort((a, b) => a.priority - b.priority);
+  const sortedCustom = [...customRules].sort((a, b) => a.priority - b.priority);
   for (const r of sortedCustom) {
     const pairs = [];
     pairs.push(['Type', r.ruleType === 'RateLimitRule' ? 'Custom rate-limit rule' : `Custom ${r.ruleType}`]);
@@ -113,13 +117,13 @@ function transform(statusResponse, rulesResponse, annotations) {
     });
   }
 
-  const sortedManaged = [...body.ManagedRules].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedManaged = [...managedRules].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   for (const m of sortedManaged) {
     const version = m['properties.ruleSetVersion'];
-    const groups = m['properties.ruleGroups'];
+    const groups = Array.isArray(m['properties.ruleGroups']) ? m['properties.ruleGroups'] : [];
     const provisioningState = m['properties.provisioningState'];
     let ruleCount = 0;
-    for (const g of groups) ruleCount += g.rules.length;
+    for (const g of groups) ruleCount += Array.isArray(g.rules) ? g.rules.length : 0;
 
     const pairs = [
       ['Type', 'Managed rule set'],

@@ -1,16 +1,15 @@
 ---
 name: security-review
 description: >-
-  Runs a guided, end-to-end security review of a Power Pages site by
-  delegating to the focused security skills (live site scan, browser
-  headers, web application firewall, authentication, and table
-  permissions) and consolidating every finding into one HTML report.
-  Use when the user wants a full security review, a release-readiness
-  check before publishing, an access-and-config check during
-  development, live site monitoring, or asks open-ended questions like
-  "review my site security", "is my site safe to ship", "do a security
-  check", "monitor my site" — even if they do not name the individual
-  checks.
+  Runs a guided, end-to-end security review of a Power Pages site and
+  consolidates every finding into one HTML report covering the live
+  site, browser headers, firewall, authentication, and role-based
+  permissions. Use when the user wants a full security review, a
+  release-readiness check before publishing, an access-and-config
+  check during development, live site monitoring, or asks open-ended
+  questions like "review my site security", "is my site safe to ship",
+  "do a security check", "monitor my site" — even if they do not name
+  the individual checks.
 user-invocable: true
 argument-hint: "[optional natural-language hint about the goal]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Skill, Agent
@@ -27,28 +26,19 @@ The skill never asks the user technical questions. The conversation stays in pla
 
 **Initial request:** $ARGUMENTS
 
-## High-level flow (the six steps)
-
-The conversation always follows the same six steps. Each step maps to a row in the workflow table below.
-
-1. **Ask the goal** — one question, three answers, plain language
-2. **Confirm and start** — show a one-line plan, give the user a chance to back out
-3. **Scan in progress** — run the matching skills, surface progress
-4. **Results summary** — totals across all findings
-5. **Findings and remediation** — group findings by section, offer to fix
-6. **Next steps and guidance** — concrete recommendations, link the next action
-
 ## Workflow
 
-| Step | What happens | Maps to |
-|------|--------------|---------|
-| 1 — Prerequisites | Prerequisites and working folders | (setup) |
-| 2 — Scope | Capture goal | Step 1 |
-| 3 — Confirm | Confirm the plan | Step 2 |
-| 4 — Skills | Run the matching skills | Step 3 |
-| 5 — Report | Build the consolidated report | Steps 4 and 5 |
-| 6 — Present | Present and offer follow-ups | Step 6 |
-| 7 — Cleanup | Clean up temporary files | (closing) |
+The skill has seven phases. Phases 2–6 each map to one conversation beat with the user; phases 1 and 7 are silent setup and cleanup. See `references/flow.md` for the rationale behind each beat.
+
+| Phase | What happens | User-facing beat |
+|-------|--------------|------------------|
+| 1 — Prerequisites | Locate project, set up working folders | (silent setup) |
+| 2 — Scope | Capture goal — one question, three answers, plain language | Ask the goal |
+| 3 — Confirm | Show a one-line plan, give the user a chance to back out | Confirm and start |
+| 4 — Skills | Run the matching skills, surface progress | Scan in progress |
+| 5 — Report | Build the consolidated report — totals + per-section findings | Results summary + Findings |
+| 6 — Present | Present results, offer remediation follow-ups | Next steps and guidance |
+| 7 — Cleanup | Remove temporary files | (silent cleanup) |
 
 ## Task Tracking
 
@@ -148,21 +138,13 @@ Spawn each selected skill as a background subagent via the `Agent` tool. Each su
 
 ### 4.1 Skill invocation via subagents
 
-Skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scan first so it gets a head start, then launch the remaining checks immediately after.
+Skills run as **parallel subagents** using the `Agent` tool.
 
-**Wave 1 — long-running scan (launch first):**
+**Default — launch every Agent-eligible skill in one parallel batch.** Spawn all selected subagents in a single message with multiple `Agent` tool calls so they start concurrently. Each subagent runs with `run_in_background: true`. The Agent-eligible set is `scan-site`, `manage-headers`, `manage-firewall` — these all support `--review` mode. `scan-site` is the slowest (server-side scan, several minutes); the others typically finish within seconds.
 
-Spawn a background subagent for `scan-site` (when selected). This skill takes the most time and benefits from an early start.
+**Fallback — staggered launch.** If the harness rejects a parallel-batch call for any reason, launch `scan-site` first and then the remaining skills in a follow-up message. This is a tool-affordance fallback, not the preferred path.
 
-**Wave 2 — remaining checks (launch immediately after Wave 1):**
-
-Spawn background subagents for the remaining selected skills (`manage-headers`, `manage-firewall`, `audit-permissions`). When the goal only includes Wave 1 skills, skip this wave.
-
-**Launch all waves together when possible.** Spawn all Wave 1 and Wave 2 subagents in a single message with multiple `Agent` tool calls so they start concurrently.
-
-**Inline checks (run while subagents work):**
-
-While subagents run, perform the read-only check for `setup-auth` inline (see 4.4).
+**Inline checks (run while subagents work).** `audit-permissions` and `setup-auth` do not support `--review` and MUST NOT be launched via `Agent` — handle them inline as described in § 4.2.
 
 Wait for all subagents to complete before proceeding to the report-building step.
 
@@ -209,8 +191,8 @@ Only findings that come from a tool that genuinely outputs severity may carry a 
 | `scan-site` | deep-scan (ZAP) | Yes |
 | `manage-headers` | `transform-headers.js` (inventory) | **No** |
 | `manage-firewall` | `transform-firewall.js` (inventory) | **No** |
-| `audit-permissions` | LLM audit | **No** |
-| `setup-auth` | YAML inspection | **No** |
+| `audit-permissions` | Web roles & table permissions audit | **No** |
+| `setup-auth` | Site settings & auth-related source code audit | **No** |
 
 For inventory sections, do **not** add `severity` to findings — not even `info`. The subagent and orchestrator must write the transform output **verbatim** without inserting opinionated severity-bearing findings.
 
@@ -281,7 +263,7 @@ Open `<DOCS_PATH>` in the user's default browser.
 >
 > Use `--skillName "SecurityReview"`.
 
-### 6.3 Step 7 summary
+### 6.3 In-chat summary
 
 Show a short plain-language summary in the chat: counts of critical / warning / info findings, where the report lives. Then offer the next action with `AskUserQuestion`:
 
@@ -306,7 +288,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms.
-- **Parallel subagent delegation** — skills run as parallel subagents via the `Agent` tool. Launch `scan-site` first (long-running), then the remaining checks immediately after. Perform the inline read-only `setup-auth` check while subagents work.
+- **Parallel subagent delegation** — every selected skill runs as a parallel subagent via the `Agent` tool, launched in a single message. Perform the inline read-only `setup-auth` check while subagents work. Use the staggered launch (§ 4.1 fallback) only if the harness rejects the parallel-batch call.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
@@ -314,4 +296,4 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 ## References
 
-- `references/flow.md` — the six-step conversation in detail
+- `references/flow.md` — rationale and example phrasing for the conversation beats in phases 2–6

@@ -97,7 +97,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --porta
 
 ## `enable.js`
 
-Turns the firewall on. The underlying operation is asynchronous — the script polls the status endpoint until the value becomes `Enabled` or the timeout elapses.
+Turns the firewall on. The underlying operation is asynchronous — the script polls the status endpoint until the value becomes `Created` (the only "enabled" terminal state — see [`get-status.js`](#get-statusjs)) or the timeout elapses.
 
 ### Usage
 

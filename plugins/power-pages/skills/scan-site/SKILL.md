@@ -167,7 +167,13 @@ Run polling with `run_in_background: true` so the user can keep working. The scr
 node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --portalId "<PORTAL_ID>"
 ```
 
-Parse the stdout JSON. `{ "status": "empty" }` means no completed report — record a single `info` finding explaining this and continue. Otherwise the stdout has `findings` and `details`. See `references/scan-reference.md` for the `Risk` → severity mapping the script applies.
+Parse the stdout JSON. The status field can be:
+
+- `ok` — a normal report with `findings` and `details`.
+- `empty` — no completed scan exists for this site (e.g., fresh site or scan still running). Record a single `info` finding explaining this and continue.
+- `malformed` — the API returned a response missing the `Rules` array. The transform emits a single `warning` finding describing this; surface it to the user and recommend re-running the scan.
+
+See `references/scan-reference.md` for the `Risk` → severity mapping the script applies.
 
 ### 5.2 Review mode
 

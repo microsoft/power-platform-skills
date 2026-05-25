@@ -235,14 +235,22 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/scan-site/scripts/transform-report.js" --repo
 
 ### Response (stdout)
 
+Normal report:
+
 ```json
 { "status": "ok", "findings": [ ], "details": { "kind": "kv", "label": "Scan details", "entries": [ ] } }
 ```
 
-…or, when no completed scan exists:
+No completed scan exists for this site (fresh site, or current scan still running):
 
 ```json
 { "status": "empty", "findings": [], "details": {} }
+```
+
+API returned a response missing the `Rules` array — the report cannot be parsed. The script emits a single `warning` finding so the orchestrator can surface the failure:
+
+```json
+{ "status": "malformed", "findings": [{ "id": "scan-site-malformed", "severity": "warning", "title": "Scan report could not be parsed", "details": "..." }], "details": {} }
 ```
 
 Each finding: `{ id, severity, category?, title, tag, location?, details, fix? }`. See `scan-reference.md` § "Severity mapping" for how `Risk` and `RuleStatus` map to `severity`.

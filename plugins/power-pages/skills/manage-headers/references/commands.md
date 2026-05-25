@@ -37,7 +37,7 @@ Reads every `HTTP/*` site-setting YAML in `.powerpages-site/site-settings/` and 
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" --projectRoot "<project-root>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" --projectRoot "<project-root>" [--annotations "<path>"]
 ```
 
 ### Parameters
@@ -45,6 +45,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--projectRoot` | Yes | Power Pages project root (the folder that contains `.powerpages-site/`). |
+| `--annotations` | No | Path to an agent-written annotations JSON file. Shape: `{ "headers": { "HTTP/<HeaderName>": { "description": "...", "fix": "..." } } }`. Used to add plain-language descriptions and optional fixes to the emitted findings. |
 
 ### Response (stdout)
 
@@ -58,7 +59,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" 
 { "status": "missing-settings", "findings": [], "details": {} }
 ```
 
-Each finding has the inventory shape `{ id, title, tag, location, details }` — no `severity` (the section is informational; the orchestrator does not roll these up into severity totals). `title` and `tag` are the site-setting name (e.g., `HTTP/X-Frame-Options`); `details` is the current value.
+Each finding has the inventory shape `{ id, title, tag, details, fix? }` — no `severity` (the section is informational; the orchestrator does not roll these up into severity totals). `title` and `tag` are the site-setting name (e.g., `HTTP/X-Frame-Options`); `details` contains the agent-supplied description (when annotations were passed) followed by the current value. `fix` is present only when the annotations file supplied one for that header.
 
 ### Exit codes
 

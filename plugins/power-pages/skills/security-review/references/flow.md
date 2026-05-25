@@ -1,8 +1,10 @@
-# The Six-Step Conversation
+# Conversation beats
 
-This document walks through the conversation pattern the `security-review` skill uses, with the questions and the rationale behind each step. The skill's SKILL.md contains the executable workflow — this file explains *why* the conversation looks the way it does so future revisions stay consistent.
+Rationale and example phrasing for phases 2–6 of the `security-review` skill. SKILL.md owns the executable workflow; this file explains *why* each user-facing beat looks the way it does so future edits stay consistent.
 
-## Step 1 — Ask the goal
+Phases 1 (prerequisites) and 7 (cleanup) are silent — no conversation beat.
+
+## Phase 2 — Ask the goal
 
 One question, three answers. The three goals match the most common reasons a user opens a Power Pages security review:
 
@@ -16,7 +18,7 @@ Authentication and authorization checks (**Access & Data Security Validation**) 
 
 Why not start by asking the user which skills to run? Because most users — including engineers — do not know the skill names yet, and listing them upfront reads as menu-driven interrogation. Ask the *outcome* the user wants and let the skill pick the right skills.
 
-## Step 2 — Confirm and start
+## Phase 3 — Confirm and start
 
 Show a one-line plan in plain language and an explicit time estimate. Examples:
 
@@ -25,9 +27,9 @@ Show a one-line plan in plain language and an explicit time estimate. Examples:
 
 Confirmation matters because some skills are long-running. Surprising the user with an unexpectedly long wait is the fastest way to lose trust.
 
-## Step 3 — Scan in progress
+## Phase 4 — Scan in progress
 
-Skills run as **parallel subagents**. The long-running `scan-site` (when selected) launches first to get a head start, then the remaining checks launch immediately after. The user sees one progress line when each subagent completes. Examples:
+Skills run as **parallel subagents launched in one batch** (see SKILL.md § 4.1). The user sees one progress line when each subagent completes. Examples:
 
 - "All checks are running now…"
 - "Permissions check finished — 1 important issue, 2 smaller ones."
@@ -36,23 +38,19 @@ Skills run as **parallel subagents**. The long-running `scan-site` (when selecte
 
 Do not narrate per-rule progress. Do not list every file scanned. The user wants reassurance, not telemetry.
 
-## Step 4 — Results summary
+## Phase 5 — Results summary and findings
 
-Show, in chat:
+After all subagents complete, the skill builds the consolidated HTML and shows, in chat:
 
 - A one-line headline ("All clear", or "1 important item to address", or "3 critical and 5 warning findings").
 - A two-line context sentence ("We checked X, Y, Z. We found N important and M smaller issues.").
 - A pointer to the saved HTML report.
 
-Put detail in the report, not in the chat.
+Put detail in the report, not in the chat. The HTML carries the per-section findings cards (title, severity, location, why this matters, suggested fix); the chat just orients the user.
 
-## Step 5 — Findings and remediation
+## Phase 6 — Next steps and guidance
 
-When the user opens the report (Step 4), they see the consolidated view: totals followed by per-section sections that list **all** findings. Each finding card has the same structure (title, severity, location, why this matters, suggested fix).
-
-After they have had a moment to look, offer the next action with one question: walk through the criticals now, re-run after changes, or stop here. Pick the option that makes sense based on the current state — if there are zero criticals, the offer to "walk through criticals" should not be the first option.
-
-## Step 6 — Next steps and guidance
+After the user has had a moment with the report, offer the next action with one `AskUserQuestion`: walk through the criticals now, re-run after changes, or stop here. Pick the option list to match the current state — if there are zero criticals, the offer to "walk through criticals" is not the first option.
 
 Always end with concrete, actionable next steps. Examples:
 

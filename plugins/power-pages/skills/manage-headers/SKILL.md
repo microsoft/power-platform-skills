@@ -3,8 +3,8 @@ name: manage-headers
 description: >-
   Inspects and configures the security headers a Power Pages site sends
   to browsers — Content Security Policy, frame and clickjacking protection,
-  cross-origin sharing, cookie behavior, and related site settings. Produces
-  identifies gaps and walks the user through fixes. Use when the user
+  cross-origin sharing, cookie behavior, and related site settings.
+  Identifies gaps and walks the user through fixes. Use when the user
   wants to review headers, fix CSP errors, allow embedding in another site,
   control cross-origin access, harden cookie settings, or asks "are my
   browser settings safe?", "fix my CSP", "set up CORS" — even if they only

@@ -195,12 +195,27 @@ After completion, re-run status and rules calls to verify the new state.
 
 ### 5.1 Review mode
 
-Apply the same status-then-rules gating as § 2 — only invoke `get-rules.js` when the status `value` is `Created`. For any other value, write the empty-rules payload directly to `<REVIEW_DIR>/firewall-rules.json` instead of calling the script.
+Apply the same status-then-rules gating as § 2 — `get-rules.js` MUST only be invoked when the status `value` is `Created`. For any other value the WAF policy does not exist and the rules endpoint will return 500; the orchestrator must write the empty-rules payload directly instead of calling the script.
+
+**Step A — always run status:**
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js"  --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
 ```
+
+**Step B — branch on the captured `value`:**
+
+- If `value` is `Created`, fetch rules:
+
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
+  ```
+
+- Otherwise (`Disabled`, `None`, `Enabling`, `Disabling`, `Failed`, anything else), do NOT call `get-rules.js`. Write the empty-rules payload yourself:
+
+  ```json
+  { "status": "ok", "body": { "CustomRules": [], "ManagedRules": [] } }
+  ```
 
 After capturing the raw output, **read both files** and write `<REVIEW_DIR>/firewall-annotations.json` with plain-language descriptions of the state and each rule (the transform script no longer hardcodes these — they come from you):
 
@@ -219,6 +234,7 @@ After capturing the raw output, **read both files** and write `<REVIEW_DIR>/fire
 Power Pages WAF state semantics (use these when writing the state description — do not invent meanings):
 - `Created` — WAF is enabled. The firewall is active and filtering requests.
 - `Disabled` — WAF is not enabled and no firewall policy exists. The site is unprotected.
+- `None` — no firewall policy has ever been provisioned. Same user-facing meaning as `Disabled`.
 - `Enabling` / `Disabling` — operation in progress; wait.
 - `Failed` — last enable/disable operation failed.
 

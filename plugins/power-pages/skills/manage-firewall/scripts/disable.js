@@ -54,9 +54,13 @@ if (!portalId) {
       const r = await request({ context: ctx, method: 'GET', path: `/websites/${portalId}/getWafStatus` });
       if (!r.ok) return { ok: false, error: r.error?.message || `${r.statusCode}` };
       const value = typeof r.body === 'string' ? r.body : (r.body?.status ?? r.body);
-      return { ok: true, body: String(value || '').toLowerCase() };
+      const lowered = String(value || '').toLowerCase();
+      if (lowered === 'failed') {
+        return { ok: false, error: 'disable operation reached the "Failed" terminal state' };
+      }
+      return { ok: true, body: lowered };
     },
-    isDone: (status) => status.includes('disabled') && !status.includes('enabling'),
+    isDone: (status) => status === 'disabled',
     timeoutMs,
     intervalMs: 30_000, // 30s between polls — balances API load vs responsiveness
   });

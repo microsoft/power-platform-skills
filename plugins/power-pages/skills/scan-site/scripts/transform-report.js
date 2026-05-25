@@ -39,9 +39,18 @@ function getArg(name, fallback = null) {
 // Drops the T separator and fractional seconds, then appends the timezone label.
 // The deep-scan API returns UTC (the Z marker on EndTime confirms this); StartTime sometimes
 // arrives without the Z but represents the same UTC clock — always label UTC.
+// Returns "unknown" for missing/malformed timestamps so the HTML never renders the
+// literal string "undefined".
 function formatTimestamp(iso) {
+  if (iso == null) return 'unknown';
   const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
-  return match ? `${match[1]} ${match[2]} UTC` : iso;
+  return match ? `${match[1]} ${match[2]} UTC` : String(iso);
+}
+
+// String coercion for envelope numeric fields. Returns "—" when the field is missing
+// rather than the literal "undefined" or "null" you'd get from String().
+function safeNum(value) {
+  return value == null ? '—' : String(value);
 }
 
 // Risk → severity, mirroring Power Pages Studio classification (per scan-reference.md).
@@ -68,38 +77,66 @@ function transform(reportBody) {
   const findings = [];
   let counter = 1;
 
+  if (!reportBody || !Array.isArray(reportBody.Rules)) {
+    process.stderr.write('transform-report.js: report body missing "Rules" array — emitting "malformed" status.\n');
+    return {
+      status: 'malformed',
+      findings: [{
+        id: 'scan-site-malformed',
+        severity: 'warning',
+        title: 'Scan report could not be parsed',
+        details: 'The deep-scan API returned a response without the expected "Rules" array. Re-run the scan; if the problem persists, contact support.',
+      }],
+      details: {},
+    };
+  }
+
   for (const rule of reportBody.Rules) {
-    if (rule.RuleStatus === 'RuleFailed') {
+    const alerts = Array.isArray(rule.Alerts) ? rule.Alerts : [];
+    if (rule.RuleStatus === 'RuleFailed' && alerts.length > 0) {
       // Severity = worst severity across alerts. Risk 3 > 2 > 1 > 0.
-      const worstRisk = Math.max(...rule.Alerts.map(a => a.Risk));
-      // Within a rule, all alerts share the same Description — show it once, then list AlertNames.
-      const sharedDescription = rule.Alerts[0].Description;
-      const alertList = rule.Alerts.map(a => `- ${a.AlertName}`).join('\n');
-      const mitigations = rule.Alerts.map(a => `- ${a.AlertName}: ${a.Mitigation}`).join('\n');
-      const learnMore = rule.Alerts
+      // Alerts with missing/invalid Risk are filtered out before Math.max so the result
+      // is never NaN; scan-reference.md § "Severity mapping" documents "missing → warning",
+      // applied via the `?? 'warning'` fallback below.
+      const validRisks = alerts.map(a => a.Risk).filter(r => RISK_TO_BUCKET[r] !== undefined);
+      const worstRisk = validRisks.length > 0 ? Math.max(...validRisks) : null;
+      const sharedDescription = alerts[0].Description || 'No description provided.';
+      const alertList = alerts.map(a => `- ${a.AlertName || '(unnamed alert)'}`).join('\n');
+      const mitigations = alerts.map(a => `- ${a.AlertName || '(unnamed alert)'}: ${a.Mitigation || 'No mitigation provided.'}`).join('\n');
+      const learnMore = alerts
         .flatMap(a => a.LearnMoreLink || [])
         .filter((url, i, arr) => arr.indexOf(url) === i);
 
       findings.push({
         id: `scan-site-${counter++}`,
-        severity: RISK_TO_BUCKET[worstRisk],
+        severity: worstRisk !== null ? RISK_TO_BUCKET[worstRisk] : 'warning',
         title: rule.RuleName,
         tag: rule.RuleId,
         location: learnMore.length > 0 ? learnMore[0] : null,
-        details: `${sharedDescription}\n\n${rule.Alerts.length} alert${rule.Alerts.length === 1 ? '' : 's'}:\n${alertList}`,
+        details: `${sharedDescription}\n\n${alerts.length} alert${alerts.length === 1 ? '' : 's'}:\n${alertList}`,
         fix: mitigations,
       });
     } else {
+      // RuleFailed with no alerts, or any unknown RuleStatus, defaults to warning so it
+      // surfaces for investigation rather than disappearing with undefined severity.
+      const severity = rule.RuleStatus === 'RulePassed'
+        ? 'pass'
+        : RULE_STATUS_TO_BUCKET[rule.RuleStatus] || 'warning';
+      const details = rule.RuleStatus === 'RulePassed'
+        ? 'Rule ran and produced no alerts.'
+        : rule.RuleStatus === 'RuleTimedOut'
+          ? 'Rule started but did not finish within the time budget.'
+          : rule.RuleStatus === 'RuleNotRun'
+            ? 'Rule did not run for this site.'
+            : rule.RuleStatus === 'RuleFailed'
+              ? 'Rule reported a failure with no alerts attached — verify the scan report.'
+              : `Rule reported an unrecognized status "${rule.RuleStatus}" — verify the scan report.`;
       findings.push({
         id: `scan-site-${counter++}`,
-        severity: RULE_STATUS_TO_BUCKET[rule.RuleStatus],
+        severity,
         title: rule.RuleName,
         tag: rule.RuleId,
-        details: rule.RuleStatus === 'RulePassed'
-          ? 'Rule ran and produced no alerts.'
-          : (rule.RuleStatus === 'RuleTimedOut'
-            ? 'Rule started but did not finish within the time budget.'
-            : 'Rule did not run for this site.'),
+        details,
       });
     }
   }
@@ -110,9 +147,9 @@ function transform(reportBody) {
     entries: [
       { key: 'Started', value: formatTimestamp(reportBody.StartTime) },
       { key: 'Ended', value: formatTimestamp(reportBody.EndTime) },
-      { key: 'Rules evaluated', value: String(reportBody.TotalRuleCount) },
-      { key: 'Rules failed', value: String(reportBody.FailedRuleCount) },
-      { key: 'Alerts', value: String(reportBody.TotalAlertCount) },
+      { key: 'Rules evaluated', value: safeNum(reportBody.TotalRuleCount) },
+      { key: 'Rules failed', value: safeNum(reportBody.FailedRuleCount) },
+      { key: 'Alerts', value: safeNum(reportBody.TotalAlertCount) },
     ],
   };
 
