@@ -127,7 +127,12 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 2. Otherwise, search for solution zips: `glob('**/*.zip', { ignore: ['**/node_modules/**'] })`
 3. For each found zip, verify it contains `solution.xml`:
    - Use `Bash`: `unzip -l "{zipPath}" 2>/dev/null | grep -qi solution.xml`
-4. If multiple valid zips found: ask user to choose via `AskUserQuestion`
+4. If multiple valid zips found, ask user to choose:
+
+   <!-- gate: import-solution:2.multiple-zips | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:2.multiple-zips):** More than one valid solution zip was discovered under the project root. User picks which one to import. Cancel exits before any target-env interaction.
+
+   Use `AskUserQuestion` with one option per valid zip — show filename + size + modified date so the user can identify the right one (most-recent export is usually the intended target).
 5. If no valid zip found: stop and explain — run `export-solution` first or provide the zip path
 
 **Step 5a — Pre-import content inspection** (run after zip is confirmed, before presenting to user):
@@ -362,10 +367,16 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
      "targetEnvironment": "<envUrl>",
      "asyncOperationId": "<id>",
      "importJobId": "<ImportJobKey value>",
+     "status": "<Succeeded|Failed|Partial>",
      "componentResults": { "success": N, "warning": N, "failure": N },
      "versionSkew": null
    }
    ```
+
+   The `status` field drives `refresh-alm-plan-data.js`'s step-sync (`completed` vs `failed`) for the rendered ALM plan's per-stage checklist. Set it to:
+   - `Succeeded` when the import job's `statecode` is 3 (Succeeded) AND component-results show `failure === 0`.
+   - `Partial` when `statecode` is 3 but `componentResults.failure > 0` (the solution landed but some components didn't import — usually managed-property conflicts or dependency gaps).
+   - `Failed` when `statecode` is 4 (Failed) OR the import never reached terminal state OR all components failed. Without this field, every import shows `completed` in the rendered plan regardless of actual outcome.
 
    **If the user acknowledged a same-version or downgrade import in Step 3.0** (`SKEW_ACK = true`), set `versionSkew` to:
    ```json

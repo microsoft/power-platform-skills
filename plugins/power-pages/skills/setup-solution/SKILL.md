@@ -549,6 +549,9 @@ Then fetch the solution's `uniquename` for each hit. Build per-env-var tags:
 
 If at least one env var has the `DEFAULT-ONLY` tag, prompt via `AskUserQuestion` with `multiSelect: true`:
 
+<!-- gate: setup-solution:5.4b.orphan-envvars | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-solution:5.4b.orphan-envvars):** Adopt env var definitions that match the publisher prefix but aren't yet in this solution. `DEFAULT-ONLY` orphans are pre-selected as Recommended; env vars already owned by another user solution are listed but not pre-selected (user opts in only if they intend to move ownership).
+
 > "We found env var definitions with your publisher prefix (`{prefix}_`) that aren't in **{solutionUniqueName}** yet. Select the ones you want to include. Definitions only — values stay per-environment and won't travel.
 >
 > 1. `{schemaName}` ({displayName}) — type {type}, currently in: **{tag}**
@@ -589,6 +592,9 @@ For each real-content orphan, also deduplicate by `name`: if there are multiple 
 **Also take `missing.siteLanguages`** — these are `powerpagesitelanguage` records (componenttype 10428) that exist on the site but aren't in the user solution. They are NOT optional: an imported site without its language records silently fails to render post-auth because `powerpagesite.content.defaultlanguage` references an ID that doesn't exist in the target env. Include every entry verbatim in the orphan-adoption prompt — there is no bundle-chunk noise to filter for languages — and pre-select them as recommended.
 
 If the real-content orphan list (or `missing.siteLanguages`) is non-empty, prompt via `AskUserQuestion` with `multiSelect: true`:
+
+<!-- gate: setup-solution:5.4c.orphan-ppcs | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-solution:5.4c.orphan-ppcs):** Adopt orphan `powerpagecomponent` rows (incl. `powerpagesitelanguage` records) that exist on the site but aren't in this solution. Site languages are pre-selected as Recommended because omitting them silently breaks post-auth rendering. Other ppc orphans (e.g. `invoice-checker` server logic) are pre-selected if they appear to be real content; stale build-artifact bundle chunks are filtered out upstream.
 
 > "Found **{N}** site components not yet in **{solutionUniqueName}**:
 >
@@ -726,7 +732,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
 
 **Multi-solution mode** (`MULTI_SOLUTION_MODE = true`): partition the unified component list across `PROPOSED_SOLUTIONS` based on each solution's `componentTypes` (and `tableLogicalNames` for Strategy 3), then run `add-components-to-solution.js` once per solution. The per-solution loop SHOULD run serially across solutions (each helper call already batches + refreshes tokens internally; running solutions in parallel multiplies the token-refresh load with no real wall-clock win since the bottleneck is per-component Dataverse calls inside each batch). For each entry in `PROPOSED_SOLUTIONS` (skip `isFutureBuffer: true`):
 1. Filter the unified component array down to components whose Dataverse type-name maps into this solution's `componentTypes` array. The mapping from numeric `componentType` → name is the same one `discover-component-types.js` and `discover-site-components.js` use (`PPC_TYPE_LABELS`). Tables route to the solution whose `tableLogicalNames` includes the table's logical name (Strategy 3) or to whichever solution claims `'Table'` (Strategies 1 and 2).
-2. Write the per-solution sub-array to a temp file (e.g., `.../components-{uniqueName}.json`), invoke `add-components-to-solution.js --solutionUniqueName "{proposedSolutions[i].uniqueName}"`, capture the JSON summary keyed by `uniqueName`, delete the temp file.
+2. Write the per-solution sub-array to a temp file (e.g., `C:/Users/{user}/AppData/Local/Temp/components-{uniqueName}.json`), then invoke the helper with all three required flags:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/add-components-to-solution.js" \
+     --envUrl "{envUrl}" \
+     --componentsFile "C:/Users/{user}/AppData/Local/Temp/components-{uniqueName}.json" \
+     --solutionUniqueName "{proposedSolutions[i].uniqueName}"
+   ```
+   Capture the JSON summary keyed by `uniqueName`, delete the temp file. **All three flags are required** — omitting `--envUrl` or `--componentsFile` (only passing `--solutionUniqueName`) causes the helper to exit 1 with `--envUrl is required` / `--componentsFile is required`. Both must be passed per iteration, even though `--envUrl` is the same across all iterations of the loop.
 3. If a component's type doesn't match any solution's `componentTypes`, surface a per-component warning and STOP — the partitioning lost a component. This usually means the split plan dropped a type (regression in `compute-split-plan.js`); the user needs to re-plan rather than silently leaking components into `Default`.
 
 Use `SOLUTIONS_BY_NAME` from Phase 4 to resolve each `uniqueName → solutionId` if the helper's resolution by name isn't sufficient.

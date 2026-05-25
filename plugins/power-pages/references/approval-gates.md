@@ -276,7 +276,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.2 `setup-solution` (16 calls)
+### 6.2 `setup-solution` (13 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -384,7 +384,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.8 `ensure-pipelines-host` (8 calls)
+### 6.8 `ensure-pipelines-host` (10 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -399,7 +399,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `ensure-pipelines-host:4.B.guid-confirm` | not-a-gate | — | 4.B | Confirm GUID identity when uncertain — data-gathering | — |
 | `ensure-pipelines-host:4.B.admin-check` | not-a-gate | — | 4.B | Single confirm of admin role — informational | — |
 
-(9 entries documented for an 8-call skill: one of the catalog rows `4.B.guid-confirm` is conditional and only fires when GUID is ambiguous — net 8 actual calls in a typical run.)
+(`4.B.guid-confirm` is conditional and only fires when the BAP GUID is ambiguous — a typical run sees ~9 prompts. The header count reflects total catalog rows, not per-run prompt count.)
 
 ---
 
