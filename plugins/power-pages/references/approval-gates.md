@@ -251,7 +251,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (18 calls; orchestrator)
+### 6.1 `plan-alm` (19 calls; orchestrator)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -272,6 +272,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `plan-alm:4.approve` | gate | plan | 4 | *"Approve and execute / save for later / change something"* | nothing |
 | `plan-alm:4.approver-fallback` | not-a-gate | — | 4 | Free-text "approver name" — pure data-gathering | — |
 | `plan-alm:7.manual-checkpoint` | gate | progress | 7 (Manual path) | `MANUAL_CHECKPOINT=true` — *"Export done; proceed to import?"* | partial-manifest |
+| `plan-alm:7.deploy-failure` | gate | plan | 7 (Step A.1) | deploy-pipeline halted before completing — *"Retry / Skip stage / Exit"*. Fires per failed stage. | nothing |
 | `plan-alm:7.activate-step-b` | gate | plan | 7 (Step B) | Post-deploy activation prompt per stage — *"Activate now / skip"* | nothing |
 
 ---

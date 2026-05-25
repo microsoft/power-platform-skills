@@ -1078,9 +1078,32 @@ Invoke the skill:
 /power-pages:deploy-pipeline
 ```
 
-After completion: mark deploy task as `completed`. Update HTML checklist step to `status-completed`.
+**Halt-on-failure check (Step A.1).** After `deploy-pipeline` returns, read `docs/alm/last-deploy.json` to see what actually happened. **Do NOT unconditionally mark the deploy task `completed`** — `deploy-pipeline` can halt at many points (validation failure, Phase 3.6 batch-validation-failed, blocked-attachments cancel, user-cancel at Phase 6.0 consent gate, mid-deploy `AttachmentBlocked`, etc.) and each writes a marker with a status field. Proceeding to Step B / the next stage on a failed deploy wastes time and produces confusing output (activate-site against a target that didn't receive the solution).
 
-**Refresh the plan after each stage's deploy.** Run the helper:
+```bash
+node -e "try { const d = require('./docs/alm/last-deploy.json'); process.stdout.write(JSON.stringify({status: d.status, stageName: d.stageName, knownGaps: d.knownGaps || null})) } catch (e) { process.stdout.write(JSON.stringify({status: 'NoMarker', error: e.message})) }"
+```
+
+Branch on the parsed status:
+
+- **`status === "Succeeded"`**: Mark deploy task `completed`. Update HTML checklist step to `status-completed`. Proceed to the refresh-plan step below, then Step B.
+- **`status === "Partial"` or `status` includes `knownGaps`**: A subset of solutions deployed (Phase 3.6.5 "deploy succeeded subset" path) but at least one was intentionally skipped. Mark the deploy task `completed-with-gaps` (or `completed` with a note in the rendered plan). Show the user the recorded `knownGaps` and confirm they want to proceed to Step B for the partial deploy. Run the refresh-plan step regardless.
+- **`status === "Failed"` / `"ValidationFailed"` / `"Canceled"` / `"NoMarker"`**: Mark deploy task `failed`. Update HTML checklist step to `status-failed`. Run the refresh-plan step so the rendered plan shows the failure surface. Then fire the deploy-failure gate below.
+
+<!-- gate: plan-alm:7.deploy-failure | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:7.deploy-failure):** deploy-pipeline halted before completing the deploy to `{stageName}`. Caller decides: retry this stage (re-invoke deploy-pipeline — Dataverse import idempotency makes already-succeeded solutions in a multi-solution loop a no-op), skip this stage and continue to the next (advanced — leaves a stage gap; the rendered plan will show it), or exit the orchestration. Cancel exits the loop without touching subsequent stages.
+
+Use `AskUserQuestion`:
+
+  | Question | Header | Options |
+  |---|---|---|
+  | Deploy to `{stageName}` did not complete (`{status}`). What now? | Deploy failure | Retry this stage, Skip to next stage (advanced — leaves a gap), Exit orchestration |
+
+  - **Retry**: re-invoke `/power-pages:deploy-pipeline` for this stage. Re-run the halt-on-failure check on the retry's marker. Loop up to the user's tolerance.
+  - **Skip to next stage**: leave the deploy task `failed`, do NOT run Step B / Step C for this stage, continue the outer `PP_STAGES` loop. The rendered plan shows a stage gap; the user owns the consequence.
+  - **Exit orchestration**: stop the skill. The rendered plan reflects current state (succeeded stages + the failed one). Re-invoking `/power-pages:plan-alm` later resumes from Phase 7 against the existing plan.
+
+**Refresh the plan after each stage's deploy.** Run the helper (regardless of success/failure — the refresh ingests both outcomes):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
@@ -1089,9 +1112,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-The helper reads `docs/alm/last-deploy.json`, populates `planData.pipelineMeta.lastDeploy` (status, stageName, deployedAt, artifactVersion, componentCount, activationStatus, siteUrl), and re-renders `docs/alm-plan.html`. The Pipelines tab now shows the actual pipeline name + ACTIVE chip + last-run footer (Succeeded / Failed status + version + component count + stage label). Cheap; runs once per stage in the deploy loop.
+The helper reads `docs/alm/last-deploy.json`, populates `planData.pipelineMeta.lastDeploy` (status, stageName, deployedAt, artifactVersion, componentCount, activationStatus, siteUrl), and re-renders `docs/alm-plan.html`. The Pipelines tab now shows the actual pipeline name + ACTIVE chip + last-run footer (Succeeded / Failed status + version + component count + stage label). Cheap; runs once per stage in the deploy loop. The `setStepStatus` cross-cutting behavior already maps failure-status markers to `failed` step status so the checklist surfaces what actually happened — Step A.1's halt-on-failure gate just adds the user-facing prompt that was previously missing.
 
-**Step B — Activate (immediately after deploy for this stage):**
+**Step B — Activate (immediately after deploy for this stage, only when Step A succeeded or completed-with-gaps):**
 Mark the "Activate site in {stageName}" task as `in_progress`. Update HTML checklist step to `status-in-progress`.
 
 Read `docs/alm/last-deploy.json` to check whether activation already happened inside `deploy-pipeline`:
