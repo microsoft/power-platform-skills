@@ -8,11 +8,11 @@ One question, three answers. The three goals match the most common reasons a use
 
 | Goal | When to use it |
 |------|-----------------|
-| Access & config | Frequent checks during development — pre-commit / pre-PR safety check. Covers Access & Data Security Validation (authentication, roles, table permissions) on local YAML. |
-| Release readiness | Last comprehensive check before pushing to production. Adds live site scan, browser headers, and firewall on top of access checks. |
+| Code & config | Frequent checks during development — pre-commit / pre-PR safety check. Covers source code (ESLint), package vulnerabilities (npm audit), and Access & Data Security Validation (authentication, roles, table permissions) on local files. |
+| Release readiness | Last comprehensive check before pushing to production. Adds live site scan, browser headers, and firewall on top of code & config checks. |
 | Deployed site | Detect runtime issues from real user traffic on a deployed site. |
 
-Authentication and authorization checks (**Access & Data Security Validation**) are the focus of Access & config and are also bundled into Release readiness rather than being a separate goal. Splitting them into their own option created confusion about when to use them versus the other goals.
+Authentication and authorization checks (**Access & Data Security Validation**) are bundled into Code & config (alongside the local code/package scans) and into Release readiness rather than being a separate goal. Splitting them into their own option created confusion about when to use them versus the other goals.
 
 Why not start by asking the user which skills to run? Because most users — including engineers — do not know the skill names yet, and listing them upfront reads as menu-driven interrogation. Ask the *outcome* the user wants and let the skill pick the right skills.
 

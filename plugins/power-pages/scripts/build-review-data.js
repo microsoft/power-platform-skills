@@ -60,16 +60,19 @@ if (!fs.existsSync(inputDir)) {
 }
 
 const SECTION_MAP = {
-  'scan-site.json':         { id: 'site-scan',   label: 'Live Site Scan',           icon: '◐' },
-  'manage-headers.json':    { id: 'headers',     label: 'Browser Headers',          icon: '◑' },
-  'manage-firewall.json':   { id: 'firewall',    label: 'Web Application Firewall', icon: '◆' },
-  'audit-permissions.json': { id: 'permissions', label: 'Roles & Permissions',      icon: '◇' },
-  'setup-auth.json':        { id: 'auth',        label: 'Access & Identity',        icon: '◈' },
+  'scan-code-eslint.json':     { id: 'code-issues',   label: 'Code Issues',              icon: '◍' },
+  'scan-code-packages.json':   { id: 'code-packages', label: 'Package Vulnerabilities',  icon: '◉' },
+  'scan-site.json':            { id: 'site-scan',     label: 'Live Site Scan',           icon: '◐' },
+  'manage-headers.json':       { id: 'headers',       label: 'Browser Headers',          icon: '◑' },
+  'manage-firewall.json':      { id: 'firewall',      label: 'Web Application Firewall', icon: '◆' },
+  'audit-permissions.json':    { id: 'permissions',   label: 'Roles & Permissions',      icon: '◇' },
+  'setup-auth.json':           { id: 'auth',          label: 'Access & Identity',        icon: '◈' },
 };
 
 // Severities that may appear on findings — ordered by precedence (most severe first).
-// pass is excluded from the "issue" count but still shown as its own stat.
-const SEVERITIES = ['critical', 'high', 'warning', 'medium', 'info', 'low', 'pass'];
+// Tools may emit any of these strings as-is: ESLint uses error/warning, npm audit uses
+// critical/high/moderate/low/info. pass is excluded from the "issue" count.
+const SEVERITIES = ['critical', 'high', 'error', 'warning', 'medium', 'moderate', 'info', 'low', 'pass'];
 
 const sections = [];
 const totals = Object.fromEntries(SEVERITIES.map(s => [s, 0]));

@@ -58,8 +58,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
 
 .severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;}
-.severity-critical,.severity-high{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
-.severity-warning,.severity-medium{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
+.severity-critical,.severity-high,.severity-error{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
+.severity-warning,.severity-medium,.severity-moderate{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
 .severity-info,.severity-low{color:var(--info);background:var(--info-bg);border:1px solid var(--info-border);}
 .severity-pass{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
 
@@ -145,7 +145,7 @@ function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').repl
 // Like esc(), but renders newlines as <br> for multi-line details/fix text.
 function escMultiline(s) { return esc(s).replace(/\n/g, '<br>'); }
 function escAttr(s) { return String(s || '').replace(/[^a-zA-Z0-9_.-]/g, ''); }
-const sevLabel = (s) => ({ critical:'CRITICAL', high:'HIGH', warning:'WARNING', medium:'MEDIUM', info:'INFO', low:'LOW', pass:'PASSED' }[s] || (s ? s.toUpperCase() : ''));
+const sevLabel = (s) => ({ critical:'CRITICAL', high:'HIGH', error:'ERROR', warning:'WARNING', medium:'MEDIUM', moderate:'MODERATE', info:'INFO', low:'LOW', pass:'PASSED' }[s] || (s ? s.toUpperCase() : ''));
 
 function findingHtml(f, idx) {
   const id = escAttr(f.id || ('f' + idx));
@@ -187,7 +187,7 @@ function detailsHtml(d) {
 
 function sectionHtml(s) {
   // Sort only when at least one finding has severity; otherwise preserve insertion order (inventory sections).
-  const order = { critical:0, high:0, warning:1, medium:1, info:2, low:2, pass:3 };
+  const order = { critical:0, high:0, error:0, warning:1, medium:1, moderate:1, info:2, low:2, pass:3 };
   const findings = (s.findings || []).some(f => f.severity)
     ? (s.findings || []).slice().sort((a, b) => (order[a.severity] ?? 99) - (order[b.severity] ?? 99))
     : (s.findings || []);
@@ -202,18 +202,20 @@ function sectionHtml(s) {
 }
 
 // Stat-card metadata for every severity that may appear on findings.
-// Same precedence ordering used everywhere (critical → high → warning → medium → info → low → pass).
+// Same precedence ordering used everywhere (critical/error → high → warning/moderate → medium → info → low → pass).
 const STAT_CARDS = [
   { key: 'critical', label: 'Critical', color: 'var(--critical)' },
   { key: 'high',     label: 'High',     color: 'var(--critical)' },
+  { key: 'error',    label: 'Error',    color: 'var(--critical)' },
   { key: 'warning',  label: 'Warning',  color: 'var(--warning)' },
   { key: 'medium',   label: 'Medium',   color: 'var(--warning)' },
+  { key: 'moderate', label: 'Moderate', color: 'var(--warning)' },
   { key: 'info',     label: 'Info',     color: 'var(--info)' },
   { key: 'low',      label: 'Low',      color: 'var(--info)' },
   { key: 'pass',     label: 'Passed',   color: 'var(--pass)' },
 ];
 // Severities that count as "issues" for the sidebar badge.
-const ISSUE_KEYS = new Set(['critical', 'high', 'warning', 'medium']);
+const ISSUE_KEYS = new Set(['critical', 'high', 'error', 'warning', 'medium', 'moderate']);
 
 // Overview section
 function overviewHtml() {
