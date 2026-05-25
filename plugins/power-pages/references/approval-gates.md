@@ -314,7 +314,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.4 `deploy-pipeline` (15 gates / 3 sub-prompts; 18 calls total)
+### 6.4 `deploy-pipeline` (17 gates / 3 sub-prompts; 20 calls total)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -324,7 +324,9 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:2.5.blocked-attachments` | gate | consent | 2.5 | Pre-flight detected `.js` on `blockedattachments` — *"Unblock / skip"* | `attachment-block-modified` |
 | `deploy-pipeline:3.5.completeness` | gate | progress | 3.5 | Solution missing components vs. live site — *"Sync now / deploy anyway / cancel"* | nothing |
 | `deploy-pipeline:3.5.post-sync` | gate | progress | 3.5 | Post-sync re-confirm — *"New version + adopted components — proceed?"* | nothing |
-| `deploy-pipeline:4.pending-approval` | gate | pause | 4 | `stagerunstatus=200000005` during validation — *"Approved in PPAC? Yes / Cancel"* | `external-state-pending` |
+| `deploy-pipeline:3.6.batch-pending-approval` | gate | pause | 3.6 | `MULTI_RUN_MODE` parallel-validation batch — N of M solutions hit `stagerunstatus=200000005` — *"Approve all in PPAC, then re-poll / Cancel"* (fires once per batch, not per pending solution) | `external-state-pending` |
+| `deploy-pipeline:3.6.batch-validation-failed` | gate | plan | 3.6 | `MULTI_RUN_MODE` parallel-validation batch — one or more solutions failed or timed out — *"Abort (Recommended) / Deploy succeeded subset only (advanced) / Cancel"* | `validated-stage-run` |
+| `deploy-pipeline:4.pending-approval` | gate | pause | 4 | `stagerunstatus=200000005` during validation (single-solution / legacy v2 only — `MULTI_RUN_MODE` handles approval via `3.6.batch-pending-approval` instead) — *"Approved in PPAC? Yes / Cancel"* | `external-state-pending` |
 | `deploy-pipeline:5.env-vars` | gate | plan | 5 | Unconfigured env vars per stage — *"Enter values"* | nothing |
 | `deploy-pipeline:6.0.final-consent` | gate | final | 6.0 | About to fire `DeployPackageAsync` — *"Deploy now / Cancel"* | `validated-stage-run` |
 | `deploy-pipeline:6.pending-approval` | gate | pause | 6 | `stagerunstatus=200000005` mid-deploy — *"Approved? Yes / Cancel"* | `external-state-pending` |
