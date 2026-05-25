@@ -487,7 +487,14 @@ Store as `EXTERNAL_ID_USER_FLOW`.
 
 | Question | Options |
 |----------|---------|
-| What should the login button label say? Default is **`Sign in with Microsoft Entra External ID`**. Do NOT use "Sign in with Microsoft" — that conflicts with the Microsoft Account social provider. | *(free text, defaulted)* |
+| What should the login button label say? Default: **`Sign in with Entra External ID`** (shortened from "Sign in with Microsoft Entra External ID" so it fits on one line in the horizontal-row Login page layout — see note below). Do NOT use "Sign in with Microsoft" — that conflicts with the Microsoft Account social provider. | *(free text, defaulted)* |
+
+> **Display name length guidance**: keep labels around **28 characters or less** to display on a single line in the horizontal-row Login page layout (which is the default). Longer labels still work — buttons grow vertically to wrap text to two lines — but single-line buttons look more polished. For reference:
+> - "Sign in with Entra External ID" — 30 chars (wraps on narrow cards, fits on wider)
+> - "Sign in with Microsoft Entra External ID" — 40 chars (wraps to two lines in the default horizontal layout)
+> - "Customer Sign In" — 16 chars (always single line, but less descriptive)
+>
+> If the user has multiple external providers configured (e.g., Entra External ID + Google), shorter labels matter more because each button gets less width. For a single-provider site, longer labels are fine (the button spans the full row width).
 
 Store as `EXTERNAL_ID_DISPLAY_NAME`.
 

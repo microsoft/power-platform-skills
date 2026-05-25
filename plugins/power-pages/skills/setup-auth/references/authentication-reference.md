@@ -1197,12 +1197,22 @@ export default function Login() {
 
 External provider buttons in a wrapping flex row at the top. Local form below an "OR SIGN IN WITH EMAIL" divider.
 
+**Text handling**: long display names wrap to two lines inside the button (buttons grow vertically to fit). This is preferred over single-line truncation with ellipsis — when text is center-aligned, ellipsis truncates from BOTH sides leaving the unreadable middle of the string visible (e.g., `WITH MICROSOFT ENTRA EXTER`). Allowing wrap gives a clean two-line button instead. The full label is also exposed via `title={p.displayName}` for hover tooltip and screen-reader accessibility.
+
 ```tsx
 {EXTERNAL_PROVIDERS.length > 0 && (
   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
     {EXTERNAL_PROVIDERS.map(p => (
       <button key={p.id} type="button"
-        style={{ flex: '1 1 0', minWidth: 0, padding: '10px 16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        title={p.displayName}
+        style={{
+          flex: '1 1 0',
+          minWidth: 0,
+          padding: '12px 16px',
+          lineHeight: 1.3,
+          textAlign: 'center',
+          // No whiteSpace:nowrap — allow text to wrap to two lines for long labels
+        }}
         disabled={!!externalSubmittingId || isSubmitting}
         onClick={() => handleExternalSignIn(p.id)}>
         {externalSubmittingId === p.id ? 'Redirecting...' : p.displayName}
@@ -1213,6 +1223,8 @@ External provider buttons in a wrapping flex row at the top. Local form below an
 {EXTERNAL_PROVIDERS.length > 0 && LOCAL_PROVIDER && <Divider label="OR SIGN IN WITH EMAIL" />}
 {LOCAL_PROVIDER && <LocalForm onSubmit={handleLocalSubmit} loginByEmail={LOCAL_PROVIDER.loginByEmail} />}
 ```
+
+> **Why allow wrapping instead of truncating**: with center-aligned text in a flex button, `text-overflow: ellipsis` doesn't behave as expected — the overflow clips both sides of the string, showing the middle of the label without any ellipsis marker. Allowing wrap (removing `whiteSpace: 'nowrap'`) keeps the label fully readable on two lines. The button height auto-adjusts. If you need uniform button heights, set `minHeight: 56` (or similar) on the button style; rows with short labels still look fine, and rows with long labels match the wrapped height.
 
 #### Layout 2: Vertical stack
 
@@ -1285,13 +1297,22 @@ const allTabs: { id: string; label: string }[] = [
 
 return (
   <>
-    <div role="tablist" style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--color-border)', marginBottom: 24 }}>
+    <div role="tablist" style={{
+      display: 'flex',
+      gap: 4,
+      borderBottom: '1px solid var(--color-border)',
+      marginBottom: 24,
+      overflowX: 'auto',  // long tab labels can scroll horizontally if they exceed the card width
+    }}>
       {allTabs.map(tab => (
         <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
+          title={tab.label}
           style={{
             padding: '10px 16px', border: 'none', background: 'none',
             borderBottom: activeTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent',
             cursor: 'pointer', fontWeight: activeTab === tab.id ? 600 : 400,
+            whiteSpace: 'nowrap',  // tab labels stay single-line; container scrolls if needed
+            flexShrink: 0,
           }}
           onClick={() => setActiveTab(tab.id)}>
           {tab.label}
