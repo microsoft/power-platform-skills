@@ -387,3 +387,131 @@ test('computeInExecution is pure — same inputs produce same output', () => {
   assert.equal(computeInExecution('Draft', recent, now).status, 'not-running');
   assert.equal(computeInExecution(null, recent, now).status, 'not-running');
 });
+
+// ── LAST_SYNC_AT semantics (G3) ──────────────────────────────────────────────
+
+test('LAST_SYNC_AT > GENERATED_AT shifts the staleness reference forward', async () => {
+  // Scenario: plan was generated, then setup-solution sync ran (bumped
+  // modifiedon AND wrote LAST_SYNC_AT after its final write), then a downstream
+  // skill checks freshness. In the real timeline refresh-alm-plan-data writes
+  // LAST_SYNC_AT AFTER setup-solution's bump-then-add ops complete, so
+  // modifiedon <= LAST_SYNC_AT. Without LAST_SYNC_AT accounting, the
+  // modifiedon > GENERATED_AT compare would falsely flag stale; with it,
+  // max(generated, sync) handles correctly.
+  const generatedAt = '2026-05-25T09:00:00.000Z';
+  const modifiedOn = '2026-05-25T10:00:00.000Z';  // sync did it
+  const lastSyncAt = '2026-05-25T10:00:05.000Z';  // marker written 5s later
+
+  const dir = tempProject({
+    GENERATED_AT: generatedAt,
+    LAST_SYNC_AT: lastSyncAt,
+    PLAN_STATUS: 'In Execution',
+  });
+  try {
+    const r = await checkAlmPlanFn({
+      projectRoot: dir,
+      envUrl: 'https://org.crm.dynamics.com',
+      token: 'fake',
+      solutionId: 'sol-1',
+      writeHeartbeat: false,
+      makeRequest: async () => ({
+        statusCode: 200,
+        body: JSON.stringify({ modifiedon: modifiedOn, version: '1.0.0.4' }),
+      }),
+    });
+    assert.equal(r.stale, false,
+      'modifiedon within LAST_SYNC_AT window must NOT trigger stale: solution-modified');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('modifiedon AFTER LAST_SYNC_AT still triggers stale: solution-modified', async () => {
+  // The LAST_SYNC_AT marker accepts modifications up to its timestamp, not
+  // beyond. Any drift after the last sync IS stale and should fire the gate.
+  const generatedAt = '2026-05-25T09:00:00.000Z';
+  const lastSyncAt = '2026-05-25T10:00:00.000Z';
+  const modifiedOn = '2026-05-25T11:30:00.000Z';  // 90 min after sync — drift
+
+  const dir = tempProject({
+    GENERATED_AT: generatedAt,
+    LAST_SYNC_AT: lastSyncAt,
+    PLAN_STATUS: 'In Execution',
+  });
+  try {
+    const r = await checkAlmPlanFn({
+      projectRoot: dir,
+      envUrl: 'https://org.crm.dynamics.com',
+      token: 'fake',
+      solutionId: 'sol-1',
+      writeHeartbeat: false,
+      makeRequest: async () => ({
+        statusCode: 200,
+        body: JSON.stringify({ modifiedon: modifiedOn, version: '1.0.0.5' }),
+      }),
+    });
+    assert.equal(r.stale, true);
+    assert.equal(r.staleness.reason, 'solution-modified');
+    assert.match(r.staleness.detail, /last sync at/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('LAST_SYNC_AT BEFORE GENERATED_AT (or absent) — staleness uses GENERATED_AT as before', async () => {
+  // Backward compat: plans generated before the LAST_SYNC_AT feature should
+  // still produce the original staleness behavior (compare against GENERATED_AT).
+  const generatedAt = '2026-05-25T10:00:00.000Z';
+  const modifiedOn = '2026-05-25T10:30:00.000Z';
+
+  const dir = tempProject({
+    GENERATED_AT: generatedAt,
+    PLAN_STATUS: 'In Execution',
+    // LAST_SYNC_AT omitted entirely
+  });
+  try {
+    const r = await checkAlmPlanFn({
+      projectRoot: dir,
+      envUrl: 'https://org.crm.dynamics.com',
+      token: 'fake',
+      solutionId: 'sol-1',
+      writeHeartbeat: false,
+      makeRequest: async () => ({
+        statusCode: 200,
+        body: JSON.stringify({ modifiedon: modifiedOn }),
+      }),
+    });
+    assert.equal(r.stale, true);
+    assert.equal(r.staleness.reason, 'solution-modified');
+    assert.match(r.staleness.detail, /plan generated at/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Unparseable LAST_SYNC_AT falls back to GENERATED_AT (defensive)', async () => {
+  const generatedAt = '2026-05-25T10:00:00.000Z';
+  const modifiedOn = '2026-05-25T10:30:00.000Z';
+
+  const dir = tempProject({
+    GENERATED_AT: generatedAt,
+    LAST_SYNC_AT: 'not-a-timestamp',
+    PLAN_STATUS: 'In Execution',
+  });
+  try {
+    const r = await checkAlmPlanFn({
+      projectRoot: dir,
+      envUrl: 'https://org.crm.dynamics.com',
+      token: 'fake',
+      solutionId: 'sol-1',
+      writeHeartbeat: false,
+      makeRequest: async () => ({
+        statusCode: 200,
+        body: JSON.stringify({ modifiedon: modifiedOn }),
+      }),
+    });
+    assert.equal(r.stale, true, 'unparseable LAST_SYNC_AT must not silently mask staleness');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

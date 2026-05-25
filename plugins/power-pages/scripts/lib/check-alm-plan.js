@@ -62,9 +62,15 @@
 //   - No plan file -> exists:false, stale:true (reason: "no-plan").
 //   - Plan file unreadable -> exists:false, stale:true (reason: "no-plan").
 //   - When --envUrl + --token + --solutionId are all provided, query the
-//     solution's modifiedon and compare against planData.GENERATED_AT. If
-//     the solution was modified after the plan was generated -> stale
+//     solution's modifiedon and compare against `max(GENERATED_AT, LAST_SYNC_AT)`.
+//     If the solution was modified after that reference point -> stale
 //     (reason: "solution-modified").
+//   - `LAST_SYNC_AT` is written by `refresh-alm-plan-data.js` when setup-solution
+//     runs in sync mode (its bump-then-add operations modify `modifiedon`, so
+//     without this field every post-sync invocation would incorrectly report
+//     stale: true). Acts as a "the plan accepts changes up to this timestamp"
+//     marker — orchestrations that finished sync expect their next
+//     setup-pipeline / deploy-pipeline / etc. to see stale:false.
 //   - Without env credentials, the helper returns stale:false based on
 //     existence alone — callers that want a deeper check can run
 //     discover-site-components.js separately.
@@ -288,13 +294,24 @@ async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeReques
       try { sol = JSON.parse(res.body); } catch { return result; }
       const modOn = sol.modifiedon;
       if (modOn && result.generatedAt) {
+        // Reference point = the LATER of GENERATED_AT and LAST_SYNC_AT.
+        // setup-solution sync mode writes LAST_SYNC_AT (via refresh-alm-plan-data.js
+        // refreshSetupSolution) because its bump-then-add operations bump
+        // `modifiedon` past GENERATED_AT — without LAST_SYNC_AT, every
+        // subsequent Phase 0 check would falsely flag the plan as stale.
+        const lastSyncAt = planData.LAST_SYNC_AT || null;
         const planTime = Date.parse(result.generatedAt);
+        const syncTime = lastSyncAt ? Date.parse(lastSyncAt) : NaN;
+        const refTime = Number.isFinite(syncTime) ? Math.max(planTime, syncTime) : planTime;
         const solTime = Date.parse(modOn);
-        if (Number.isFinite(planTime) && Number.isFinite(solTime) && solTime > planTime) {
+        if (Number.isFinite(refTime) && Number.isFinite(solTime) && solTime > refTime) {
+          const refLabel = Number.isFinite(syncTime) && syncTime > planTime
+            ? 'last sync at ' + lastSyncAt
+            : 'plan generated at ' + result.generatedAt;
           result.stale = true;
           result.staleness = {
             reason: 'solution-modified',
-            detail: 'Solution was modified at ' + modOn + ' (after plan generated at ' + result.generatedAt + '). Components may have changed since.',
+            detail: 'Solution was modified at ' + modOn + ' (after ' + refLabel + '). Components may have changed since.',
           };
         }
       }

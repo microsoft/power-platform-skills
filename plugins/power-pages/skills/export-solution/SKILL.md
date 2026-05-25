@@ -177,7 +177,7 @@ Then:
   > 3. **Abort** — I want to investigate before exporting"
 
   - **Option 1 — Sync first, then re-confirm before export:**
-    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion.
+    1. Invoke `/power-pages:setup-solution` (auto-detects the existing manifest, enters sync mode, adopts missing components, bumps the version). Wait for completion. setup-solution's final refresh step writes `LAST_SYNC_AT` into `docs/.alm-plan-data.json` so subsequent `check-alm-plan.js` calls do NOT falsely flag the plan as stale just because the sync bumped `solutions.modifiedon` past `GENERATED_AT` — the freshness reference becomes `max(GENERATED_AT, LAST_SYNC_AT)`.
     2. Re-read `.solution-manifest.json` and capture `POST_SYNC_VERSION = solutionManifest.solution.version`.
     3. Re-run the discovery helper. If any `missing.*` remain non-empty, repeat the Phase 2.5 prompt above.
     4. Otherwise compute `NEWLY_ADOPTED` as a per-category set difference between `PRE_SYNC_MISSING` and the second discovery run's `missing.*` (the items that disappeared are what setup-solution just adopted into the solution). Total count = sum of all category lengths.

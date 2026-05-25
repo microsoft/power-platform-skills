@@ -460,6 +460,17 @@ function refreshSetupSolution(planData, projectRoot) {
     // the empty existing state instead of carrying stale planned counts.
     planData.envVars = envVarsMarker.envVars;
   }
+  // Mark `LAST_SYNC_AT` so check-alm-plan.js's freshness check accounts for
+  // the fact that setup-solution sync mode just modified the source solution's
+  // `modifiedon` field via its bump + AddSolutionComponent calls. Without this
+  // marker, a subsequent Phase 0 check in deploy-pipeline / export-solution /
+  // configure-env-variables would correctly observe `sol.modifiedon > GENERATED_AT`
+  // and incorrectly classify the plan as stale — even though the modification
+  // was caused by the just-completed sync, not by drift. The check uses
+  // `max(GENERATED_AT, LAST_SYNC_AT)` as the reference point so post-sync
+  // checks return stale:false. Fresh-mode setup-solution (no manifest yet)
+  // also writes LAST_SYNC_AT — the bump effect is identical.
+  planData.LAST_SYNC_AT = new Date().toISOString();
   // Step-sync: complete the "Setup solution" checklist entry.
   setStepStatus(planData, { keyword: /\bsetup\s+solution\b/i, status: 'completed' });
   return planData;
