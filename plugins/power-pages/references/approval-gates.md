@@ -180,6 +180,7 @@ Required, normalized vocabulary:
 | `attachment-block-modified` | Env's `blockedattachments` setting modified before Cancel. |
 | `cross-host-stamp-moved` | Pattern 15 force-link partially completed. |
 | `external-state-pending` | Skill cancelled while external system (PP Pipelines) was in `PendingApproval` — the run remains on the host in that state. |
+| `invalid-secret-in-file` | `deployment-settings.json` carries Secret values in invalid formats (e.g. `@KeyVault(...)` short-form). Cancel leaves the file as-is so the user can hand-fix with canonical Key Vault URIs. |
 
 Custom values are allowed when none of the above fits — lint accepts any kebab-case slug but flags duplicate slugs across the catalog for de-duplication.
 
@@ -315,7 +316,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.4 `deploy-pipeline` (17 gates / 3 sub-prompts; 20 calls total)
+### 6.4 `deploy-pipeline` (18 gates / 3 sub-prompts; 21 calls total)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -333,6 +334,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:6.pending-approval` | gate | pause | 6 | `stagerunstatus=200000005` mid-deploy — *"Approved? Yes / Cancel"* | `external-state-pending` |
 | `deploy-pipeline:7.6.2.blocked-attachments` | gate | consent | 7.6.2 | Reactive `AttachmentBlocked` — *"Modify `blockedattachments`? Yes / No"* | `attachment-block-modified` |
 | `deploy-pipeline:7.6.3.retry-exit` | gate | plan | 7.6.3 | Failed deploy, no known pattern matched — *"Retry / Exit"* | `validated-stage-run` |
+| `deploy-pipeline:7.6.4.strip-secret-values` | gate | consent | 7.6.4 | Reactive Secret-reference validation failure — *"Strip invalid Secret values from `deployment-settings.json` and retry? Yes / No"* | `invalid-secret-in-file` |
 | `deploy-pipeline:7.7.activate` | gate | plan | 7.7 | Site deployed, not yet activated — *"Activate now / later"* | nothing |
 | `deploy-pipeline:7.cloud-flow-register` | gate | plan | 7 (cloud-flow path) | Cloud flows in solution — *"Registered in target? Yes / Later"* (informational continue) | nothing |
 | `deploy-pipeline:6.1.pac-fallback-consent` | gate | final | 6.1 | `VALIDATE_PACKAGE_UNAVAILABLE=true` path uses `pac pipeline deploy` instead of `DeployPackageAsync` — same shape as `6.0` | `validated-stage-run` |

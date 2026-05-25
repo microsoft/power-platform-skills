@@ -981,6 +981,7 @@ Parse `errordetails` and `validationresults` as JSON / text. Check for these pat
 | Pattern in error text | Diagnosis | Remediation prompt |
 |---|---|---|
 | `AttachmentBlocked` OR `-2147188706` OR `not a valid type` OR `\.js.*blocked` | **Blocked attachments** — the target env's `blockedattachments` setting rejects file types in the solution | See 7.6.2 below |
+| `secret reference does not match a valid` OR `ImportAsHolding failed.*secret reference` OR `KeyVault.*format` | **Invalid Secret reference** — `deployment-settings.json` carries a Secret value in a non-canonical format (e.g. `@KeyVault(vaultName=...;secretName=...)`, raw secret text, malformed URI) | See 7.6.4 below |
 | `MissingDependency` OR `Missing dependency` | Missing solution dependencies in target | Surface the dependencies; recommend the user install them and retry |
 | (anything else) | Unknown failure | Fall through to the generic retry/exit prompt |
 
@@ -1036,6 +1037,77 @@ Authorization: Bearer {HOST_TOKEN}
 Then resume polling from Phase 6.2.
 
 If **Exit**: stop and present the failure summary above.
+
+**7.6.4 Invalid Secret reference remediation (gated).** Only run when the diagnostic in 7.6.1 matched the Secret-reference pattern. This is the strip-and-retry path described in the original Citizens-portal validation report: when the import rejects a `deployment-settings.json` Secret value, replace it in-place with `""` (which Dataverse interprets as "use the env var definition's default") and retry the deploy. The file mutation is persisted so the next run doesn't re-ship the broken value.
+
+**This is a backstop.** The pre-write validator in `configure-env-variables` Phase 6.1 and the pre-PATCH validator in this skill's Phase 5.1b should catch most invalid Secret values upstream. Phase 7.6.4 covers the cases where:
+- The user hand-edited `deployment-settings.json` after `configure-env-variables` ran.
+- A legacy file from before Phase 6.1 existed was committed.
+- The pre-PATCH gate returned `status: "unknown-type"` for an entry whose Dataverse type couldn't be resolved at PATCH time, but the host validator rejected at import time.
+
+Steps:
+
+1. **Identify which schema(s) have the bad value.** Run `validate-deployment-settings.js` against the current file (same helper as Phase 5.1b) to surface every invalid entry:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+     --settingsFile "./deployment-settings.json" \
+     --envUrl "{sourceEnvUrl}" \
+     --stageLabel "{SELECTED_STAGE.name}"
+   ```
+   Capture stdout as JSON; collect `findings[]` where `status === "invalid"` AND `valueFormat` is one of `kv-placeholder` / `plain-text` / `invalid-uri`. The collected `schemaName` list is the set of values to strip.
+
+2. **If `validate-deployment-settings.js` finds no invalid entries** (the host error referenced a Secret format but the local file looks fine — possible mid-air edit, or the error matched the pattern but was about a different field), fall through to **7.6.3** (generic retry/exit prompt).
+
+3. **Otherwise, prompt the user for consent.**
+
+   <!-- gate: deploy-pipeline:7.6.4.strip-secret-values | category=consent | cancel-leaves=invalid-secret-in-file -->
+   > 🚦 **Gate (consent · deploy-pipeline:7.6.4.strip-secret-values):** Strip invalid Secret-reference values from `deployment-settings.json` and retry the deploy. The bad values are replaced with empty strings (use definition default) and the file mutation is persisted — the next run won't re-ship the broken values. Cancel leaves the file as-is so the user can fix it manually with canonical Key Vault URIs.
+
+   Use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |---|---|---|
+   | The deploy failed because `deployment-settings.json` carries Secret values in an invalid format: `{list of schema names}`. Strip those values (set to `""` — use definition default) and retry the deploy? The file will be updated; you can supply canonical Key Vault URIs later via `/power-pages:configure-env-variables`. | Strip invalid Secret values | Yes — strip and retry (Recommended), No — exit so I can fix `deployment-settings.json` manually with canonical URIs |
+
+4. Branch on the answer:
+
+   - **Yes — strip and retry**: invoke the file-mutation helper, then re-PATCH the stage run with the corrected `deploymentsettingsjson`, then call `RetryFailedDeploymentAsync` and resume polling from Phase 6.2.
+
+     ```bash
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/strip-invalid-secret-values.js" \
+       --settingsFile "./deployment-settings.json" \
+       --schemaNames "{comma-separated schema names from step 1}" \
+       --stageLabel "{SELECTED_STAGE.name}"
+     ```
+
+     Confirm `stripped.length > 0` and capture the list for the audit summary (Phase 7.5b refresh ingests it into the rendered plan). Re-build `ENV_VAR_OVERRIDES` from the now-corrected `deployment-settings.json` (re-run the same logic as Phase 5.1's "Read deployment-settings.json" step) and PATCH the stage run again:
+
+     ```
+     PATCH {hostEnvUrl}/api/data/v9.0/deploymentstageruns({STAGE_RUN_ID})
+     Content-Type: application/json
+     Authorization: Bearer {HOST_TOKEN}
+
+     {
+       "deploymentsettingsjson": "{JSON.stringify({ EnvironmentVariables: ENV_VAR_OVERRIDES, ConnectionReferences: ... })}"
+     }
+     ```
+
+     Then retry the import:
+     ```
+     POST {hostEnvUrl}/api/data/v9.1/RetryFailedDeploymentAsync
+     {"StageRunId": "{STAGE_RUN_ID}"}
+     ```
+
+     Resume polling from Phase 6.2. Record the strip action in `docs/alm/last-deploy.json` `secretRemediation[]` so the deploy summary shows which schemas were stripped + what their previous values were.
+
+   - **No — exit**: stop with a remediation pointer. Tell the user the canonical Secret-reference formats and point at `/power-pages:configure-env-variables` for guided remediation:
+
+     > "To fix manually: open `deployment-settings.json` and replace the invalid Secret values with one of:
+     > 1. Key Vault Secret Identifier URI: `https://<vault>.vault.azure.net/secrets/<name>[/<version>]`
+     > 2. Azure resource ID: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>`
+     > 3. Empty string (use the env var definition's default)
+     >
+     > Then re-run `/power-pages:deploy-pipeline`. Or invoke `/power-pages:configure-env-variables` for a guided edit that re-runs Phase 6.1's pre-write validation."
 
 **7.6.5 Verify `environmentvariablevalues` landed on the target** (only if deployment **Succeeded** AND `ENV_VAR_OVERRIDES` was non-empty AND `deploymentsettingsjson` was PATCHed in Phase 5.2):
 
