@@ -16,6 +16,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # plan-alm
 
 An 8-phase orchestrator that gathers ALM strategy from the user, generates an HTML deployment plan, gets approval, then executes the plan by calling existing skills in sequence.

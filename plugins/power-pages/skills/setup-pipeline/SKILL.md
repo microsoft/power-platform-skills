@@ -16,6 +16,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # setup-pipeline
 
 Sets up a **Power Platform Pipeline** for automated Power Pages solution deployments. Creates the pipeline configuration directly in Dataverse using the PP Pipelines OData API — no YAML files, no external CI/CD infrastructure needed.

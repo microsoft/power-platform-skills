@@ -14,6 +14,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # configure-env-variables
 
 Creates and links Dataverse environment variables to Power Pages site settings, enabling different configuration values per deployment environment (dev vs staging vs prod). Generates `deployment-settings.json` for use by `deploy-pipeline`.

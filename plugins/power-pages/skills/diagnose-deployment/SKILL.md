@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # diagnose-deployment
 
 Surfaces and pattern-matches deployment errors against a known failure catalog. For each identified error with an available auto-fix, asks explicit user permission before applying any changes. Never auto-applies fixes without confirmation.

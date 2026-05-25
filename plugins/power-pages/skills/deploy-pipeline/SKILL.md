@@ -14,6 +14,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # deploy-pipeline
 
 Triggers a **Power Platform Pipeline** deployment run. Reads the existing pipeline configuration from `docs/alm/last-pipeline.json`, selects a target stage, validates the solution package, and deploys it to the target environment.

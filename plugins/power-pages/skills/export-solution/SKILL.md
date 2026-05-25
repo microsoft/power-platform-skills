@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # export-solution
 
 Triggers an async Dataverse solution export, polls until complete, downloads the solution zip, and verifies it. Reads `.solution-manifest.json` to identify the solution; falls back to asking the user.
