@@ -612,6 +612,7 @@ Build a `planData` object with all gathered strategy inputs:
   "SOLUTION_DONE": true | false,
   "PIPELINE_DONE": true | false,
   "PLAN_STATUS": "Draft",
+  "LAST_INVOCATION_AT": null,
   "APPROVED_BY": "",
   "APPROVAL_DATE": "",
   "stages": [
@@ -957,7 +958,7 @@ Options:
 
 - **If option 3:** Re-run Phase 2 (ask which section to change, then re-gather those answers). Regenerate the plan (repeat Phase 3). Re-present for approval.
 - **If option 2:** Capture the approver (see below), stamp `<span id="approved-by">` and `<span id="approval-date">` in the HTML, then update HTML plan footer `plan-status` span to "Approved — Deferred" via `Edit` tool. Commit `docs/alm-plan.html` with message `"Add ALM plan for {siteName} (deferred)"`. Show next steps for manual execution. Mark task 2 as `completed`. Exit the skill.
-- **If option 1:** Capture the approver (see below), stamp the HTML, then update `<span class="plan-status">` to "In Execution" via `Edit` tool. Mark task 2 as `completed`.
+- **If option 1:** Capture the approver (see below), stamp the HTML, then update `<span class="plan-status">` to "In Execution" via `Edit` tool. **Also update `docs/.alm-plan-data.json`** — set `PLAN_STATUS: "In Execution"` and write `LAST_INVOCATION_AT: "<ISO timestamp>"` (now). This is the signal `check-alm-plan.js` reads to set `inExecution.status === "active"` so the downstream skills' Phase 0 gates skip silently. `check-alm-plan.js` will refresh `LAST_INVOCATION_AT` on every subsequent invocation that finds the plan in execution, so the chain stays alive even across multi-hour deploys. Mark task 2 as `completed`.
 
 **Capturing the approver (both options 1 and 2):**
 

@@ -219,3 +219,171 @@ test('deferred:false is set in normal results so callers can branch consistently
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Heartbeat / inExecution semantics ────────────────────────────────────────
+
+const { checkAlmPlan: checkAlmPlanFn, computeInExecution, HEARTBEAT_WINDOW_MIN } = require('../lib/check-alm-plan');
+
+test('inExecution.status === "no-plan" when plan file does not exist', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-alm-plan-inex-'));
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir });
+    assert.equal(r.inExecution.status, 'no-plan');
+    assert.equal(r.inExecution.windowMin, HEARTBEAT_WINDOW_MIN);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inExecution.status === "not-running" when PLAN_STATUS is Draft/Approved/Completed', async () => {
+  for (const status of ['Draft', 'Approved', 'Completed']) {
+    const dir = tempProject({ PLAN_STATUS: status, GENERATED_AT: new Date().toISOString() });
+    try {
+      const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false });
+      assert.equal(r.inExecution.status, 'not-running', `expected not-running for PLAN_STATUS=${status}`);
+      assert.match(r.inExecution.reason, /not 'In Execution'/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('inExecution.status === "active" on first heartbeat (PLAN_STATUS=In Execution, no prior heartbeat)', async () => {
+  const dir = tempProject({ PLAN_STATUS: 'In Execution', GENERATED_AT: new Date().toISOString() });
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false });
+    assert.equal(r.inExecution.status, 'active');
+    assert.match(r.inExecution.reason, /first heartbeat/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inExecution.status === "active" when heartbeat is recent (within window)', async () => {
+  const now = Date.now();
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date(now - 90 * 60_000).toISOString(),
+    LAST_INVOCATION_AT: new Date(now - 5 * 60_000).toISOString(), // 5 min ago
+  });
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false, now });
+    assert.equal(r.inExecution.status, 'active');
+    assert.match(r.inExecution.reason, /within \d+min window/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inExecution.status === "stale-heartbeat" when heartbeat is older than window', async () => {
+  const now = Date.now();
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date(now - 120 * 60_000).toISOString(),
+    LAST_INVOCATION_AT: new Date(now - (HEARTBEAT_WINDOW_MIN + 5) * 60_000).toISOString(),
+  });
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false, now });
+    assert.equal(r.inExecution.status, 'stale-heartbeat');
+    assert.match(r.inExecution.reason, /stalled/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inExecution.status === "stale-heartbeat" when LAST_INVOCATION_AT is unparseable', async () => {
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date().toISOString(),
+    LAST_INVOCATION_AT: 'not-a-timestamp',
+  });
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false });
+    assert.equal(r.inExecution.status, 'stale-heartbeat');
+    assert.match(r.inExecution.reason, /not a parseable/i);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeHeartbeat:true refreshes LAST_INVOCATION_AT on the plan file', async () => {
+  const oldStamp = new Date(Date.now() - 30 * 60_000).toISOString();
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date(Date.now() - 90 * 60_000).toISOString(),
+    LAST_INVOCATION_AT: oldStamp,
+  });
+  try {
+    await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: true });
+    const planAfter = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.notEqual(planAfter.LAST_INVOCATION_AT, oldStamp, 'heartbeat must be updated');
+    // The refreshed value must be parseable and very recent
+    const refreshedMs = Date.parse(planAfter.LAST_INVOCATION_AT);
+    assert.ok(Number.isFinite(refreshedMs));
+    assert.ok(Date.now() - refreshedMs < 5000, 'heartbeat must be within 5s of now');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeHeartbeat:false leaves LAST_INVOCATION_AT untouched (read-only audits)', async () => {
+  const oldStamp = new Date(Date.now() - 30 * 60_000).toISOString();
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date(Date.now() - 90 * 60_000).toISOString(),
+    LAST_INVOCATION_AT: oldStamp,
+  });
+  try {
+    await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: false });
+    const planAfter = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.equal(planAfter.LAST_INVOCATION_AT, oldStamp);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('heartbeat is NOT written when PLAN_STATUS !== "In Execution"', async () => {
+  // The chain only wants heartbeats during actual execution. If the plan is
+  // Draft / Approved / Completed, a Phase 0 gate check should not silently
+  // mark it as "in execution" by writing a heartbeat.
+  const dir = tempProject({ PLAN_STATUS: 'Draft', GENERATED_AT: new Date().toISOString() });
+  try {
+    await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: true });
+    const planAfter = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.equal(planAfter.LAST_INVOCATION_AT, undefined,
+      'heartbeat must not appear on a non-executing plan — Phase 0 checks during Draft/Approved must be side-effect-free');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lastInvocationAt in the return value reflects the PRIOR heartbeat, not the just-written one', async () => {
+  // Important contract: the helper's return value must describe state BEFORE
+  // it wrote the new heartbeat, so the caller's inExecution decision is based
+  // on what actually existed when the chain began.
+  const priorStamp = new Date(Date.now() - 10 * 60_000).toISOString();
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    GENERATED_AT: new Date(Date.now() - 90 * 60_000).toISOString(),
+    LAST_INVOCATION_AT: priorStamp,
+  });
+  try {
+    const r = await checkAlmPlanFn({ projectRoot: dir, writeHeartbeat: true });
+    assert.equal(r.lastInvocationAt, priorStamp,
+      'return value carries the prior heartbeat — the just-written one is on disk for the NEXT skill in the chain');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('computeInExecution is pure — same inputs produce same output', () => {
+  const now = Date.parse('2026-05-25T12:00:00.000Z');
+  const recent = new Date(now - 10 * 60_000).toISOString();
+  const stale = new Date(now - (HEARTBEAT_WINDOW_MIN + 1) * 60_000).toISOString();
+
+  assert.equal(computeInExecution('In Execution', recent, now).status, 'active');
+  assert.equal(computeInExecution('In Execution', stale, now).status, 'stale-heartbeat');
+  assert.equal(computeInExecution('In Execution', null, now).status, 'active'); // first-heartbeat case
+  assert.equal(computeInExecution('Draft', recent, now).status, 'not-running');
+  assert.equal(computeInExecution(null, recent, now).status, 'not-running');
+});
