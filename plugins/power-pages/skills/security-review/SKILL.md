@@ -25,8 +25,6 @@ Guide the user through a full security review of their Power Pages site. Runs th
 
 The skill never asks the user technical questions. The conversation stays in plain language.
 
-The review combines local-source checks (`scan-code` for packages and code) with live-site checks (`scan-site`, `manage-headers`, `manage-firewall`) and configuration checks (`audit-permissions`, `setup-auth`).
-
 **Initial request:** $ARGUMENTS
 
 ## High-level flow (the six steps)
@@ -90,7 +88,7 @@ Use `Glob` to find `**/powerpages.config.json`. If none is found, tell the user 
 
 For the `monitor` and `release` goals (any goal that delegates to `scan-site` or `manage-firewall`), also confirm that `.powerpages-site/website.yml` exists. If it does not, the site has not been deployed yet — tell the user (in plain language) the site needs to be deployed once before a live security review can run, recommend `/deploy-site`, then stop. Do **not** try to identify the site by name or URL — different sites can share the same name.
 
-For the `code-config` goal, the deploy check is not required: source code, packages, authentication, web roles, and table permissions are all read from the local project.
+For the `access-config` goal, the deploy check is not required: authentication, web roles, and table permissions are read from local YAML alone.
 
 ### 1.2 Prepare a temporary working folder
 
@@ -114,7 +112,7 @@ Ask the user with a single `AskUserQuestion` call. If the user's initial request
 
 | Label | Description |
 |-------|-------------|
-| Code & config | Check source code, packages, authentication, web roles, and table permissions. Works on local files only. |
+| Access & config | Check authentication, web roles, and table permissions. Works on local files only. |
 | Release readiness | Full review before publishing — checks everything. (Recommended) |
 | Deployed site | Check the live site for issues. Requires deployment. |
 
@@ -122,13 +120,13 @@ Goal mapping (internal):
 
 | Label | Goal id | Skills |
 |-------|---------|------------|
-| Code & config | `code-config` | scan-code, audit-permissions, setup-auth (read-only) |
-| Release readiness | `release` | scan-code, scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
+| Access & config | `access-config` | audit-permissions, setup-auth (read-only) |
+| Release readiness | `release` | scan-site, manage-headers, manage-firewall, audit-permissions, setup-auth (read-only) |
 | Deployed site | `monitor` | scan-site |
 
 ### 2.2 Capture the chosen skill set
 
-Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `code-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 4.2 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `access-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 4.2 below). This is the **Access & Data Security Validation** component.
 
 ---
 
@@ -152,9 +150,9 @@ Spawn each selected skill as a background subagent via the `Agent` tool. Each su
 
 Skills run as **parallel subagents** using the `Agent` tool. Launch the long-running scan first so it gets a head start, then launch the remaining checks immediately after.
 
-**Wave 1 — long-running scans (launch first):**
+**Wave 1 — long-running scan (launch first):**
 
-Spawn background subagents for `scan-site` and `scan-code` (when selected). Both can take minutes — `scan-site` waits on a server-side scan; `scan-code` may need to install ESLint plugins into `<projectRoot>/.scan-code/` on its first run. Launching them first gives them a head start.
+Spawn a background subagent for `scan-site` (when selected). This skill takes the most time and benefits from an early start.
 
 **Wave 2 — remaining checks (launch immediately after Wave 1):**
 
@@ -190,16 +188,14 @@ Agent({
 
 ### 4.1.2 Expected output
 
-After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json`. Each file has the shape `{ status, findings, details? }` produced by the skill's transform script. The `scan-code` skill writes **two** files (packages and code), shown as separate sections in the report:
+After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json`. Each file has the shape `{ status, findings, details? }` produced by the skill's transform script:
 
 ```text
 <SYSTEM_TEMP>/security-review/
 ├── scan-site.json
-├── scan-code-packages.json   (when scan-code invoked)
-├── scan-code-eslint.json     (when scan-code invoked)
 ├── manage-headers.json
 ├── manage-firewall.json
-└── audit-permissions.json    (when invoked)
+└── audit-permissions.json   (when invoked)
 ```
 
 If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
@@ -211,8 +207,6 @@ Only findings that come from a tool that genuinely outputs severity may carry a 
 | Section | Source | Severity allowed? |
 |---------|--------|-------------------|
 | `scan-site` | deep-scan (ZAP) | Yes |
-| `scan-code` packages | `npm audit` | Yes (verbatim: critical/high/moderate/low/info) |
-| `scan-code` code | ESLint | Yes (verbatim: error/warning) |
 | `manage-headers` | `transform-headers.js` (inventory) | **No** |
 | `manage-firewall` | `transform-firewall.js` (inventory) | **No** |
 | `audit-permissions` | LLM audit | **No** |
@@ -295,7 +289,7 @@ Show a short plain-language summary in the chat: counts of critical / warning / 
 |----------|---------|
 | What would you like to do next? | Walk me through the fixes; Re-run the review; Done for now |
 
-If the user picks "walk me through", group critical findings by section and offer the matching focused skill for each (`/manage-headers`, `/manage-firewall`, `/audit-permissions`, `/scan-code` for re-running after fixes, etc.).
+If the user picks "walk me through", group critical findings by section and offer the matching focused skill for each (`/manage-headers`, `/manage-firewall`, `/audit-permissions`, etc.).
 
 If the user picks "re-run", invoke this skill again with the same goal and scope.
 
