@@ -374,7 +374,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.7 `configure-env-variables` (4 calls)
+### 6.7 `configure-env-variables` (5 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -382,6 +382,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `configure-env-variables:0.stale-plan` | gate | intent | 0 | `check-alm-plan.js` `stale:true` — *"Refresh / Continue / Cancel"* | nothing |
 | `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"* | nothing |
 | `configure-env-variables:6.confirm-matrix` | gate | plan | 6 | `deployment-settings.json` assembled — *"Confirm matrix before write"* | nothing |
+| `configure-env-variables:6.1.invalid-secret-values` | gate | consent | 6.1 | Pre-write validation found Secret refs in invalid formats — hard-stop, *"Fix or abort"* | nothing |
 
 ---
 

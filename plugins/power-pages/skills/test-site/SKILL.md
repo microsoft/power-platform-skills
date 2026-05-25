@@ -663,12 +663,38 @@ Always write a structured JSON report so other skills (notably `plan-alm`) can i
 | `auth-api`       | Authenticated API    | Phase 5.6 API tests                             |
 | `console`        | Console Health       | Aggregated console errors across all pages      |
 
+**Do NOT include a top-level `notes` string that embeds component counts, version numbers, or other run-specific data from prior deploys.** Real-world failure: a `last-test-site.json` notes field hardcoded `"4,037 components"` from a deploy two runs ago, then surfaced via plan-alm even though the latest deploy shipped 4,051 components. If the marker needs a freeform narrative, base it strictly on the CURRENT run's data — never carry numbers across runs. The structured `summary` + `categories[]` is the audit trail; prose summaries belong in the rendered HTML, not in the JSON marker.
+
 **Severity rules** (apply per test card):
 - HTTP 5xx response → `critical`
 - HTTP 4xx response on a public page or a documented public API → `high`
 - HTTP 4xx response on an authenticated-only resource accessed anonymously → `low` (expected gate)
 - Console errors on an otherwise-passing page → `medium`
 - All other findings (info-only) → `low`
+
+**Computing the `summary` object — read carefully.** The summary buckets MUST be aggregated by counting each test's `severity` field across all `categories[].tests[]`, not derived from the category itself or defaulted to `low`. plan-alm's Validation tab and the rendered HTML's severity grid both rely on the summary directly — if every test lands in `low` regardless of its actual severity, every stage looks healthy even when critical failures exist. Real-world reproduction (Citizens portal, 2026-05-21): four tests with severities `critical / high / high / low` were dumped into `summary: {critical:0, high:0, medium:0, low:4}` because the agent skipped per-test counting.
+
+Compute it as:
+
+```js
+const summary = { critical: 0, high: 0, medium: 0, low: 0, total: 0, automated: 0, manual: 0, passed: 0, failed: 0, skipped: 0 };
+for (const cat of (report.categories || [])) {
+  for (const test of (cat.tests || [])) {
+    summary.total += 1;
+    const sev = String(test.severity || '').toLowerCase();
+    if (sev === 'critical') summary.critical += 1;
+    else if (sev === 'high') summary.high += 1;
+    else if (sev === 'medium') summary.medium += 1;
+    else summary.low += 1;            // default for unknown / missing severity
+    if (test.type === 'manual') summary.manual += 1; else summary.automated += 1;
+    if (test.status === 'failed') summary.failed += 1;
+    else if (test.status === 'skipped') summary.skipped += 1;
+    else summary.passed += 1;
+  }
+}
+```
+
+The plan-alm renderer (`render-alm-plan.js` `buildValidationStagePane`) draws four severity cards — Critical / High / Medium / Low — independently. Each summary bucket must reflect the actual count for that severity, not a combined "Medium / Low" total.
 
 **Status rules**:
 - `passed` — assertion held (200, no console errors, expected redirect, etc.)

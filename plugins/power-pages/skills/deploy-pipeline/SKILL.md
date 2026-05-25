@@ -138,7 +138,7 @@ Steps:
    - If `schemaVersion === 2` (legacy), set `MULTI_PIPELINE_MODE = true` and store `pipelines[]` as `PIPELINES_LIST`. The skill falls back to the older "loop over N separate `deploymentpipelines` records" behavior. Advise the user to re-run `setup-pipeline` to migrate to v3.
    - Otherwise read `pipelineId`, `pipelineName`, `hostEnvUrl`, `sourceDeploymentEnvironmentId`, `solutionName`, `stages[]` (single-solution mode — existing behavior).
 
-   **In `MULTI_RUN_MODE`**, resolve `solutionName` + `solutionId` per iteration of `DEPLOYMENT_ORDER`. Entries where `status === "skipped-empty"` (typically the `{Prefix}_Future` buffer) are short-circuited — no stage run is created for them. The single `pipelineId` / `hostEnvUrl` / `sourceDeploymentEnvironmentId` apply to every run.
+   **In `MULTI_RUN_MODE`**, resolve `solutionName` + `solutionId` per iteration of `DEPLOYMENT_ORDER`. Entries where `status === "SkippedEmpty"` (typically the `{Prefix}_Future` buffer) are short-circuited — no stage run is created for them. The single `pipelineId` / `hostEnvUrl` / `sourceDeploymentEnvironmentId` apply to every run.
 
    **In `MULTI_PIPELINE_MODE`** (legacy v2), resolve `solutionName` per pipeline in the loop (not globally). All pipelines share the same `hostEnvUrl` and `sourceDeploymentEnvironmentId`.
 
@@ -190,7 +190,7 @@ Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploym
 
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
 1. **Phase 3.6 runs first** (once, before the loop) — fans out `create-stage-run` + `ValidatePackageAsync` + `poll-validation-status` for every non-skipped solution in parallel. Halts the entire deploy if any solution fails validation. Stores the per-solution `stageRunId` in `VALIDATED_STAGE_RUNS` so the serial deploy loop can reuse them.
-2. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, retrieve its `stageRunId` from `VALIDATED_STAGE_RUNS[solutionUniqueName]`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID` / `STAGE_RUN_ID`, then run Phases 4.4 (fetch deployment notes) → 5 (configure) → 6.0 (**consent gate fires every iteration**) → 6.1 (deploy) → 6.2 (poll) against the same pipeline. **Phase 4.1–4.3 (create stage run + validate + poll-validation) are skipped — Phase 3.6 already did the work in parallel.**
+2. For each entry in `DEPLOYMENT_ORDER` where `status !== "SkippedEmpty"`: resolve its `solutionUniqueName` + `solutionId`, retrieve its `stageRunId` from `VALIDATED_STAGE_RUNS[solutionUniqueName]`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID` / `STAGE_RUN_ID`, then run Phases 4.4 (fetch deployment notes) → 5 (configure) → 6.0 (**consent gate fires every iteration**) → 6.1 (deploy) → 6.2 (poll) against the same pipeline. **Phase 4.1–4.3 (create stage run + validate + poll-validation) are skipped — Phase 3.6 already did the work in parallel.**
 3. If any iteration fails (deployment), halt the loop and report **which solution** failed and which had already landed.
 4. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
 
@@ -365,8 +365,8 @@ The deploy phase (6.1 / 6.2) remains strictly serial — see the **Design ration
 **3.6.1 Build the input file.**
 
 Filter `DEPLOYMENT_ORDER` down to entries that need validation:
-- **Include**: any entry whose `status !== "skipped-empty"` AND `isFutureBuffer !== true`.
-- **Exclude**: `skipped-empty` and `isFutureBuffer: true` entries — the Future buffer is a reserved 0-component placeholder and there's nothing to validate.
+- **Include**: any entry whose `status !== "SkippedEmpty"` AND `isFutureBuffer !== true`.
+- **Exclude**: `SkippedEmpty` and `isFutureBuffer: true` entries — the Future buffer is a reserved 0-component placeholder and there's nothing to validate.
 
 Resolve each remaining entry's `solutionId` from `.solution-manifest.json` (`schemaVersion: 2` `solutions[]`) if not already on the deployment-order entry. Write to a tmp file:
 
@@ -865,6 +865,10 @@ These warnings are informational only — do not block the summary or use `AskUs
 `activationStatus` and `siteUrl` start as `null` and are patched at the end of Phase 7.7 once the activation outcome is known.
 
 Where `{YYYY-MM-DD}` is the date portion of `deployedAt` and `{stageName}` is the stage name with spaces replaced by hyphens (lowercased), e.g. `2026-04-06-staging-1.0.0.3.md`.
+
+> **Retry attempts go as PEER entries in `runs[]`, not nested under `runs[i].lastAttempt`.** In `MULTI_RUN_MODE` (multi-solution) the marker carries a `runs[]` array — one entry per solution per attempt. When the user retries a failed solution (e.g. after fixing an env var value, re-running deploy-pipeline against the same stage), the retry is a NEW peer entry in `runs[]` with its own `artifactVersion` and `attemptedAt`. **Do NOT** nest the retry as `runs[i].lastAttempt: {...}` under the original failed entry — that mixes the schema and makes audit traversal ambiguous (was 1.0.0.4 the deployed version or just the latest attempt?). The flat peer-array shape lets every consumer (refresh-alm-plan-data, the rendered Pipelines tab, the deploy history HTML) walk `runs[]` once and see the full timeline.
+>
+> Marker writers in this skill should append, not mutate. Each retry of a failed solution writes a new `runs[]` entry with status='Succeeded' (or 'Failed' on persistent failure) and the post-bump `artifactVersion`. The original failed entry stays untouched as history.
 
 **7.4 Write deployment history entry (HTML):**
 

@@ -209,10 +209,11 @@ Wait for user confirmation before proceeding.
 > node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
 >   --envUrl "{envUrl}" \
 >   --token "{token}" \
->   --solutionId "{solutionId}"
+>   --solutionId "{solutionId}" \
+>   --projectRoot "."
 > ```
 >
-> Capture output as JSON; the helper returns `{ previous, next, bumped: true }`. Update `existingSolution.solution.version` locally to `.next` so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway. **Do not inline the PATCH** — diverging the rule between this skill and `export-solution` is exactly the bug class the helper exists to prevent.
+> Capture output as JSON; the helper returns `{ previous, next, bumped: true, manifestUpdated, manifestUpdateReason }`. Passing `--projectRoot "."` lets the helper update `.solution-manifest.json`'s `solution.version` (single-solution) or matching `solutions[].version` (multi-solution) field automatically — without it, the manifest drifts behind every bump. Update `existingSolution.solution.version` locally to `.next` so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway. **Do not inline the PATCH** — diverging the rule between this skill and `export-solution` is exactly the bug class the helper exists to prevent.
 
 Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact request body templates.
 

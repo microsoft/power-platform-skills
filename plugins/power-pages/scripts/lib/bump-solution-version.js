@@ -23,21 +23,81 @@
 
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
 const { verifySolutionExists } = require('./verify-solution-exists');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { envUrl: null, uniqueName: null, solutionId: null, token: null, dryRun: false };
+  const out = { envUrl: null, uniqueName: null, solutionId: null, token: null, dryRun: false, projectRoot: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--uniqueName' && args[i + 1]) out.uniqueName = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--dryRun' || args[i] === '--dry-run') out.dryRun = true;
+    else if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
   }
   return out;
+}
+
+// Update `.solution-manifest.json` in the project root with the just-bumped
+// version so consumers reading the manifest (deploy-pipeline, export-solution,
+// the rendered plan) see the current Dataverse state without a stale-data
+// surprise. Best-effort — a missing or unparseable manifest is a no-op rather
+// than a fatal error (some callers run without a manifest, e.g. when bumping
+// a one-off solution outside a Power Pages project layout).
+//
+// Single-solution shape (schemaVersion: 1 or absent):
+//   { "solution": { "uniqueName": "...", "solutionId": "...", "version": "..." } }
+// Multi-solution shape (schemaVersion: 2):
+//   { "solutions": [{ "uniqueName": "...", "solutionId": "...", "version": "..." }, ...] }
+//
+// We match by solutionId (preferred) or uniqueName (fallback) to find the
+// matching entry. Atomic tmp + rename to avoid mid-write corruption.
+function updateManifestVersion(projectRoot, { solutionId, uniqueName, nextVersion }) {
+  if (!projectRoot) return { updated: false, reason: 'no-projectRoot' };
+  try {
+    const manifestPath = path.join(projectRoot, '.solution-manifest.json');
+    if (!fs.existsSync(manifestPath)) return { updated: false, reason: 'no-manifest' };
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    let manifest;
+    try { manifest = JSON.parse(raw); } catch { return { updated: false, reason: 'unparseable' }; }
+
+    const matches = (entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      if (solutionId && entry.solutionId && String(entry.solutionId).toLowerCase() === String(solutionId).toLowerCase()) return true;
+      if (uniqueName && entry.uniqueName && entry.uniqueName === uniqueName) return true;
+      return false;
+    };
+
+    let updated = false;
+    // Single-solution shape
+    if (manifest.solution && matches(manifest.solution)) {
+      manifest.solution.version = nextVersion;
+      updated = true;
+    }
+    // Multi-solution shape
+    if (Array.isArray(manifest.solutions)) {
+      for (const sol of manifest.solutions) {
+        if (matches(sol)) {
+          sol.version = nextVersion;
+          updated = true;
+        }
+      }
+    }
+
+    if (!updated) return { updated: false, reason: 'no-matching-entry' };
+
+    const tmp = manifestPath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+    fs.renameSync(tmp, manifestPath);
+    return { updated: true, manifestPath };
+  } catch (e) {
+    return { updated: false, reason: `write-failed: ${e.message}` };
+  }
 }
 
 /**
@@ -107,7 +167,7 @@ function compareVersions(a, b) {
   return 0;
 }
 
-async function bumpSolutionVersion({ envUrl, uniqueName, solutionId, token, dryRun = false }) {
+async function bumpSolutionVersion({ envUrl, uniqueName, solutionId, token, dryRun = false, projectRoot = null }) {
   if (!envUrl) throw new Error('--envUrl is required');
   if (!uniqueName && !solutionId) {
     throw new Error('Either --uniqueName or --solutionId is required');
@@ -190,12 +250,24 @@ async function bumpSolutionVersion({ envUrl, uniqueName, solutionId, token, dryR
     throw new Error(`Version PATCH returned ${patchRes.statusCode}: ${patchRes.body}`);
   }
 
+  // Best-effort: update .solution-manifest.json so its `version` field tracks
+  // the just-bumped Dataverse state. Without this, the manifest drifts behind
+  // every bump — validated against a real Citizens portal deploy where the
+  // manifest sat at 1.0.0.2 while Dataverse had reached 1.0.0.4.
+  const manifestUpdate = updateManifestVersion(projectRoot, {
+    solutionId: resolvedSolutionId,
+    uniqueName: resolvedUniqueName,
+    nextVersion: next,
+  });
+
   return {
     solutionId: resolvedSolutionId,
     uniqueName: resolvedUniqueName,
     previous: currentVersion,
     next,
     bumped: true,
+    manifestUpdated: manifestUpdate.updated,
+    manifestUpdateReason: manifestUpdate.updated ? null : manifestUpdate.reason,
   };
 }
 
@@ -212,4 +284,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { bumpSolutionVersion, bumpPatchSegment, parseVersionToSegments, compareVersions };
+module.exports = { bumpSolutionVersion, bumpPatchSegment, parseVersionToSegments, compareVersions, updateManifestVersion };

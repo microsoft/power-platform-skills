@@ -194,6 +194,8 @@ Setting: Authentication/Registration/LocalLoginEnabled
 
 For each planned env var, branch on `typeCode`:
 
+> **`{displayName}` substitution rule — pick a human-readable label, not the schema name.** The Dataverse `displayname` column on `environmentvariabledefinition` is what shows up in PPAC, in the rendered ALM plan's Env Variables tab, and in `last-env-vars.json`. If you substitute the schema name (e.g. `c311_api_secret`) into `--displayName`, the plan and PPAC both read like raw tokens. Pick the friendly label from the source site setting (e.g. `API Secret` from `c311/api_secret`'s `Description` or its human-readable title in the planData). When no friendly label exists, derive one from the schema name by title-casing the prefix-stripped tail (e.g. `c311_api_secret` → `Api Secret` → manually clean up to `API Secret`). Keep `displayName` and `schemaName` deliberately different — they have different audiences.
+
 ### 3.A — String env vars (`typeCode = 100000000`)
 
 Definition-only flow — per-stage values come later from `deployment-settings.json` via `deploymentsettingsjson` PATCH at deploy time.
@@ -365,6 +367,34 @@ Stage names must match exactly the `stages[].name` values in `docs/alm/last-pipe
 
 For Secret-type env vars: write `"Value": ""` and add a comment instructing the user to populate via Azure Key Vault or pipeline secrets — never store raw secrets in this file.
 
+### Phase 6.1 — Pre-write validation (REQUIRED, do not skip)
+
+Before persisting `deployment-settings.json` to disk, validate every entry against the canonical Secret-reference formats. The Power Platform Pipelines handler validates the `deploymentsettingsjson` PATCH at import time — after the stage run has been queued for potentially hours behind serialized imports. A bad value here (e.g. the templating-style `@KeyVault(vaultName=...;secretName=...)` placeholder, raw secret content, malformed URI) fails the import with *"ImportAsHolding failed: The value provided as a secret reference does not match a valid secret reference format"* — and the user only finds out hours later. Live evidence (2026-05-21 Citizens portal deploy): a `@KeyVault(...)` placeholder in `deployment-settings.json` shipped to the host, queued behind other imports, then rejected after a 4h41m wait.
+
+Catching invalid values **at write time** is the difference between a sub-second hard stop and a hours-long blind alley.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-deployment-settings.js" \
+  --settingsFile "./deployment-settings.json" \
+  --envUrl "{devEnvUrl}" \
+  --token "{token}"
+```
+
+The helper reads the file you just wrote, classifies each `EnvironmentVariables[]` entry by `valueFormat` (`kv-uri` / `kv-resource-id` / `kv-placeholder` / `empty` / `plain-text` / `invalid-uri`), cross-checks Secret-type entries against the Dataverse type lookup when `--envUrl` is provided, and emits `{ summary: { valid, invalid, "unknown-type", skipped }, findings[] }`. Branch on `summary.invalid`:
+
+- **`summary.invalid === 0`** → proceed to Phase 7.
+- **`summary.invalid > 0`** → STOP. Surface each invalid `findings[]` entry to the user with its `schemaName`, `valueFormat`, `value`, and `message`. Common offenders:
+  - `@KeyVault(vaultName=...;secretName=...)` → `kv-placeholder` (a templating-style format never recognized by Dataverse). Fix: replace with the Key Vault Secret Identifier URI `https://<vault>.vault.azure.net/secrets/<name>[/<version>]` or the full Azure resource ID `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/<name>`, or use an empty string to fall back to the env var definition's default.
+  - Raw secret content (any plain string that doesn't match a URI or resource-ID pattern) → `plain-text`. Fix: never commit raw secrets — switch to a Key Vault URI/resource ID, or use empty string + populate per-stage via pipeline secrets.
+  - Malformed URI → `invalid-uri`. Fix: re-check the format against the canonical patterns above.
+
+Re-run validation after the user supplies corrected values. Only proceed to Phase 7 when `summary.invalid === 0`.
+
+<!-- gate: configure-env-variables:6.1.invalid-secret-values | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · configure-env-variables:6.1.invalid-secret-values):** Pre-write validation found Secret references in invalid formats. Refuse to ship the file with these values — fix or abort. Caller cannot bypass: every recorded invalid value would fail import.
+
+> **Why this gate is hard-stop, not "proceed anyway"**: there's no value to "force-write" a known-bad Secret reference. The Pipelines handler will reject it deterministically at import time. Writing it anyway only wastes the queue wait. If the user genuinely doesn't have a canonical Key Vault URI yet, the correct path is to leave `Value: ""` (definition default) and circle back when the secret reference is ready.
+
 ## Phase 7 — Verify and Commit
 
 **7.1 Sync site settings YAML** — run `pac pages upload-code-site` to push the updated site settings (with `source: 1` now visible in Dataverse) back to the YAML:
@@ -388,6 +418,32 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
 ```
 
 Capture stdout as JSON. If `summary.landed === summary.total`, the local definition+value chain is healthy and `deploy-pipeline` Phase 5.2's `deploymentsettingsjson` PATCH will have what it needs. If `summary.missing > 0`, log a one-line warning and recommend re-running configure-env-variables — most likely cause is a transient OData write failure that left a definition without its paired value. The same helper runs at deploy time (deploy-pipeline Phase 7.6.5) against the target env; centralizing the check keeps the diagnostic shape consistent across the dev-side write and the target-side landing.
+
+**7.2b.bump Bump source solution version + manifest sync.** Creating new env var definitions and adding them to the solution via `AddSolutionComponent` modifies `solutions.modifiedon`. Bump the patch segment so downstream skills see a strictly-increasing version label AND the local `.solution-manifest.json` tracks the change:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+  --envUrl "{devEnvUrl}" \
+  --token "{token}" \
+  --uniqueName "{solutionUniqueName}" \
+  --projectRoot "."
+```
+
+The helper returns `{ previous, next, bumped: true, manifestUpdated, manifestUpdateReason }`. `--projectRoot "."` makes it update `.solution-manifest.json`'s `solution.version` (or matching `solutions[].version` in multi-solution mode) atomically. Without this bump, `.solution-manifest.json` drifts behind Dataverse — validated against a real Citizens portal run where the manifest sat at 1.0.0.2 while Dataverse had reached 1.0.0.4 after configure-env-variables and deploy-pipeline had each touched the source.
+
+**7.2c Refresh the post-config env var snapshot.** Re-run the discovery helper to write `docs/alm/last-env-vars.json` with the freshly-created definitions. Without this, the rendered ALM plan's Env Variables tab stays at whatever setup-solution last wrote — newly-created definitions don't appear until plan-alm runs again. The refresh helper invoked at the end of this phase ingests this sidecar into `planData.envVars[]` AND mirrors it over to `docs/alm/alm-env-vars.json` so both snapshots stay current:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+  --envUrl "{devEnvUrl}" \
+  --publisherPrefix "{publisherPrefix}" \
+  --websiteRecordId "{websiteRecordId}" \
+  --token "{token}" \
+  --solutionId "{solutionId}" > docs/alm/last-env-vars.json.tmp \
+  && mv docs/alm/last-env-vars.json.tmp docs/alm/last-env-vars.json
+```
+
+The tmp-file write pattern preserves a prior good snapshot if discovery fails transiently. Pass `--solutionId` so the result is scoped to the target solution — without it, a generic publisher prefix would return env vars from unrelated projects in the same tenant.
 
 **7.3 Commit:**
 ```bash

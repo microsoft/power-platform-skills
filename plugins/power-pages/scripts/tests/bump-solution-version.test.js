@@ -249,3 +249,171 @@ test('bumpSolutionVersion surfaces unknown uniqueName before any PATCH', async (
   );
   assert.equal(calls.filter((c) => c.method === 'PATCH').length, 0);
 });
+
+// ── updateManifestVersion ─────────────────────────────────────────────────────
+
+const { updateManifestVersion } = require('../lib/bump-solution-version');
+const fs = require('fs');
+const os = require('os');
+const pathlib = require('path');
+
+function makeProjectDir(t) {
+  const dir = fs.mkdtempSync(pathlib.join(os.tmpdir(), 'bump-manifest-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test('updateManifestVersion updates single-solution manifest by solutionId', (t) => {
+  const root = makeProjectDir(t);
+  const manifest = {
+    schemaVersion: 1,
+    solution: { uniqueName: 'ContosoSite', solutionId: 'sol-1', version: '1.0.0.2' },
+  };
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), JSON.stringify(manifest, null, 2));
+
+  const result = updateManifestVersion(root, { solutionId: 'sol-1', uniqueName: null, nextVersion: '1.0.0.3' });
+
+  assert.equal(result.updated, true);
+  const after = JSON.parse(fs.readFileSync(pathlib.join(root, '.solution-manifest.json'), 'utf8'));
+  assert.equal(after.solution.version, '1.0.0.3');
+  // Other fields preserved
+  assert.equal(after.solution.uniqueName, 'ContosoSite');
+  assert.equal(after.solution.solutionId, 'sol-1');
+  assert.equal(after.schemaVersion, 1);
+});
+
+test('updateManifestVersion updates multi-solution manifest by matching solutionId', (t) => {
+  const root = makeProjectDir(t);
+  const manifest = {
+    schemaVersion: 2,
+    solutions: [
+      { uniqueName: 'Site_Core', solutionId: 'sol-1', version: '1.0.0.2' },
+      { uniqueName: 'Site_WebAssets', solutionId: 'sol-2', version: '1.0.0.5' },
+      { uniqueName: 'Site_Future', solutionId: 'sol-3', version: '1.0.0.0' },
+    ],
+  };
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), JSON.stringify(manifest, null, 2));
+
+  const result = updateManifestVersion(root, { solutionId: 'sol-2', uniqueName: null, nextVersion: '1.0.0.6' });
+
+  assert.equal(result.updated, true);
+  const after = JSON.parse(fs.readFileSync(pathlib.join(root, '.solution-manifest.json'), 'utf8'));
+  // Only the matching entry updated
+  assert.equal(after.solutions[0].version, '1.0.0.2', 'non-matching entry preserved');
+  assert.equal(after.solutions[1].version, '1.0.0.6', 'matching entry bumped');
+  assert.equal(after.solutions[2].version, '1.0.0.0', 'non-matching entry preserved');
+});
+
+test('updateManifestVersion falls back to uniqueName when solutionId not present in manifest', (t) => {
+  const root = makeProjectDir(t);
+  const manifest = {
+    schemaVersion: 1,
+    solution: { uniqueName: 'ContosoSite', version: '1.0.0.2' },  // no solutionId in manifest
+  };
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), JSON.stringify(manifest, null, 2));
+
+  const result = updateManifestVersion(root, { solutionId: 'sol-1', uniqueName: 'ContosoSite', nextVersion: '1.0.0.3' });
+
+  assert.equal(result.updated, true);
+  const after = JSON.parse(fs.readFileSync(pathlib.join(root, '.solution-manifest.json'), 'utf8'));
+  assert.equal(after.solution.version, '1.0.0.3');
+});
+
+test('updateManifestVersion is a no-op when no matching entry found (writes nothing)', (t) => {
+  const root = makeProjectDir(t);
+  const manifest = {
+    schemaVersion: 1,
+    solution: { uniqueName: 'OtherSite', solutionId: 'sol-other', version: '1.0.0.0' },
+  };
+  const initialContent = JSON.stringify(manifest, null, 2);
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), initialContent);
+
+  const result = updateManifestVersion(root, { solutionId: 'sol-nomatch', uniqueName: 'AlsoNoMatch', nextVersion: '1.0.0.1' });
+
+  assert.equal(result.updated, false);
+  assert.equal(result.reason, 'no-matching-entry');
+  // File untouched
+  assert.equal(fs.readFileSync(pathlib.join(root, '.solution-manifest.json'), 'utf8'), initialContent);
+});
+
+test('updateManifestVersion silently handles missing manifest', (t) => {
+  const root = makeProjectDir(t);
+  // No .solution-manifest.json
+  const result = updateManifestVersion(root, { solutionId: 'sol-1', uniqueName: 'X', nextVersion: '1.0.0.3' });
+  assert.equal(result.updated, false);
+  assert.equal(result.reason, 'no-manifest');
+});
+
+test('updateManifestVersion silently handles missing projectRoot', () => {
+  const result = updateManifestVersion(null, { solutionId: 'sol-1', uniqueName: 'X', nextVersion: '1.0.0.3' });
+  assert.equal(result.updated, false);
+  assert.equal(result.reason, 'no-projectRoot');
+});
+
+test('updateManifestVersion silently handles unparseable manifest', (t) => {
+  const root = makeProjectDir(t);
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), 'not-valid-json{{{');
+  const result = updateManifestVersion(root, { solutionId: 'sol-1', uniqueName: 'X', nextVersion: '1.0.0.3' });
+  assert.equal(result.updated, false);
+  assert.equal(result.reason, 'unparseable');
+});
+
+test('bumpSolutionVersion calls updateManifestVersion when --projectRoot is supplied', async (t) => {
+  const helpers2 = require('../lib/validation-helpers');
+  const orig = helpers2.makeRequest;
+  helpers2.makeRequest = async (req) => {
+    if (req.method === 'PATCH') return { statusCode: 204, body: '', headers: {} };
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        value: [{ solutionid: 'sol-1', uniquename: 'ContosoSite', version: '1.0.0.2', ismanaged: false }],
+      }),
+    };
+  };
+  t.after(() => { helpers2.makeRequest = orig; });
+
+  const root = makeProjectDir(t);
+  fs.writeFileSync(pathlib.join(root, '.solution-manifest.json'), JSON.stringify({
+    solution: { uniqueName: 'ContosoSite', solutionId: 'sol-1', version: '1.0.0.2' },
+  }, null, 2));
+
+  const result = await bumpSolutionVersion({
+    envUrl: 'https://org.crm.dynamics.com',
+    uniqueName: 'ContosoSite',
+    token: 'fake',
+    projectRoot: root,
+  });
+
+  assert.equal(result.bumped, true);
+  assert.equal(result.next, '1.0.0.3');
+  assert.equal(result.manifestUpdated, true);
+  // Manifest reflects the bump
+  const manifestAfter = JSON.parse(fs.readFileSync(pathlib.join(root, '.solution-manifest.json'), 'utf8'));
+  assert.equal(manifestAfter.solution.version, '1.0.0.3');
+});
+
+test('bumpSolutionVersion does NOT update manifest when --projectRoot is omitted', async (t) => {
+  const helpers2 = require('../lib/validation-helpers');
+  const orig = helpers2.makeRequest;
+  helpers2.makeRequest = async (req) => {
+    if (req.method === 'PATCH') return { statusCode: 204, body: '', headers: {} };
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        value: [{ solutionid: 'sol-1', uniquename: 'ContosoSite', version: '1.0.0.2', ismanaged: false }],
+      }),
+    };
+  };
+  t.after(() => { helpers2.makeRequest = orig; });
+
+  const result = await bumpSolutionVersion({
+    envUrl: 'https://org.crm.dynamics.com',
+    uniqueName: 'ContosoSite',
+    token: 'fake',
+    // no projectRoot
+  });
+
+  assert.equal(result.bumped, true);
+  assert.equal(result.manifestUpdated, false);
+  assert.equal(result.manifestUpdateReason, 'no-projectRoot');
+});

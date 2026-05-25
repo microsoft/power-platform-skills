@@ -238,12 +238,13 @@ Before exporting, bump the patch segment (4th segment) of the source solution's 
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
-  --uniqueName "{solutionUniqueName}"
+  --uniqueName "{solutionUniqueName}" \
+  --projectRoot "."
 ```
 
-Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION` and `.next` as `EXPORT_VERSION`. Report: "Bumped solution `{solutionUniqueName}` from v{PRE_EXPORT_VERSION} to v{EXPORT_VERSION} for export."
+Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION`, `.next` as `EXPORT_VERSION`, and inspect `.manifestUpdated` / `.manifestUpdateReason` to confirm the manifest sync succeeded. Report: "Bumped solution `{solutionUniqueName}` from v{PRE_EXPORT_VERSION} to v{EXPORT_VERSION} for export."
 
-If `.solution-manifest.json` is present in the project root, update its `solution.version` field to `EXPORT_VERSION` (in-place `Edit`) so the manifest stays consistent if the skill is interrupted between bump and export.
+`--projectRoot "."` makes the helper update `.solution-manifest.json`'s `solution.version` (single-solution) or matching `solutions[].version` (multi-solution) field atomically as part of the bump operation — no separate `Edit` step needed. If the manifest doesn't exist or has no matching entry, `manifestUpdated: false` and `manifestUpdateReason` tells you why (`no-manifest`, `no-matching-entry`, etc.); the bump itself still succeeded.
 
 > **If the bump already happened earlier in this session** (e.g. `setup-solution` sync mode ran with adopted components in Phase 2.5 and bumped the version, then handed back here): the helper still runs and bumps again. This is intentional — sync's bump is paired with new components; export's bump is paired with the produced zip. They're independent concerns and double-bumping is cheap (just an extra patch segment). The skill-skipping logic for "the manifest version already matches the live source version" is intentionally NOT added here; it would create a class of "I edited content but no sync was needed and no bump happened, so the export shipped a stale version" failures.
 

@@ -203,12 +203,25 @@ function buildStrategyRationale() {
   // — that described the pre-v1.3.x layout that was reverted because it
   // cluttered the Pipelines UI.
   const strat = data.splitStrategy || 'single';
+  // Count NON-buffer solutions for the narrative — the Future Growth buffer
+  // is a reserved 0/0 slot that doesn't deploy until it has content. Mention
+  // it separately if present so the rationale and the Solutions tab agree.
+  const nonBufferSolutions = (proposedSolutions || []).filter((s) => !s.isFutureBuffer);
+  const hasFutureBuffer = (proposedSolutions || []).some((s) => s.isFutureBuffer === true);
+  const futureBufferNote = hasFutureBuffer ? ' Plus a reserved <strong>Future Growth</strong> buffer solution (initially empty, exists as a default target for new components).' : '';
+  const changeFreqNames = nonBufferSolutions.map((s) => s.uniqueName || '').filter(Boolean);
+  const changeFreqList = changeFreqNames.length
+    ? changeFreqNames.map((n) => `<strong>${escapeHtml(n.split('_').slice(1).join('_') || n)}</strong>`).join(' &rarr; ')
+    : '<strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>';
+  const N = nonBufferSolutions.length;
+  // Number-word for small counts; fall back to digits for >10.
+  const numberWord = (n) => ({ 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten' }[n] || String(n));
   const map = {
     'single': `All components packaged in a single managed solution. Estimated size is within the ${ALM_THRESHOLDS.maxSolutionSizeMB} MB split-decision threshold (platform hard cap is 95 MB) and component count is within tested bounds. One pipeline, one approval chain.`,
-    'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Both ship through the same pipeline as separate stage runs (per the <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>) — WebAssets can be re-deployed independently when only frontend files change.',
-    'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. All four ship through the same pipeline in that order, so low-churn layers don\'t re-import when only content changes.',
-    'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. All solutions ship through the same pipeline in domain order. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
-    'strategy-4-config-isolation': 'Environment variable definitions isolated into their own solution so value changes don\'t require re-importing everything else.',
+    'strategy-1-layer': `Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Both ship through the same pipeline as separate stage runs (per the <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>) — WebAssets can be re-deployed independently when only frontend files change.${futureBufferNote}`,
+    'strategy-2-change-frequency': `${numberWord(N || 4)} solutions ordered by change frequency: ${changeFreqList}. All ship through the same pipeline in that order, so low-churn layers don\'t re-import when only content changes.${futureBufferNote}`,
+    'strategy-3-schema-segmentation': `Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. All solutions ship through the same pipeline in domain order. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.${futureBufferNote}`,
+    'strategy-4-config-isolation': `Environment variable definitions isolated into their own solution so value changes don't require re-importing everything else.${futureBufferNote}`,
   };
   let rationale = map[strat] || map.single;
   if (data.compositeSubPartitioned === true) {
@@ -501,21 +514,83 @@ function buildEnvVarCard(ev) {
 // Side-by-side matrix: one row per env var, one column per environment.
 // Renders only when at least one env var has a populated values{} map (i.e.
 // after deploy-pipeline has back-filled per-stage values).
+//
+// Stage-key canonicalization: deployment-settings.json + planData.envVars[].values
+// can carry stage keys under multiple aliases — the stage `label` ("Staging"),
+// the pipeline-stage display name ("Deploy to Staging"), or the environment's
+// BAP display name ("CitizenServicesStaging"). All three refer to the same
+// target. Without dedup, a 2-env deploy renders THREE columns (Dev, Staging,
+// "Deploy to Staging") with the last two identical. We build an alias→label
+// map from data.stages[] and last-pipeline.json (when present) and collapse
+// every observed alias onto its canonical stage label before assembling the
+// header. Aliases that don't match any known stage stay as-is so unknown
+// keys aren't silently dropped.
 function buildEnvVarValuesMatrix() {
-  const envNamesSet = new Set();
+  // Build alias → canonical label map from the plan's stage list.
+  const aliasToLabel = new Map();
+  const canonicalLabels = [];
+  const stagesArr = (Array.isArray(data) ? null : (data && data.stages)) || [];
+  for (const stage of stagesArr) {
+    if (!stage || typeof stage !== 'object') continue;
+    const label = String(stage.label || '').trim();
+    if (!label) continue;
+    if (!canonicalLabels.includes(label)) canonicalLabels.push(label);
+    aliasToLabel.set(label, label);
+    // Common aliases observed in deployment-settings.json / pipeline stage names.
+    if (stage.envName) aliasToLabel.set(String(stage.envName), label);
+    if (stage.envUrl) aliasToLabel.set(String(stage.envUrl), label);
+    aliasToLabel.set(`Deploy to ${label}`, label);
+    aliasToLabel.set(`${label} (Deploy to ${label})`, label);
+  }
+  // Also pick up stage labels from pipelineMeta.stages[] when present.
+  const pipelineStages = (data && data.pipelineMeta && Array.isArray(data.pipelineMeta.stages))
+    ? data.pipelineMeta.stages : [];
+  for (const ps of pipelineStages) {
+    if (!ps || typeof ps !== 'object') continue;
+    const psName = String(ps.name || '').trim();
+    if (!psName) continue;
+    // "Deploy to Staging" → canonical "Staging" when "Staging" is a known label;
+    // otherwise treat the pipeline name itself as canonical.
+    const stripped = psName.replace(/^Deploy to\s+/i, '').trim();
+    const canonical = canonicalLabels.includes(stripped) ? stripped : psName;
+    if (!aliasToLabel.has(psName)) aliasToLabel.set(psName, canonical);
+    if (!canonicalLabels.includes(canonical)) canonicalLabels.push(canonical);
+  }
+
+  // Collect canonical stage names actually observed across env vars (preserving stage order).
+  const observedLabels = new Set();
   for (const ev of envVars) {
     if (ev.values && typeof ev.values === 'object') {
-      for (const key of Object.keys(ev.values)) envNamesSet.add(key);
+      for (const key of Object.keys(ev.values)) {
+        const canonical = aliasToLabel.get(key) || key;  // unknown aliases stay as-is
+        observedLabels.add(canonical);
+      }
     }
   }
-  if (envNamesSet.size === 0) return '';
-  const envNames = Array.from(envNamesSet);
+  if (observedLabels.size === 0) return '';
+  // Order: stages from planData first (in plan order), then any leftovers from unknown aliases.
+  const envNames = [
+    ...canonicalLabels.filter((l) => observedLabels.has(l)),
+    ...Array.from(observedLabels).filter((l) => !canonicalLabels.includes(l)),
+  ];
 
   const headerCells = envNames.map((e) => `<th style="min-width:160px;">${escapeHtml(e)}</th>`).join('');
   const rows = envVars.map((ev) => {
     const label = escapeHtml(ev.displayName || ev.schemaName || '(unnamed)');
+    // Resolve each canonical column to its alias on the env var's values{} map.
+    // Picks the first matching alias so duplicates (e.g. "Staging" AND "Deploy to Staging"
+    // both pointing to the same target) collapse to one column.
     const cells = envNames.map((e) => {
-      const v = (ev.values || {})[e];
+      const valuesMap = (ev.values || {});
+      let v = valuesMap[e];                                    // exact canonical hit
+      if (v == null || v === '') {
+        for (const [alias, canonical] of aliasToLabel.entries()) {
+          if (canonical === e && valuesMap[alias] != null && valuesMap[alias] !== '') {
+            v = valuesMap[alias];
+            break;
+          }
+        }
+      }
       return v == null || v === ''
         ? '<td class="env-val"><span class="env-placeholder">(not set)</span></td>'
         : `<td class="env-val">${escapeHtml(v)}</td>`;
@@ -909,6 +984,13 @@ function buildValidationStagePane(stageName, run) {
   const dur = (run.durationSec != null) ? `${Number(run.durationSec).toFixed(0)}s` : '&mdash;';
   const runAt = run.runAt ? `<span style="font-family:var(--mono);">${escapeHtml(run.runAt)}</span>` : '&mdash;';
 
+  // Severity buckets — render four cards (Critical / High / Medium / Low) separately
+  // plus a Total. Previously Medium and Low were combined ("Medium / Low") which
+  // hid a real severity signal from reviewers and validators reading the plan;
+  // a stage that ships 4 medium-severity issues looked identical to one that
+  // shipped 4 low-severity issues. Use the summary object as authored by
+  // test-site Phase 6.7a, which counts each severity bucket directly from
+  // categories[].tests[].severity (so the planner sees what the test author saw).
   const summary = run.summary || {};
   const cardClass = (n) => Number(n || 0) > 0 ? 'has-value' : 'zero-value';
   const summaryGrid = `<div class="test-summary-grid">
@@ -920,9 +1002,13 @@ function buildValidationStagePane(stageName, run) {
     <div class="test-summary-num high">${Number(summary.high || 0)}</div>
     <div class="test-summary-label">High</div>
   </div>
-  <div class="test-summary-card ${cardClass((summary.medium || 0) + (summary.low || 0))}">
-    <div class="test-summary-num medium">${Number((summary.medium || 0) + (summary.low || 0))}</div>
-    <div class="test-summary-label">Medium / Low</div>
+  <div class="test-summary-card ${cardClass(summary.medium)}">
+    <div class="test-summary-num medium">${Number(summary.medium || 0)}</div>
+    <div class="test-summary-label">Medium</div>
+  </div>
+  <div class="test-summary-card ${cardClass(summary.low)}">
+    <div class="test-summary-num low">${Number(summary.low || 0)}</div>
+    <div class="test-summary-label">Low</div>
   </div>
   <div class="test-summary-card has-value">
     <div class="test-summary-num">${Number(summary.total || 0)}</div>
@@ -1244,21 +1330,21 @@ function buildChecklistHtml() {
         if (Number(sm.failed || 0) > 0) counts.push(`${Number(sm.failed)} fail`);
         if (Number(sm.skipped || 0) > 0) counts.push(`${Number(sm.skipped)} skip`);
         const countsStr = counts.length ? ` &middot; ${counts.join(' / ')}` : '';
-        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        validationLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
     <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
     <span style="font-size:11px;">${run.url ? `<code>${escapeHtml(run.url)}</code>` : '&mdash;'}${countsStr}</span>
     <a href="#tab-validation" onclick="document.querySelector('[data-tab=\\'validation\\']').click(); return false;" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none;">View details &rarr;</a>
   </li>
-</div>`;
+</ul>`;
         // Promote step status to "warning" yellow when the test failed/warned —
         // makes the failure visible at a glance from the Execution tab.
         if (s === 'completed' && o === 'failed') s = 'warning';
       } else if (s === 'completed' || s === 'pending' || s === 'in-progress') {
         // Step exists but no run captured — show a small note.
-        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        validationLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="font-size:11px;">No test-site run captured for <strong>${escapeHtml(stageName)}</strong> yet.</li>
-</div>`;
+</ul>`;
       }
     }
 
@@ -1282,12 +1368,12 @@ function buildChecklistHtml() {
         const urlMarkup = act.siteUrl
           ? `<a href="${escapeHtml(act.siteUrl)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;"><code>${escapeHtml(act.siteUrl)}</code></a>`
           : '&mdash;';
-        activateLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        activateLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
     <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
     <span style="font-size:11px;">${urlMarkup}</span>
   </li>
-</div>`;
+</ul>`;
         if (s === 'completed' && failed) s = 'warning';
       }
     }
@@ -1313,12 +1399,12 @@ function buildChecklistHtml() {
           ? ` &middot; <span style="color:var(--critical);">${Number(imp.componentFailureCount)} failed</span>`
           : '';
         const detailParts = [versionStr, componentsStr].filter(Boolean).join(' &middot; ') + failedStr;
-        importLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        importLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
     <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
     <span style="font-size:11px;">${detailParts || '&mdash;'}</span>
   </li>
-</div>`;
+</ul>`;
         // Promote completed → warning when import had component failures.
         if (s === 'completed' && failed) s = 'warning';
       }
@@ -1329,9 +1415,9 @@ function buildChecklistHtml() {
     // existing checklist-substep-list styling.
     let envLine = '';
     if (stageInfo && stageInfo.envUrl && !isTestStep) {
-      envLine = `<div class="checklist-substep-list" style="margin-top:2px;">
+      envLine = `<ul class="checklist-substep-list" style="margin-top:2px;padding:0;list-style:none;">
   <li class="checklist-substep" style="font-size:11px;color:var(--text-dim);">Target: <code>${escapeHtml(stageInfo.envUrl)}</code></li>
-</div>`;
+</ul>`;
     }
 
     const targetTab = tabForChecklistStep(name);
