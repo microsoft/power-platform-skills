@@ -721,9 +721,48 @@ After collecting the required provider details, ask if the user wants to configu
 
 | Question | Options |
 |----------|---------|
-| Would you like to configure advanced authentication settings? (claims mapping, session timeout, scopes, etc.) | No, use defaults (Recommended), Yes, show me the options |
+| Would you like to configure advanced authentication settings? (logout mode, claims mapping, session timeout, scopes, etc.) | No, use defaults (Recommended), Yes, show me the options |
 
 **If "Yes, show me the options"**, present the optional settings table relevant to the selected provider. Only show settings that apply to their provider type. For each setting the user wants to configure, collect the value.
+
+##### Logout mode (external providers only — OIDC, Entra External ID, SAML2, WS-Fed, social)
+
+**Always offer this question to the user** when an external provider is being configured (it's the most common advanced setting and has visible UX consequences). For local-auth-only sites, skip this question.
+
+> **Two logout modes:**
+> - **Local logout** (server default, simpler) — Power Pages clears its session cookie and redirects the user to `returnUrl` (defaults to `/`). The user **remains signed in at the IdP**. Next time they click the external provider button, the IdP's SSO cookie is still warm and they re-sign-in silently with no credential re-entry. This is the default UX for most consumer / customer-facing sites.
+> - **Federated logout** (RP-initiated) — Power Pages additionally calls the IdP's `end_session_endpoint` with `id_token_hint` and `post_logout_redirect_uri`. The IdP signs the user out of THEIR session too, then redirects the browser back to the site. The user is fully signed out across systems. Required for: shared-device scenarios, regulated industries with hard logout requirements, sites that explicitly want users to re-enter credentials each time.
+
+| Question | Header | Options |
+|----------|--------|---------|
+| What should happen at the IdP when a user signs out? | Logout mode | Local logout only (Recommended, server default) — clear Power Pages session; user stays signed in at the IdP, Federated logout — also sign user out at the IdP so they have to re-authenticate |
+
+**If "Local logout only"**: do nothing further. Skip writing `RPInitiatedLogout` and `PostLogoutRedirectUri` site settings in Phase 8.1 — the server defaults handle it correctly (both default to `false`/unset).
+
+**If "Federated logout"**: this requires TWO pieces of configuration that MUST go together. Setting only `RPInitiatedLogout=true` without `PostLogoutRedirectUri` leaves users stranded on the IdP's "you have been signed out" page — confirmed via HAR analysis on a live Entra External ID site.
+
+Step 1 — collect the post-logout redirect URI (default to the site root):
+
+| Question | Options |
+|----------|---------|
+| Where should users land after they sign out at the IdP? (Defaults to the site home page. Use a different URL if you have a dedicated "signed out" page.) | *(free text, defaulted to `{SITE_URL}/`)* |
+
+Validate the value: must be a fully-qualified URL on the same host as `SITE_URL`. Store as `POST_LOGOUT_REDIRECT_URI`.
+
+Step 2 — for Entra External ID specifically, instruct the user to register the URL in their app registration:
+
+> **Required app registration step** (must be done in the Microsoft Entra admin center):
+>
+> 1. Go to **App registrations → {your app} → Authentication**
+> 2. Scroll to the **Front-channel logout URL** field (under "Advanced settings", just above "Implicit grant and hybrid flows")
+> 3. Enter: **`{POST_LOGOUT_REDIRECT_URI}`** — must match the value above exactly
+> 4. **Save**
+>
+> **Why this is needed**: Entra External ID rejects any `post_logout_redirect_uri` value that isn't pre-registered (same security model as Redirect URIs for sign-in). Without this registration, the IdP silently drops the parameter and the user is stranded after sign-out — even if Power Pages sends it correctly.
+>
+> For **generic OIDC providers** (Okta, Auth0, Ping, etc.), check the provider's docs for the equivalent registration. Most providers call this "Logout URL", "Post Logout Redirect URI", or "Allowed Sign-out Redirect URLs" under the app's settings.
+
+Phase 8.1 will write BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={POST_LOGOUT_REDIRECT_URI}` when this option is chosen.
 
 **OpenID Connect / Entra External ID optional settings:**
 
@@ -734,12 +773,12 @@ After collecting the required provider details, ask if the user wants to configu
 | `ResponseType` | OAuth response type (`code`, `id_token`, `code id_token`) | `code id_token` |
 | `ResponseMode` | How the IdP returns the response (`form_post`, `query`, `fragment`) | `form_post` for code flow |
 | `RedirectUri` | Override the callback URL | `{site-url}/signin-{provider}` |
-| `PostLogoutRedirectUri` | URL to redirect to after external logout | Site root |
-| `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, `ExternalLogoutEnabled` is forced to `false` by the server. | `false` |
+| `PostLogoutRedirectUri` | URL to redirect to after federated logout completes at the IdP. **Required when `RPInitiatedLogout=true`** — server has a fallback that derives from `RedirectUri` authority, but a separate flag (`PostLogoutRedirectUriEnabled`) requires the explicit site setting to be present before the fallback is used. Without an explicit value, the IdP logout URL omits the parameter and users get stranded. | Unset (server default — but use the Logout mode question above to write it correctly) |
+| `RPInitiatedLogout` | Use RP-initiated logout via `end_session_endpoint` with `id_token_hint`. **Mutually exclusive with `ExternalLogoutEnabled`** — when `true`, the server forces `ExternalLogoutEnabled` to `false` regardless of that setting. **Prefer the "Logout mode" question above** instead of setting this directly — that flow pairs it with `PostLogoutRedirectUri` (required) and the Entra app-registration step. | `false` |
 | `Caption` | Display name shown on the login button | Provider name |
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied **once** at first sign-in, before the contact is created. Example for Entra External ID: `firstname=given_name,lastname=family_name,emailaddress1=email`. The server silently skips malformed pairs — verify in Application Insights if claims aren't populating. | None |
 | `LoginClaimsMapping` | Same format as `RegistrationClaimsMapping`. Applied **every login** (overwrites contact fields). Use sparingly — it overwrites manual edits the user makes to their profile. | None |
-| `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out (legacy — prefer `RPInitiatedLogout` for OIDC) | `true` |
+| `ExternalLogoutEnabled` | Sign out of the IdP when the user logs out (legacy OWIN sign-out, prefer `RPInitiatedLogout` for OIDC). Forced to `false` when `RPInitiatedLogout=true`. | `false` (server default) |
 | `RegistrationEnabled` | Allow new users to register via this provider | `true` |
 | `AllowContactMappingWithEmail` | **Auto-link an external sign-in to an existing Dataverse contact by matching the `email` claim against `emailaddress1`.** Default `false` (a new contact is always created). **⚠ Multi-tenant Entra External ID: the server forcibly disables this** (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`) — email claims can't be trusted across tenants. If you want contact linking, use single-tenant Authority. **⚠ Security**: When `true`, anyone who can sign into this provider with a victim's email gains access to the victim's contact. Enable only when the provider is trusted to verify emails. | `false` |
 | `RequireUniqueEmail` | Enforce unique email addresses during registration | `false` |
@@ -1866,6 +1905,33 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 Where `{Type}` is `OpenIdConnect`, `SAML2`, `WsFederation`, or `OpenAuth`. This is a **per-provider toggle** that's distinct from the global `Authentication/Registration/ExternalLoginEnabled` — set both to `true` for registration to work. Use case for setting one provider's `RegistrationEnabled=false`: temporarily block new users from a given IdP while still letting existing users sign in.
 
+**Logout settings — conditional on Phase 2.1.1 logout mode choice**
+
+For external providers, write logout settings only when the user picked **"Federated logout"** in Phase 2.1.1. If they picked "Local logout only" (the default), write neither setting — the server defaults (`RPInitiatedLogout=false`, `ExternalLogoutEnabled=false`) handle this correctly.
+
+```powershell
+# Only when LOGOUT_MODE = "Federated logout"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
+  --value "true" \
+  --description "Federated logout — call IdP end_session_endpoint with id_token_hint" \
+  --type boolean
+
+# REQUIRED when RPInitiatedLogout=true — must be paired
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Authentication/OpenIdConnect/{ProviderName}/PostLogoutRedirectUri" \
+  --value "<POST_LOGOUT_REDIRECT_URI from Phase 2.1.1>" \
+  --description "URL the IdP redirects to after federated logout completes"
+```
+
+For SAML2 / WS-Federation / social providers, the equivalent settings names differ — `Authentication/{Type}/{ProviderName}/RPInitiatedLogout` and `/PostLogoutRedirectUri` follow the same naming pattern. For social providers (Microsoft Account / Facebook / Google), federated logout is usually not supported by the provider, so the question is moot — skip the logout-mode question for social and don't write either setting.
+
+> **Server behavior reminder**: Without these settings (i.e., "Local logout only" mode), `/Account/Login/LogOff` clears the Power Pages session and redirects to the `returnUrl` query parameter (or site root if missing/invalid). The IdP session stays warm — next sign-in is silent SSO. **No app-registration changes needed in this mode.**
+>
+> With these settings ("Federated logout"), `/Account/Login/LogOff` 302s to the IdP's `end_session_endpoint` with `id_token_hint` and `post_logout_redirect_uri`. The IdP signs the user out and redirects to the registered post-logout URI. **The maker MUST also register that URI in the IdP app registration** (see Phase 2.1.1) — confirmed via HAR analysis that without app-registration of the front-channel logout URL, the IdP silently drops the parameter and users get stranded.
+
 **Provider-specific settings** — create site settings for **EACH** provider selected in Phase 2.1. If the user selected multiple providers (e.g., Entra External ID + Local Authentication), create settings for ALL of them:
 
 **Microsoft Entra ID** (no additional settings needed — configured via Power Pages admin center).
@@ -1917,24 +1983,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "/signin-{ProviderName-lowercased}" \
   --description "Unique callback path derived from ProviderName"
 
-# ExternalLogoutEnabled — set to false when using RPInitiatedLogout (they are mutually exclusive)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
-  --value "false" \
-  --description "Legacy logout — disabled when RPInitiatedLogout is used" \
-  --type boolean
-
-# RPInitiatedLogout — preferred for OIDC providers with end_session_endpoint
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
-  --value "true" \
-  --description "RP-initiated logout via end_session_endpoint with id_token_hint" \
-  --type boolean
 ```
 
 > **Note:** The `AuthenticationType` value is the unique provider identifier used in the `ExternalLogin` form POST. This value must match what `resolveProviderIdentifier()` returns in the auth service.
+
+> **Logout settings** — do NOT auto-write `RPInitiatedLogout` or `ExternalLogoutEnabled` here. Both default to `false` server-side (per `StartupSettingsManager.cs:418,425`), which means logout clears only the Power Pages session and leaves the IdP session intact (user can silently SSO back in). This is the simpler default and what most sites want. If the user wants **federated logout** (sign out at the IdP too, with `post_logout_redirect_uri` redirecting back to the site), they configure it via the advanced settings flow in Phase 2.1.1 — which writes BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={SITE_URL}/` together (one without the other leaves users stranded on the IdP's signed-out page — see Phase 2.1.1 for the full walkthrough).
 
 **Entra External ID** — uses values from the 4-step walkthrough in Phase 2.1. Derive `Authority` and `MetadataAddress` from the tenant subdomain + tenant ID — do not ask the user to paste them:
 
@@ -1992,22 +2045,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --value "<path-portion-of-REDIRECT_URI>" \
   --description "OWIN callback path (derived from RedirectUri)"
 
-# ExternalLogoutEnabled — false when using RPInitiatedLogout
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenIdConnect/{ProviderName}/ExternalLogoutEnabled" \
-  --value "false" \
-  --description "Legacy logout — disabled when RPInitiatedLogout is used" \
-  --type boolean
-
-# RPInitiatedLogout — preferred for Entra External ID
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/OpenIdConnect/{ProviderName}/RPInitiatedLogout" \
-  --value "true" \
-  --description "RP-initiated logout via end_session_endpoint" \
-  --type boolean
 ```
+
+> **Logout settings for Entra External ID** — do NOT auto-write `RPInitiatedLogout` or `ExternalLogoutEnabled` here. Both default to `false` server-side. Default behavior: logout clears the Power Pages session only; user stays signed in at the Entra External ID tenant. Next sign-in is silent SSO via the IdP's cookie. This is the simpler default and matches what most customer-facing sites want. **If the user wants federated logout** (sign out at Entra External ID too), they enable it via the advanced settings flow in Phase 2.1.1 — which writes BOTH `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={SITE_URL}/` together AND adds an app-registration step for the Front-channel logout URL.
 
 > **Custom domains**: If the user is using a custom domain for their Entra External ID tenant (e.g., `https://login.contoso.com/{tenantId}/v2.0/`) instead of `*.ciamlogin.com`, replace the derived values above with the custom domain values. The walkthrough in Phase 2.1 doesn't currently ask about custom domains — when re-running with a custom-domain Authority in existing site settings (Phase 1.5 discovery), preserve those values rather than rebuilding from `EXTERNAL_ID_TENANT_SUBDOMAIN`.
 

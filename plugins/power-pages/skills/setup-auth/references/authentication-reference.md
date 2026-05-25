@@ -100,11 +100,20 @@ When local authentication is configured, add a "Forgot password?" link in the `L
    - Clears the `DeferredLocalLoginCookie` if present
    - Sends `Clear-Site-Data: "cache"` header
 3. `window.Microsoft.Dynamic365.Portal.User` becomes `undefined`
-4. For OIDC providers with `RPInitiatedLogout` enabled, the server redirects to the provider's `end_session_endpoint` with an `id_token_hint` for federated single sign-out
-5. For other providers with `ExternalLogoutEnabled`, the server signs out of the provider's authentication type
-6. Finally, redirects to the `returnUrl` or site root
+4. **If federated logout is enabled** (see modes below), the server redirects to the IdP's `end_session_endpoint`. **Otherwise**, the server redirects to the `returnUrl` query parameter (or site root if missing/invalid).
 
-> **`ExternalLogoutEnabled` vs `RPInitiatedLogout`**: These are mutually exclusive. When `RPInitiatedLogout` is `true`, the server forces `ExternalLogoutEnabled` to `false`. RP-initiated logout is the newer, preferred approach for OIDC providers — it sends an `id_token_hint` to the provider's `end_session_endpoint`. Use `ExternalLogoutEnabled` only for providers that don't support RP-initiated logout.
+### Two logout modes for external providers
+
+| Mode | Site settings | Behavior | When to use |
+|---|---|---|---|
+| **Local logout** (server default) | `RPInitiatedLogout` unset/false, `PostLogoutRedirectUri` unset | Clears Power Pages session; user stays signed in at the IdP. Next sign-in is silent SSO via the IdP's still-warm cookie. Server redirects to `returnUrl` or `/`. | Default for most customer-facing sites. Smooth UX, no app-registration changes needed. |
+| **Federated logout** (RP-initiated) | `RPInitiatedLogout=true` AND `PostLogoutRedirectUri={site-url}/` | Server 302s to IdP's `end_session_endpoint` with `id_token_hint` and `post_logout_redirect_uri`. IdP signs the user out of THEIR session and redirects back to the registered post-logout URI. | Shared-device scenarios, regulated industries, sites that need users to re-enter credentials each time. **Requires app-registration step** (register the URL as "Front-channel logout URL" in the Entra app — IdP rejects unregistered values). |
+
+> **Both settings must be paired**: setting `RPInitiatedLogout=true` without an explicit `PostLogoutRedirectUri` leaves users stranded on the IdP's signed-out page. The server has an internal fallback that derives a URL from `RedirectUri`'s authority — but a separate flag (`PostLogoutRedirectUriEnabled`) only treats it as enabled when the EXPLICIT site setting is present. So in practice the explicit setting is required.
+>
+> Verified via HAR analysis on a live Entra External ID site: with `RPInitiatedLogout=true` and no explicit `PostLogoutRedirectUri`, the server's logout URL was `https://{tenant}.ciamlogin.com/.../v2.0/logout?id_token_hint=...` with NO `post_logout_redirect_uri` parameter, and the user was stranded.
+
+> **`ExternalLogoutEnabled`**: this is a separate, legacy setting (server default `false`). It triggers OWIN's `AuthenticationManager.SignOut` for the IdP's auth type, but doesn't construct an explicit redirect URL. When `RPInitiatedLogout=true`, the server forces `ExternalLogoutEnabled=false` regardless of its setting. Prefer `RPInitiatedLogout` over `ExternalLogoutEnabled` for modern OIDC providers; `ExternalLogoutEnabled` is mainly useful for WS-Federation and older providers without an `end_session_endpoint`.
 
 ### Terms & Conditions Flow
 
