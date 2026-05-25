@@ -130,6 +130,9 @@ test('validateStageRunsBatch returns allPassed:true when every solution succeeds
   assert.equal(result.failed, 0);
   assert.equal(result.pendingApproval, 0);
   assert.equal(result.allPassed, true);
+  assert.equal(typeof result.elapsedSeconds, 'number',
+    'elapsedSeconds must always be emitted so callers (deploy-pipeline Phase 3.6.6) can persist it without out-of-band timing');
+  assert.ok(result.elapsedSeconds >= 0, 'elapsedSeconds must be non-negative');
 
   // Order is input order (Promise.all preserves it).
   assert.deepEqual(result.results.map((r) => r.solutionUniqueName), ['A_Core', 'A_WebAssets', 'A_Future']);
@@ -317,6 +320,127 @@ test('validateStageRunsBatch fans out N requests in parallel (not serial)', asyn
     createSpan < delay * 2,
     `expected parallel create-stage-run calls (span < ${delay * 2}ms), got span=${createSpan}ms`
   );
+});
+
+test('validateStageRunsBatch rePoll mode skips create-stage-run + ValidatePackageAsync', async (t) => {
+  // Pure re-poll path — no POST /deploymentstageruns, no POST /ValidatePackageAsync.
+  // Only GET deploymentstageruns(<id>)?$select=operation,validationresults,stagerunstatus.
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  const callMethods = [];
+  helpers.makeRequest = async (req) => {
+    callMethods.push({ method: req.method || 'GET', url: req.url });
+    if ((req.method === 'GET' || !req.method) && /deploymentstageruns\([^)]+\)\?\$select=operation/.test(req.url)) {
+      // After approval, transitions through Validating (200000006) then ValidationSucceeded (200000007).
+      // Returning Succeeded immediately is fine — the helper exits the poll loop on success.
+      return { statusCode: 200, body: JSON.stringify({ stagerunstatus: 200000007, validationresults: 'ok' }) };
+    }
+    throw new Error(`unexpected request in rePoll test: ${req.method} ${req.url}`);
+  };
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const result = await validateStageRunsBatch({
+    hostEnvUrl: HOST,
+    token: 'fake',
+    rePoll: true,
+    specs: [
+      { solutionUniqueName: 'X_Core', solutionId: 'sid-1', stageRunId: 'existing-srun-1' },
+      { solutionUniqueName: 'X_WebAssets', solutionId: 'sid-2', stageRunId: 'existing-srun-2' },
+    ],
+    intervalMs: 1,
+    maxAttempts: 2,
+  });
+
+  assert.equal(result.allPassed, true);
+  assert.equal(result.succeeded, 2);
+  for (const r of result.results) {
+    assert.equal(r.status, 'Succeeded');
+    assert.ok(/^existing-srun-/.test(r.stageRunId), 'pre-existing stage run ID must be preserved');
+  }
+
+  // Critically, NO POST to /deploymentstageruns or /ValidatePackageAsync.
+  for (const c of callMethods) {
+    if (c.method === 'POST') {
+      assert.fail(`rePoll mode must not POST anything; got ${c.method} ${c.url}`);
+    }
+  }
+});
+
+test('validateStageRunsBatch rePoll does not require stageId or sourceDeploymentEnvironmentId', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async () => ({ statusCode: 200, body: JSON.stringify({ stagerunstatus: 200000007, validationresults: 'ok' }) });
+  t.after(() => { helpers.makeRequest = orig; });
+
+  // Omit stageId and sourceDeploymentEnvironmentId entirely — must succeed.
+  const result = await validateStageRunsBatch({
+    hostEnvUrl: HOST,
+    token: 'fake',
+    rePoll: true,
+    specs: [{ solutionUniqueName: 'Y', solutionId: 'sid', stageRunId: 'srun-1' }],
+    intervalMs: 1,
+    maxAttempts: 2,
+  });
+  assert.equal(result.succeeded, 1);
+});
+
+test('validateStageRunsBatch rePoll surfaces missing stageRunId as Error without polling', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  let pollCalls = 0;
+  helpers.makeRequest = async () => { pollCalls++; return { statusCode: 200, body: '{}' }; };
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const result = await validateStageRunsBatch({
+    hostEnvUrl: HOST,
+    token: 'fake',
+    rePoll: true,
+    specs: [
+      { solutionUniqueName: 'Z_Good', solutionId: 'sid-1', stageRunId: 'srun-1' },
+      { solutionUniqueName: 'Z_Bad', solutionId: 'sid-2' },  // missing stageRunId
+    ],
+    intervalMs: 1,
+    maxAttempts: 1,
+  });
+
+  assert.equal(result.failed, 1);
+  const bad = result.results.find((r) => r.solutionUniqueName === 'Z_Bad');
+  assert.equal(bad.status, 'Error');
+  assert.match(bad.error, /missing required fields.*stageRunId/);
+});
+
+test('validateStageRunsBatch rePoll still classifies PendingApproval via probe (unapproved race)', async (t) => {
+  // Simulates the case where the user clicked "Yes I approved" but the approval
+  // hasn't propagated yet. Stage run is still 200000005 (PendingApproval), poll
+  // sees only 200000006 (Validating) until timeout, then probe sees 200000005.
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async (req) => {
+    if (/\$select=operation/.test(req.url)) {
+      // Still validating — keeps poll spinning until maxAttempts exhausts
+      return { statusCode: 200, body: JSON.stringify({ stagerunstatus: 200000006, validationresults: null }) };
+    }
+    if (/\$select=stagerunstatus/.test(req.url)) {
+      // Probe sees the actual state: Pending Approval
+      return { statusCode: 200, body: JSON.stringify({ stagerunstatus: 200000005, validationresults: null }) };
+    }
+    return { statusCode: 200, body: '{}' };
+  };
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const result = await validateStageRunsBatch({
+    hostEnvUrl: HOST,
+    token: 'fake',
+    rePoll: true,
+    specs: [{ solutionUniqueName: 'P', solutionId: 'sid', stageRunId: 'srun-pending' }],
+    intervalMs: 1,
+    maxAttempts: 2,
+  });
+
+  assert.equal(result.pendingApproval, 1);
+  assert.equal(result.allPassed, false);
+  assert.equal(result.results[0].status, 'PendingApproval');
+  assert.equal(result.results[0].stageRunId, 'srun-pending');
 });
 
 test('validateStageRunsBatch reports VALIDATE_PACKAGE_UNAVAILABLE when ValidatePackageAsync returns 404', async (t) => {

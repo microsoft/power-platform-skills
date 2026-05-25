@@ -330,6 +330,39 @@ function refreshDeployPipeline(planData, projectRoot) {
       activationStatus: deployMarker.activationStatus || null,
       siteUrl: deployMarker.siteUrl || null,
     };
+    // MULTI_RUN_MODE only: deploy-pipeline Phase 3.6 fans out parallel
+    // ValidatePackageAsync calls before the serial deploy loop and persists
+    // a `batchValidation` summary into the marker. Surface it on
+    // pipelineMeta.lastDeploy so the renderer can display "Parallel validation:
+    // N solutions in ~Ts, M succeeded" without re-querying. We carry the
+    // per-solution stageRunIds too in case the renderer wants to deep-link
+    // each one back to PPAC. Field absent for single-solution / legacy v2
+    // deploys — caller's renderer should treat `null` as "not multi-run".
+    if (deployMarker.batchValidation && typeof deployMarker.batchValidation === 'object') {
+      const b = deployMarker.batchValidation;
+      // Accept both `elapsedSeconds` (current Phase 3.6.6 schema, populated
+      // directly from validate-stage-runs-batch.js's helper output) and
+      // `elapsedSecondsApprox` (legacy name used in earlier drafts of the
+      // SKILL.md before the helper exposed wall-clock measurement). The
+      // helper is the source of truth going forward, but legacy markers
+      // written before that change shouldn't get silently dropped.
+      const elapsed = b.elapsedSeconds != null
+        ? b.elapsedSeconds
+        : (b.elapsedSecondsApprox != null ? b.elapsedSecondsApprox : null);
+      planData.pipelineMeta.lastDeploy.batchValidation = {
+        totalSolutions: b.totalSolutions != null ? b.totalSolutions : null,
+        succeeded: b.succeeded != null ? b.succeeded : null,
+        failed: b.failed != null ? b.failed : null,
+        pendingApproval: b.pendingApproval != null ? b.pendingApproval : null,
+        timedOut: b.timedOut != null ? b.timedOut : null,
+        elapsedSeconds: elapsed,
+        perSolutionStageRunIds: (b.perSolutionStageRunIds && typeof b.perSolutionStageRunIds === 'object')
+          ? { ...b.perSolutionStageRunIds }
+          : null,
+      };
+    } else {
+      planData.pipelineMeta.lastDeploy.batchValidation = null;
+    }
     planData.pipelineMeta.isActive = true;
   }
   planData.risks = dropResolvedRisks(planData.risks, 'deploy-pipeline');
@@ -437,16 +470,40 @@ function refreshSetupSolution(planData, projectRoot) {
 // the re-render. Each may grow to ingest a per-stage marker file (e.g.
 // docs/alm/last-import.json keyed by target stage) in a future iteration.
 
-function refreshExportSolution(planData) {
-  // export-solution writes the solution zip to disk + a .solution-manifest.json
-  // version bump. No structured marker file today — re-rendering picks up
-  // the agent's step.status updates. If a future commit introduces
-  // .last-export.json (zipPath / exportedAt / version / managed flag), expand
-  // this handler to populate planData.manualMeta.lastExport from it.
+function refreshExportSolution(planData, projectRoot) {
+  // export-solution writes:
+  //   - the solution zip to disk
+  //   - a `.solution-manifest.json` version bump
+  //   - `docs/alm/last-export.json` marker (since 2026-05-25 — `bump-solution-version.js`
+  //     + always-on Phase 4.0 bump)
   //
+  // Ingest the marker into `planData.manualMeta.lastExport` so the rendered
+  // plan's Manual-path tab surfaces what was last shipped: solution name,
+  // bumped version (and the previous version it superseded), managed flag,
+  // zip path, and timestamp. The renderer is free to ignore fields it
+  // doesn't display today — we persist all the marker's known fields so
+  // future renderer changes don't have to round-trip through a refresh PR.
+  const exportMarker = readJson(almPath(projectRoot, 'lastExport'));
+  if (exportMarker) {
+    planData.manualMeta = planData.manualMeta || {};
+    planData.manualMeta.lastExport = {
+      solutionUniqueName: exportMarker.solutionUniqueName || null,
+      solutionId: exportMarker.solutionId || null,
+      previousVersion: exportMarker.previousVersion || null,
+      version: exportMarker.version || null,
+      managed: typeof exportMarker.managed === 'boolean' ? exportMarker.managed : null,
+      sourceEnvironmentUrl: exportMarker.sourceEnvironmentUrl || null,
+      zipPath: exportMarker.zipPath || null,
+      fileSizeBytes: exportMarker.fileSizeBytes != null ? exportMarker.fileSizeBytes : null,
+      asyncOperationId: exportMarker.asyncOperationId || null,
+      exportedAt: exportMarker.exportedAt || null,
+    };
+  }
+
   // Step-sync: a successful invocation of --phase export-solution completes
-  // the "Export solution" checklist entry. There's no marker to read; the
-  // invocation itself is the proof.
+  // the "Export solution" checklist entry. Independent of marker presence —
+  // legacy projects on the manual path may not yet have the marker file even
+  // though the export succeeded.
   setStepStatus(planData, { keyword: /\bexport\b/i, status: 'completed' });
   return planData;
 }
@@ -605,7 +662,7 @@ function applyRefresh(planData, phase, projectRoot, stageName) {
     case 'setup-pipeline':          return refreshSetupPipeline(planData, projectRoot);
     case 'configure-env-variables': return refreshConfigureEnvVariables(planData, projectRoot);
     case 'deploy-pipeline':         return refreshDeployPipeline(planData, projectRoot);
-    case 'export-solution':         return refreshExportSolution(planData);
+    case 'export-solution':         return refreshExportSolution(planData, projectRoot);
     case 'import-solution':         return refreshImportSolution(planData, projectRoot, stageName);
     case 'activate-site':           return refreshActivateSite(planData, projectRoot, stageName);
     case 'test-site':               return refreshTestSite(planData, projectRoot, stageName);

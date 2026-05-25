@@ -18,7 +18,7 @@
 // No automatic retry: the caller decides whether to abort or surface results
 // to the user.
 //
-// Usage:
+// Usage (fresh fan-out — fires once before the serial deploy loop):
 //   node validate-stage-runs-batch.js \
 //     --hostEnvUrl <url> \
 //     --stageId <id> \
@@ -29,11 +29,26 @@
 //     [--intervalMs <ms>] \
 //     [--maxAttempts <n>]
 //
+// Usage (re-poll after user approves PendingApproval validations in PPAC):
+//   node validate-stage-runs-batch.js \
+//     --hostEnvUrl <url> \
+//     --rePoll \
+//     --solutionsFile <path>   # each entry must include "stageRunId"
+//     [--token <token>] \
+//     [--intervalMs <ms>] \
+//     [--maxAttempts <n>]
+//
+//   --stageId / --sourceDeploymentEnvironmentId are NOT required in rePoll mode —
+//   the stage run already exists with its bindings intact. Pass them and they're
+//   ignored.
+//
 // solutionsFile format (JSON array of):
-//   [
-//     { "solutionUniqueName": "MySite_Core",      "solutionId": "<guid>" },
-//     { "solutionUniqueName": "MySite_WebAssets", "solutionId": "<guid>" }
-//   ]
+//   Fresh:   [{ "solutionUniqueName": "MySite_Core",      "solutionId": "<guid>" }, ...]
+//   RePoll:  [{ "solutionUniqueName": "MySite_Core",      "solutionId": "<guid>",
+//              "stageRunId": "<guid>" }, ...]
+//
+//   In rePoll mode, missing `stageRunId` per entry yields an `Error` result
+//   for that entry without polling.
 //
 // Output (JSON to stdout):
 //   {
@@ -43,6 +58,8 @@
 //     "pendingApproval": N,
 //     "timedOut": N,
 //     "allPassed": <bool>,                      // true iff succeeded === total
+//     "elapsedSeconds": N,                      // wall-clock seconds for the fan-out
+//                                               // (excludes token-acquire prelude)
 //     "results": [
 //       {
 //         "solutionUniqueName": "...",
@@ -79,6 +96,7 @@ function parseArgs(argv) {
     solutionsFile: null,
     intervalMs: 5000,
     maxAttempts: 36,
+    rePoll: false,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--hostEnvUrl' && args[i + 1]) out.hostEnvUrl = args[++i];
@@ -89,6 +107,7 @@ function parseArgs(argv) {
     else if (args[i] === '--solutionsFile' && args[i + 1]) out.solutionsFile = args[++i];
     else if (args[i] === '--intervalMs' && args[i + 1]) out.intervalMs = parseInt(args[++i], 10);
     else if (args[i] === '--maxAttempts' && args[i + 1]) out.maxAttempts = parseInt(args[++i], 10);
+    else if (args[i] === '--rePoll' || args[i] === '--repoll') out.rePoll = true;
   }
   return out;
 }
@@ -121,6 +140,56 @@ async function triggerValidatePackage({ hostEnvUrl, token, stageRunId }) {
   }
 }
 
+/**
+ * Polls validation, and on timeout probes once to distinguish "still validating"
+ * (timeout) from "pending approval" (`stagerunstatus=200000005`). Centralised so
+ * the regular fan-out path (validateOne) and the re-poll path (rePollOne) share
+ * the same terminal-state classification.
+ *
+ * Returns one of:
+ *   { status: 'Succeeded', validationResults }
+ *   { status: 'PendingApproval', validationResults }
+ *   { status: 'Timeout', error }
+ *   { status: 'Failed', error }
+ */
+async function pollAndProbe({ hostEnvUrl, token, stageRunId, intervalMs, maxAttempts }) {
+  try {
+    const pollResult = await pollValidationStatus({
+      hostEnvUrl,
+      token,
+      stageRunId,
+      intervalMs,
+      maxAttempts,
+    });
+    return { status: 'Succeeded', validationResults: pollResult.validationResults || null };
+  } catch (pollErr) {
+    const baseUrl = hostEnvUrl.replace(/\/+$/, '');
+    const probe = await helpers.makeRequest({
+      url: `${baseUrl}/api/data/v9.0/deploymentstageruns(${stageRunId})?$select=stagerunstatus,validationresults`,
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'OData-MaxVersion': '4.0',
+        'OData-Version': '4.0',
+      },
+      timeout: 15000,
+    });
+    if (probe.statusCode === 200) {
+      try {
+        const data = JSON.parse(probe.body);
+        if (data.stagerunstatus === STAGE_RUN_STATUS_PENDING_APPROVAL) {
+          return { status: 'PendingApproval', validationResults: data.validationresults || null };
+        }
+      } catch {
+        // fall through to timeout/failed classification
+      }
+    }
+    const msg = pollErr && pollErr.message ? pollErr.message : String(pollErr);
+    return { status: /timed out/i.test(msg) ? 'Timeout' : 'Failed', error: msg };
+  }
+}
+
 async function validateOne({ hostEnvUrl, token, stageId, sourceDeploymentEnvironmentId, pipelineId, spec, intervalMs, maxAttempts }) {
   if (!spec || !spec.solutionUniqueName || !spec.solutionId) {
     return {
@@ -149,74 +218,67 @@ async function validateOne({ hostEnvUrl, token, stageId, sourceDeploymentEnviron
     // 2) Trigger validation (204 expected)
     await triggerValidatePackage({ hostEnvUrl, token, stageRunId });
 
-    // 3) Poll until validation reaches a terminal state.
-    //
-    // pollValidationStatus throws on stageRunStatus 200000003 (Failed) and on
-    // timeout. PendingApproval (200000005) is NOT in the helper's terminal
-    // set — it would keep polling — so we catch the timeout path specifically
-    // and re-query once to distinguish "still validating" vs "pending approval"
-    // before deciding which status to emit.
-    let pollResult;
-    try {
-      pollResult = await pollValidationStatus({
-        hostEnvUrl,
-        token,
-        stageRunId,
-        intervalMs,
-        maxAttempts,
-      });
-    } catch (pollErr) {
-      // Re-query the stage run to inspect its terminal state. If it's PendingApproval
-      // the timeout was a false positive — the validation needs user approval.
-      const baseUrl = hostEnvUrl.replace(/\/+$/, '');
-      const probe = await helpers.makeRequest({
-        url: `${baseUrl}/api/data/v9.0/deploymentstageruns(${stageRunId})?$select=stagerunstatus,validationresults`,
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-          'OData-MaxVersion': '4.0',
-          'OData-Version': '4.0',
-        },
-        timeout: 15000,
-      });
-      if (probe.statusCode === 200) {
-        const data = JSON.parse(probe.body);
-        if (data.stagerunstatus === STAGE_RUN_STATUS_PENDING_APPROVAL) {
-          return {
-            solutionUniqueName: spec.solutionUniqueName,
-            solutionId: spec.solutionId,
-            stageRunId,
-            status: 'PendingApproval',
-            validationResults: data.validationresults || null,
-          };
-        }
-      }
-      // Real failure / timeout — surface poll error.
-      const msg = pollErr && pollErr.message ? pollErr.message : String(pollErr);
-      const status = /timed out/i.test(msg) ? 'Timeout' : 'Failed';
-      return {
-        solutionUniqueName: spec.solutionUniqueName,
-        solutionId: spec.solutionId,
-        stageRunId,
-        status,
-        error: msg,
-      };
-    }
-
+    // 3) Poll + probe (terminal-state classification shared with rePollOne)
+    const outcome = await pollAndProbe({ hostEnvUrl, token, stageRunId, intervalMs, maxAttempts });
     return {
       solutionUniqueName: spec.solutionUniqueName,
       solutionId: spec.solutionId,
       stageRunId,
-      status: 'Succeeded',
-      validationResults: pollResult.validationResults || null,
+      ...outcome,
     };
   } catch (err) {
     return {
       solutionUniqueName: spec.solutionUniqueName,
       solutionId: spec.solutionId,
       stageRunId,
-      status: err && err.code === 'VALIDATE_PACKAGE_UNAVAILABLE' ? 'Error' : 'Error',
+      status: 'Error',
+      error: err && err.message ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Re-poll an EXISTING stage run that previously hit `PendingApproval`. Skips
+ * create-stage-run + ValidatePackageAsync — those already happened on the
+ * original `validateOne` call. After the user approves the validation in PPAC,
+ * the stage run transitions: 200000005 (PendingApproval) → 200000006 (Validating) →
+ * 200000007 (Succeeded). This function picks that up via the same poll+probe
+ * path used for the initial fan-out.
+ *
+ * spec shape: `{ solutionUniqueName, solutionId, stageRunId }`. Missing `stageRunId`
+ * is a fatal misuse — return `Error` rather than fabricating one.
+ */
+async function rePollOne({ hostEnvUrl, token, spec, intervalMs, maxAttempts }) {
+  if (!spec || !spec.solutionUniqueName || !spec.solutionId || !spec.stageRunId) {
+    return {
+      solutionUniqueName: spec && spec.solutionUniqueName,
+      solutionId: spec && spec.solutionId,
+      stageRunId: spec && spec.stageRunId,
+      status: 'Error',
+      error: 'rePoll spec missing required fields (solutionUniqueName, solutionId, stageRunId)',
+    };
+  }
+
+  try {
+    const outcome = await pollAndProbe({
+      hostEnvUrl,
+      token,
+      stageRunId: spec.stageRunId,
+      intervalMs,
+      maxAttempts,
+    });
+    return {
+      solutionUniqueName: spec.solutionUniqueName,
+      solutionId: spec.solutionId,
+      stageRunId: spec.stageRunId,
+      ...outcome,
+    };
+  } catch (err) {
+    return {
+      solutionUniqueName: spec.solutionUniqueName,
+      solutionId: spec.solutionId,
+      stageRunId: spec.stageRunId,
+      status: 'Error',
       error: err && err.message ? err.message : String(err),
     };
   }
@@ -225,12 +287,20 @@ async function validateOne({ hostEnvUrl, token, stageId, sourceDeploymentEnviron
 async function validateStageRunsBatch({
   hostEnvUrl, token, pipelineId, stageId, sourceDeploymentEnvironmentId,
   solutionsFile, specs, intervalMs = 5000, maxAttempts = 36,
+  // When true, treat each spec as an existing stage run to re-poll (no
+  // create-stage-run, no ValidatePackageAsync). Used by deploy-pipeline Phase
+  // 3.6.4 after the user approves Pending Approval validations in PPAC.
+  rePoll = false,
   // Test seam — defaults to getAuthToken when no token passed.
   refreshToken,
 }) {
   if (!hostEnvUrl) throw new Error('--hostEnvUrl is required');
-  if (!stageId) throw new Error('--stageId is required');
-  if (!sourceDeploymentEnvironmentId) throw new Error('--sourceDeploymentEnvironmentId is required');
+  // stageId + sourceDeploymentEnvironmentId only required for the fresh fan-out
+  // path; rePoll re-uses stage runs whose stage was already chosen.
+  if (!rePoll) {
+    if (!stageId) throw new Error('--stageId is required');
+    if (!sourceDeploymentEnvironmentId) throw new Error('--sourceDeploymentEnvironmentId is required');
+  }
 
   let entries = specs;
   if (!entries) {
@@ -247,17 +317,31 @@ async function validateStageRunsBatch({
   const resolvedToken = token || refresh();
   if (!resolvedToken) throw new Error('Failed to acquire Azure CLI token. Run `az login` first.');
 
+  // Wall-clock-measure the batch so callers (deploy-pipeline Phase 3.6.6) can
+  // persist `elapsedSeconds` into docs/alm/last-deploy.json's batchValidation
+  // block without measuring out-of-band. Captured at the start of fan-out so
+  // it covers the actual concurrent work, not the token-acquire prelude.
+  const startTimeMs = Date.now();
+
   const tasks = entries.map((spec) =>
-    validateOne({
-      hostEnvUrl,
-      token: resolvedToken,
-      pipelineId,
-      stageId,
-      sourceDeploymentEnvironmentId,
-      spec,
-      intervalMs,
-      maxAttempts,
-    })
+    rePoll
+      ? rePollOne({
+          hostEnvUrl,
+          token: resolvedToken,
+          spec,
+          intervalMs,
+          maxAttempts,
+        })
+      : validateOne({
+          hostEnvUrl,
+          token: resolvedToken,
+          pipelineId,
+          stageId,
+          sourceDeploymentEnvironmentId,
+          spec,
+          intervalMs,
+          maxAttempts,
+        })
   );
 
   // Promise.allSettled would also work but every validateOne resolves
@@ -274,6 +358,8 @@ async function validateStageRunsBatch({
     else if (r.status === 'Timeout') tally.timedOut += 1;
   }
 
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - startTimeMs) / 1000));
+
   return {
     total: entries.length,
     succeeded: tally.succeeded,
@@ -281,6 +367,7 @@ async function validateStageRunsBatch({
     pendingApproval: tally.pendingApproval,
     timedOut: tally.timedOut,
     allPassed: tally.succeeded === entries.length,
+    elapsedSeconds,
     results,
   };
 }

@@ -294,7 +294,7 @@ Handle script exit code:
 
 **Step 7.1 — Write `docs/alm/last-export.json` marker.**
 
-Ensure `docs/alm/` exists, then write a marker so downstream skills (`import-solution` skew advisory, future "modified-since-last-export" gates, audit trail) can reason about what was last shipped from this source.
+Ensure `docs/alm/` exists, then write the marker so downstream skills (`import-solution` skew advisory, `refresh-alm-plan-data.js` rendering the Manual-path tab, future "modified-since-last-export" gates, audit trail) can reason about what was last shipped from this source.
 
 ```bash
 node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
@@ -317,11 +317,7 @@ Then write `docs/alm/last-export.json`:
 }
 ```
 
-Always resolve the path through `scripts/lib/alm-paths.js` — never inline `docs/alm/last-export.json`:
-
-```bash
-node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/alm-paths').almPath(process.cwd(), 'lastExport'))"
-```
+The path is registered in `scripts/lib/alm-paths.js` under the key `lastExport` — programmatic consumers should resolve via `almPath(projectRoot, 'lastExport')` rather than re-inlining the path string. (Skill prose inlines the path verbatim for readability, matching the convention used for `last-deploy.json`, `last-import.json`, and the other ALM markers.)
 
 **Step 7.2 — Display the summary.**
 

@@ -175,15 +175,26 @@ Before asking the user about staged/direct import, query the target environment 
    ```
    Store the result as `INSTALLED` (or `null` if the filter returns an empty `value` array).
 
-3. **Branch on the comparison**:
+3. **Compare versions via the shared helper, then branch on the result.**
 
-   | `INSTALLED` | `INSTALLED.version` vs `ZIP_SOLUTION_VERSION` | Behavior |
+   **Precondition — skip this entire step when `INSTALLED` is `null`.** That's the first-time-install case: there's nothing on the target to compare against. Do NOT call the helper with `null` substituted into `'{INSTALLED.version}'` — it would throw "version is required" and leave the agent without a branch. Jump straight to the staged/direct prompt below and treat the import as a fresh install.
+
+   Otherwise (`INSTALLED` is non-null), compare versions:
+
+   Critical: **do not compare version strings with raw `>` / `<` / `===`** — Dataverse versions are 4-segment integer tuples (`1.0.0.9` vs `1.0.0.10`) and lexical comparison reports `1.0.0.10` as **lower than** `1.0.0.9`, flipping the skew gate on the 10th deploy of the day. Use the canonical helper instead:
+
+   ```bash
+   node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version').compareVersions('{ZIP_SOLUTION_VERSION}', '{INSTALLED.version}'))"
+   ```
+
+   The helper returns `-1` when ZIP < INSTALLED, `0` when equal, `1` when ZIP > INSTALLED. Same segment-wise integer rules as `bumpPatchSegment` (pad-with-zero, max-4-segments, reject non-integer). Capture stdout, trim, and store the integer as `VERSION_CMP`. If the helper throws (malformed version on either side), surface the stderr to the user and stop — the version comparison is a precondition for safe import.
+
+   | `INSTALLED` | `VERSION_CMP` | Behavior |
    |---|---|---|
-   | `null` | (n/a — not yet installed) | First-time install. Continue silently to the staged/direct prompt below. |
-   | not null | `ZIP_SOLUTION_VERSION > INSTALLED.version` | Normal upgrade. Report: *"Target has v{INSTALLED.version} installed; this zip is v{ZIP_SOLUTION_VERSION}. Importing will upgrade."* |
-   | not null, `INSTALLED.ismanaged: true` | `ZIP_SOLUTION_VERSION === INSTALLED.version` | **Surface the warning below** (managed same-version skew). |
-   | not null, `INSTALLED.ismanaged: false` | `ZIP_SOLUTION_VERSION === INSTALLED.version` | **Surface the warning below** (unmanaged same-version skew). |
-   | not null | `ZIP_SOLUTION_VERSION < INSTALLED.version` | **Surface the warning below** (downgrade). |
+   | `null` | (helper not called — see precondition above) | First-time install. Continue silently to the staged/direct prompt below. |
+   | not null | `1` (zip is strictly greater) | Normal upgrade. Report: *"Target has v{INSTALLED.version} installed; this zip is v{ZIP_SOLUTION_VERSION}. Importing will upgrade."* |
+   | not null | `0` (zip equals installed) | **Surface the warning below** (same-version skew — applies to both managed and unmanaged). |
+   | not null | `-1` (zip is strictly less) | **Surface the warning below** (downgrade — applies to both managed and unmanaged). |
 
    <!-- gate: import-solution:3.0.version-skew | category=consent | cancel-leaves=nothing -->
    > 🚦 **Gate (consent · import-solution:3.0.version-skew):** Zip version is equal-to or lower-than the installed solution's version on the target. Importing produces unpredictable upgrade semantics; the source `export-solution` is supposed to bump the version on every export. Re-export with bumped version, force the import anyway, or cancel.

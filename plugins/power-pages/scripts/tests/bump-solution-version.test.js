@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const {
   bumpSolutionVersion,
   bumpPatchSegment,
+  parseVersionToSegments,
+  compareVersions,
 } = require('../lib/bump-solution-version');
 
 test('bumpPatchSegment increments the 4th segment', () => {
@@ -184,6 +186,46 @@ test('bumpSolutionVersion surfaces non-204 PATCH responses', async (t) => {
     }),
     /Version PATCH returned 412/
   );
+});
+
+test('parseVersionToSegments pads + validates the same way bumpPatchSegment does', () => {
+  assert.deepEqual(parseVersionToSegments('1.0.0.2'), [1, 0, 0, 2]);
+  assert.deepEqual(parseVersionToSegments('1.2.3'), [1, 2, 3, 0]);
+  assert.deepEqual(parseVersionToSegments('1'), [1, 0, 0, 0]);
+  assert.throws(() => parseVersionToSegments('1.0.0.a'), /not a non-negative integer/);
+  assert.throws(() => parseVersionToSegments('1.0.0.0.0'), /more than 4 segments/);
+  assert.throws(() => parseVersionToSegments(''), /version is required/);
+});
+
+test('compareVersions compares segment-wise as integers (not lexically)', () => {
+  // The canary case — string comparison would say '1.0.0.9' > '1.0.0.10' (true!),
+  // i.e. label v1.0.0.10 as a downgrade from v1.0.0.9. Integer comparison gets it right.
+  assert.equal(compareVersions('1.0.0.9', '1.0.0.10'), -1);
+  assert.equal(compareVersions('1.0.0.10', '1.0.0.9'), 1);
+
+  // Equal versions
+  assert.equal(compareVersions('1.0.0.2', '1.0.0.2'), 0);
+  assert.equal(compareVersions('2.0.0.0', '2.0.0.0'), 0);
+
+  // Major / minor / build segments dominate
+  assert.equal(compareVersions('2.0.0.0', '1.99.99.99'), 1);
+  assert.equal(compareVersions('1.0.0.0', '1.0.1.0'), -1);
+  assert.equal(compareVersions('1.1.0.0', '1.0.99.99'), 1);
+
+  // Pads with zero — '1.0.0' should equal '1.0.0.0'
+  assert.equal(compareVersions('1.0.0', '1.0.0.0'), 0);
+  assert.equal(compareVersions('1', '1.0.0.0'), 0);
+  assert.equal(compareVersions('1', '1.0.0.1'), -1);
+
+  // Integer arithmetic across multiple ten-crossings
+  assert.equal(compareVersions('1.0.10.0', '1.0.9.99'), 1);
+  assert.equal(compareVersions('1.10.0.0', '1.9.99.99'), 1);
+});
+
+test('compareVersions rejects malformed input on either side', () => {
+  assert.throws(() => compareVersions('1.0.0.a', '1.0.0.0'), /not a non-negative integer/);
+  assert.throws(() => compareVersions('1.0.0.0', '1.0.0.a'), /not a non-negative integer/);
+  assert.throws(() => compareVersions('', '1.0.0.0'), /version is required/);
 });
 
 test('bumpSolutionVersion surfaces unknown uniqueName before any PATCH', async (t) => {

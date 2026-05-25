@@ -41,6 +41,31 @@ function parseArgs(argv) {
 }
 
 /**
+ * Parses a Dataverse version string into a 4-segment integer tuple.
+ * Pads missing trailing segments with `0` so `1.0` → `[1,0,0,0]`.
+ * Rejects non-numeric or negative segments and > 4 segments.
+ *
+ * @param {string} version
+ * @returns {number[]}
+ */
+function parseVersionToSegments(version) {
+  if (typeof version !== 'string' || version.trim() === '') {
+    throw new Error(`parseVersionToSegments: version is required (got ${JSON.stringify(version)})`);
+  }
+  const segments = version.split('.');
+  if (segments.length > 4) {
+    throw new Error(`parseVersionToSegments: version "${version}" has more than 4 segments`);
+  }
+  const padded = [...segments, '0', '0', '0', '0'].slice(0, 4);
+  return padded.map((s, i) => {
+    if (!/^\d+$/.test(s)) {
+      throw new Error(`parseVersionToSegments: segment ${i} of "${version}" is not a non-negative integer ("${s}")`);
+    }
+    return Number(s);
+  });
+}
+
+/**
  * Bumps the patch (4th) segment of a Dataverse version string.
  * Pads missing segments with `0` so 1.0 → 1.0.0.1 and 1 → 1.0.0.1.
  * Rejects non-numeric segments, negative numbers, and empty input.
@@ -49,22 +74,37 @@ function parseArgs(argv) {
  * @returns {string}
  */
 function bumpPatchSegment(version) {
-  if (typeof version !== 'string' || version.trim() === '') {
-    throw new Error(`bumpPatchSegment: version is required (got ${JSON.stringify(version)})`);
-  }
-  const segments = version.split('.');
-  if (segments.length > 4) {
-    throw new Error(`bumpPatchSegment: version "${version}" has more than 4 segments`);
-  }
-  const padded = [...segments, '0', '0', '0', '0'].slice(0, 4);
-  const nums = padded.map((s, i) => {
-    if (!/^\d+$/.test(s)) {
-      throw new Error(`bumpPatchSegment: segment ${i} of "${version}" is not a non-negative integer ("${s}")`);
-    }
-    return Number(s);
-  });
+  const nums = parseVersionToSegments(version);
   nums[3] += 1;
   return nums.join('.');
+}
+
+/**
+ * Integer-segment-wise comparison of two Dataverse version strings.
+ * Returns -1 when `a < b`, 0 when equal, +1 when `a > b`.
+ *
+ * Critically, this does NOT compare lexically — `compareVersions('1.0.0.9', '1.0.0.10')`
+ * correctly returns -1 (i.e., `1.0.0.9 < 1.0.0.10`), where JS string `'1.0.0.9' > '1.0.0.10'`
+ * is `true`. Callers that use `>`/`<` on raw version strings (in agent prose, in SKILL.md
+ * decision tables, etc.) will get the wrong branch as soon as any segment crosses 10 —
+ * a real-world failure mode for any project on its 10th+ deploy of the day.
+ *
+ * Used by `import-solution` Phase 3.0 version-skew advisory and any other caller that
+ * needs to compare zip-version vs installed-version, dev-version vs target-version, etc.
+ * Same segment-parse rules as `bumpPatchSegment` (pad-with-zero, integer-only, max-4-segments).
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {-1 | 0 | 1}
+ */
+function compareVersions(a, b) {
+  const aSeg = parseVersionToSegments(a);
+  const bSeg = parseVersionToSegments(b);
+  for (let i = 0; i < 4; i++) {
+    if (aSeg[i] < bSeg[i]) return -1;
+    if (aSeg[i] > bSeg[i]) return 1;
+  }
+  return 0;
 }
 
 async function bumpSolutionVersion({ envUrl, uniqueName, solutionId, token, dryRun = false }) {
@@ -172,4 +212,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { bumpSolutionVersion, bumpPatchSegment };
+module.exports = { bumpSolutionVersion, bumpPatchSegment, parseVersionToSegments, compareVersions };

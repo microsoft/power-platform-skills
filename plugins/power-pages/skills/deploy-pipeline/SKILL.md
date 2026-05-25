@@ -412,7 +412,23 @@ Surface the affected solutions in a single message (not per-solution) and pause.
 > |---|---|---|
 > | Approvals complete? | Batch validation approval | Yes — I approved all of them; re-poll, No — cancel the deploy |
 
-- **Yes**: re-run `validate-stage-runs-batch.js` BUT this time pass `--specs` containing only the previously-pending entries (their stage runs already exist; the helper will recreate stage runs for them which fails on 409 — preferable: rather than re-creating, re-poll the existing ones individually). The simpler implementation: for each `result.stageRunId` where `status === 'PendingApproval'`, call `poll-validation-status.js` individually (serial is fine — there are at most N pending and they should all be approved by now). Merge the updated outcomes into `VALIDATED_STAGE_RUNS`. If any of the re-polls still return PendingApproval, fire this gate again. If any fail, fall through to 3.6.5.
+- **Yes**: re-run `validate-stage-runs-batch.js` in **`--rePoll`** mode. The helper accepts existing stage run IDs and skips the `create-stage-run` + `ValidatePackageAsync` calls — it just runs the poll-and-probe pattern against each `stageRunId`. After user approval, the stage run transitions `200000005 (PendingApproval) → 200000006 (Validating) → 200000007 (ValidationSucceeded)`; the helper's probe correctly distinguishes "still pending" (the user clicked Yes prematurely) from "real timeout" so the agent doesn't have to interpret a generic timeout error.
+
+  Build a tmp file with only the previously-pending entries (carry `stageRunId` from the original batch result):
+  ```bash
+  node -e "require('fs').writeFileSync('./docs/alm/.repoll-batch.json', JSON.stringify({{PENDING_SPECS_WITH_STAGERUNIDS}}))"
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
+    --hostEnvUrl "{hostEnvUrl}" \
+    --token "{HOST_TOKEN}" \
+    --rePoll \
+    --solutionsFile ./docs/alm/.repoll-batch.json
+  ```
+  Where `{{PENDING_SPECS_WITH_STAGERUNIDS}}` is the array `[{ solutionUniqueName, solutionId, stageRunId }, …]` filtered to entries with `status === 'PendingApproval'` from the original batch.
+
+  Capture stdout as JSON; delete the tmp file (`./docs/alm/.repoll-batch.json`). Merge the updated outcomes into `VALIDATED_STAGE_RUNS` keyed by `solutionUniqueName`. Then branch on the rePoll batch's tally:
+  - **All succeeded** → proceed to Phase 4 with the full set of validated stage runs.
+  - **One or more still PendingApproval** → fire the same gate again (the approval hadn't propagated; the user gets a fresh "approve in PPAC, then re-poll" prompt). Loop until either all approved or the user cancels.
+  - **One or more `Failed` / `Timeout` / `Error`** → fall through to **3.6.5** (treat as batch validation failure).
 - **No**: stop cleanly. The validated stage runs and the pending stage runs remain on the host; re-invoking the skill picks up where this left off (the user can approve and re-run).
 
 **3.6.5 Halt on batch validation failure.**
@@ -439,20 +455,23 @@ Surface the failing entries with their `validationResults` (which is the **doubl
 
 **3.6.6 Persist the batch summary.**
 
-Append a `batchValidation` object to the in-memory state that will be written to `docs/alm/last-deploy.json` in Phase 7:
+Append a `batchValidation` object to the in-memory state that will be written to `docs/alm/last-deploy.json` in Phase 7. Source most fields directly from the `batch` JSON returned by `validate-stage-runs-batch.js`:
 
 ```json
 {
-  "totalSolutions": <total>,
-  "succeeded": <count>,
-  "failed": <count>,
-  "pendingApproval": <count>,
-  "elapsedSecondsApprox": <wall-clock seconds for the batch call>,
+  "totalSolutions": <batch.total>,
+  "succeeded": <batch.succeeded>,
+  "failed": <batch.failed>,
+  "pendingApproval": <batch.pendingApproval>,
+  "timedOut": <batch.timedOut>,
+  "elapsedSeconds": <batch.elapsedSeconds>,
   "perSolutionStageRunIds": { "<solutionUniqueName>": "<stageRunId>", ... }
 }
 ```
 
-This gives the next invocation (and any audit consumer) a record of the parallel-validation outcome distinct from the serial deploy outcomes.
+Build `perSolutionStageRunIds` by reducing `batch.results` into `{ [r.solutionUniqueName]: r.stageRunId }` for every entry where `stageRunId` is non-null (including failed-but-stage-run-was-created entries — preserves the deep-link to PPAC for debugging). `elapsedSeconds` comes from the helper directly (it wall-clock-measures the fan-out internally — no need to wrap the bash invocation in a timer).
+
+This gives the next invocation (and any audit consumer) a record of the parallel-validation outcome distinct from the serial deploy outcomes. `refresh-alm-plan-data.js`'s `deploy-pipeline` phase ingests this block into `planData.pipelineMeta.lastDeploy.batchValidation` so the rendered ALM plan can show the parallel-validation timing.
 
 ### Phase 4 — Create Stage Run + Validate Package
 
