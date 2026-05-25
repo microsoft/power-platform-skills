@@ -353,13 +353,14 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.6 `import-solution` (10 calls)
+### 6.6 `import-solution` (11 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `import-solution:0.no-plan` | gate | intent | 0 | `check-alm-plan.js` `exists:false` — *"Run plan-alm? / Continue / Cancel"* | nothing |
 | `import-solution:0.stale-plan` | gate | intent | 0 | `check-alm-plan.js` `stale:true` — *"Refresh / Continue / Cancel"* | nothing |
 | `import-solution:2.multiple-zips` | gate | plan | 2 | More than one valid zip found — *"Choose"* | nothing |
+| `import-solution:3.0.version-skew` | gate | consent | 3.0 | Zip version `≤` installed target version — *"Re-export with bump / Import anyway / Cancel"* | nothing |
 | `import-solution:3.config` | gate | plan | 3 | Import config — *"Staged dependency check / direct / overwrite options"* | nothing |
 | `import-solution:5b.blocked-attachments` | gate | consent | 5b.3 | `AttachmentBlocked` during import — *"Modify `blockedattachments` and retry? Yes / Skip"* | `attachment-block-modified` |
 | `import-solution:6b.env-vars` | gate | plan | 6b | Env vars need per-stage values — *"Enter values"* | nothing |

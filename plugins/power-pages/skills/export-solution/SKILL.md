@@ -222,6 +222,27 @@ Also ask (separate `AskUserQuestion`):
 
 ### Phase 4 — Trigger Async Export
 
+**Step 4.0 — Bump source solution version (always-on).**
+
+Before exporting, bump the patch segment (4th segment) of the source solution's version. Without this, two consecutive exports without intervening `setup-solution` sync produce zips that carry the **same** version string — and importing the second zip into a target that already has the first installed is unreliable for managed solutions (no clean upgrade path) and depends on `OverwriteUnmanagedCustomizations: true` for unmanaged.
+
+> **Why always-on, not "only when sync mode added components"**: `setup-solution` only bumps when it has new components to add. A user who modifies content of an already-in-solution component (a web template, a site setting value, a web file) and then re-exports must still get a strictly-increasing version label — otherwise the manual export/import path quietly ships stale-version zips. See the `Why this step exists` callout in `setup-solution` Phase 4.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+  --envUrl "{envUrl}" \
+  --token "{token}" \
+  --uniqueName "{solutionUniqueName}"
+```
+
+Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION` and `.next` as `EXPORT_VERSION`. Report: "Bumped solution `{solutionUniqueName}` from v{PRE_EXPORT_VERSION} to v{EXPORT_VERSION} for export."
+
+If `.solution-manifest.json` is present in the project root, update its `solution.version` field to `EXPORT_VERSION` (in-place `Edit`) so the manifest stays consistent if the skill is interrupted between bump and export.
+
+> **If the bump already happened earlier in this session** (e.g. `setup-solution` sync mode ran with adopted components in Phase 2.5 and bumped the version, then handed back here): the helper still runs and bumps again. This is intentional — sync's bump is paired with new components; export's bump is paired with the produced zip. They're independent concerns and double-bumping is cheap (just an extra patch segment). The skill-skipping logic for "the manifest version already matches the live source version" is intentionally NOT added here; it would create a class of "I edited content but no sync was needed and no bump happened, so the export shipped a stale version" failures.
+
+**Step 4.1 — Trigger async export.**
+
 Run `scripts/lib/export-solution-async.js` to POST `ExportSolutionAsync`, poll until terminal state, and return the `AsyncOperationId`:
 
 ```bash
@@ -271,15 +292,47 @@ Handle script exit code:
 
 ### Phase 7 — Present Summary
 
-Display a summary:
+**Step 7.1 — Write `docs/alm/last-export.json` marker.**
+
+Ensure `docs/alm/` exists, then write a marker so downstream skills (`import-solution` skew advisory, future "modified-since-last-export" gates, audit trail) can reason about what was last shipped from this source.
+
+```bash
+node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
+```
+
+Then write `docs/alm/last-export.json`:
+
+```json
+{
+  "exportedAt": "<ISO timestamp>",
+  "solutionUniqueName": "<solutionUniqueName>",
+  "solutionId": "<solutionId from .solution-manifest.json or Phase 2 query>",
+  "previousVersion": "<PRE_EXPORT_VERSION from Step 4.0>",
+  "version": "<EXPORT_VERSION from Step 4.0>",
+  "managed": <true|false>,
+  "sourceEnvironmentUrl": "<envUrl>",
+  "zipPath": "<zipPath>",
+  "fileSizeBytes": <fileSizeBytes>,
+  "asyncOperationId": "<asyncOperationId>"
+}
+```
+
+Always resolve the path through `scripts/lib/alm-paths.js` — never inline `docs/alm/last-export.json`:
+
+```bash
+node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/alm-paths').almPath(process.cwd(), 'lastExport'))"
+```
+
+**Step 7.2 — Display the summary.**
 
 | Item | Value |
 |---|---|
-| Solution | `{solutionName}` v`{version}` |
+| Solution | `{solutionUniqueName}` v`{EXPORT_VERSION}` (was v`{PRE_EXPORT_VERSION}`) |
 | Export type | Managed / Unmanaged |
 | File | `{zipPath}` |
 | File size | `{size} KB` |
 | Export job | `{AsyncJobId}` |
+| Marker written | `docs/alm/last-export.json` |
 
 **Suggested next steps**:
 - Run `/power-pages:import-solution` to deploy this zip to another environment
@@ -308,6 +361,7 @@ Re-renders `docs/alm-plan.html` so any step-status updates the agent made during
 2. **Phase 2.5**: Completeness-gap prompt (sync-first / export-as-is / abort) when the live site has components missing from the solution
 3. **Phase 2.5**: **Post-sync approval gate** — only fires after a mid-export sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before exporting the zip. Pause exits cleanly; Cancel aborts.
 4. **Phase 3**: Managed vs unmanaged — affects downstream importability (irreversible choice for this export)
+5. **Phase 4 Step 4.0**: No user prompt — version bump runs automatically before `ExportSolutionAsync`. The bumped version (`PRE_EXPORT_VERSION → EXPORT_VERSION`) is surfaced in the Phase 7 summary so the user can see what version landed in the zip.
 
 ## Error Handling
 
@@ -322,7 +376,7 @@ Re-renders `docs/alm-plan.html` so any step-status updates the agent made during
 | Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
 | Identify solution | Identifying solution | Read .solution-manifest.json or ask user, confirm solution exists in environment |
 | Configure export | Configuring export | Ask user: managed vs unmanaged, output directory |
-| Trigger async export | Triggering async export | POST ExportSolutionAsync, capture AsyncJobId, poll until complete |
+| Trigger async export | Triggering async export | Bump source solution version (Step 4.0) via bump-solution-version.js so the zip carries a strictly-increasing version label; POST ExportSolutionAsync, capture AsyncJobId, poll until complete |
 | Download solution zip | Downloading solution zip | POST DownloadSolutionExportData, decode base64, write zip to disk |
 | Verify export | Verifying export | Confirm zip exists, size > 0, Solution.xml present inside |
-| Present summary | Presenting summary | Show zip path, size, type, and suggested next steps |
+| Present summary | Presenting summary | Write docs/alm/last-export.json marker (via alm-paths.js); show zip path, size, type, version bump, and suggested next steps |

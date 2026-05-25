@@ -18,11 +18,12 @@ test('ALM_DIR is the canonical docs/alm folder', () => {
   assert.equal(ALM_DIR, 'docs/alm');
 });
 
-test('FILE_NAMES exposes the 13 ALM artifact keys without leading dots', () => {
+test('FILE_NAMES exposes the 14 ALM artifact keys without leading dots', () => {
   const expected = [
     'planContext', 'sizeEstimate', 'splitPlan', 'hostResolution', 'envVars',
     'lastPipeline', 'lastDeploy', 'lastHostCheck', 'lastImport',
     'lastActivate', 'lastTestSite', 'lastForceLink', 'lastEnvVars',
+    'lastExport',
   ];
   assert.deepEqual(Object.keys(FILE_NAMES).sort(), expected.slice().sort());
   for (const name of Object.values(FILE_NAMES)) {
