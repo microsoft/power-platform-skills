@@ -4,7 +4,7 @@ version: 2.0.0
 description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__configure
+allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
 ---
 
 # Configure the Canvas Authoring MCP Server
@@ -71,13 +71,13 @@ Example URL: `https://make.powerapps.com/e/Default-91bee3d9-0c15-4f17-8624-c92bb
 
 ### 3. Configure the MCP server
 
-Call the `configure` MCP tool to connect the server to the user's coauthoring session:
+Call the `connect` MCP tool to connect the server to the user's coauthoring session:
 
 ```
-mcp__canvas-authoring__configure(
-  environmentId: ENV_ID,
-  appId: APP_ID,
-  clusterCategory: CLUSTER_CATEGORY
+mcp__canvas-authoring__connect(
+  environment_id: ENV_ID,
+  app_id: APP_ID,
+  cluster_category: CLUSTER_CATEGORY
 )
 ```
 
