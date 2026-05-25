@@ -159,6 +159,68 @@ Present the selected zip file details (name, size, path), any pre-import warning
 
 ### Phase 3 — Configure Import
 
+**Step 3.0 — Version-skew advisory (read-only check before any prompt).**
+
+Before asking the user about staged/direct import, query the target environment for the solution unique name carried in the zip and compare the installed version against the zip's version. The goal is to surface "you're about to import the same version that's already installed" before the user clicks through — this is the most common silent-failure pattern for the manual export/import path, because the source-side bump is what produces an unambiguously promotable artifact.
+
+1. **Extract the zip's `uniqueName` + `version`** from `solution.xml` inside the zip:
+   ```bash
+   unzip -p "{zipPath}" solution.xml 2>/dev/null | head -50
+   ```
+   Parse `<UniqueName>` and `<Version>` from the XML. Store as `ZIP_SOLUTION_NAME` and `ZIP_SOLUTION_VERSION`.
+
+2. **Query the target for the installed solution**:
+   ```
+   GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{ZIP_SOLUTION_NAME}'&$select=solutionid,uniquename,version,ismanaged
+   ```
+   Store the result as `INSTALLED` (or `null` if the filter returns an empty `value` array).
+
+3. **Compare versions via the shared helper, then branch on the result.**
+
+   **Precondition — skip this entire step when `INSTALLED` is `null`.** That's the first-time-install case: there's nothing on the target to compare against. Do NOT call the helper with `null` substituted into `'{INSTALLED.version}'` — it would throw "version is required" and leave the agent without a branch. Jump straight to the staged/direct prompt below and treat the import as a fresh install.
+
+   Otherwise (`INSTALLED` is non-null), compare versions:
+
+   Critical: **do not compare version strings with raw `>` / `<` / `===`** — Dataverse versions are 4-segment integer tuples (`1.0.0.9` vs `1.0.0.10`) and lexical comparison reports `1.0.0.10` as **lower than** `1.0.0.9`, flipping the skew gate on the 10th deploy of the day. Use the canonical helper instead:
+
+   ```bash
+   node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version').compareVersions('{ZIP_SOLUTION_VERSION}', '{INSTALLED.version}'))"
+   ```
+
+   The helper returns `-1` when ZIP < INSTALLED, `0` when equal, `1` when ZIP > INSTALLED. Same segment-wise integer rules as `bumpPatchSegment` (pad-with-zero, max-4-segments, reject non-integer). Capture stdout, trim, and store the integer as `VERSION_CMP`. If the helper throws (malformed version on either side), surface the stderr to the user and stop — the version comparison is a precondition for safe import.
+
+   | `INSTALLED` | `VERSION_CMP` | Behavior |
+   |---|---|---|
+   | `null` | (helper not called — see precondition above) | First-time install. Continue silently to the staged/direct prompt below. |
+   | not null | `1` (zip is strictly greater) | Normal upgrade. Report: *"Target has v{INSTALLED.version} installed; this zip is v{ZIP_SOLUTION_VERSION}. Importing will upgrade."* |
+   | not null | `0` (zip equals installed) | **Surface the warning below** (same-version skew — applies to both managed and unmanaged). |
+   | not null | `-1` (zip is strictly less) | **Surface the warning below** (downgrade — applies to both managed and unmanaged). |
+
+   <!-- gate: import-solution:3.0.version-skew | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · import-solution:3.0.version-skew):** Zip version is equal-to or lower-than the installed solution's version on the target. Importing produces unpredictable upgrade semantics; the source `export-solution` is supposed to bump the version on every export. Re-export with bumped version, force the import anyway, or cancel.
+
+   **Warning prompt** — `AskUserQuestion`:
+
+   > "The target environment already has **`{ZIP_SOLUTION_NAME}` v`{INSTALLED.version}`** installed ({INSTALLED.ismanaged ? 'managed' : 'unmanaged'}). The zip you are about to import carries version `{ZIP_SOLUTION_VERSION}`.
+   >
+   > Importing the same or a lower version is unreliable:
+   > - **Managed**: no upgrade lineage; the platform may apply or reject the import depending on internal heuristics.
+   > - **Unmanaged**: behavior depends entirely on `OverwriteUnmanagedCustomizations: true`, and any in-target edits that happen to match the zip's component IDs get silently overwritten without a version change to point to.
+   >
+   > `/power-pages:export-solution` always bumps the source version before producing a zip (since 2026-05-25). If this zip was produced before that change, re-exporting will give you a clean, strictly-greater version.
+   >
+   > How would you like to proceed?"
+   >
+   > | Question | Header | Options |
+   > |---|---|---|
+   > | What to do? | Version skew | Re-export with a bumped version (Recommended — invokes /power-pages:export-solution), Import anyway (proceed at your own risk), Cancel |
+
+   - **Re-export**: invoke `/power-pages:export-solution`. After it completes, restart this skill from Phase 2 with the freshly-produced zip.
+   - **Import anyway**: set `SKEW_ACK = true` and proceed to the staged/direct prompt below. Record the acknowledged skew in `docs/alm/last-import.json` under `versionSkew: { zipVersion, installedVersion, isManaged, acknowledged: true }` for the audit trail.
+   - **Cancel**: stop the skill cleanly. No target-env writes happened in Step 3.0 — it was read-only.
+
+4. **If the comparison is the normal upgrade case** (or the zip's solution isn't installed yet), continue silently — do not present a prompt, just record the version delta in the eventual `docs/alm/last-import.json` for the summary.
+
 <!-- gate: import-solution:3.config | category=plan | cancel-leaves=nothing -->
 > 🚦 **Gate (plan · import-solution:3.config):** Staged vs Direct import, overwrite options. Cancel exits before any target-env mutation.
 
@@ -300,9 +362,16 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
      "targetEnvironment": "<envUrl>",
      "asyncOperationId": "<id>",
      "importJobId": "<ImportJobKey value>",
-     "componentResults": { "success": N, "warning": N, "failure": N }
+     "componentResults": { "success": N, "warning": N, "failure": N },
+     "versionSkew": null
    }
    ```
+
+   **If the user acknowledged a same-version or downgrade import in Step 3.0** (`SKEW_ACK = true`), set `versionSkew` to:
+   ```json
+   { "zipVersion": "<ZIP_SOLUTION_VERSION>", "installedVersion": "<INSTALLED.version>", "isManaged": <bool>, "acknowledged": true }
+   ```
+   Otherwise leave `versionSkew: null`.
 
 ### Phase 6b — Set Environment Variable Values (if any)
 
@@ -464,12 +533,13 @@ If `--stageName` is omitted the helper falls back to matching `docs/alm/last-imp
 
 1. **Phase 1**: Confirm target environment — import is not easily undoable for managed solutions
 2. **Phase 2**: Select zip file if multiple found
-3. **Phase 3**: Staged vs direct import; overwrite customizations
-4. **Phase 4**: Proceed despite missing dependencies
-5. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
-6. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
-7. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
-8. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
+3. **Phase 3 Step 3.0**: **Version-skew advisory** — only fires when the target already has the solution installed AND the zip's version is `≤` the installed version. Offers re-export with bumped version (Recommended), import-anyway (acknowledged in `last-import.json`), or cancel. Read-only check; cancelling here makes no target-env writes.
+4. **Phase 3**: Staged vs direct import; overwrite customizations
+5. **Phase 4**: Proceed despite missing dependencies
+6. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
+7. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
+8. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
+9. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
 
 ## Error Handling
 
@@ -485,7 +555,7 @@ If `--stageName` is omitted the helper falls back to matching `docs/alm/last-imp
 |---|---|---|
 | Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire token, verify target environment with user |
 | Locate solution file | Locating solution file | Find and validate solution zip, confirm Solution.xml present |
-| Configure import | Configuring import | Ask: staged vs direct, overwrite customizations, publish workflows |
+| Configure import | Configuring import | Step 3.0: extract zip uniqueName+version from solution.xml, query target's installed version, surface a version-skew advisory if zip version ≤ installed (offer re-export / import-anyway / cancel); then ask: staged vs direct, overwrite customizations, publish workflows |
 | Stage solution (dependency check) | Staging solution | Run StageSolution to check for missing dependencies before committing |
 | Import solution | Importing solution | POST ImportSolutionAsync, poll until complete; if AttachmentBlocked: identify blocked types, get user consent, unblock via pac env update-settings, retry |
 | Verify import | Verifying import | Confirm solution version in target, parse component results, write docs/alm/last-import.json |

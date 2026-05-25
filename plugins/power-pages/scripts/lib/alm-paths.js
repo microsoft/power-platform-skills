@@ -41,6 +41,7 @@ const FILE_NAMES = Object.freeze({
   lastTestSite:      'last-test-site.json',
   lastForceLink:     'last-force-link.json',
   lastEnvVars:       'last-env-vars.json',
+  lastExport:        'last-export.json',
 });
 
 /**

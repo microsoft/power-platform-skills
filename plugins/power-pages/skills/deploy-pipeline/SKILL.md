@@ -106,7 +106,7 @@ Tasks to create:
 1. "Verify prerequisites"
 2. "Select target stage"
 3. "Resolve pipeline info"
-4. "Validate package"
+4. "Validate package" — in `MULTI_RUN_MODE` this becomes a single parallel batch (Phase 3.6) covering all N non-skipped solutions; in single-solution / legacy v2 mode it runs per-iteration inline in Phase 4
 5. "Configure deployment settings"
 6. "Deploy and monitor"
 7. "Write deployment record"
@@ -173,10 +173,20 @@ Otherwise, ask via `AskUserQuestion`:
 
 Store selected stage as `SELECTED_STAGE` (with `stageId`, `name`, `targetDeploymentEnvironmentId`, `targetEnvironmentUrl`).
 
+> **Design rationale — the deploy loop is serial by design.** When `DEPLOYMENT_ORDER` has N entries (e.g. `Core → WebAssets → Future` for a 2-solution split with a future buffer), the loop runs **one solution at a time, in `order` ascending, halt-on-first-failure**. This is intentional. Four constraints stack up and make parallel `DeployPackageAsync` calls actively harmful, not just non-beneficial:
+>
+> 1. **Dataverse import lock at the target env.** `ImportSolutionAsync` takes an env-level lock — only one solution can actively import at a time per environment. Even if the skill fired N `DeployPackageAsync` calls in parallel, the host would queue them and run them serially anyway. The wall-clock win for parallel deploys is effectively zero.
+> 2. **Inter-split dependencies in 3 of 4 split strategies.** Change Frequency (`Foundation → Integration → Config → Content`), Schema (`Domain_1..N → Site`), and Layer (`Core → WebAssets`, where WebAssets ppc rows reference the `powerpagesite` record in Core) all encode strict ordering. Re-ordering breaks the import — a flow that references a table not yet in the target fails with `MissingDependency`.
+> 3. **Per-iteration consent gates.** Phase 6.0 (`deploy-pipeline:6.0.final-consent`) fires before EVERY `DeployPackageAsync`. The Phase 5 env-var prompt fires per iteration too. Parallel execution would require either batching the gates (explicitly forbidden — see the per-iteration callout below) or running concurrent `AskUserQuestion`s, neither of which the harness supports.
+> 4. **Clean failure handling.** Serial + halt-on-first-failure means `docs/alm/last-deploy.json` records per-solution `status` cleanly. On retry the loop iterates from the start; Dataverse's same-version idempotency turns already-landed solutions into no-ops.
+>
+> **Do not "optimize" this loop by wrapping iterations in `Promise.all` / `Promise.allSettled` / `await Promise.race`.** The validation phase (Phase 3.6) IS parallelized — `ValidatePackageAsync` does NOT take the import lock — but the deploy phase is intentionally serial. If a future Dataverse release removes the env-level import lock, revisit this rationale; until then it is load-bearing, not an oversight.
+
 **In `MULTI_RUN_MODE` (v3 — recommended):** The selected stage is looked up once from the single `stages[]` array. The skill then **loops over `DEPLOYMENT_ORDER`** in `order`, creating one stage run per solution against the same `stageId`:
-1. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID`, then run Phases 3–6 (resolve info → validate → configure → **fire Phase 6.0 consent gate** → deploy → poll) against the same pipeline.
-2. If any iteration fails (validation or deployment), halt the loop and report **which solution** failed and which had already landed.
-3. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
+1. **Phase 3.6 runs first** (once, before the loop) — fans out `create-stage-run` + `ValidatePackageAsync` + `poll-validation-status` for every non-skipped solution in parallel. Halts the entire deploy if any solution fails validation. Stores the per-solution `stageRunId` in `VALIDATED_STAGE_RUNS` so the serial deploy loop can reuse them.
+2. For each entry in `DEPLOYMENT_ORDER` where `status !== "skipped-empty"`: resolve its `solutionUniqueName` + `solutionId`, retrieve its `stageRunId` from `VALIDATED_STAGE_RUNS[solutionUniqueName]`, set `ARTIFACT_SOLUTION_NAME` / `ARTIFACT_SOLUTION_ID` / `STAGE_RUN_ID`, then run Phases 4.4 (fetch deployment notes) → 5 (configure) → 6.0 (**consent gate fires every iteration**) → 6.1 (deploy) → 6.2 (poll) against the same pipeline. **Phase 4.1–4.3 (create stage run + validate + poll-validation) are skipped — Phase 3.6 already did the work in parallel.**
+3. If any iteration fails (deployment), halt the loop and report **which solution** failed and which had already landed.
+4. Write one `docs/alm/last-deploy.json` at the end summarizing all runs for the selected stage. Record per-solution `status` (`Succeeded` / `Failed` / `NotAttempted` / `SkippedEmpty`) plus the shared `pipelineId`.
 
 > **⚠ Per-iteration gate firing — non-negotiable.** Inside the loop, the **full Phase 3 → 3.5 → 4 → 5 → 6.0 → 6.1 → 6.2 → 7 sequence runs for each solution.** Do NOT batch validation across solutions, do NOT batch the Phase 6.0 consent gate, and do NOT treat any upstream answer (Phase 2 stage selection, `--stage` argument, the previous iteration's "Deploy now") as covering subsequent iterations. The Phase 6.0 gate fires `N` times for `N` non-skipped solutions in `DEPLOYMENT_ORDER`. If you find yourself proceeding from iteration 1's success directly to iteration 2's `DeployPackageAsync` without a fresh Phase 6.0 prompt, you have skipped the gate.
 
@@ -338,7 +348,136 @@ Then:
 
 > **Why Phase 3.5 exists in the first place**: the ALM-aware-by-default rule in `AGENTS.md` requires the completeness check at every gate where a solution leaves its source environment.
 
+### Phase 3.6 — Parallel Validation Batch (`MULTI_RUN_MODE` only)
+
+> **Skip this entire phase when `MULTI_RUN_MODE = false`** (single-solution mode, or legacy `MULTI_PIPELINE_MODE` v2). Single-solution and v2 each create + validate exactly one stage run inside Phase 4 below — there's nothing to parallelize. Resume at Phase 4.
+
+This phase compresses the per-solution `create-stage-run → ValidatePackageAsync → poll-validation-status` chain by running all N solutions concurrently. `ValidatePackageAsync` does **not** acquire the env-level import lock that pins `DeployPackageAsync` to serial execution — it's a structural check on the solution package and per-stage-run state, so the platform happily processes N validations in parallel. For a typical 5-solution split with 60–180s validations, this drops the validation phase from `N × ~120s` (≈10 min) to roughly the slowest single validation (≈3 min).
+
+The deploy phase (6.1 / 6.2) remains strictly serial — see the **Design rationale** callout in Phase 2.
+
+**3.6.1 Build the input file.**
+
+Filter `DEPLOYMENT_ORDER` down to entries that need validation:
+- **Include**: any entry whose `status !== "skipped-empty"` AND `isFutureBuffer !== true`.
+- **Exclude**: `skipped-empty` and `isFutureBuffer: true` entries — the Future buffer is a reserved 0-component placeholder and there's nothing to validate.
+
+Resolve each remaining entry's `solutionId` from `.solution-manifest.json` (`schemaVersion: 2` `solutions[]`) if not already on the deployment-order entry. Write to a tmp file:
+
+```bash
+node -e "require('fs').writeFileSync('./docs/alm/.validation-batch.json', JSON.stringify({{VALIDATION_SPECS}}))"
+```
+
+Where `{{VALIDATION_SPECS}}` is the array `[{ solutionUniqueName, solutionId }, …]`.
+
+**3.6.2 Run the batch validator.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
+  --hostEnvUrl "{hostEnvUrl}" \
+  --token "{HOST_TOKEN}" \
+  --pipelineId "{pipelineId}" \
+  --stageId "{SELECTED_STAGE.stageId}" \
+  --sourceDeploymentEnvironmentId "{sourceDeploymentEnvironmentId}" \
+  --solutionsFile ./docs/alm/.validation-batch.json
+```
+
+Capture stdout as JSON: `const batch = JSON.parse(output)`. Delete the tmp file (`./docs/alm/.validation-batch.json`) — it's transient. Build `VALIDATED_STAGE_RUNS = { [solutionUniqueName]: { stageRunId, validationResults } }` from `batch.results`.
+
+> **If `VALIDATE_PACKAGE_UNAVAILABLE` propagates** (any per-solution `error` matches `ValidatePackageAsync not available on this Pipelines package`): set `VALIDATE_PACKAGE_UNAVAILABLE = true` globally, skip the rest of Phase 3.6 (the stage runs created so far stay around — they're harmless validated-but-not-deployed records), and proceed to Phase 4 in single-solution-fallback shape, which routes each iteration through the `pac pipeline deploy` CLI fallback in Phase 6. This is the same code path the older Pipelines package versions take.
+
+**3.6.3 Branch on the batch outcome.**
+
+| `batch.allPassed` | `batch.pendingApproval` | `batch.failed` + `batch.timedOut` | Behavior |
+|---|---|---|---|
+| `true` | 0 | 0 | All validations passed. Report a single line: *"Validated {N} solution(s) in parallel — all passed."* Proceed to Phase 4. |
+| `false` | > 0 | 0 | One or more validations are awaiting approval. See **3.6.4 (Pending Approval batch handling)** below. |
+| `false` | — | > 0 | One or more validations failed or timed out. See **3.6.5 (Halt on batch validation failure)** below. |
+
+**3.6.4 Pending Approval batch handling.**
+
+<!-- gate: deploy-pipeline:3.6.batch-pending-approval | category=pause | cancel-leaves=external-state-pending -->
+> 🚦 **Gate (pause · deploy-pipeline:3.6.batch-pending-approval):** External wait — one or more solutions hit `stagerunstatus=200000005` (Pending Approval) during parallel validation. User approves all in PPAC, then we re-poll. Cancel leaves N validated-but-pending stage runs on the host (the user can either approve them later and re-invoke, or cancel them in PPAC). **Fires once per batch — not once per pending solution.**
+
+Surface the affected solutions in a single message (not per-solution) and pause. Use `AskUserQuestion`:
+
+> "Validation for `{batch.pendingApproval}` of `{batch.total}` solution(s) is **awaiting approval** before it can complete:
+> {bulleted list of `result.solutionUniqueName` where `status === 'PendingApproval'`}
+>
+> Approve all of them in Power Platform: `make.powerapps.com` → Solutions → Pipelines → for each stage run listed above → Approve. Then return here.
+>
+> The other `{batch.succeeded}` solution(s) already validated successfully — they'll deploy after you approve."
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | Approvals complete? | Batch validation approval | Yes — I approved all of them; re-poll, No — cancel the deploy |
+
+- **Yes**: re-run `validate-stage-runs-batch.js` in **`--rePoll`** mode. The helper accepts existing stage run IDs and skips the `create-stage-run` + `ValidatePackageAsync` calls — it just runs the poll-and-probe pattern against each `stageRunId`. After user approval, the stage run transitions `200000005 (PendingApproval) → 200000006 (Validating) → 200000007 (ValidationSucceeded)`; the helper's probe correctly distinguishes "still pending" (the user clicked Yes prematurely) from "real timeout" so the agent doesn't have to interpret a generic timeout error.
+
+  Build a tmp file with only the previously-pending entries (carry `stageRunId` from the original batch result):
+  ```bash
+  node -e "require('fs').writeFileSync('./docs/alm/.repoll-batch.json', JSON.stringify({{PENDING_SPECS_WITH_STAGERUNIDS}}))"
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/validate-stage-runs-batch.js" \
+    --hostEnvUrl "{hostEnvUrl}" \
+    --token "{HOST_TOKEN}" \
+    --rePoll \
+    --solutionsFile ./docs/alm/.repoll-batch.json
+  ```
+  Where `{{PENDING_SPECS_WITH_STAGERUNIDS}}` is the array `[{ solutionUniqueName, solutionId, stageRunId }, …]` filtered to entries with `status === 'PendingApproval'` from the original batch.
+
+  Capture stdout as JSON; delete the tmp file (`./docs/alm/.repoll-batch.json`). Merge the updated outcomes into `VALIDATED_STAGE_RUNS` keyed by `solutionUniqueName`. Then branch on the rePoll batch's tally:
+  - **All succeeded** → proceed to Phase 4 with the full set of validated stage runs.
+  - **One or more still PendingApproval** → fire the same gate again (the approval hadn't propagated; the user gets a fresh "approve in PPAC, then re-poll" prompt). Loop until either all approved or the user cancels.
+  - **One or more `Failed` / `Timeout` / `Error`** → fall through to **3.6.5** (treat as batch validation failure).
+- **No**: stop cleanly. The validated stage runs and the pending stage runs remain on the host; re-invoking the skill picks up where this left off (the user can approve and re-run).
+
+**3.6.5 Halt on batch validation failure.**
+
+<!-- gate: deploy-pipeline:3.6.batch-validation-failed | category=plan | cancel-leaves=validated-stage-run -->
+> 🚦 **Gate (plan · deploy-pipeline:3.6.batch-validation-failed):** One or more solutions failed validation in the parallel batch. Surface per-solution `validationResults` for the failing entries, and let the user decide whether to abort the entire deploy or proceed with only the succeeded solutions (advanced — leaves a known dependency gap on the target). Cancel leaves N validated stage runs on the host; the user can clean them up in PPAC or re-invoke after fixing the source.
+
+Surface the failing entries with their `validationResults` (which is the **double-encoded JSON string** from the Dataverse `validationresults` field — `JSON.parse` it twice when displaying to extract `SolutionValidationResults[].Message`). Use `AskUserQuestion`:
+
+> "`{batch.failed + batch.timedOut}` of `{batch.total}` solution(s) failed parallel validation:
+>
+> {for each failing result: a short block with `solutionUniqueName`, `status`, top `Message` from `validationResults`}
+>
+> The other `{batch.succeeded}` solution(s) passed and have validated stage runs ready to deploy. Deploying only the succeeded subset risks leaving a dependency gap on the target — e.g. shipping `_Content` without its prerequisite `_Foundation` produces broken site behavior. Recommended: abort, fix the source, re-invoke.
+>
+> What would you like to do?"
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | Next step? | Batch validation failed | Abort the entire deploy (Recommended), Deploy only the succeeded subset (advanced — accept the gap), Cancel and investigate |
+
+- **Abort / Cancel**: stop cleanly. Write a minimal `docs/alm/last-deploy.json` with `status: "ValidationFailed"` per failing solution and `status: "NotAttempted"` for the rest, so the next invocation can see what happened. Do not call `DeployPackageAsync`.
+- **Deploy only the succeeded subset**: set `DEPLOY_SUBSET_ACK = true` and filter `DEPLOYMENT_ORDER` down to just the entries with `status === 'Succeeded'` in `VALIDATED_STAGE_RUNS`. Record the skipped entries in `docs/alm/last-deploy.json` `knownGaps`. Proceed to Phase 4. **Never offer this option as the default** — it's a foot-gun and the recommended path is always to abort.
+
+**3.6.6 Persist the batch summary.**
+
+Append a `batchValidation` object to the in-memory state that will be written to `docs/alm/last-deploy.json` in Phase 7. Source most fields directly from the `batch` JSON returned by `validate-stage-runs-batch.js`:
+
+```json
+{
+  "totalSolutions": <batch.total>,
+  "succeeded": <batch.succeeded>,
+  "failed": <batch.failed>,
+  "pendingApproval": <batch.pendingApproval>,
+  "timedOut": <batch.timedOut>,
+  "elapsedSeconds": <batch.elapsedSeconds>,
+  "perSolutionStageRunIds": { "<solutionUniqueName>": "<stageRunId>", ... }
+}
+```
+
+Build `perSolutionStageRunIds` by reducing `batch.results` into `{ [r.solutionUniqueName]: r.stageRunId }` for every entry where `stageRunId` is non-null (including failed-but-stage-run-was-created entries — preserves the deep-link to PPAC for debugging). `elapsedSeconds` comes from the helper directly (it wall-clock-measures the fan-out internally — no need to wrap the bash invocation in a timer).
+
+This gives the next invocation (and any audit consumer) a record of the parallel-validation outcome distinct from the serial deploy outcomes. `refresh-alm-plan-data.js`'s `deploy-pipeline` phase ingests this block into `planData.pipelineMeta.lastDeploy.batchValidation` so the rendered ALM plan can show the parallel-validation timing.
+
 ### Phase 4 — Create Stage Run + Validate Package
+
+> **In `MULTI_RUN_MODE`, Phase 3.6 already created the stage run + ran validation for the current iteration's solution in parallel with its siblings.** Inside the per-iteration loop, skip Steps 4.1–4.3 entirely: retrieve `STAGE_RUN_ID` from `VALIDATED_STAGE_RUNS[solutionUniqueName].stageRunId` and `validationResults` from the same record. Jump directly to Step 4.4 (fetch deployment notes) and then Phase 5.
+>
+> In single-solution mode and legacy `MULTI_PIPELINE_MODE` (v2), run Steps 4.1–4.4 inline as documented below.
 
 Use Node.js `https` module for all Dataverse calls (curl has encoding issues on Windows).
 
@@ -1031,13 +1170,16 @@ Authorization: Bearer {HOST_TOKEN}
 3. **Phase 2.5**: Pre-flight blocked-attachments unblock (`Yes — unblock / No — proceed anyway / Cancel deploy`). Only fires when the target env's `blockedattachments` setting blocks extensions the solution needs (typically `.js` for code sites). Modifies a tenant-wide security setting; explicit consent required.
 4. **Phase 3.5**: Completeness-gap prompt (sync-first / deploy-anyway / cancel) when the live site has components missing from the solution
 5. **Phase 3.5**: **Post-sync approval gate** — only fires after a mid-deploy sync (Option 1). Shows the new solution version + newly-adopted components and asks the user to confirm the post-sync solution before promoting to the target stage. Pause exits cleanly; Cancel aborts.
-6. **Phase 4**: Validation approval gate — if Pending Approval, wait for user to approve
-7. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
-8. **Phase 6.0**: **Final deploy consent gate** — `Deploy now / Cancel`. Fires immediately before `DeployPackageAsync` (or the `pac pipeline deploy` fallback). Makes the production-promotion moment explicit; without it, Phase 5 → Phase 6.1 could fire without a final confirmation when validation passes cleanly. Treat as the single most important prompt for Production targets.
-9. **Phase 6**: Deployment approval gate — if Pending Approval mid-deploy, wait for user to approve
-10. **Phase 7.6.2**: Reactive blocked-attachments unblock (`Yes — unblock and retry / No — leave settings unchanged / Cancel`). Only fires when the deploy failed with `AttachmentBlocked` and pre-flight (Phase 2.5) was skipped or declined. Same security-setting consent as Phase 2.5.
-11. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
-12. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
+6. **Phase 3.6 (`MULTI_RUN_MODE` only)**: **Batch validation outcome** — two possible gates fire here:
+   - **Batch Pending Approval**: one or more solutions in the parallel validation batch entered Pending Approval. User approves all in PPAC, then we re-poll. Cancel leaves N pending stage runs.
+   - **Batch validation failed**: one or more solutions failed validation. Default is abort — re-export and re-invoke. Advanced option lets the user deploy the succeeded subset only (records the gap in `last-deploy.json` `knownGaps`).
+7. **Phase 4**: Validation approval gate — only fires in single-solution / v2 mode (in `MULTI_RUN_MODE` this is handled by Phase 3.6 instead)
+8. **Phase 5**: `deployment-settings.json` surfaced upfront (5.0a: show summary or generate template; 5.0b: display file path). Env var values — always shown if the solution contains env var definitions with no pre-configured value for the selected stage; offer to save values for future runs
+9. **Phase 6.0**: **Final deploy consent gate** — `Deploy now / Cancel`. Fires immediately before `DeployPackageAsync` (or the `pac pipeline deploy` fallback). Makes the production-promotion moment explicit; without it, Phase 5 → Phase 6.1 could fire without a final confirmation when validation passes cleanly. Treat as the single most important prompt for Production targets.
+10. **Phase 6**: Deployment approval gate — if Pending Approval mid-deploy, wait for user to approve
+11. **Phase 7.6.2**: Reactive blocked-attachments unblock (`Yes — unblock and retry / No — leave settings unchanged / Cancel`). Only fires when the deploy failed with `AttachmentBlocked` and pre-flight (Phase 2.5) was skipped or declined. Same security-setting consent as Phase 2.5.
+12. **Phase 7.7**: Site activation — only if deployment Succeeded, Power Pages website components present, and site not yet activated in the target. Result (`activationStatus`, `siteUrl`) is written back to `docs/alm/last-deploy.json` and the deploy history HTML.
+13. **Phase 7.8**: Cloud flow registration — only if deployment Succeeded and solution contains cloud flow components (componenttype 29); non-blocking regardless of user answer
 
 ## Error Handling
 
@@ -1058,7 +1200,7 @@ Authorization: Bearer {HOST_TOKEN}
 | Verify prerequisites | Verifying prerequisites | Run verify-alm-prerequisites.js (--require-manifest) for PAC/az/WhoAmI; run detect-project-context.js for solutionManifest/siteName; read docs/alm/last-pipeline.json for pipelineId/stages; acquire host env token |
 | Select target stage | Selecting target stage | Show available stages from docs/alm/last-pipeline.json; ask user to select target; warn if last deploy to this stage failed |
 | Resolve pipeline info | Resolving pipeline info | Call RetrieveDeploymentPipelineInfo (v9.1) to get SourceDeploymentEnvironmentId and DeployableArtifacts; match solution |
-| Validate package | Validating package | POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
+| Validate package | Validating package | **`MULTI_RUN_MODE`**: run Phase 3.6 once (parallel batch) — `validate-stage-runs-batch.js` fans out create-stage-run + ValidatePackageAsync + poll-validation-status for all non-skipped solutions concurrently; halts the deploy on any failure or pending-approval batch; persists per-solution stageRunIds for the serial deploy loop to reuse. **Single-solution / legacy v2**: Phase 4 inline — POST deploymentstageruns (→ 201 or 204+header); POST ValidatePackageAsync top-level action (204); poll stagerunstatus until not 200000006; JSON.parse validationresults twice; fetch aigenerateddeploymentnotes; PATCH artifactversion + deploymentnotes + deploymentsettingsjson (from deployment-settings.json) |
 | Configure deployment settings | Configuring deployment settings | Check/display deployment-settings.json (5.0a: read or generate template; 5.0b: surface path); query solution for env var definitions (componenttype 380); diff against deployment-settings.json for selected stage; prompt user for any unconfigured values; offer to save back to deployment-settings.json; PATCH deploymentsettingsjson on stage run |
 | Deploy and monitor | Deploying and monitoring | POST DeployPackageAsync top-level action (204); poll via filter GET (10s) until stagerunstatus terminal; handle approval gates (cancel via PATCH iscanceled=true); offer RetryFailedDeploymentAsync on failure; refresh token every 10 cycles |
 | Write deployment record | Writing deployment record | Write docs/alm/last-deploy.json (with artifactVersion + deployHistoryFile fields); write docs/deploy-history/{date}-{stage}-{version}.md; git add + commit history file; run skill tracking; if Succeeded: show connection reference warning (if solutionManifest.cloudFlows non-empty) and bot republish warning (if solutionManifest.botComponents non-empty); present summary; if Succeeded and Power Pages components present: switch PAC to target, run check-activation-status.js, switch back, ask user to activate if not yet provisioned; if Succeeded and cloud flow components present (componenttype 29): query solutioncomponents, resolve flow names, inform user, ask AskUserQuestion (non-blocking), note registration status in summary |

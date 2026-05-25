@@ -306,6 +306,215 @@ test('refresh export-solution flips the "Export solution" step to completed (ste
     'invoking --phase export-solution is proof the phase ran — step must flip from in_progress to completed without the agent doing a manual Edit');
 });
 
+test('refresh export-solution ingests docs/alm/last-export.json into planData.manualMeta.lastExport', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [{ name: 'Export solution', status: 'in_progress' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-export.json'), {
+    exportedAt: '2026-05-26T12:34:56.000Z',
+    solutionUniqueName: 'ContosoSite',
+    solutionId: 'sol-guid-1',
+    previousVersion: '1.0.0.2',
+    version: '1.0.0.3',
+    managed: true,
+    sourceEnvironmentUrl: 'https://dev.crm.dynamics.com',
+    zipPath: '/tmp/ContosoSite_managed.zip',
+    fileSizeBytes: 1048576,
+    asyncOperationId: 'async-guid-1',
+  });
+
+  const result = refresh({ projectRoot: root, phase: 'export-solution', render: false });
+  assert.equal(result.ok, true);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+
+  assert.ok(planData.manualMeta, 'manualMeta block must be created');
+  const lx = planData.manualMeta.lastExport;
+  assert.equal(lx.solutionUniqueName, 'ContosoSite');
+  assert.equal(lx.solutionId, 'sol-guid-1');
+  assert.equal(lx.previousVersion, '1.0.0.2');
+  assert.equal(lx.version, '1.0.0.3');
+  assert.equal(lx.managed, true);
+  assert.equal(lx.sourceEnvironmentUrl, 'https://dev.crm.dynamics.com');
+  assert.equal(lx.zipPath, '/tmp/ContosoSite_managed.zip');
+  assert.equal(lx.fileSizeBytes, 1048576);
+  assert.equal(lx.asyncOperationId, 'async-guid-1');
+  assert.equal(lx.exportedAt, '2026-05-26T12:34:56.000Z');
+
+  // Step-sync still works independent of marker ingestion
+  assert.equal(planData.steps[0].status, 'completed');
+});
+
+test('refresh export-solution without the marker is a silent step-sync no-op for manualMeta', (t) => {
+  // Legacy projects on the manual path may not yet have last-export.json.
+  // The handler must still flip the step status (the invocation itself is
+  // proof of completion) and must NOT create an empty/null manualMeta.lastExport.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [{ name: 'Export solution', status: 'in_progress' }],
+  });
+  // No docs/alm/last-export.json on disk
+
+  const result = refresh({ projectRoot: root, phase: 'export-solution', render: false });
+  assert.equal(result.ok, true);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  // manualMeta should NOT be present (or its lastExport should not be present) —
+  // the renderer would treat absence as "no export data yet" rather than
+  // "export ran with null fields", which is more accurate.
+  if (planData.manualMeta) {
+    assert.equal(planData.manualMeta.lastExport, undefined,
+      'no marker → no manualMeta.lastExport key (avoid null-filled rows in the Manual-path tab)');
+  }
+});
+
+test('refresh export-solution handles malformed last-export.json gracefully', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'manual',
+    steps: [{ name: 'Export solution', status: 'in_progress' }],
+  });
+  const fs = require('fs');
+  fs.mkdirSync(path.join(root, 'docs', 'alm'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'alm', 'last-export.json'), 'not-json{{{');
+
+  // readJson is the shared internal helper — malformed JSON returns null,
+  // so the handler degrades to step-sync-only.
+  const result = refresh({ projectRoot: root, phase: 'export-solution', render: false });
+  assert.equal(result.ok, true);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.steps[0].status, 'completed');
+  // No partially-populated manualMeta.lastExport from a malformed marker.
+  if (planData.manualMeta) {
+    assert.equal(planData.manualMeta.lastExport, undefined);
+  }
+});
+
+test('refresh deploy-pipeline ingests batchValidation block from last-deploy.json (MULTI_RUN_MODE)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pipeline',
+    steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    pipelineId: 'pipe-1',
+    stageRunId: 'srun-core',
+    stageName: 'Staging',
+    status: 'Succeeded',
+    deployedAt: '2026-05-26T12:00:00.000Z',
+    artifactVersion: '1.0.0.5',
+    componentCount: 247,
+    activationStatus: 'Activated',
+    siteUrl: 'https://contoso.powerappsportals.com',
+    targetEnvironmentUrl: 'https://staging.crm.dynamics.com',
+    batchValidation: {
+      totalSolutions: 3,
+      succeeded: 3,
+      failed: 0,
+      pendingApproval: 0,
+      timedOut: 0,
+      elapsedSeconds: 187,
+      perSolutionStageRunIds: {
+        'TestSite_Core': 'srun-core',
+        'TestSite_WebAssets': 'srun-webassets',
+        'TestSite_Future': 'srun-future',
+      },
+    },
+  });
+
+  const result = refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  assert.equal(result.ok, true);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+
+  const ld = planData.pipelineMeta.lastDeploy;
+  // Top-level fields ingested as before
+  assert.equal(ld.status, 'Succeeded');
+  assert.equal(ld.artifactVersion, '1.0.0.5');
+  // New batchValidation block ingested
+  assert.ok(ld.batchValidation, 'batchValidation block must be ingested');
+  assert.equal(ld.batchValidation.totalSolutions, 3);
+  assert.equal(ld.batchValidation.succeeded, 3);
+  assert.equal(ld.batchValidation.elapsedSeconds, 187);
+  assert.deepEqual(ld.batchValidation.perSolutionStageRunIds, {
+    'TestSite_Core': 'srun-core',
+    'TestSite_WebAssets': 'srun-webassets',
+    'TestSite_Future': 'srun-future',
+  });
+});
+
+test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchValidation', (t) => {
+  // Backward-compatibility: legacy SKILL.md prose (pre-v1.x) used
+  // `elapsedSecondsApprox`. Markers written under that schema still in the
+  // wild should normalize to `elapsedSeconds` on ingest so renderers don't
+  // see two different field names.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pipeline',
+    steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    pipelineId: 'pipe-1',
+    stageRunId: 'srun-1',
+    stageName: 'Staging',
+    status: 'Succeeded',
+    deployedAt: '2026-05-26T12:00:00.000Z',
+    artifactVersion: '1.0.0.5',
+    componentCount: 247,
+    batchValidation: {
+      totalSolutions: 2,
+      succeeded: 2,
+      failed: 0,
+      pendingApproval: 0,
+      timedOut: 0,
+      elapsedSecondsApprox: 95, // legacy name
+    },
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.pipelineMeta.lastDeploy.batchValidation.elapsedSeconds, 95,
+    'legacy elapsedSecondsApprox must be normalized to elapsedSeconds on ingest');
+});
+
+test('refresh deploy-pipeline sets batchValidation to null when marker omits the block (single-solution / v2)', (t) => {
+  // Single-solution and legacy v2 manifests don't go through Phase 3.6 batch
+  // validation; the marker won't have a batchValidation block. The handler
+  // must explicitly set `lastDeploy.batchValidation = null` so the renderer
+  // can distinguish "single-solution deploy" from "the data hasn't been
+  // ingested yet" (which would be `undefined`).
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pipeline',
+    steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    pipelineId: 'pipe-1',
+    stageRunId: 'srun-1',
+    stageName: 'Staging',
+    status: 'Succeeded',
+    deployedAt: '2026-05-26T12:00:00.000Z',
+    artifactVersion: '1.0.0.5',
+    componentCount: 247,
+    // no batchValidation block
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.pipelineMeta.lastDeploy.batchValidation, null,
+    'batchValidation must be explicitly null (not undefined) so renderers can branch on it');
+});
+
 test('refresh import-solution accepts the phase and round-trips planData', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {

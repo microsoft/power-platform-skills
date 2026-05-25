@@ -197,13 +197,16 @@ Wait for user confirmation before proceeding.
 
 > **Skip this entire phase when `syncMode = true`.** The publisher and solution already exist.
 >
-> **Version bump in sync mode**: before any add operations in Phase 5, PATCH the existing solution to the next revision so exports cleanly supersede the prior version:
+> **Version bump in sync mode**: before any add operations in Phase 5, bump the existing solution's patch segment so the post-sync manifest and any subsequent export cleanly supersede the prior version. Use the shared helper — it is the single source of truth for the bump rule (pad-with-zero for missing segments, integer-numeric `1.0.0.9 → 1.0.0.10`, reject `1.0.0.a`, reject more-than-4 segments). The same helper is called from `export-solution` Phase 4 Step 4.0 — both skills must produce identical bumps for the same input version.
+>
+> ```bash
+> node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+>   --envUrl "{envUrl}" \
+>   --token "{token}" \
+>   --solutionId "{solutionId}"
 > ```
-> PATCH {envUrl}/api/data/v9.2/solutions({solutionId})
-> Headers: If-Match: *
-> Body: { "version": "{currentVersion with patch bumped}" }
-> ```
-> Where `currentVersion with patch bumped` increments the fourth segment (`1.0.0.2 → 1.0.0.3`). Update `existingSolution.solution.version` locally so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway.
+>
+> Capture output as JSON; the helper returns `{ previous, next, bumped: true }`. Update `existingSolution.solution.version` locally to `.next` so the final manifest write reflects the bump. Do this **before** Step 5.6's component adds, so the manifest stays consistent if the skill is interrupted midway. **Do not inline the PATCH** — diverging the rule between this skill and `export-solution` is exactly the bug class the helper exists to prevent.
 
 Refer to `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` for exact request body templates.
 
