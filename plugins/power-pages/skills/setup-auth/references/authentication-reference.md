@@ -832,8 +832,17 @@ export async function resetPassword(
  *
  * Why the fallbacks: Power Pages populates `firstName`, `lastName`, and `email` from standard
  * OIDC claims (`given_name`, `family_name`, `email`) by default — no explicit RegistrationClaimsMapping
- * is needed for these standard claims. However, a field can still be empty if the IdP did not emit
- * the claim. Only `contactId` and `userName` are truly guaranteed to be populated.
+ * is needed for these standard claims. However, a field can still be empty if the IdP didn't emit
+ * the claim. For external providers like Entra External ID where the user flow may not include
+ * `given_name`/`family_name` attributes, firstName and lastName come back empty.
+ *
+ * Priority order: full name → first or last alone → email → userName → 'User'.
+ *
+ * **Why email beats userName**: for external providers, the `userName` field is the OIDC subject
+ * identifier (a long opaque string like `vs25QwNe1ZAHqlWK1Naw9dVEBe-TbF5tZEpb0XjAEZQ`) — showing
+ * that in a navigation bar is ugly and meaningless to the user. Email is human-readable and
+ * almost always populated from the OIDC `email` claim. So when names aren't available, prefer
+ * email; fall back to userName only as a last resort.
  */
 export function getUserDisplayName(): string {
   const user = getCurrentUser();
@@ -841,14 +850,15 @@ export function getUserDisplayName(): string {
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
   if (fullName) return fullName;
   if (user.firstName) return user.firstName;
-  if (user.userName) return user.userName;
+  if (user.lastName) return user.lastName;
   if (user.email) return user.email;
+  if (user.userName) return user.userName;
   return 'User';
 }
 
 /**
  * Returns the user's initials for avatar display.
- * Falls back from first+last to first alone to userName/email first character.
+ * Same fallback priority as getUserDisplayName but uses the first character of each source.
  */
 export function getUserInitials(): string {
   const user = getCurrentUser();
@@ -857,8 +867,10 @@ export function getUserInitials(): string {
     return `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
   }
   if (user.firstName) return user.firstName[0].toUpperCase();
-  const fallback = user.userName || user.email || '';
-  return (fallback[0] || '').toUpperCase();
+  if (user.lastName) return user.lastName[0].toUpperCase();
+  if (user.email) return user.email[0].toUpperCase();
+  if (user.userName) return user.userName[0].toUpperCase();
+  return '?';
 }
 ```
 
