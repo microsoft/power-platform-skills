@@ -437,6 +437,26 @@ function refreshFinalize(planData) {
   return planData;
 }
 
+// Refresh-phase helper: stamp `LAST_SYNC_AT` on planData so check-alm-plan.js's
+// freshness check correctly accounts for source-solution modifications caused
+// by the just-completed phase. Called by every phase that touches the source
+// solution's modifiedon — setup-solution (bump + AddSolutionComponent),
+// configure-env-variables (env var definition creation + AddSolutionComponent),
+// and export-solution (bump-solution-version.js). Without this stamp, a
+// subsequent Phase 0 check sees `sol.modifiedon > GENERATED_AT` and falsely
+// classifies the plan as stale — even though the modification was caused by
+// the just-completed phase, not by drift. The check uses
+// `max(GENERATED_AT, LAST_SYNC_AT)` as the reference point.
+//
+// Phases that do NOT call this helper: setup-pipeline (only writes to host env),
+// deploy-pipeline (writes to target, not source — though Phase 3.5 may delegate
+// to setup-solution which stamps via its own refresh), import-solution (target),
+// activate-site (no source mod), test-site (read-only), ensure-pipelines-host
+// (host env), force-link-environment (host env).
+function stampLastSyncAt(planData) {
+  planData.LAST_SYNC_AT = new Date().toISOString();
+}
+
 function refreshSetupSolution(planData, projectRoot) {
   // After setup-solution runs, the planned-vs-existing distinction the
   // renderer surfaces (Overview stat + Size Analysis signal + Env Variables
@@ -461,16 +481,8 @@ function refreshSetupSolution(planData, projectRoot) {
     planData.envVars = envVarsMarker.envVars;
   }
   // Mark `LAST_SYNC_AT` so check-alm-plan.js's freshness check accounts for
-  // the fact that setup-solution sync mode just modified the source solution's
-  // `modifiedon` field via its bump + AddSolutionComponent calls. Without this
-  // marker, a subsequent Phase 0 check in deploy-pipeline / export-solution /
-  // configure-env-variables would correctly observe `sol.modifiedon > GENERATED_AT`
-  // and incorrectly classify the plan as stale — even though the modification
-  // was caused by the just-completed sync, not by drift. The check uses
-  // `max(GENERATED_AT, LAST_SYNC_AT)` as the reference point so post-sync
-  // checks return stale:false. Fresh-mode setup-solution (no manifest yet)
-  // also writes LAST_SYNC_AT — the bump effect is identical.
-  planData.LAST_SYNC_AT = new Date().toISOString();
+  // the source-solution modification this phase just caused.
+  stampLastSyncAt(planData);
   // Step-sync: complete the "Setup solution" checklist entry.
   setStepStatus(planData, { keyword: /\bsetup\s+solution\b/i, status: 'completed' });
   return planData;
@@ -511,6 +523,9 @@ function refreshExportSolution(planData, projectRoot) {
     };
   }
 
+  // export-solution Phase 4 Step 4.0 always-on-bump modifies source `modifiedon`.
+  // Stamp LAST_SYNC_AT so subsequent Phase 0 checks don't falsely flag stale.
+  stampLastSyncAt(planData);
   // Step-sync: a successful invocation of --phase export-solution completes
   // the "Export solution" checklist entry. Independent of marker presence —
   // legacy projects on the manual path may not yet have the marker file even
@@ -663,6 +678,9 @@ function refreshConfigureEnvVariables(planData, projectRoot) {
   // surface them in the Values by Environment matrix immediately.
   backfillEnvVarValuesFromSettings(planData, projectRoot);
   planData.risks = dropResolvedRisks(planData.risks, 'configure-env-variables');
+  // Env var definition creation + AddSolutionComponent bumps source `modifiedon`.
+  // Stamp LAST_SYNC_AT to keep subsequent Phase 0 checks accurate.
+  stampLastSyncAt(planData);
   setStepStatus(planData, { keyword: /\bconfigure\s+env(?:ironment)?\s+var/i, status: 'completed' });
   return planData;
 }
