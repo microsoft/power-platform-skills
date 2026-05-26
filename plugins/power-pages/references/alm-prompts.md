@@ -77,7 +77,7 @@ would you like to do?
 | Option | Pick it when | Result |
 |---|---|---|
 | **Run sync mode now (Recommended)** | You expected this component to travel. Almost always. | Sync runs, version bumps, your export/deploy resumes. |
-| **Export as-is** | You have a specific reason (staging-only test, known-deferred component) | The gap is recorded in `.last-deploy.json` under `knownGaps` for audit. |
+| **Export as-is** | You have a specific reason (staging-only test, known-deferred component) | The gap is recorded in `docs/alm/last-deploy.json` under `knownGaps` for audit. |
 | **Cancel** | You're not sure what's happening | Nothing changes. Investigate, then re-run. |
 
 **What if I pick "Export as-is"?** — the component stays in your source environment but is never added to the export zip. Target environments won't have it until a later deploy brings it along.

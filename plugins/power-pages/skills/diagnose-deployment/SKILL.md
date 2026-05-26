@@ -7,21 +7,11 @@ description: >-
   deployment errors", "fix deployment issues", "show upload logs", "why did my deploy fail",
   or "troubleshoot upload".
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: prompt
-          prompt: |
-            Check whether the diagnose-deployment skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. PAC CLI and Azure CLI auth were verified (or their absence was reported)
-            2. Deployment artifacts were collected (powerpages.config.json, .powerpages-site/ contents)
-            3. Upload errors were surfaced (either by re-running pac pages upload-code-site or reading prior output)
-            4. Findings were pattern-matched against the deployment error catalog
-            5. A summary table was presented showing all findings with severity and fix status
-          timeout: 30
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # diagnose-deployment
 
@@ -55,6 +45,17 @@ Steps:
 
 Auth failures are non-blocking — report them as findings, continue collecting other artifacts.
 
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages deployment errors solution import troubleshooting`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on troubleshooting or known import errors) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about common deployment failures and their resolution. Compare against `${CLAUDE_PLUGIN_ROOT}/references/deployment-error-catalog.md` and flag any new error patterns not yet captured in the catalog.
+4. Use the summary to inform pattern-matching in Phase 5. If a new pattern is documented on Learn that isn't in the catalog, surface it to the user as a candidate addition rather than silently extending the catalog.
+
 ### Phase 2 — Collect Deployment Artifacts
 
 Gather all available context:
@@ -63,7 +64,7 @@ Gather all available context:
 2. Check `.powerpages-site/` folder exists
 3. Glob for manifest files: `.powerpages-site/*-manifest.yml` — list all found, note their environment hostnames
 4. Check if `.solution-manifest.json` exists (for solution-related diagnostics)
-5. Check if `.last-import.json` exists (for recent import failures)
+5. Check if `docs/alm/last-import.json` exists (for recent import failures)
 6. Check build output: confirm `{compiledPath}/` exists and is non-empty
 
 Report: "Found project: `{siteName}`. Artifacts collected."
@@ -126,6 +127,9 @@ Present all findings in a table:
 ### Phase 6 — Offer Auto-Fixes
 
 For each Error finding with `autoFixAvailable: true`, in order:
+
+<!-- gate: diagnose-deployment:6.auto-fix | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · diagnose-deployment:6.auto-fix):** Per-finding consent before applying any auto-fix. **Loops once per Error finding with `autoFixAvailable: true`** — each finding gets its own Yes / No / Skip-all `AskUserQuestion`. The pattern ID surfaces in the prompt. **Never batch fixes** — three findings = three separate consent prompts (unless the user picks "Skip all" on the first, which short-circuits the loop). The Yes from finding 1 does NOT cover finding 2; each fix has its own blast radius (different files, different settings, different reversibility).
 
 1. Explain the issue and proposed fix
 2. Ask explicit permission via `AskUserQuestion`:

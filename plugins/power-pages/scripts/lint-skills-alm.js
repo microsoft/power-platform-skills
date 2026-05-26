@@ -24,9 +24,50 @@
 //              (via PPC_TYPE_LABELS).
 //     Waivable: no — new component types must be added to the discovery module.
 //
+//   GATE-must-have-marker
+//     Trigger: a SKILL.md phase section contains an `AskUserQuestion` prompt
+//              (matched by `` `AskUserQuestion` `` near a `:`).
+//     Require: the same section contains at least one preceding
+//              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
+//     Scope:   ALM skills (see ALM_SKILLS) → severity 'error'.
+//              Non-ALM skills → severity 'warning' (warn-only until the
+//              catalog in references/approval-gates.md is extended).
+//     Waivable: yes, inline `<!-- alm-lint-ignore: GATE-must-have-marker -->`
+//               or `.almlintignore` entry.
+//
+//   GATE-id-must-be-unique
+//     Trigger: parse all `<!-- gate: ID | ... -->` markers across all
+//              SKILL.md files.
+//     Require: no `ID` appears twice.
+//     Waivable: no — duplicates are always a bug.
+//
+//   GATE-must-be-in-catalog
+//     Trigger: any gate-id used in a SKILL.md marker.
+//     Require: the same gate-id appears (backticked) somewhere in
+//              references/approval-gates.md (the catalog).
+//     Scope:   ALM skills → 'error'. Non-ALM → 'warning'.
+//     Waivable: yes (inline + allowlist).
+//
+//   GATE-intent-must-call-helper
+//     Trigger: a marker tagged `category=intent`.
+//     Require: the SKILL.md section invokes one of the known helper scripts
+//              (INTENT_HELPERS): check-alm-plan.js, verify-alm-prerequisites.js,
+//              check-activation-status.js.
+//     Waivable: no — `intent` means "helper-script-backed, deterministic
+//               state read"; an inline LLM-evaluated entry condition does
+//               not qualify.
+//
+//   GATE-cancel-leaves-known-vocab
+//     Trigger: any `<!-- gate: ... | cancel-leaves=VALUE -->` marker.
+//     Require: VALUE is in CANCEL_LEAVES_VOCAB or matches the
+//              kebab-case slug grammar.
+//     Waivable: yes — custom slugs allowed; rule flags only typos /
+//               non-kebab values.
+//
 // Usage:
 //   node scripts/lint-skills-alm.js [--plugin-root <path>]
-//   Exit 0 when no findings; exit 1 when findings exist (stderr lists them).
+//   Exit 0 when no findings (or only warnings); exit 1 when at least one
+//   finding has severity 'error'. stderr lists errors; stdout lists warnings.
 //
 // The script is pure-Node, has no dependencies, and returns findings
 // programmatically so the tests can assert behavior without spawning processes.
@@ -139,7 +180,56 @@ const KNOWN_RULES = new Set([
   'SKILL-must-read-manifest',
   'SCRIPT-must-use-resolver',
   'DISCOVER-coverage',
+  'GATE-must-have-marker',
+  'GATE-id-must-be-unique',
+  'GATE-must-be-in-catalog',
+  'GATE-intent-must-call-helper',
+  'GATE-cancel-leaves-known-vocab',
 ]);
+
+// ALM skills get hard-fail severity; everything else gets warn-only until
+// the approval-gates catalog is extended to non-ALM skills (see §8 of
+// references/approval-gates.md). Folder name = skill name.
+const ALM_SKILLS = new Set([
+  'plan-alm',
+  'setup-solution',
+  'setup-pipeline',
+  'deploy-pipeline',
+  'export-solution',
+  'import-solution',
+  'configure-env-variables',
+  'ensure-pipelines-host',
+  'force-link-environment',
+  'activate-site',
+  'test-site',
+  'diagnose-deployment',
+]);
+
+// `category=intent` markers must be backed by a real helper invocation.
+// Anything else is LLM-improvised entry logic, which defeats the rule's
+// purpose (deterministic state read, not LLM reasoning).
+const INTENT_HELPERS = [
+  'check-alm-plan.js',
+  'verify-alm-prerequisites.js',
+  'check-activation-status.js',
+];
+
+// Normalized vocabulary for the `cancel-leaves=` marker field. Any value
+// outside this set is accepted iff it's a kebab-case slug; non-kebab
+// values are flagged so typos surface.
+const CANCEL_LEAVES_VOCAB = new Set([
+  'nothing',
+  'validated-stage-run',
+  'partial-manifest',
+  'partial-solution',
+  'deferral-marker',
+  'host-binding',
+  'attachment-block-modified',
+  'cross-host-stamp-moved',
+  'external-state-pending',
+]);
+
+const KEBAB_CASE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 // Map lowercased rule name → canonical form. Inline `alm-lint-ignore:` tags
 // match case-insensitively (the regex uses `gi`), so the file-based allowlist
@@ -244,6 +334,156 @@ function loadKnownPpcTypes(pluginRoot) {
 
 const PPCTYPE_FILTER_PATTERN = /powerpagecomponenttype\s+eq\s+(\d+)/gi;
 
+// ---- Approval Gate parsing helpers ---------------------------------------
+//
+// SKILL.md format expected by these rules:
+//
+//   <!-- gate: skill-name:phase-id | category=X | cancel-leaves=Y -->
+//   > 🚦 **Gate (X · skill-name:phase-id):** Description.
+//
+//   <!-- not-a-gate: <reason text> -->
+//
+// Pairing rule: each `AskUserQuestion` prompt in a phase section must be
+// preceded (anywhere earlier in the same section) by at least one
+// `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
+
+// Phase boundary: any markdown heading at level 2 or 3 (## or ###).
+const SECTION_HEADING_PATTERN = /^(#{2,3})\s+(.+?)\s*$/;
+
+// Gate marker — capture id, category, cancel-leaves.
+// Gate IDs allow alphanumeric, dash, underscore, colon, and dot (e.g. `setup-solution:5.4c`).
+const GATE_MARKER_PATTERN =
+  /<!--\s*gate:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*\|\s*category=([a-z]+)\s*\|\s*cancel-leaves=([a-z0-9-]+)\s*-->/gi;
+
+// Not-a-gate marker — capture reason text. Use non-greedy `[\s\S]+?` so the
+// reason can contain hyphens / arbitrary characters; the closing `-->`
+// anchors the match.
+const NOT_A_GATE_PATTERN = /<!--\s*not-a-gate:\s*([\s\S]+?)\s*-->/g;
+
+// Strong-signal AskUserQuestion prompt detection. Requires backticked
+// `AskUserQuestion` followed (on the same line, within ~150 chars) by a colon
+// — filters out prose mentions like "the AskUserQuestion tool" and table cells.
+// Allows backticks inside the matched range so multi-select prompts of the
+// form "Use `AskUserQuestion` with `multiSelect: true`:" are still detected.
+const PROMPT_LINE_PATTERN = /`AskUserQuestion`[^\n]{0,150}:/;
+
+function splitIntoSections(content) {
+  const lines = content.split(/\r?\n/);
+  const sections = [];
+  let current = { heading: '<file-prologue>', startLine: 1, lines: [] };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(SECTION_HEADING_PATTERN);
+    if (m) {
+      sections.push(current);
+      current = { heading: m[2], startLine: i + 1, lines: [] };
+    }
+    current.lines.push({ text: line, lineNum: i + 1 });
+  }
+  sections.push(current);
+  return sections;
+}
+
+// Extract structured gate markers from a content string.
+// Returns: [{ gateId, category, cancelLeaves, lineNum }, ...]
+function extractGateMarkers(content) {
+  const out = [];
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    GATE_MARKER_PATTERN.lastIndex = 0;
+    let m;
+    while ((m = GATE_MARKER_PATTERN.exec(lines[i])) !== null) {
+      out.push({
+        gateId: m[1],
+        category: m[2].toLowerCase(),
+        cancelLeaves: m[3].toLowerCase(),
+        lineNum: i + 1,
+      });
+    }
+  }
+  return out;
+}
+
+function extractNotAGateMarkers(content) {
+  const out = [];
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    NOT_A_GATE_PATTERN.lastIndex = 0;
+    let m;
+    while ((m = NOT_A_GATE_PATTERN.exec(lines[i])) !== null) {
+      out.push({ reason: m[1].trim(), lineNum: i + 1 });
+    }
+  }
+  return out;
+}
+
+// Find AskUserQuestion prompts. Returns array of line numbers where a prompt
+// is introduced.
+function findPromptLines(content) {
+  const lines = content.split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (PROMPT_LINE_PATTERN.test(lines[i])) out.push(i + 1);
+  }
+  return out;
+}
+
+function skillNameFromFile(file) {
+  // Expect .../skills/<skill-name>/SKILL.md
+  const parts = file.split(/[\\/]/);
+  const idx = parts.lastIndexOf('skills');
+  if (idx < 0 || idx + 1 >= parts.length) return null;
+  return parts[idx + 1];
+}
+
+function severityForSkill(skillName) {
+  return ALM_SKILLS.has(skillName) ? 'error' : 'warning';
+}
+
+// Parse the catalog file (references/approval-gates.md) and extract all
+// backticked gate-id strings. Returns a Set, or null if the catalog isn't
+// present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
+// hard-broken when the catalog is removed/renamed).
+const CATALOG_GATE_ID_PATTERN = /`([a-z][a-z0-9-]*:[A-Za-z0-9._-]+)`/g;
+
+function loadCatalogGateIds(pluginRoot) {
+  const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
+  if (!fs.existsSync(catalogFile)) return null;
+  const content = fs.readFileSync(catalogFile, 'utf8');
+  const ids = new Set();
+  CATALOG_GATE_ID_PATTERN.lastIndex = 0;
+  let m;
+  while ((m = CATALOG_GATE_ID_PATTERN.exec(content)) !== null) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+// Section-level pair: for each prompt, is there a preceding gate or
+// not-a-gate marker in the same section?
+function checkSectionPairing(content) {
+  const sections = splitIntoSections(content);
+  const unmatched = [];
+  for (const section of sections) {
+    const sectionText = section.lines.map((l) => l.text).join('\n');
+    const gates = extractGateMarkers(sectionText);
+    const notGates = extractNotAGateMarkers(sectionText);
+    const markerLines = [...gates.map((g) => g.lineNum), ...notGates.map((n) => n.lineNum)];
+    // Lines in section-local numbering — convert to file-relative.
+    const sectionStart = section.startLine;
+    const fileMarkerLines = markerLines.map((l) => sectionStart - 1 + l);
+    const prompts = findPromptLines(sectionText).map(
+      (l) => sectionStart - 1 + l
+    );
+    for (const promptLine of prompts) {
+      const hasPreceding = fileMarkerLines.some((m) => m <= promptLine);
+      if (!hasPreceding) unmatched.push({ heading: section.heading, lineNum: promptLine });
+    }
+  }
+  return unmatched;
+}
+// --------------------------------------------------------------------------
+
 function collectFindings({ pluginRoot }) {
   const findings = [];
   const { entries: allowlistEntries } = loadAllowlist(pluginRoot);
@@ -263,11 +503,16 @@ function collectFindings({ pluginRoot }) {
   });
 
   const knownPpcTypes = loadKnownPpcTypes(pluginRoot);
+  const catalogGateIds = loadCatalogGateIds(pluginRoot); // may be null if catalog absent
+  const allGateMarkers = []; // [{ file, gateId, category, cancelLeaves, lineNum }]
 
-  // Rule 1 — SKILL-must-read-manifest + Rule 3 — DISCOVER-coverage.
+  // Rule 1 — SKILL-must-read-manifest + Rule 3 — DISCOVER-coverage +
+  // Approval Gate rules (per-file portions).
   for (const file of skillFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const ignores = extractIgnores(content);
+    const skillName = skillNameFromFile(file);
+    const skillSeverity = severityForSkill(skillName);
 
     if (!ignores.has('SKILL-must-read-manifest')) {
       const touches = touchesDataverseWrites(content);
@@ -302,6 +547,106 @@ function collectFindings({ pluginRoot }) {
         }
       }
     }
+
+    // -- Approval Gate rules ------------------------------------------------
+    const gateMarkers = extractGateMarkers(content);
+    for (const gm of gateMarkers) allGateMarkers.push({ file, ...gm });
+
+    // GATE-must-have-marker — every prompt in a section needs a preceding marker.
+    if (!ignores.has('GATE-must-have-marker')) {
+      const unmatched = checkSectionPairing(content);
+      for (const u of unmatched) {
+        findings.push({
+          rule: 'GATE-must-have-marker',
+          severity: skillSeverity,
+          file,
+          message:
+            `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
+            `with no preceding \`<!-- gate: ... -->\` or \`<!-- not-a-gate: ... -->\` marker in the same section.`,
+          hint: 'See references/approval-gates.md §4 (marker syntax) and §6 (catalog).',
+        });
+      }
+    }
+
+    // GATE-intent-must-call-helper — `category=intent` markers require a known helper invocation.
+    if (!ignores.has('GATE-intent-must-call-helper')) {
+      const intentMarkers = gateMarkers.filter((g) => g.category === 'intent');
+      if (intentMarkers.length > 0) {
+        const callsHelper = INTENT_HELPERS.some((h) => content.includes(h));
+        if (!callsHelper) {
+          findings.push({
+            rule: 'GATE-intent-must-call-helper',
+            severity: 'error',
+            file,
+            message:
+              `Skill declares ${intentMarkers.length} \`category=intent\` gate(s) ` +
+              `(${intentMarkers.map((g) => g.gateId).join(', ')}) but does not invoke any ` +
+              `known helper script (${INTENT_HELPERS.join(', ')}). ` +
+              `\`intent\` gates must be backed by deterministic state from a helper — not by LLM reasoning.`,
+            hint: 'See references/approval-gates.md §3.1.',
+          });
+        }
+      }
+    }
+
+    // GATE-cancel-leaves-known-vocab — value must be in vocab OR kebab-case.
+    if (!ignores.has('GATE-cancel-leaves-known-vocab')) {
+      for (const gm of gateMarkers) {
+        const v = gm.cancelLeaves;
+        if (CANCEL_LEAVES_VOCAB.has(v)) continue;
+        if (KEBAB_CASE_PATTERN.test(v)) continue;
+        findings.push({
+          rule: 'GATE-cancel-leaves-known-vocab',
+          severity: 'error',
+          file,
+          message:
+            `Gate \`${gm.gateId}\` has \`cancel-leaves=${v}\` which is neither a known vocabulary value ` +
+            `(${[...CANCEL_LEAVES_VOCAB].join(', ')}) nor a valid kebab-case slug. ` +
+            `Use the canonical vocab or coin a kebab-case slug.`,
+          hint: 'See references/approval-gates.md §4.3.',
+        });
+      }
+    }
+
+    // GATE-must-be-in-catalog — every gate-id used here must be in the catalog.
+    if (catalogGateIds && !ignores.has('GATE-must-be-in-catalog')) {
+      for (const gm of gateMarkers) {
+        if (!catalogGateIds.has(gm.gateId)) {
+          findings.push({
+            rule: 'GATE-must-be-in-catalog',
+            severity: skillSeverity,
+            file,
+            message:
+              `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
+              `(references/approval-gates.md). Add a catalog row before introducing the marker, ` +
+              `or remove the marker if the prompt is data-gathering (use \`<!-- not-a-gate: ... -->\` instead).`,
+            hint: 'See references/approval-gates.md §6 and §7 (How to add a new gate).',
+          });
+        }
+      }
+    }
+  }
+
+  // GATE-id-must-be-unique — fire after all SKILL.md files are processed.
+  const idIndex = new Map(); // gateId → [{ file, lineNum }, ...]
+  for (const m of allGateMarkers) {
+    if (!idIndex.has(m.gateId)) idIndex.set(m.gateId, []);
+    idIndex.get(m.gateId).push({ file: m.file, lineNum: m.lineNum });
+  }
+  for (const [gateId, occurrences] of idIndex.entries()) {
+    if (occurrences.length <= 1) continue;
+    const locs = occurrences
+      .map((o) => `${path.relative(pluginRoot, o.file)}:${o.lineNum}`)
+      .join(', ');
+    findings.push({
+      rule: 'GATE-id-must-be-unique',
+      severity: 'error',
+      file: occurrences[0].file,
+      message:
+        `Gate id \`${gateId}\` is declared in ${occurrences.length} places: ${locs}. ` +
+        `Gate IDs must be globally unique across the plugin.`,
+      hint: 'Re-anchor one of the markers to a different phase id, or merge them into a single gate.',
+    });
   }
 
   // Rule 2 — SCRIPT-must-use-resolver.
@@ -352,12 +697,27 @@ function main(argv) {
   }
 
   const findings = collectFindings({ pluginRoot });
+  const errors = findings.filter((f) => f.severity === 'error');
+  const warnings = findings.filter((f) => f.severity === 'warning');
+
   if (findings.length === 0) {
     process.stdout.write('alm-lint: 0 findings\n');
     return 0;
   }
-  for (const f of findings) process.stderr.write(formatFinding(f, pluginRoot));
-  process.stderr.write(`\nalm-lint: ${findings.length} finding(s) in ${pluginRoot}\n`);
+
+  // Warnings go to stdout (informational); errors go to stderr.
+  for (const f of warnings) process.stdout.write(formatFinding(f, pluginRoot));
+  for (const f of errors) process.stderr.write(formatFinding(f, pluginRoot));
+
+  if (errors.length === 0) {
+    process.stdout.write(
+      `\nalm-lint: ${warnings.length} warning(s) in ${pluginRoot} (no errors)\n`
+    );
+    return 0;
+  }
+  process.stderr.write(
+    `\nalm-lint: ${errors.length} error(s), ${warnings.length} warning(s) in ${pluginRoot}\n`
+  );
   return 1;
 }
 
@@ -372,4 +732,13 @@ module.exports = {
   parseAllowlist,
   allowlistPathMatches,
   KNOWN_RULES,
+  ALM_SKILLS,
+  INTENT_HELPERS,
+  CANCEL_LEAVES_VOCAB,
+  // Approval Gate parsing helpers (exported for tests):
+  extractGateMarkers,
+  extractNotAGateMarkers,
+  findPromptLines,
+  splitIntoSections,
+  loadCatalogGateIds,
 };

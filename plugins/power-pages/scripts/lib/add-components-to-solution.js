@@ -65,6 +65,60 @@ function isAlreadyInSolution(responseBody) {
   }
 }
 
+// Upfront input-shape validation. The helper expects camelCase keys
+// (`componentId`, `componentType`); PascalCase (`ComponentId`, `ComponentType`)
+// is a common silent-failure mode — destructuring at line ~97 returns
+// `undefined` for both fields and the OData POST body carries
+// `ComponentId: undefined`, producing a stream of cryptic HTTP 400
+// "missing parameters" responses with no upfront signal. This validator
+// runs once over the whole array and surfaces a clear error before any
+// Dataverse call. Returns null when valid; returns an Error to throw when
+// invalid (caller throws to abort).
+function validateComponentsShape(components) {
+  if (!Array.isArray(components)) {
+    return new Error('--componentsFile must contain a JSON array.');
+  }
+  // Detect PascalCase fan-fail: every entry has ComponentId/ComponentType but
+  // none has componentId/componentType. Surface a targeted error so the user
+  // knows to fix the casing rather than chasing 400s.
+  const sample = components.slice(0, Math.min(5, components.length));
+  const allPascal = sample.length > 0 && sample.every((c) =>
+    c && typeof c === 'object' &&
+    'ComponentId' in c && 'ComponentType' in c &&
+    !('componentId' in c) && !('componentType' in c)
+  );
+  if (allPascal) {
+    return new Error(
+      '--componentsFile entries use PascalCase keys (ComponentId/ComponentType). ' +
+      'This helper expects camelCase keys (componentId/componentType). ' +
+      'Rename the keys in your input file or transform via `jq` / Node before invoking. ' +
+      'See the header comment of add-components-to-solution.js for the expected shape.',
+    );
+  }
+  // Per-entry validation: each must have componentId (string) and componentType
+  // (number). Surface the FIRST malformed entry with its index so the user can
+  // jump straight to the bad row.
+  for (let i = 0; i < components.length; i++) {
+    const c = components[i];
+    if (!c || typeof c !== 'object') {
+      return new Error(`--componentsFile entry [${i}] is not an object: ${JSON.stringify(c)}`);
+    }
+    if (typeof c.componentId !== 'string' || c.componentId.length === 0) {
+      const hint = 'ComponentId' in c
+        ? ' (found `ComponentId` (PascalCase) instead — keys must be camelCase)'
+        : '';
+      return new Error(`--componentsFile entry [${i}] is missing required field 'componentId' (string)${hint}.`);
+    }
+    if (typeof c.componentType !== 'number' || !Number.isFinite(c.componentType)) {
+      const hint = 'ComponentType' in c
+        ? ' (found `ComponentType` (PascalCase) instead — keys must be camelCase)'
+        : '';
+      return new Error(`--componentsFile entry [${i}] is missing required field 'componentType' (number)${hint}.`);
+    }
+  }
+  return null;
+}
+
 async function addComponentsToSolution({ envUrl, componentsFile, solutionUniqueName, batchSize, token }) {
   if (!envUrl) throw new Error('--envUrl is required');
   if (!componentsFile) throw new Error('--componentsFile is required');
@@ -74,6 +128,13 @@ async function addComponentsToSolution({ envUrl, componentsFile, solutionUniqueN
   if (!Array.isArray(components) || components.length === 0) {
     return { total: 0, success: 0, skipped: 0, failed: 0, failures: [] };
   }
+
+  // Validate shape upfront — abort with a clear error rather than streaming
+  // 400s. This catches the PascalCase silent-failure case observed in the
+  // field (all calls returned HTTP 400 "missing parameters" with no upfront
+  // signal until the user inspected the input file).
+  const shapeError = validateComponentsShape(components);
+  if (shapeError) throw shapeError;
 
   let currentToken = token || getAuthToken(envUrl);
   if (!currentToken) throw new Error('Failed to acquire Azure CLI token. Run `az login` first.');
@@ -196,4 +257,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { addComponentsToSolution };
+module.exports = { addComponentsToSolution, validateComponentsShape };

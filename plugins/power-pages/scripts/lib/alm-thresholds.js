@@ -9,10 +9,15 @@
 const fs = require('fs');
 const path = require('path');
 
+// NOTE: split-decision thresholds are intentionally tighter than the platform
+// hard caps (95 MB / 6000 components) to leave growth headroom in each
+// solution. Recommending a split at ~75 MB / 4000 components means each split
+// child has ~20 MB / ~2000 components of room before the platform refuses an
+// import. Bumped down on 2026-05-08 (IronItOut release-readiness pass).
 const DEFAULTS = Object.freeze({
-  maxSolutionSizeMB: 95,
-  warnComponentCount: 3000,
-  maxComponentCount: 6000,
+  maxSolutionSizeMB: 75,
+  warnComponentCount: 2500,
+  maxComponentCount: 4000,
   hardFlagComponentCount: 10000,
   maxSchemaAttrs: 15000,
   maxTableCount: 20,

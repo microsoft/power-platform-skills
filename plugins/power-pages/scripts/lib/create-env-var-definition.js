@@ -6,7 +6,8 @@
 // Usage: node create-env-var-definition.js
 //          --envUrl <url> --token <token>
 //          --schemaName <name> --displayName <name>
-//          [--type 100000003]      (100000003=Secret, 100000000=String, 100000001=Number, 100000002=Boolean)
+//          [--type 100000005]      (100000000=String, 100000001=Number, 100000002=Boolean,
+//                                   100000003=JSON, 100000004=DataSource, 100000005=Secret)
 //          [--defaultValue ""]
 //
 // Output (JSON to stdout):
@@ -19,14 +20,20 @@
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
 
-// Env var type codes
+// Canonical Dataverse option-set values for environmentvariabledefinition.type.
+// Verified against live tenant data — a Secret env var created via the Power
+// Platform UI is stored as 100000005, not 100000003. Earlier revisions had
+// Secret/JSON swapped (Secret=100000003, JSON=100000005), which caused this
+// helper to silently create JSON-typed records when callers asked for Secret,
+// and the discovery helper to render Secret records as "Json" in the plan.
+// Keep in sync with discover-env-var-definitions.js TYPE_LABELS.
 const ENV_VAR_TYPES = {
   String: 100000000,
   Number: 100000001,
   Boolean: 100000002,
-  Secret: 100000003,
+  JSON: 100000003,
   DataSource: 100000004,
-  Json: 100000005,
+  Secret: 100000005,
 };
 
 function parseArgs(argv) {

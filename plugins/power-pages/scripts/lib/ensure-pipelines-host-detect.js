@@ -8,7 +8,7 @@
 // want to inspect host state without inviting user prompts.
 //
 // Resolution order (mirrors ProjectHostProvider.tsx):
-//   1. Check .last-host-check.json cache → probe finalHostEnvUrl → reuse if reachable.
+//   1. Check docs/alm/last-host-check.json cache → probe finalHostEnvUrl → reuse if reachable.
 //   2. GetOrgDbOrgSetting('ProjectHostEnvironmentId') on source env.
 //      - If bound → BAP env GET to resolve URL/sku.
 //        - If sku === 'Platform' → check tenant default custom host (discover-pipelines-host).
@@ -30,7 +30,7 @@
 //     [--includeName <substring>] [--maxEnvsToProbe N] [--skus Production,Sandbox]
 //     [--minPipelinesVersion 9.0.0.0]
 //
-// Output (JSON to stdout): matches .last-host-check.json schemaVersion 2.
+// Output (JSON to stdout): matches docs/alm/last-host-check.json schemaVersion 2.
 
 'use strict';
 
@@ -39,6 +39,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const helpers = require('./validation-helpers');
+const { almPath } = require('./alm-paths');
 const { checkEnvHostBinding } = require('./check-env-host-binding');
 const { resolveEnvById } = require('./resolve-env-by-id');
 const { discoverPipelinesHost } = require('./discover-pipelines-host');
@@ -105,7 +106,7 @@ function getDataverseToken(originUrl, getTokenImpl) {
 }
 
 async function tryCacheFastPath({ projectRoot, cacheMaxAgeHours, getTokenImpl }) {
-  const cachePath = path.join(projectRoot, '.last-host-check.json');
+  const cachePath = almPath(projectRoot, 'lastHostCheck');
   if (!fs.existsSync(cachePath)) return null;
   let cached;
   try {
@@ -182,6 +183,7 @@ async function detect(opts = {}) {
     actionTaken: 'none',
     finalHostEnvUrl: null,
     finalHostEnvId: null,
+    finalHostEnvName: null,         // BAP env displayName — surfaces in plan-alm host card so reviewers see "Supplier Portal Host" instead of just the GUID-y instance URL
     finalHostInstanceApiUrl: null,
     isPlatformHost: false,
     tenantDefaultCustomHostEnvId: null,
@@ -227,6 +229,7 @@ async function detect(opts = {}) {
 
     baseOut.finalHostEnvId = env.envId;
     baseOut.finalHostEnvUrl = env.instanceUrl;
+    baseOut.finalHostEnvName = env.displayName || null;
     baseOut.finalHostInstanceApiUrl = env.instanceApiUrl;
     baseOut.isPlatformHost = env.environmentSku === 'Platform';
 
@@ -257,7 +260,10 @@ async function detect(opts = {}) {
     // Phase 2.5 — no org binding. Tenant-wide enumeration.
     const list = await listTenantEnvs({
       bapToken,
-      skus: skus || ['Production'],
+      // Default to Production+Sandbox so trial-license tenants (Sandbox-only)
+      // still see eligible existing envs in the env-first menu. See
+      // list-tenant-envs.js DEFAULT_SKUS for rationale.
+      skus: skus || ['Production', 'Sandbox'],
       maxEnvsToProbe: maxEnvsToProbe || undefined,
       firstHitWins: true,
       includeName,
@@ -280,6 +286,7 @@ async function detect(opts = {}) {
       baseOut.resolutionStatus = 'AvailableUnboundCustomHost';
       baseOut.finalHostEnvId = h.envId;
       baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvName = h.displayName || null;
       baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
       baseOut.isPlatformHost = false;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;
@@ -291,6 +298,7 @@ async function detect(opts = {}) {
       baseOut.resolutionStatus = 'PlatformHostExistsUnbound';
       baseOut.finalHostEnvId = h.envId;
       baseOut.finalHostEnvUrl = h.instanceUrl;
+      baseOut.finalHostEnvName = h.displayName || null;
       baseOut.finalHostInstanceApiUrl = h.instanceApiUrl;
       baseOut.isPlatformHost = true;
       baseOut.pipelinesSolutionVersion = h.pipelinesSolutionVersion || null;

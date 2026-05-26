@@ -41,18 +41,19 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
 | add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
+| scan-site | ScanSite | Site/AI/Skills/ScanSite |
+| manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
+| manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
+| security-review | SecurityReview | Site/AI/Skills/SecurityReview |
 | setup-solution | SetupSolution | Site/AI/Skills/SetupSolution |
 | export-solution | ExportSolution | Site/AI/Skills/ExportSolution |
 | import-solution | ImportSolution | Site/AI/Skills/ImportSolution |
-| hotfix-solution | HotfixSolution | Site/AI/Skills/HotfixSolution |
 | diagnose-deployment | DiagnoseDeployment | Site/AI/Skills/DiagnoseDeployment |
 | configure-env-variables | ConfigureEnvVariables | Site/AI/Skills/ConfigureEnvVariables |
 | setup-pipeline | SetupPipeline | Site/AI/Skills/SetupPipeline |
 | deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
 | ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
-| git-connect | GitConnect | Site/AI/Skills/GitConnect |
-| git-commit | GitCommit | Site/AI/Skills/GitCommit |
-| git-pull | GitPull | Site/AI/Skills/GitPull |
+| force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 
 ## YAML Format
 

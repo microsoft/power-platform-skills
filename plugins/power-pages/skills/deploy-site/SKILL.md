@@ -283,7 +283,7 @@ Use `AskUserQuestion` to confirm before proceeding:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-The script reads `siteName` from `powerpages.config.json`, looks up the website via the Power Platform admin API, and restarts it to flush the runtime cache.
+The script reads `siteName` from `powerpages.config.json`, looks up the website via the Power Platform API, and restarts it to flush the runtime cache.
 
 Evaluate the result:
 

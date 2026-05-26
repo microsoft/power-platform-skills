@@ -116,7 +116,14 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .pipeline-stage:not(:last-child)::after{content:'';position:absolute;right:-12px;top:50%;transform:translateY(-50%);width:0;height:0;border-top:12px solid transparent;border-bottom:12px solid transparent;border-left:12px solid var(--border);z-index:2;}
 .pipeline-stage:not(:last-child)::before{content:'';position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:0;height:0;border-top:11px solid transparent;border-bottom:11px solid transparent;border-left:11px solid var(--surface);z-index:3;}
 .stage-name{font-size:14px;font-weight:800;color:var(--text-bright);}
+.stage-env-name{font-size:13px;font-weight:600;color:var(--text);margin-top:6px;line-height:1.3;word-break:break-word;}
 .stage-env{font-size:11px;font-family:var(--mono);color:var(--accent);margin-top:4px;}
+.stage-env a{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;}
+.stage-env a:hover{border-bottom-color:var(--accent);}
+.host-card .card-env-name{font-size:14px;font-weight:600;color:var(--text-bright);margin-bottom:4px;}
+.host-card .card-env-url{font-size:11px;font-family:var(--mono);color:var(--accent);}
+.host-card .card-env-url a{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;}
+.host-card .card-env-url a:hover{border-bottom-color:var(--accent);}
 .stage-active{background:var(--accent-bg);border-color:var(--accent-border);}
 .stage-active .stage-name{color:var(--accent);}
 .pipeline-solution-label{display:flex;align-items:center;gap:10px;margin:22px 0 8px;padding:10px 14px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border);}
@@ -132,6 +139,28 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .env-table .env-val{font-family:var(--mono);font-size:11px;color:var(--text);word-break:break-all;}
 .env-table .env-placeholder{color:var(--high);font-style:italic;}
 
+.envvar-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;box-shadow:var(--shadow-4);}
+.envvar-header{display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;user-select:none;}
+.envvar-header:hover{background:var(--surface2);}
+.envvar-tag{font-size:9px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;padding:3px 8px;border-radius:10px;background:var(--accent-bg);border:1px solid var(--accent-border);color:var(--accent);font-family:var(--mono);flex-shrink:0;}
+.envvar-name{font-size:14px;font-weight:700;color:var(--text-bright);flex:1;}
+.envvar-type{font-size:11px;font-family:var(--mono);color:var(--accent);background:var(--accent-bg);padding:2px 8px;border-radius:3px;border:1px solid var(--accent-border);flex-shrink:0;}
+.envvar-chevron{font-size:14px;color:var(--text-dim);transition:transform 0.2s;flex-shrink:0;}
+.envvar-card.open .envvar-chevron{transform:rotate(180deg);}
+.envvar-body{display:none;padding:0 18px 16px;border-top:1px solid var(--border);}
+.envvar-card.open .envvar-body{display:block;animation:fadeIn 0.2s ease;}
+.envvar-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;font-size:12px;}
+.envvar-fields .span2{grid-column:span 2;}
+.envvar-fields .field-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.envvar-fields code{font-family:var(--mono);font-size:11px;color:var(--text-bright);background:var(--surface2);padding:2px 7px;border-radius:3px;border:1px solid var(--border);}
+.envvar-fields .schema{font-family:var(--mono);font-size:11px;color:var(--text-bright);word-break:break-all;}
+.envvar-fields .default{font-family:var(--mono);font-size:11px;color:var(--text);word-break:break-all;}
+.envvar-fields .desc{color:var(--text);line-height:1.6;}
+.envvar-fields .bound{font-family:var(--mono);font-size:11px;color:var(--purple);background:var(--purple-bg);padding:2px 7px;border-radius:3px;border:1px solid var(--purple-border);display:inline-block;}
+.envvar-fields .none{color:var(--text-dim);font-style:italic;}
+.envvar-values{margin-top:14px;}
+.envvar-values .field-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;}
+
 .checklist-item{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;}
 .checklist-icon{font-size:14px;font-weight:800;color:var(--text-dim);width:22px;text-align:center;}
 .checklist-item.status-pending .checklist-icon{color:var(--text-dim);}
@@ -140,6 +169,10 @@ code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1
 .checklist-item.status-skipped .checklist-icon{color:var(--text-dim);opacity:0.6;}
 .checklist-item.status-warning .checklist-icon{color:var(--high);}
 .checklist-name{flex:1;font-size:13px;color:var(--text);}
+.checklist-name a.checklist-link{color:inherit;text-decoration:none;border-bottom:1px dashed transparent;cursor:pointer;}
+.checklist-name a.checklist-link:hover{color:var(--accent);border-bottom-color:var(--accent);}
+.checklist-name a.checklist-link::after{content:" \2197";opacity:0.4;font-size:11px;}
+.checklist-name a.checklist-link:hover::after{opacity:0.9;}
 .status-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;font-family:var(--mono);}
 .status-badge.pending{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border);}
 .status-badge.in-progress{background:var(--high-bg);color:var(--high);border:1px solid var(--high-border);}
@@ -407,6 +440,12 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 document.querySelectorAll('.split-solution-card').forEach(card => {
   card.addEventListener('click', (e) => {
     if (e.target.closest('.split-solution-body')) return;
+    card.classList.toggle('open');
+  });
+});
+document.querySelectorAll('.envvar-card').forEach(card => {
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.envvar-body')) return;
     card.classList.toggle('open');
   });
 });

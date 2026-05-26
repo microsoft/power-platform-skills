@@ -276,6 +276,8 @@ Method: InitializeFileBlocksUpload
 
 **Auto-fix available**: Yes (with explicit user permission)
 
+**Primary mitigation — pre-flight detection** (added 2026-05-15 after a real-world case where a Content solution failed at 3,909 rejected `.js` files on Staging 50-75 minutes into the import, even though Dev had been pre-fixed): the `deploy-pipeline` skill runs a pre-flight check in **Phase 2.5** for any Power Pages project. It queries the target env's `blockedattachments` setting via `fix-blocked-attachments.js --dry-run` and, if any relevant extensions are blocked, prompts the user immediately via `AskUserQuestion` to unblock + continue, proceed anyway (Phase 7.6 reactive path catches failure), or cancel. This catches the issue in ~10 seconds instead of after the full import attempt. The procedure below is the reactive path the **Phase 7.6** handler invokes when the pre-flight was skipped or declined.
+
 **Fix procedure**:
 1. Retrieve the current blocked attachments list:
    ```bash
@@ -373,3 +375,40 @@ Authenticated users cannot create/read records
 3. Or re-run `setup-solution` — table permissions (type 18) are included by default.
 
 **Prevention**: Table Permissions are standard `powerpagecomponents` and are included by default in `setup-solution` Phase 5. Verify they were not accidentally excluded when the solution was created.
+
+---
+
+## Pattern 15: Environment Already Associated With Another Pipelines Host
+
+> **Approval gates:** Detection by `setup-pipeline:5a.pattern-15` (consent). Auto-fix by `force-link-environment:4.destructive` (consent). See `references/approval-gates.md` §6.3 and §6.9.
+
+**Error pattern** (from `deploymentenvironments` POST or its `validationstatus` poll):
+```
+This environment is already associated with another pipelines host.
+errormessage: "...already associated with another pipelines host..."
+validationstatus: 200000002 (Failed)
+```
+
+**Root cause**: The BAP environment being added to this Pipelines host is already stamped (linked) to a different Pipelines host. Each environment can only be linked to one host at a time — the stamp lives on the BAP env record and points back to whichever host claimed it most recently. Common cause: a tenant previously used the Platform Host (auto-created), and now an admin is migrating environments to a Custom Host (or between two Custom Hosts).
+
+**Severity**: Error
+
+**Auto-fix available**: Yes (via the `force-link-environment` skill — DESTRUCTIVE to the previous host).
+
+**Microsoft Learn reference**: [Using Force Link to associate an environment with a new host](https://learn.microsoft.com/en-us/power-platform/alm/custom-host-pipelines#using-force-link-to-associate-an-environment-with-a-new-host).
+
+**Fix procedure**:
+1. Confirm with the user that the migration is intentional. Force Link is reversible (run it again from the previous host) but has two documented side effects:
+   - Makers in the previous host lose access to pipelines that ran through this environment.
+   - The previous host's `deploymentenvironments` row is left with a stale `validationstatus = Succeeded` until refreshed.
+2. Identify the new host's `deploymentenvironments` record ID for this BAP env. If it does not exist yet, create it first (the create itself will mark the record as Failed with this exact errormessage).
+3. Invoke `/power-pages:force-link-environment` with `--host <newHostEnvUrl>` and `--dev-env <bapEnvId>`. The skill will:
+   - Re-confirm the destructive action via `AskUserQuestion`.
+   - Call `POST {newHostEnvUrl}/api/data/v9.0/ManageEnvironmentStamp` with body `{"DeploymentEnvironmentId":"{UPPER-GUID}"}` and headers `clienthost: Browser`, `x-ms-app-name: AppDeploymentConfiguration`.
+   - Re-poll `validationstatus` on the record until Succeeded (200000001).
+   - Write `docs/alm/last-force-link.json` marker.
+4. Verify by re-running the originally-failing operation (typically `setup-pipeline` or `deploy-pipeline`) — the env's `validationstatus` should now be Succeeded on this host.
+
+**Prerequisite**: Caller must have **Deployment Pipeline Administrator** role on the new host. Without it, `ManageEnvironmentStamp` returns 403.
+
+**Manual alternative**: In the Deployment Pipeline Configuration app, open the environment record on the new host and click **Force Link** on the command bar. Confirm the prompt.

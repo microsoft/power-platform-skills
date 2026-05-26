@@ -7,24 +7,11 @@ description: >-
   "deploy to staging", "deploy to production", or "install site in new environment".
 user-invocable: true
 argument-hint: "Optional: path to solution zip file"
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch
 model: opus
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: 'node "${CLAUDE_PLUGIN_ROOT}/skills/import-solution/scripts/validate-import.js"'
-          timeout: 30
-        - type: prompt
-          prompt: |
-            Check whether the import-solution skill completed successfully. Return { "ok": true } if ALL of the following are true, otherwise { "ok": false, "reason": "..." }:
-            1. A valid solution zip file was located and verified to contain Solution.xml
-            2. Import options (overwrite, staged vs direct) were confirmed with the user
-            3. An async import job was triggered and polled to completion
-            4. The solution was verified to exist in the target environment after import
-            5. A completion summary was presented showing imported component count (or warnings/errors)
-          timeout: 30
 ---
+
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # import-solution
 
@@ -37,6 +24,73 @@ Imports a solution zip into a target Dataverse environment via `ImportSolutionAs
 - Solution zip file exists on disk (produced by `export-solution`)
 
 ## Phases
+
+### Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+The helper computes this from `docs/.alm-plan-data.json` — `PLAN_STATUS === "In Execution"` AND `LAST_INVOCATION_AT` within the last 60 minutes. `check-alm-plan.js` refreshes `LAST_INVOCATION_AT` automatically on every invocation that finds the plan in execution, so each in-chain skill keeps the chain alive for the next one — even multi-hour deploys (deploy-pipeline alone can take 60 min per stage) survive the window without the chain incorrectly de-classifying. Stalled chains (no heartbeat for > 60 min) reclassify as `stale-heartbeat` and Phase 0 gates fire normally so an abandoned plan doesn't silently bypass user confirmation.
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`. Pass `--envUrl`, `--token`, `--solutionId` once Phase 1 has acquired them if you also want a freshness check; otherwise the helper does an existence-only check, which is sufficient for the gate decision below.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` (reason: `solution-modified`) | The solution changed after the plan was generated. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including this one) in the right order. Want me to run plan-alm now?"
+
+<!-- gate: import-solution:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · import-solution:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since (at `{solution.modifiedon}`). Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: import-solution:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · import-solution:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, re-run the Phase 0 helper once to confirm freshness; if still stale, surface the detail and proceed to Phase 1 anyway (don't infinite-loop).
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Direct invocation of `import-solution` deploys a zip into a target environment without the orchestrator's deployment-strategy selection or post-import validation steps. Users running this skill standalone often skip the staged-import dependency check, miss env var override values for the target environment, and have no plan-tracked record of which environment received which artifact version. The gate ensures `plan-alm` either ran (so the strategy was selected, per-stage values were captured in `deployment-settings.json`, and the deployment is reproducible) or the user explicitly chose to bypass it.
 
 ### Phase 1 — Verify Prerequisites
 
@@ -64,13 +118,29 @@ Steps:
 
 If any check fails, stop (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
+### Phase 1.5 — Ground in current ALM documentation
+
+> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+
+Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
+
+1. Run `microsoft_docs_search` with the query: `Power Pages solution import staging missing dependencies ImportSolutionAsync ALM`.
+2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on staged imports or dependency handling) in parallel via `microsoft_docs_fetch`.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about staging vs direct import, dependency resolution, and component-level error handling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ImportSolutionAsync` / `StageSolution` signatures.
+4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 4 (the actual import).
+
 ### Phase 2 — Locate Solution File
 
 1. If a zip path was provided as an argument, use it directly
 2. Otherwise, search for solution zips: `glob('**/*.zip', { ignore: ['**/node_modules/**'] })`
 3. For each found zip, verify it contains `solution.xml`:
    - Use `Bash`: `unzip -l "{zipPath}" 2>/dev/null | grep -qi solution.xml`
-4. If multiple valid zips found: ask user to choose via `AskUserQuestion`
+4. If multiple valid zips found, ask user to choose:
+
+   <!-- gate: import-solution:2.multiple-zips | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:2.multiple-zips):** More than one valid solution zip was discovered under the project root. User picks which one to import. Cancel exits before any target-env interaction.
+
+   Use `AskUserQuestion` with one option per valid zip — show filename + size + modified date so the user can identify the right one (most-recent export is usually the intended target).
 5. If no valid zip found: stop and explain — run `export-solution` first or provide the zip path
 
 **Step 5a — Pre-import content inspection** (run after zip is confirmed, before presenting to user):
@@ -101,6 +171,71 @@ If `postImportWarnings` is non-empty, display all warnings inline (not via `AskU
 Present the selected zip file details (name, size, path), any pre-import warnings, and confirm with user.
 
 ### Phase 3 — Configure Import
+
+**Step 3.0 — Version-skew advisory (read-only check before any prompt).**
+
+Before asking the user about staged/direct import, query the target environment for the solution unique name carried in the zip and compare the installed version against the zip's version. The goal is to surface "you're about to import the same version that's already installed" before the user clicks through — this is the most common silent-failure pattern for the manual export/import path, because the source-side bump is what produces an unambiguously promotable artifact.
+
+1. **Extract the zip's `uniqueName` + `version`** from `solution.xml` inside the zip:
+   ```bash
+   unzip -p "{zipPath}" solution.xml 2>/dev/null | head -50
+   ```
+   Parse `<UniqueName>` and `<Version>` from the XML. Store as `ZIP_SOLUTION_NAME` and `ZIP_SOLUTION_VERSION`.
+
+2. **Query the target for the installed solution**:
+   ```
+   GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{ZIP_SOLUTION_NAME}'&$select=solutionid,uniquename,version,ismanaged
+   ```
+   Store the result as `INSTALLED` (or `null` if the filter returns an empty `value` array).
+
+3. **Compare versions via the shared helper, then branch on the result.**
+
+   **Precondition — skip this entire step when `INSTALLED` is `null`.** That's the first-time-install case: there's nothing on the target to compare against. Do NOT call the helper with `null` substituted into `'{INSTALLED.version}'` — it would throw "version is required" and leave the agent without a branch. Jump straight to the staged/direct prompt below and treat the import as a fresh install.
+
+   Otherwise (`INSTALLED` is non-null), compare versions:
+
+   Critical: **do not compare version strings with raw `>` / `<` / `===`** — Dataverse versions are 4-segment integer tuples (`1.0.0.9` vs `1.0.0.10`) and lexical comparison reports `1.0.0.10` as **lower than** `1.0.0.9`, flipping the skew gate on the 10th deploy of the day. Use the canonical helper instead:
+
+   ```bash
+   node -e "console.log(require('${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version').compareVersions('{ZIP_SOLUTION_VERSION}', '{INSTALLED.version}'))"
+   ```
+
+   The helper returns `-1` when ZIP < INSTALLED, `0` when equal, `1` when ZIP > INSTALLED. Same segment-wise integer rules as `bumpPatchSegment` (pad-with-zero, max-4-segments, reject non-integer). Capture stdout, trim, and store the integer as `VERSION_CMP`. If the helper throws (malformed version on either side), surface the stderr to the user and stop — the version comparison is a precondition for safe import.
+
+   | `INSTALLED` | `VERSION_CMP` | Behavior |
+   |---|---|---|
+   | `null` | (helper not called — see precondition above) | First-time install. Continue silently to the staged/direct prompt below. |
+   | not null | `1` (zip is strictly greater) | Normal upgrade. Report: *"Target has v{INSTALLED.version} installed; this zip is v{ZIP_SOLUTION_VERSION}. Importing will upgrade."* |
+   | not null | `0` (zip equals installed) | **Surface the warning below** (same-version skew — applies to both managed and unmanaged). |
+   | not null | `-1` (zip is strictly less) | **Surface the warning below** (downgrade — applies to both managed and unmanaged). |
+
+   <!-- gate: import-solution:3.0.version-skew | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · import-solution:3.0.version-skew):** Zip version is equal-to or lower-than the installed solution's version on the target. Importing produces unpredictable upgrade semantics; the source `export-solution` is supposed to bump the version on every export. Re-export with bumped version, force the import anyway, or cancel.
+
+   **Warning prompt** — `AskUserQuestion`:
+
+   > "The target environment already has **`{ZIP_SOLUTION_NAME}` v`{INSTALLED.version}`** installed ({INSTALLED.ismanaged ? 'managed' : 'unmanaged'}). The zip you are about to import carries version `{ZIP_SOLUTION_VERSION}`.
+   >
+   > Importing the same or a lower version is unreliable:
+   > - **Managed**: no upgrade lineage; the platform may apply or reject the import depending on internal heuristics.
+   > - **Unmanaged**: behavior depends entirely on `OverwriteUnmanagedCustomizations: true`, and any in-target edits that happen to match the zip's component IDs get silently overwritten without a version change to point to.
+   >
+   > `/power-pages:export-solution` always bumps the source version before producing a zip (since 2026-05-25). If this zip was produced before that change, re-exporting will give you a clean, strictly-greater version.
+   >
+   > How would you like to proceed?"
+   >
+   > | Question | Header | Options |
+   > |---|---|---|
+   > | What to do? | Version skew | Re-export with a bumped version (Recommended — invokes /power-pages:export-solution), Import anyway (proceed at your own risk), Cancel |
+
+   - **Re-export**: invoke `/power-pages:export-solution`. After it completes, restart this skill from Phase 2 with the freshly-produced zip.
+   - **Import anyway**: set `SKEW_ACK = true` and proceed to the staged/direct prompt below. Record the acknowledged skew in `docs/alm/last-import.json` under `versionSkew: { zipVersion, installedVersion, isManaged, acknowledged: true }` for the audit trail.
+   - **Cancel**: stop the skill cleanly. No target-env writes happened in Step 3.0 — it was read-only.
+
+4. **If the comparison is the normal upgrade case** (or the zip's solution isn't installed yet), continue silently — do not present a prompt, just record the version delta in the eventual `docs/alm/last-import.json` for the summary.
+
+<!-- gate: import-solution:3.config | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:3.config):** Staged vs Direct import, overwrite options. Cancel exits before any target-env mutation.
 
 Ask user (via `AskUserQuestion`):
 
@@ -187,6 +322,9 @@ Tell the user:
 
 #### 5b.3 Ask for Permission
 
+<!-- gate: import-solution:5b.blocked-attachments | category=consent | cancel-leaves=attachment-block-modified -->
+> 🚦 **Gate (consent · import-solution:5b.blocked-attachments):** Reactive `AttachmentBlocked` remediation — modify env-level `blockedattachments` setting (tenant-wide impact). Reversible from PPAC. **Fires fresh on every skill invocation that hits the failure.** When `plan-alm` Manual path orchestrates multi-target imports (Staging then Production), it invokes `import-solution` **once per target** — if both targets block the same extensions, the gate fires once per target (each is a separate skill invocation against a separate env). Consent for Staging does NOT cover Production.
+
 Invoke `AskUserQuestion` immediately — do NOT present this as a chat message. The user must answer live before the skill proceeds.
 
 | Question | Header | Options |
@@ -228,7 +366,7 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
    - Parse the `data` XML field for per-component results (look for `result="failure"` entries)
    - Count: imported successfully / warnings / failures
 
-3. Write `.last-import.json` marker to project root:
+3. Ensure `docs/alm/` exists, then write `docs/alm/last-import.json` marker (`node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`):
    ```json
    {
      "importedAt": "<ISO timestamp>",
@@ -237,9 +375,22 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
      "targetEnvironment": "<envUrl>",
      "asyncOperationId": "<id>",
      "importJobId": "<ImportJobKey value>",
-     "componentResults": { "success": N, "warning": N, "failure": N }
+     "status": "<Succeeded|Failed|Partial>",
+     "componentResults": { "success": N, "warning": N, "failure": N },
+     "versionSkew": null
    }
    ```
+
+   The `status` field drives `refresh-alm-plan-data.js`'s step-sync (`completed` vs `failed`) for the rendered ALM plan's per-stage checklist. Set it to:
+   - `Succeeded` when the import job's `statecode` is 3 (Succeeded) AND component-results show `failure === 0`.
+   - `Partial` when `statecode` is 3 but `componentResults.failure > 0` (the solution landed but some components didn't import — usually managed-property conflicts or dependency gaps).
+   - `Failed` when `statecode` is 4 (Failed) OR the import never reached terminal state OR all components failed. Without this field, every import shows `completed` in the rendered plan regardless of actual outcome.
+
+   **If the user acknowledged a same-version or downgrade import in Step 3.0** (`SKEW_ACK = true`), set `versionSkew` to:
+   ```json
+   { "zipVersion": "<ZIP_SOLUTION_VERSION>", "installedVersion": "<INSTALLED.version>", "isManaged": <bool>, "acknowledged": true }
+   ```
+   Otherwise leave `versionSkew: null`.
 
 ### Phase 6b — Set Environment Variable Values (if any)
 
@@ -256,6 +407,9 @@ For each definition found, check if a value already exists in the target:
 ```
 GET {envUrl}/api/data/v9.2/environmentvariablevalues?$filter=_environmentvariabledefinitionid_value eq '{id}'&$select=value
 ```
+
+<!-- gate: import-solution:6b.env-vars | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:6b.env-vars):** Imported env var definitions need per-target values. User supplies values or skips (uses default). Without values, runtime reads default which may be dev-only.
 
 **If any definitions have no existing value**, present them to the user via `AskUserQuestion`:
 
@@ -274,10 +428,20 @@ POST {envUrl}/api/data/v9.2/environmentvariablevalues
 }
 ```
 
-> **Note on Secret type (type 100000003):** Secret values are stored encrypted. The POST behaves the same but the value will be masked in the UI. The user should provide the actual secret value for the target environment (e.g. the OAuth client secret for the production tenant's app registration — different from the dev value).
+> **Note on Secret type (type 100000005):** Secret values are stored encrypted. The POST behaves the same but the value will be masked in the UI. The user should provide the actual secret value for the target environment (e.g. the OAuth client secret for the production tenant's app registration — different from the dev value).
 
 If the user skips all values: inform them the site may not function correctly until values are set, and provide the direct Power Platform URL to set them manually:
 `https://{targetEnvHost}/main.aspx?appid=...&etn=environmentvariabledefinition`
+
+**6b.verify — Confirm values landed.** After the per-variable POSTs complete, verify each `environmentvariablevalues` record actually exists on the target. The shared helper `scripts/lib/verify-env-var-values.js` does this read-only check and returns a structured JSON result per schema (`landed` / `missing-value-record` / `missing-definition` / `value-mismatch` / `query-error`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-env-var-values.js" \
+  --envUrl "{targetEnvUrl}" \
+  --schemaNames "{comma-separated schema names that the user supplied values for}"
+```
+
+Capture stdout as JSON. If `summary.missing > 0` or `summary.error > 0`, surface a single warning to the user with the affected schema names — but do not block the import summary, the import itself succeeded. The same helper is used at deploy time (deploy-pipeline Phase 7.6.5) and at configure time (configure-env-variables Phase 7); centralizing the check keeps the user-visible message consistent across skills.
 
 ### Phase 6c — Detect Cloud Flows (if any)
 
@@ -303,6 +467,9 @@ If cloud flow files are found:
    > To register: **Power Pages Management** → target environment → Edit site → **Set up** → **Cloud flows** → register each flow listed above.
    >
    > Direct link: `https://make.powerpages.microsoft.com/`
+
+   <!-- gate: import-solution:6c.cloud-flow-register | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:6c.cloud-flow-register):** Cloud flows in imported solution need manual registration in target env. Acknowledge / defer.
 
 3. Invoke `AskUserQuestion`:
 
@@ -331,6 +498,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot ".
 Evaluate the result:
 
 - **`activated: true`**: Store `siteUrl` for the Phase 7 summary. No further action needed.
+
+<!-- gate: import-solution:6d.activate | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · import-solution:6d.activate):** Site imported but not activated in target env. Offer to invoke activate-site now or defer.
+
 - **`activated: false`**: Ask the user via `AskUserQuestion`:
 
   | Question | Header | Options |
@@ -363,16 +534,31 @@ Display a summary table:
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ImportSolution"`.
 
+### Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase import-solution \
+  --stageName "{targetLabel}" \
+  --render
+```
+
+`{targetLabel}` is the Manual-path target stage (e.g. `Staging`, `Production`) the just-completed import was for — usually carried in by the orchestrator (plan-alm Phase 7) or derivable from the target env URL. The helper reads `docs/alm/last-import.json`, captures the import outcome (status, version, component count, component failures) into `planData.manualImports[targetLabel]`, and re-renders `docs/alm-plan.html` so the matching `Import to {targetLabel}` checklist step shows an `IMPORTED` / `FAILED` badge with version + component count inline. Subsequent imports to OTHER targets each get their own entry — the renderer surfaces a per-target history rather than overwriting on each call.
+
+If `--stageName` is omitted the helper falls back to matching `docs/alm/last-import.json`'s `targetEnvironment` URL against `planData.stages[].envUrl`. When the match fails (rare — usually a stage-label/env-URL mismatch in planData), the import is captured under a synthetic key so it isn't silently lost; pass `--stageName` explicitly to keep the rendered plan clean. When `docs/.alm-plan-data.json` is absent, the helper returns `ok:false` as a soft no-op.
+
 ## Key Decision Points (Wait for User)
 
 1. **Phase 1**: Confirm target environment — import is not easily undoable for managed solutions
 2. **Phase 2**: Select zip file if multiple found
-3. **Phase 3**: Staged vs direct import; overwrite customizations
-4. **Phase 4**: Proceed despite missing dependencies
-5. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
-6. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
-7. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
-8. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
+3. **Phase 3 Step 3.0**: **Version-skew advisory** — only fires when the target already has the solution installed AND the zip's version is `≤` the installed version. Offers re-export with bumped version (Recommended), import-anyway (acknowledged in `last-import.json`), or cancel. Read-only check; cancelling here makes no target-env writes.
+4. **Phase 3**: Staged vs direct import; overwrite customizations
+5. **Phase 4**: Proceed despite missing dependencies
+6. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
+7. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
+8. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
+9. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
 
 ## Error Handling
 
@@ -388,10 +574,10 @@ Follow the skill tracking instructions in the reference to record this skill's u
 |---|---|---|
 | Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire token, verify target environment with user |
 | Locate solution file | Locating solution file | Find and validate solution zip, confirm Solution.xml present |
-| Configure import | Configuring import | Ask: staged vs direct, overwrite customizations, publish workflows |
+| Configure import | Configuring import | Step 3.0: extract zip uniqueName+version from solution.xml, query target's installed version, surface a version-skew advisory if zip version ≤ installed (offer re-export / import-anyway / cancel); then ask: staged vs direct, overwrite customizations, publish workflows |
 | Stage solution (dependency check) | Staging solution | Run StageSolution to check for missing dependencies before committing |
 | Import solution | Importing solution | POST ImportSolutionAsync, poll until complete; if AttachmentBlocked: identify blocked types, get user consent, unblock via pac env update-settings, retry |
-| Verify import | Verifying import | Confirm solution version in target, parse component results, write .last-import.json |
+| Verify import | Verifying import | Confirm solution version in target, parse component results, write docs/alm/last-import.json |
 | Detect cloud flows | Detecting cloud flows | List Workflows/*.json entries in zip; if found, prompt user to register flows with Power Pages site; record status (Registered / Pending registration) |
 | Check site activation | Checking site activation | If solution has componentType 10374: run check-activation-status.js; if not activated, ask user and invoke /power-pages:activate-site |
 | Present summary | Presenting summary | Show component counts (success/warning/failure), cloud flow registration status, site activation status, env var values set |

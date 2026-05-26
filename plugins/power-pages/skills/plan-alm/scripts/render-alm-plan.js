@@ -17,6 +17,7 @@
 const path = require('path');
 const fs = require('fs');
 const { parseArgs } = require('../../../scripts/lib/render-template');
+const { DEFAULTS: ALM_THRESHOLDS } = require('../../../scripts/lib/alm-thresholds');
 
 const args = parseArgs(process.argv);
 
@@ -56,11 +57,41 @@ const tierColor = { green: 'var(--pass)', yellow: 'var(--high)', red: 'var(--cri
 const strategyLabel = data.STRATEGY === 'pp-pipelines' ? 'Power Platform Pipelines' : 'Manual Export / Import';
 const proposedSolutions = Array.isArray(data.proposedSolutions) ? data.proposedSolutions : [];
 const envVars = Array.isArray(data.envVars) ? data.envVars : [];
+const plannedEnvVarCount = Number.isFinite(data.plannedEnvVarCount) ? Math.max(0, Math.trunc(data.plannedEnvVarCount)) : 0;
 const sizeAnalysis = data.sizeAnalysis || null;
 const assetAdvisory = data.assetAdvisory || { enabled: false, candidates: [], recommendation: null };
 const breakdown = data.breakdown || {};
 
-const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
+// Disk-measurement cross-check. Top-level keys are the contract path (per
+// SKILL.md "Disk-measurement cross-check" section). The rawDiscovery fallback
+// exists for older plan files written before the hoist was specified — it
+// keeps the signal-card display intact without forcing a re-render. All three
+// fields are null when --projectRoot wasn't passed or no build-output dir
+// was found.
+const diskMeasuredMB =
+  data.webFilesDiskMeasuredMB != null
+    ? Number(data.webFilesDiskMeasuredMB)
+    : (data.rawDiscovery?.estimate?.webFilesDiskMeasuredMB != null
+        ? Number(data.rawDiscovery.estimate.webFilesDiskMeasuredMB)
+        : null);
+const diskMeasuredPath =
+  data.webFilesDiskMeasuredPath || data.rawDiscovery?.estimate?.webFilesDiskMeasuredPath || null;
+// Stratified-sample count surfaced under the Web Files signal so reviewers can
+// see how aggressively the aggregate was extrapolated. Same hoist-then-fallback
+// pattern as the disk-measurement fields above.
+const webFileSampleSize =
+  Number.isFinite(data.webFileSampleSize)
+    ? Number(data.webFileSampleSize)
+    : (Number.isFinite(data.rawDiscovery?.estimate?.webFileSampleSize)
+        ? Number(data.rawDiscovery.estimate.webFileSampleSize)
+        : null);
+const webFileCount =
+  Number.isFinite(data.webFileCount)
+    ? Number(data.webFileCount)
+    : (Number.isFinite(data.rawDiscovery?.estimate?.webFileCount)
+        ? Number(data.rawDiscovery.estimate.webFileCount)
+        : null);
+
 // Three-number semantics when the estimator ran with --solutionId:
 //   componentCountSiteTotal      — RAW Dataverse rows on the site. What the
 //                                  Maker UI would show if the entire site
@@ -70,16 +101,32 @@ const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0);
 //   orphansOnSite                — ppcs on the site that aren't in the solution,
 //                                  excluding stale bundle chunks.
 // For the headline "X components" we prefer inSolution when present (that's
-// what the pipeline ships). Fall back to siteTotal or the legacy
-// sizeAnalysis.componentCount value when the estimator ran without a solution
-// context.
+// what the pipeline ships). Fall back to siteTotal, the legacy
+// sizeAnalysis.componentCount value, and finally the proposedSolutions
+// aggregate when the estimator ran without a solution context — that last
+// fallback prevents the Overview tab from showing 0 components when the
+// Solutions tab already has accurate per-solution counts.
 const fallbackComponentCount = Number(sizeAnalysis?.componentCount?.value ?? 0);
+const proposedComponentCount = proposedSolutions.reduce((sum, s) => sum + Number(s?.componentCount || 0), 0);
 const componentCountSiteTotal = Number(data.componentCountSiteTotal ?? fallbackComponentCount);
 const componentCountInSolution = (data.componentCountInSolution == null) ? null : Number(data.componentCountInSolution);
 const orphansOnSite = (data.orphansOnSite == null) ? null : Number(data.orphansOnSite);
 const hasSolutionMembershipBreakout = componentCountInSolution !== null;
-const componentCount = hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal;
-const SIZE_LIMIT_MB = 95;
+// Pick the first non-zero source. proposedSolutions is the last-ditch fallback —
+// it holds the SPLIT_PLAN's count which compute-split-plan.js calculates from a
+// different code path than estimate-solution-size.js, so it can be populated
+// even when the estimator's componentCount returned 0.
+const componentCount = (
+  (hasSolutionMembershipBreakout ? componentCountInSolution : componentCountSiteTotal)
+  || proposedComponentCount
+);
+// Same fallback chain for total size — Overview MB stat is wrong if we trust 0 from
+// sizeAnalysis when proposedSolutions has a non-zero aggregate.
+const proposedTotalSizeMB = proposedSolutions.reduce((sum, s) => sum + Number(s?.sizeMB || 0), 0);
+const totalSizeMB = Number(sizeAnalysis?.totalSizeMB?.value ?? 0) || proposedTotalSizeMB;
+// Threshold pulled from the central source so a future bump in alm-thresholds.js
+// flows through here without an additional code edit.
+const SIZE_LIMIT_MB = ALM_THRESHOLDS.maxSolutionSizeMB;
 const exceedsSize = totalSizeMB > SIZE_LIMIT_MB;
 const sizeTier = sizeAnalysis?.totalSizeMB?.tier || 'unknown';
 const sizeColor = tierColor[sizeTier];
@@ -96,7 +143,7 @@ function buildOverviewSummary() {
   let msg = `<strong>${escapeHtml(data.SITE_NAME)}</strong> &mdash; `;
   msg += `estimated at <strong>${totalSizeMB.toFixed(1)} MB</strong> with <strong>${componentCount.toLocaleString()}</strong> components. `;
   if (solCount > 1) {
-    msg += `Recommendation: <strong>${solCount} solutions</strong> (${strat}). Each solution gets its own pipeline.`;
+    msg += `Recommendation: <strong>${solCount} solutions</strong> (${strat}). All ship through the same pipeline as per-solution stage runs (see <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>).`;
   } else {
     msg += 'Recommendation: <strong>single solution</strong>. Within thresholds across all signals.';
   }
@@ -106,15 +153,31 @@ function buildOverviewSummary() {
   return msg;
 }
 
-function buildStagesHtml() {
-  return (data.stages || []).map((stage) => {
-    const activeClass = stage.type === 'source' ? 'stage-active' : '';
-    const url = stage.envUrl ? `<div class="stage-env">${escapeHtml(stage.envUrl)}</div>` : '';
-    return `<div class="pipeline-stage ${activeClass}">
-  <div class="stage-name">${escapeHtml(stage.label || '')}</div>
-  ${url}
+// Render a single stage card. Used by both the Overview pipeline diagram and
+// the Pipelines tab body — keeping the card markup in one place ensures the
+// two views stay visually consistent. Layout (top → bottom):
+//   1. stage label  (e.g. "Dev", "Staging", "Production") — large, bold, the
+//      stage's role in the pipeline
+//   2. env display name (e.g. "ni-dev", "Supplier Portal Staging") — medium,
+//      the friendly identifier humans recognize
+//   3. env URL (clickable, opens in new tab) — small, monospace, useful for
+//      one-click jump-to-env without leaving the plan
+function buildStageCardHtml(stage) {
+  const activeClass = stage && stage.type === 'source' ? 'stage-active' : '';
+  const label = escapeHtml(stage?.label || '');
+  const envName = stage?.envName ? `<div class="stage-env-name">${escapeHtml(stage.envName)}</div>` : '';
+  const envUrl = stage?.envUrl
+    ? `<div class="stage-env"><a href="${escapeHtml(stage.envUrl)}" target="_blank" rel="noopener">${escapeHtml(stage.envUrl)}</a></div>`
+    : '';
+  return `<div class="pipeline-stage ${activeClass}">
+  <div class="stage-name">${label}</div>
+  ${envName}
+  ${envUrl}
 </div>`;
-  }).join('\n');
+}
+
+function buildStagesHtml() {
+  return (data.stages || []).map(buildStageCardHtml).join('\n');
 }
 
 function buildRisksHtml() {
@@ -132,15 +195,43 @@ function buildRisksHtml() {
 }
 
 function buildStrategyRationale() {
+  // All multi-solution strategies ship through ONE pipeline with one stage
+  // per target environment. setup-pipeline Phase 6b records per-solution
+  // `deploymentOrder[]` in `docs/alm/last-pipeline.json`; deploy-pipeline
+  // loops the order, creating a stage run per solution against the same
+  // stage. Earlier rationale text said "each solution gets its own pipeline"
+  // — that described the pre-v1.3.x layout that was reverted because it
+  // cluttered the Pipelines UI.
   const strat = data.splitStrategy || 'single';
+  // Count NON-buffer solutions for the narrative — the Future Growth buffer
+  // is a reserved 0/0 slot that doesn't deploy until it has content. Mention
+  // it separately if present so the rationale and the Solutions tab agree.
+  const nonBufferSolutions = (proposedSolutions || []).filter((s) => !s.isFutureBuffer);
+  const hasFutureBuffer = (proposedSolutions || []).some((s) => s.isFutureBuffer === true);
+  const futureBufferNote = hasFutureBuffer ? ' Plus a reserved <strong>Future Growth</strong> buffer solution (initially empty, exists as a default target for new components).' : '';
+  const changeFreqNames = nonBufferSolutions.map((s) => s.uniqueName || '').filter(Boolean);
+  const changeFreqList = changeFreqNames.length
+    ? changeFreqNames.map((n) => `<strong>${escapeHtml(n.split('_').slice(1).join('_') || n)}</strong>`).join(' &rarr; ')
+    : '<strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>';
+  const N = nonBufferSolutions.length;
+  // Number-word for small counts; fall back to digits for >10.
+  const numberWord = (n) => ({ 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten' }[n] || String(n));
   const map = {
-    'single': 'All components packaged in a single managed solution. Estimated size is within the recommended 95 MB cap and component count is within tested bounds. One pipeline, one approval chain.',
-    'strategy-1-layer': 'Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Core imports first; WebAssets can redeploy independently when frontend-only changes land.',
-    'strategy-2-change-frequency': 'Four solutions ordered by change frequency: <strong>Foundation</strong> &rarr; <strong>Integration</strong> &rarr; <strong>Config</strong> &rarr; <strong>Content</strong>. Each solution has its own pipeline so low-churn layers don\'t re-import when content changes.',
-    'strategy-3-schema-segmentation': 'Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.',
-    'strategy-4-config-isolation': 'Environment variable definitions isolated into their own solution so value changes don\'t require re-importing everything else.',
+    'single': `All components packaged in a single managed solution. Estimated size is within the ${ALM_THRESHOLDS.maxSolutionSizeMB} MB split-decision threshold (platform hard cap is 95 MB) and component count is within tested bounds. One pipeline, one approval chain.`,
+    'strategy-1-layer': `Components split into <strong>Core</strong> (schema, security, integrations, config) and <strong>WebAssets</strong> (web files). Both ship through the same pipeline as separate stage runs (per the <code>deploymentOrder[]</code> in <code>last-pipeline.json</code>) — WebAssets can be re-deployed independently when only frontend files change.${futureBufferNote}`,
+    'strategy-2-change-frequency': `${numberWord(N || 4)} solutions ordered by change frequency: ${changeFreqList}. All ship through the same pipeline in that order, so low-churn layers don\'t re-import when only content changes.${futureBufferNote}`,
+    'strategy-3-schema-segmentation': `Tables split by domain into per-domain solutions. A separate <strong>Site</strong> solution imports last. All solutions ship through the same pipeline in domain order. <strong>Warning: schema-heavy imports can take 10+ hours per stage</strong> &mdash; test in staging and avoid peak hours.${futureBufferNote}`,
+    'strategy-4-config-isolation': `Environment variable definitions isolated into their own solution so value changes don't require re-importing everything else.${futureBufferNote}`,
   };
   let rationale = map[strat] || map.single;
+  if (data.compositeSubPartitioned === true) {
+    // Composite path: Layer split fired AND Core busted a cap, so Core was
+    // sub-partitioned into Foundation/Config/Content (+ Integration when
+    // flows or bots exist). Without this sentence the rationale describes
+    // Core + WebAssets but the Solutions tab shows 4+ entries, which reads
+    // like the rationale and the table disagree.
+    rationale += ' <strong>Core was further sub-partitioned</strong> because it still exceeded the size or component-count cap after Web Assets were peeled off &mdash; it now ships as separate <strong>Foundation</strong>, <strong>Config</strong>, and <strong>Content</strong> solutions (plus <strong>Integration</strong> when the parent had flows or bots). All sub-solutions deploy through the same pipeline as separate stage runs.';
+  }
   if (data.appliedStrategies?.includes('strategy-4-config-isolation') && strat !== 'strategy-4-config-isolation') {
     rationale += ' Additionally, env var definitions are isolated into a dedicated EnvVars solution (additive Strategy 4).';
   }
@@ -206,26 +297,65 @@ function buildSizeGauge() {
 
 function buildSignalCards() {
   if (!sizeAnalysis) return '<div class="note-box neutral">Size analysis unavailable.</div>';
+  // Thresholds align with alm-thresholds.js DEFAULTS — bumped tighter than the
+  // platform hard caps (95 MB / 6000 components) to reserve growth headroom.
   const signals = [
-    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 95 MB' },
-    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 6,000' },
-    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 15,000' },
-    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 20' },
-    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: '&lt; 40 MB' },
-    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: '&lt; 500' },
+    { key: 'totalSizeMB', label: 'Size (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxSolutionSizeMB} MB` },
+    { key: 'componentCount', label: 'Components', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxComponentCount.toLocaleString()}` },
+    { key: 'schemaAttrCount', label: 'Schema Attrs', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxSchemaAttrs.toLocaleString()}` },
+    { key: 'tableCount', label: 'Tables', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxTableCount}` },
+    { key: 'webFilesAggregateMB', label: 'Web Files (MB)', fmt: (v) => Number(v).toFixed(1), threshold: `&lt; ${ALM_THRESHOLDS.maxAggregateWebFilesMB} MB` },
+    { key: 'envVarCount', label: 'Env Vars', fmt: (v) => Number(v).toLocaleString(), threshold: `&lt; ${ALM_THRESHOLDS.maxEnvVarCount}` },
   ];
   return signals.map((s) => {
     const a = sizeAnalysis[s.key];
     if (!a) return '';
     const tier = a.tier || 'unknown';
     const color = tierColor[tier];
+    // Env Vars signal shows existing-vs-planned dual count when applicable —
+    // a fresh project (envVarCount.value === 0) with K planned should not
+    // appear empty in the Size Analysis tab.
+    let valueDisplay;
+    if (s.key === 'envVarCount') {
+      valueDisplay = escapeHtml(envVarStatDisplay());
+    } else {
+      valueDisplay = s.fmt(a.value || 0);
+    }
+    // Web Files signal annotations:
+    //   (a) disk-compare note — fires when --projectRoot was passed and the
+    //       disk-measured number disagrees materially with Dataverse (same
+    //       condition as the estimator's undercount canary). Surfaces the
+    //       actual MB delta + the disk path so a reviewer can see at a glance
+    //       which to trust. The canary's warning is also in the risks list,
+    //       but inline is much more discoverable.
+    //   (b) sample-extrapolation note — fires when the stratified sampler
+    //       measured fewer files than the total count (>150). Tells the
+    //       reviewer how aggressively the aggregate was scaled up.
+    let signalExtras = '';
+    if (s.key === 'webFilesAggregateMB') {
+      if (diskMeasuredMB != null && diskMeasuredMB > 5) {
+        const dv = Number(a.value || 0);
+        if (dv < 0.5 * diskMeasuredMB) {
+          const pathAttr = diskMeasuredPath ? ` title="${escapeHtml(diskMeasuredPath)}"` : '';
+          signalExtras += `<div class="signal-disk-compare" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);"${pathAttr}><strong style="color:var(--high);">Disk: ${diskMeasuredMB.toFixed(1)} MB</strong> &mdash; Dataverse-measured is &lt; 50% of the local build output. File-typed columns may be holding bytes <code>$select=content</code> can't return. <strong>Trust the disk number.</strong>${diskMeasuredPath ? ` <span style="opacity:0.7;">(measured from <code>${escapeHtml(diskMeasuredPath)}</code>)</span>` : ''}</div>`;
+        }
+      }
+      if (
+        webFileSampleSize != null &&
+        webFileCount != null &&
+        webFileSampleSize > 0 &&
+        webFileCount > webFileSampleSize
+      ) {
+        signalExtras += `<div class="signal-sample-info" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--surface2);color:var(--text-dim);">Aggregate extrapolated from a stratified sample of <strong>${webFileSampleSize}</strong> of <strong>${webFileCount.toLocaleString()}</strong> web files.</div>`;
+      }
+    }
     return `<div class="signal-card">
   <div class="signal-name">${s.label}</div>
-  <div class="signal-value" style="color:${color};">${s.fmt(a.value || 0)}</div>
+  <div class="signal-value" style="color:${color};">${valueDisplay}</div>
   <div class="signal-footer">
     <span class="tier tier-${tier}">${tier}</span>
     <span>${s.threshold}</span>
-  </div>
+  </div>${signalExtras}
 </div>`;
   }).join('\n');
 }
@@ -267,7 +397,7 @@ function buildAdvisoryHtml() {
   }
   const candidates = assetAdvisory.candidates || [];
   if (candidates.length === 0) {
-    return '<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (2 MB) or excluded by patterns.</div></div>';
+    return `<div class="pass-box"><span style="font-size:18px;">&#9989;</span><div><strong>No assets flagged for externalization.</strong> All web files are under the individual-file threshold (${ALM_THRESHOLDS.maxSingleFileMB} MB) or excluded by patterns.</div></div>`;
   }
   let html = '';
   if (assetAdvisory.recommendation === 'externalize-media') {
@@ -286,28 +416,241 @@ function buildAdvisoryHtml() {
   return html;
 }
 
+function envVarSummaryCount() {
+  // Source of truth when per-variable details haven't been enumerated into
+  // envVars[] yet. The size estimator counts env var definitions matching the
+  // publisher prefix during plan-alm Phase 1 and stores the count in
+  // sizeAnalysis.envVarCount.value — that count is what drives the size
+  // signal card and the agent-generated "(N detected)" warning.
+  const v = sizeAnalysis?.envVarCount?.value;
+  return Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0;
+}
+
+// Existing env var definitions found on the live env (envVars[] populated by
+// discover-env-var-definitions.js, with size-estimator count as fallback).
+function envVarExistingCount() {
+  return envVars.length || envVarSummaryCount();
+}
+
+// "N today / +M planned" or "N today" depending on which counts are populated.
+// The dual-count display is critical for fresh projects — the renderer was
+// previously showing 0 even when the risks list said "K auth settings will be
+// promoted to env vars", which read as a bug. Showing both counts keeps the
+// stat card and the risks list internally consistent.
+function envVarStatDisplay() {
+  const existing = envVarExistingCount();
+  const planned = plannedEnvVarCount;
+  if (existing === 0 && planned > 0) return `0 / +${planned} planned`;
+  if (existing > 0 && planned > 0) return `${existing} / +${planned} planned`;
+  return String(existing);
+}
+
+// Builds one expandable card per existing env var. Mirrors the mock layout:
+// display name (friendly heading) on the row, schema name + type/bound setting
+// + default value + description inside the body, and a per-environment values
+// table when ev.values is populated. The card class is hooked by the template's
+// click-to-toggle JS (see alm-plan-template.html).
+function buildEnvVarCard(ev) {
+  const displayName = ev.displayName || ev.schemaName || '(unnamed env var)';
+  const type = ev.type || 'String';
+  const schemaName = ev.schemaName || '';
+  const siteSetting = ev.siteSetting || '';
+  const defaultValue = ev.defaultValue == null ? '' : String(ev.defaultValue);
+  const description = ev.description || '';
+  const rationale = ev.rationale || '';
+  const values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
+
+  const fieldBlocks = [
+    `<div><div class="field-label">Schema Name</div><span class="schema">${escapeHtml(schemaName)}</span></div>`,
+    `<div><div class="field-label">Data Type</div><span>${escapeHtml(type)}</span></div>`,
+    `<div class="span2"><div class="field-label">Bound Site Setting</div>${
+      siteSetting
+        ? `<span class="bound">${escapeHtml(siteSetting)}</span>`
+        : '<span class="none">— (not bound to a site setting)</span>'
+    }</div>`,
+    `<div class="span2"><div class="field-label">Default Value</div>${
+      defaultValue
+        ? `<span class="default">${escapeHtml(defaultValue)}</span>`
+        : '<span class="none">— (no default)</span>'
+    }</div>`,
+  ];
+  if (description) {
+    fieldBlocks.push(`<div class="span2"><div class="field-label">Description</div><span class="desc">${escapeHtml(description)}</span></div>`);
+  }
+
+  let rationaleBlock = '';
+  if (rationale) {
+    rationaleBlock = `<div style="margin-top:14px;">
+  <div class="field-label" style="font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Reasoning</div>
+  <div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.7;">${escapeHtml(rationale)}</div>
+</div>`;
+  }
+
+  let perEnvBlock = '';
+  const envNames = Object.keys(values);
+  if (envNames.length > 0) {
+    const rows = envNames.map((e) => `<tr><td class="env-name">${escapeHtml(e)}</td><td class="env-val">${escapeHtml(values[e] || '')}</td></tr>`).join('');
+    perEnvBlock = `<div class="envvar-values">
+  <div class="field-label">Values by Environment</div>
+  <div style="overflow-x:auto;"><table class="env-table"><thead><tr><th>Environment</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table></div>
+</div>`;
+  }
+
+  return `<div class="envvar-card">
+  <div class="envvar-header">
+    <span class="envvar-tag">ENV VAR</span>
+    <span class="envvar-name">${escapeHtml(displayName)}</span>
+    <span class="envvar-type">${escapeHtml(type)}</span>
+    <span class="envvar-chevron">&#9660;</span>
+  </div>
+  <div class="envvar-body">
+    <div class="envvar-fields">${fieldBlocks.join('')}</div>
+    ${rationaleBlock}
+    ${perEnvBlock}
+  </div>
+</div>`;
+}
+
+// Side-by-side matrix: one row per env var, one column per environment.
+// Renders only when at least one env var has a populated values{} map (i.e.
+// after deploy-pipeline has back-filled per-stage values).
+//
+// Stage-key canonicalization: deployment-settings.json + planData.envVars[].values
+// can carry stage keys under multiple aliases — the stage `label` ("Staging"),
+// the pipeline-stage display name ("Deploy to Staging"), or the environment's
+// BAP display name ("CitizenServicesStaging"). All three refer to the same
+// target. Without dedup, a 2-env deploy renders THREE columns (Dev, Staging,
+// "Deploy to Staging") with the last two identical. We build an alias→label
+// map from data.stages[] and last-pipeline.json (when present) and collapse
+// every observed alias onto its canonical stage label before assembling the
+// header. Aliases that don't match any known stage stay as-is so unknown
+// keys aren't silently dropped.
+function buildEnvVarValuesMatrix() {
+  // Build alias → canonical label map from the plan's stage list.
+  const aliasToLabel = new Map();
+  const canonicalLabels = [];
+  const stagesArr = (Array.isArray(data) ? null : (data && data.stages)) || [];
+  for (const stage of stagesArr) {
+    if (!stage || typeof stage !== 'object') continue;
+    const label = String(stage.label || '').trim();
+    if (!label) continue;
+    if (!canonicalLabels.includes(label)) canonicalLabels.push(label);
+    aliasToLabel.set(label, label);
+    // Common aliases observed in deployment-settings.json / pipeline stage names.
+    if (stage.envName) aliasToLabel.set(String(stage.envName), label);
+    if (stage.envUrl) aliasToLabel.set(String(stage.envUrl), label);
+    aliasToLabel.set(`Deploy to ${label}`, label);
+    aliasToLabel.set(`${label} (Deploy to ${label})`, label);
+  }
+  // Also pick up stage labels from pipelineMeta.stages[] when present.
+  const pipelineStages = (data && data.pipelineMeta && Array.isArray(data.pipelineMeta.stages))
+    ? data.pipelineMeta.stages : [];
+  for (const ps of pipelineStages) {
+    if (!ps || typeof ps !== 'object') continue;
+    const psName = String(ps.name || '').trim();
+    if (!psName) continue;
+    // "Deploy to Staging" → canonical "Staging" when "Staging" is a known label;
+    // otherwise treat the pipeline name itself as canonical.
+    const stripped = psName.replace(/^Deploy to\s+/i, '').trim();
+    const canonical = canonicalLabels.includes(stripped) ? stripped : psName;
+    if (!aliasToLabel.has(psName)) aliasToLabel.set(psName, canonical);
+    if (!canonicalLabels.includes(canonical)) canonicalLabels.push(canonical);
+  }
+
+  // Collect canonical stage names actually observed across env vars (preserving stage order).
+  const observedLabels = new Set();
+  for (const ev of envVars) {
+    if (ev.values && typeof ev.values === 'object') {
+      for (const key of Object.keys(ev.values)) {
+        const canonical = aliasToLabel.get(key) || key;  // unknown aliases stay as-is
+        observedLabels.add(canonical);
+      }
+    }
+  }
+  if (observedLabels.size === 0) return '';
+  // Order: stages from planData first (in plan order), then any leftovers from unknown aliases.
+  const envNames = [
+    ...canonicalLabels.filter((l) => observedLabels.has(l)),
+    ...Array.from(observedLabels).filter((l) => !canonicalLabels.includes(l)),
+  ];
+
+  const headerCells = envNames.map((e) => `<th style="min-width:160px;">${escapeHtml(e)}</th>`).join('');
+  const rows = envVars.map((ev) => {
+    const label = escapeHtml(ev.displayName || ev.schemaName || '(unnamed)');
+    // Resolve each canonical column to its alias on the env var's values{} map.
+    // Picks the first matching alias so duplicates (e.g. "Staging" AND "Deploy to Staging"
+    // both pointing to the same target) collapse to one column.
+    const cells = envNames.map((e) => {
+      const valuesMap = (ev.values || {});
+      let v = valuesMap[e];                                    // exact canonical hit
+      if (v == null || v === '') {
+        for (const [alias, canonical] of aliasToLabel.entries()) {
+          if (canonical === e && valuesMap[alias] != null && valuesMap[alias] !== '') {
+            v = valuesMap[alias];
+            break;
+          }
+        }
+      }
+      return v == null || v === ''
+        ? '<td class="env-val"><span class="env-placeholder">(not set)</span></td>'
+        : `<td class="env-val">${escapeHtml(v)}</td>`;
+    }).join('');
+    return `<tr><td class="env-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `<h3 style="margin:20px 0 8px 0;font-size:14px;">Values by Environment</h3>
+<p class="section-desc" style="margin-bottom:12px;">Per-stage values for each environment variable. Set the correct value in each target before importing the solution.</p>
+<div class="card" style="padding:0;overflow-x:auto;">
+  <table class="env-table">
+    <thead><tr><th style="min-width:220px;">Environment Variable</th>${headerCells}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+}
+
 function buildEnvVarsHtml() {
-  if (envVars.length === 0) {
+  const existing = envVars.length;
+  const planned = plannedEnvVarCount;
+
+  // Empty state: neither existing nor planned env vars.
+  if (existing === 0 && planned === 0) {
+    const summaryCount = envVarSummaryCount();
+    if (summaryCount > 0) {
+      // The size estimator found definitions but envVars[] wasn't enumerated
+      // (publisher prefix or token unavailable during plan-alm Step 10b).
+      const noun = summaryCount === 1 ? 'definition' : 'definitions';
+      return `<div class="note-box info">${summaryCount} environment variable ${noun} detected. Per-variable details (schema name, type, bound site setting) will be reviewed during <code>setup-solution</code> / <code>configure-env-variables</code>, and per-stage values will be collected before <code>deploy-pipeline</code>.</div>`;
+    }
     return '<div class="note-box neutral">No environment variable definitions detected. If environment-specific values are needed (URLs, client IDs, endpoints), they can be added during Setup Solution.</div>';
   }
-  const envNames = Object.keys(envVars[0]?.values || {});
-  const tableHeader = envNames.length > 0
-    ? `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th>${envNames.map((e) => `<th>${escapeHtml(e)}</th>`).join('')}</tr></thead>`
-    : `<thead><tr><th>Schema Name</th><th>Type</th><th>Bound Setting</th><th>Default</th></tr></thead>`;
-  const rows = envVars.map((ev) => {
-    const valueCells = envNames.length > 0
-      ? envNames.map((e) => `<td class="env-val">${escapeHtml(ev.values?.[e] || '')}</td>`).join('')
-      : `<td class="env-val">${escapeHtml(ev.defaultValue || '')}</td>`;
-    return `<tr>
-  <td class="env-name">${escapeHtml(ev.schemaName)}</td>
-  <td>${escapeHtml(ev.type || 'String')}</td>
-  <td><code>${escapeHtml(ev.siteSetting || '—')}</code></td>
-  ${valueCells}
-</tr>`;
-  }).join('\n');
-  return `<div class="card" style="padding:0;overflow-x:auto;">
-  <table class="env-table">${tableHeader}<tbody>${rows}</tbody></table>
-</div>`;
+
+  // Build optional sections: existing cards + planned summary + values matrix.
+  // All can render together when the project has some env vars already and
+  // more are planned.
+  const sections = [];
+
+  if (existing > 0) {
+    const cards = envVars.map(buildEnvVarCard).join('\n');
+    sections.push(`<h3 style="margin:8px 0 12px 0;font-size:14px;">Existing environment variables (${existing})</h3>
+${cards}`);
+
+    // Comparison matrix renders inline below the cards once per-stage values
+    // are known. Empty until deploy-pipeline back-fills via refresh-alm-plan-data.
+    const matrix = buildEnvVarValuesMatrix();
+    if (matrix) sections.push(matrix);
+  }
+
+  if (planned > 0) {
+    const noun = planned === 1 ? 'environment variable' : 'environment variables';
+    sections.push(`<h3 style="margin:${existing > 0 ? '20px' : '8px'} 0 12px 0;font-size:14px;">Planned ${noun} (${planned})</h3>
+<div class="note-box info">setup-solution will walk through these ${planned} candidate site setting${planned === 1 ? '' : 's'} (auth-related and credential-style) one at a time. For each, you'll pick whether to back it with a Secret-typed env var (Key Vault per stage), a String-typed env var (plain text per stage), or skip — so the realized env-var count is typically lower than the candidate count. Per-variable details (schema name, type, bound site setting, default value) populate this tab automatically once <code>setup-solution</code> finishes and the plan is refreshed via <code>refresh-alm-plan-data.js</code> (or by re-running <code>/power-pages:plan-alm</code>).</div>`);
+  }
+
+  // Always close with a one-line refresh hint when either count is non-zero,
+  // so users know to re-render after each ALM phase completes.
+  sections.push('<div class="note-box neutral" style="margin-top:14px;">This tab back-fills automatically after <code>setup-solution</code> (creates definitions) and <code>deploy-pipeline</code> (records per-stage values). If counts look stale, run the relevant ALM skill again or re-render the plan.</div>');
+
+  return sections.join('\n');
 }
 
 function buildSolutionsTabTitle() { return proposedSolutions.length > 1 ? `Solutions (${proposedSolutions.length})` : 'Solution'; }
@@ -356,9 +699,53 @@ function buildSolutionMembershipBanner() {
 </div>`;
 }
 
+function buildSynthesizedSingleSolution() {
+  // Compose a single proposedSolution entry from other planData fields when
+  // the caller passed proposedSolutions = []. Returns null if there isn't
+  // enough information to synthesize anything useful.
+  //
+  // Sources, in priority order:
+  //   - data.solutionContents.solution (if the orchestrator wrote it)
+  //   - data.solution / data.SOLUTION_INFO (legacy field)
+  //   - .solution-manifest.json data already merged into planData
+  //   - Fall back to SITE_NAME for both unique and display names
+
+  const fromContents = (data.solutionContents && data.solutionContents.solution) || null;
+  const fromTopLevel = data.solution || data.SOLUTION_INFO || null;
+  const src = fromContents || fromTopLevel || {};
+
+  const uniqueName = src.uniqueName || src.unique_name || data.solutionUniqueName ||
+    (data.SITE_NAME ? String(data.SITE_NAME).replace(/\s+/g, '') : null);
+  const displayName = src.friendlyName || src.displayName || data.SITE_NAME || uniqueName;
+
+  if (!uniqueName && !displayName) return null;
+
+  return {
+    uniqueName: uniqueName || 'Solution',
+    displayName: displayName || uniqueName || 'Solution',
+    order: 1,
+    sizeMB: totalSizeMB || 0,
+    componentCount: componentCount || 0,
+    componentTypes: ['All site components'],
+    tableLogicalNames: Array.isArray(data.solutionContents && data.solutionContents.tables) ? data.solutionContents.tables : [],
+    description: 'Single managed solution containing all Power Pages site components. No split was recommended by the size estimator.',
+    isFutureBuffer: false,
+  };
+}
+
 function buildSolutionsHtml() {
+  // Safety net: when proposedSolutions is empty (caller forgot to populate
+  // the single-solution entry, or planData was hand-built), synthesize one
+  // base-solution entry from other planData fields rather than showing the
+  // useless "structure will be determined" placeholder. Reviewers always
+  // see SOMETHING about the solution that's about to ship.
   if (proposedSolutions.length === 0) {
-    return '<div class="note-box neutral">Solution structure will be determined during Setup Solution.</div>';
+    const synthesized = buildSynthesizedSingleSolution();
+    if (synthesized) {
+      proposedSolutions.push(synthesized);
+    } else {
+      return '<div class="note-box neutral">Solution structure will be determined during Setup Solution. <em>(Fallback shown because <code>planData.proposedSolutions</code> was empty — populate it from the size estimator output for a richer view.)</em></div>';
+    }
   }
   const membershipHtml = buildSolutionMembershipBanner();
   const calloutHtml = buildAssetAdvisoryCallout();
@@ -412,7 +799,7 @@ function buildPipelinesTabDesc() {
 function buildPipelineActiveAnnotations(meta, color) {
   // Renders the chips/notes that mark a pipeline as the one currently being
   // used to move configurations — only emitted when planData has a
-  // pipelineMeta block (i.e. .last-pipeline.json exists for this project).
+  // pipelineMeta block (i.e. docs/alm/last-pipeline.json exists for this project).
   if (!meta || !meta.isActive) return { chip: '', wiringNote: '', lastRunFooter: '' };
 
   const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;margin-left:8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;font-family:var(--mono);background:${color}1a;border:1px solid ${color}55;color:${color};">ACTIVE</span>`;
@@ -448,10 +835,11 @@ function buildPipelineActiveAnnotations(meta, color) {
 function buildPipelinesHtml() {
   const colors = ['#0078d4', '#ca5010', '#107c10', '#8764b8', '#038387'];
   const stages = Array.isArray(data.stages) ? data.stages : [];
-  const stagesHtml = stages.map((st) => `<div class="pipeline-stage ${st.type === 'source' ? 'stage-active' : ''}">
-    <div class="stage-name">${escapeHtml(st.label || '')}</div>
-    <div class="stage-env">${escapeHtml(st.envUrl || '')}</div>
-  </div>`).join('');
+  // Reuse the shared card builder so the Pipelines tab body matches the
+  // Overview pipeline diagram exactly (env name + clickable URL). Without
+  // this the two views drifted — Overview included envName, Pipelines tab
+  // didn't.
+  const stagesHtml = stages.map(buildStageCardHtml).join('');
 
   const meta = data.pipelineMeta && typeof data.pipelineMeta === 'object' ? data.pipelineMeta : null;
   const activeColor = colors[0];
@@ -510,7 +898,7 @@ function buildValidationTab(d) {
   // Renders the full "Site Validation" tab body. One sub-tab per target stage.
   // Each sub-tab shows a summary grid + per-category test cards.
   //
-  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's .last-test-site.json):
+  // Data shape (from plan-alm Phase 7 Step C, ingesting test-site's docs/alm/last-test-site.json):
   //   data.validationRuns = {
   //     "<stageName>": null | {
   //       url, runAt, durationSec, runOutcome,
@@ -596,6 +984,13 @@ function buildValidationStagePane(stageName, run) {
   const dur = (run.durationSec != null) ? `${Number(run.durationSec).toFixed(0)}s` : '&mdash;';
   const runAt = run.runAt ? `<span style="font-family:var(--mono);">${escapeHtml(run.runAt)}</span>` : '&mdash;';
 
+  // Severity buckets — render four cards (Critical / High / Medium / Low) separately
+  // plus a Total. Previously Medium and Low were combined ("Medium / Low") which
+  // hid a real severity signal from reviewers and validators reading the plan;
+  // a stage that ships 4 medium-severity issues looked identical to one that
+  // shipped 4 low-severity issues. Use the summary object as authored by
+  // test-site Phase 6.7a, which counts each severity bucket directly from
+  // categories[].tests[].severity (so the planner sees what the test author saw).
   const summary = run.summary || {};
   const cardClass = (n) => Number(n || 0) > 0 ? 'has-value' : 'zero-value';
   const summaryGrid = `<div class="test-summary-grid">
@@ -607,9 +1002,13 @@ function buildValidationStagePane(stageName, run) {
     <div class="test-summary-num high">${Number(summary.high || 0)}</div>
     <div class="test-summary-label">High</div>
   </div>
-  <div class="test-summary-card ${cardClass((summary.medium || 0) + (summary.low || 0))}">
-    <div class="test-summary-num medium">${Number((summary.medium || 0) + (summary.low || 0))}</div>
-    <div class="test-summary-label">Medium / Low</div>
+  <div class="test-summary-card ${cardClass(summary.medium)}">
+    <div class="test-summary-num medium">${Number(summary.medium || 0)}</div>
+    <div class="test-summary-label">Medium</div>
+  </div>
+  <div class="test-summary-card ${cardClass(summary.low)}">
+    <div class="test-summary-num low">${Number(summary.low || 0)}</div>
+    <div class="test-summary-label">Low</div>
   </div>
   <div class="test-summary-card has-value">
     <div class="test-summary-num">${Number(summary.total || 0)}</div>
@@ -774,13 +1173,22 @@ function buildHostCardHtml(d) {
   const status = String(hr.status);
   if (status.startsWith('AvailableUsing')) {
     const url = hr.hostEnvUrl || '';
+    const name = hr.hostEnvName || '';
     const meta = [];
     if (hr.hostType) meta.push(escapeHtml(hr.hostType));
     if (hr.pipelinesSolutionVersion) meta.push('Pipelines v' + escapeHtml(hr.pipelinesSolutionVersion));
     meta.push('&#10003; Reachable');
+    // When we have the env display name, lead with it (humans recognize names,
+    // not GUIDs in URLs) and demote the URL to a clickable navigation aid.
+    // Falls back to URL-as-headline when name is missing (older planData /
+    // detection paths that didn't capture the BAP displayName).
+    const headline = name
+      ? `<div class="card-env-name">${escapeHtml(name)}</div>
+  <div class="card-env-url"><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>`
+      : `<div class="card-value">${escapeHtml(url)}</div>`;
     return `<div class="card host-card host-card-ok">
   <div class="card-label">Pipelines Host</div>
-  <div class="card-value">${escapeHtml(url)}</div>
+  ${headline}
   <div class="card-meta">${meta.join(' &middot; ')}</div>
 </div>`;
   }
@@ -791,9 +1199,28 @@ function buildHostCardHtml(d) {
     } else if (status === 'MultipleUnboundCustomHosts') {
       note = 'Will pick from ' + Number(hr.candidatesCount || 0) + ' existing Custom Hosts at execution time.';
     } else if (status === 'PlatformHostExistsUnbound') {
-      note = 'Will use existing Platform Host (free, no admin role required).';
+      note = 'Will use existing Platform Host (idempotent — already provisioned in this tenant).';
     } else if (status === 'NoHost') {
-      note = 'Will provision new Custom Host with <code>D365_ProjectHost</code> template (~5&ndash;10 min, requires Power Platform admin).';
+      // The NoHost env-first menu in plan-alm Phase 2 Q4 asks the user to pick a
+      // host strategy: install on existing env / provision new / PPAC manual /
+      // switch to manual strategy. Reflect the choice rather than always saying
+      // "will provision new", so the rendered plan agrees with what
+      // ensure-pipelines-host will actually do at execution time.
+      if (hr.willProvisionPlatform === true) {
+        // Keep the user-facing description free of API names and admin-role disclaimers —
+        // those are implementation details. The pre-call confirmation gate in
+        // ensure-pipelines-host Phase 4.0 echoes the tenant identity before firing.
+        note = 'Will provision a new Platform Host (idempotent, ~3&ndash;5 min). Plan execution will pause for a tenant-identity confirmation gate before the call.';
+      } else if (hr.chosenEnvUrl) {
+        note = 'Will install Pipelines app on existing env <code>' + escapeHtml(hr.chosenEnvUrl) + '</code>.';
+      } else if (hr.willUsePpac === true) {
+        note = 'Will create new Custom Host via PPAC manual flow (admin opens <code>https://admin.powerplatform.microsoft.com/deployments</code> &#8594; <em>New custom host</em>).';
+      } else if (hr.willProvisionCustom === true) {
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
+      } else {
+        // Fallback for older planData that did not capture the choice.
+        note = 'Will provision a new Custom Host (~5&ndash;10 min, requires Power Platform admin role). Plan execution will pause for admin-role attestation and a pre-call confirmation gate.';
+      }
     } else {
       note = 'Will be resolved during setup-pipeline (' + escapeHtml(status) + ').';
     }
@@ -825,11 +1252,43 @@ function buildHostChecklistSubBullet(d) {
   return `<ul class="checklist-substep-list"><li class="checklist-substep" id="check-ensure-host">&#8627; Ensure Pipelines host <span class="substep-note">(delegated by setup-pipeline)</span></li></ul>`;
 }
 
+// Maps a checklist step name to the tab the user most likely wants to inspect
+// when they click the step. Used by buildChecklistHtml() to wrap the step name
+// in an anchor that re-uses the existing data-tab click handler installed by
+// the template's footer script. Returns null when no tab is a clear match
+// (e.g. "Finalize" or skipped steps); the renderer then falls back to plain
+// text without a link.
+//
+// Order matters — more specific patterns first ("Test site" before "Setup").
+function tabForChecklistStep(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  if (/\btest\s+site\b/.test(n)) return 'validation';
+  if (/\b(deploy|deploy\s+via\s+pipeline|deploy\s+to)\b/.test(n)) return 'pipelines';
+  if (/\b(import|import\s+to)\b/.test(n)) return 'solutions';
+  if (/\bactivate\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+pipeline\b/.test(n)) return 'pipelines';
+  if (/\bsetup\s+solution\b/.test(n)) return 'solutions';
+  if (/\bexport\s+solution\b/.test(n)) return 'solutions';
+  if (/\bensure\s+pipelines\s+host\b/.test(n)) return 'pipelines';
+  if (/\bfinalize\b/.test(n)) return 'overview';
+  return null;
+}
+
 function buildChecklistHtml() {
   const statusIcon = { pending: '&#9675;', 'in-progress': '&#9679;', completed: '&#10003;', skipped: '&mdash;', warning: '&#9888;' };
   const steps = Array.isArray(data.steps) ? data.steps : [];
   if (steps.length === 0) return '<div class="note-box neutral">Execution steps will be populated after approval.</div>';
   const runs = (data.validationRuns && typeof data.validationRuns === 'object') ? data.validationRuns : {};
+  // Manual-path per-target import outcomes — keyed by target stage label,
+  // populated by refresh-alm-plan-data's import-solution phase. Parallel to
+  // validationRuns; surfaced as a substep on the matching "Import to {stage}"
+  // checklist step.
+  const imports = (data.manualImports && typeof data.manualImports === 'object') ? data.manualImports : {};
+  // Manual-path activation outcomes — keyed by target stage label, populated
+  // by refresh-alm-plan-data's activate-site phase. Surfaced as an ACTIVATED
+  // substep on the matching "Activate site in {stage}" checklist step.
+  const activations = (data.activations && typeof data.activations === 'object') ? data.activations : {};
 
   // Match "Test site in {stageName}" entries to their captured validationRun.
   // Also enrich every "<verb> in {stageName}" step with a stage-env subline so
@@ -871,39 +1330,112 @@ function buildChecklistHtml() {
         if (Number(sm.failed || 0) > 0) counts.push(`${Number(sm.failed)} fail`);
         if (Number(sm.skipped || 0) > 0) counts.push(`${Number(sm.skipped)} skip`);
         const countsStr = counts.length ? ` &middot; ${counts.join(' / ')}` : '';
-        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        validationLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
     <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
     <span style="font-size:11px;">${run.url ? `<code>${escapeHtml(run.url)}</code>` : '&mdash;'}${countsStr}</span>
     <a href="#tab-validation" onclick="document.querySelector('[data-tab=\\'validation\\']').click(); return false;" style="margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none;">View details &rarr;</a>
   </li>
-</div>`;
+</ul>`;
         // Promote step status to "warning" yellow when the test failed/warned —
         // makes the failure visible at a glance from the Execution tab.
         if (s === 'completed' && o === 'failed') s = 'warning';
       } else if (s === 'completed' || s === 'pending' || s === 'in-progress') {
         // Step exists but no run captured — show a small note.
-        validationLine = `<div class="checklist-substep-list" style="margin-top:4px;">
+        validationLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
   <li class="checklist-substep" style="font-size:11px;">No test-site run captured for <strong>${escapeHtml(stageName)}</strong> yet.</li>
-</div>`;
+</ul>`;
       }
     }
 
-    // Env-name subline: for any stage-bound step (Deploy / Activate / Test),
+    // Activate-step substep: surface per-target activation outcome when
+    // planData.activations[stageName] is populated. Same visual idiom as the
+    // test-site validation substep + import substep below. Detection: step
+    // name starts with "Activate site in " (plan-alm Phase 3 schema). Works
+    // for both PP and Manual paths — PP path's activation flows through
+    // docs/alm/last-deploy.json and refreshDeployPipeline, but the Manual-path
+    // standalone activate-site invocation is what surfaces here.
+    const isActivateStep = /^activate\s+site\s+in\s+/i.test(name);
+    let activateLine = '';
+    if (isActivateStep && stageName) {
+      const act = activations[stageName] || null;
+      if (act && typeof act === 'object') {
+        const status = String(act.status || '').toLowerCase();
+        const failed = /fail/i.test(status);
+        const alreadyActivated = status === 'alreadyactivated' || status === 'already-activated';
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : (alreadyActivated ? 'ALREADY LIVE' : 'ACTIVATED');
+        const urlMarkup = act.siteUrl
+          ? `<a href="${escapeHtml(act.siteUrl)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;"><code>${escapeHtml(act.siteUrl)}</code></a>`
+          : '&mdash;';
+        activateLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${urlMarkup}</span>
+  </li>
+</ul>`;
+        if (s === 'completed' && failed) s = 'warning';
+      }
+    }
+
+    // Manual-path Import-step substep: surface per-target import outcome
+    // when planData.manualImports[stageName] is populated. Same visual idiom
+    // as the test-site validation substep above. Detection mirrors the
+    // plan-alm Phase 3 step name "Import to {stageName}".
+    const isImportStep = /^import\s+to\s+/i.test(name);
+    let importLine = '';
+    if (isImportStep && stageName) {
+      const imp = imports[stageName] || null;
+      if (imp && typeof imp === 'object') {
+        const status = String(imp.status || '').toLowerCase();
+        const failed = (imp.componentFailureCount && imp.componentFailureCount > 0) || /fail/i.test(status);
+        const badgeKlass = failed ? 'test-result-fail' : 'test-result-pass';
+        const badgeLabel = failed ? 'FAILED' : 'IMPORTED';
+        const versionStr = imp.artifactVersion ? `v${escapeHtml(imp.artifactVersion)}` : '';
+        const componentsStr = imp.componentCount != null
+          ? `${Number(imp.componentCount).toLocaleString()} components`
+          : '';
+        const failedStr = (imp.componentFailureCount && imp.componentFailureCount > 0)
+          ? ` &middot; <span style="color:var(--critical);">${Number(imp.componentFailureCount)} failed</span>`
+          : '';
+        const detailParts = [versionStr, componentsStr].filter(Boolean).join(' &middot; ') + failedStr;
+        importLine = `<ul class="checklist-substep-list" style="margin-top:4px;padding:0;list-style:none;">
+  <li class="checklist-substep" style="display:flex;align-items:center;gap:8px;">
+    <span class="test-result-badge ${badgeKlass}">${badgeLabel}</span>
+    <span style="font-size:11px;">${detailParts || '&mdash;'}</span>
+  </li>
+</ul>`;
+        // Promote completed → warning when import had component failures.
+        if (s === 'completed' && failed) s = 'warning';
+      }
+    }
+
+    // Env-name subline: for any stage-bound step (Deploy / Import / Activate / Test),
     // show the target env URL beneath the step name. Plays well with the
     // existing checklist-substep-list styling.
     let envLine = '';
     if (stageInfo && stageInfo.envUrl && !isTestStep) {
-      envLine = `<div class="checklist-substep-list" style="margin-top:2px;">
+      envLine = `<ul class="checklist-substep-list" style="margin-top:2px;padding:0;list-style:none;">
   <li class="checklist-substep" style="font-size:11px;color:var(--text-dim);">Target: <code>${escapeHtml(stageInfo.envUrl)}</code></li>
-</div>`;
+</ul>`;
     }
+
+    const targetTab = tabForChecklistStep(name);
+    const escapedName = escapeHtml(name);
+    // Wrap the step name in an anchor when there's a clear tab to navigate to.
+    // The onclick re-uses the .nav-btn click handler installed by the template's
+    // footer script (querySelector matches the sidebar button by data-tab).
+    // The href falls back to the section's id, so middle-click / right-click /
+    // copy-link still works in browsers that block JS.
+    const nameMarkup = targetTab
+      ? `<a class="checklist-link" href="#tab-${targetTab}" onclick="const b=document.querySelector('.nav-btn[data-tab=&quot;${targetTab}&quot;]');if(b){b.click();window.scrollTo(0,0);}return false;">${escapedName}</a>${skip}`
+      : `${escapedName}${skip}`;
 
     return `<div class="checklist-item status-${s}">
   <span class="checklist-icon">${statusIcon[s] || '&#9675;'}</span>
-  <span class="checklist-name">${escapeHtml(name)}${skip}</span>
+  <span class="checklist-name">${nameMarkup}</span>
   <span class="status-badge ${s}">${s.replace('-', ' ')}</span>
-</div>${envLine}${validationLine}`;
+</div>${envLine}${activateLine}${importLine}${validationLine}`;
   }).join('\n');
 }
 
@@ -918,7 +1450,7 @@ const replacements = {
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
-  STAT_ENVVARS: String(envVars.length || 0),
+  STAT_ENVVARS: envVarStatDisplay(),
   STAT_SIZE: totalSizeMB.toFixed(1),
   STAT_SIZE_COLOR: sizeColor,
   STAT_SOLUTIONS: String(proposedSolutions.length || 1),

@@ -8,6 +8,8 @@ const {
   isTerminalFailed,
   readRetryAfterSec,
   TEMPLATE_NAME,
+  ALLOWED_SKUS,
+  DEFAULT_SKU,
 } = require('../lib/provision-custom-host');
 
 const noSleep = async () => {};
@@ -30,6 +32,104 @@ function withMockedHttp(t, routes) {
 
 test('TEMPLATE_NAME constant is D365_ProjectHost', () => {
   assert.equal(TEMPLATE_NAME, 'D365_ProjectHost');
+});
+
+test('DEFAULT_SKU is Production and ALLOWED_SKUS lists the supported fallbacks', () => {
+  assert.equal(DEFAULT_SKU, 'Production');
+  assert.ok(ALLOWED_SKUS instanceof Set);
+  assert.ok(ALLOWED_SKUS.has('Production'));
+  assert.ok(ALLOWED_SKUS.has('Sandbox'));
+  assert.ok(ALLOWED_SKUS.has('Developer'));
+  assert.ok(ALLOWED_SKUS.has('Trial'));
+});
+
+test('rejects an invalid environmentSku before any HTTP call', async () => {
+  await assert.rejects(
+    () => provisionCustomHost({
+      bapToken: 't', displayName: 'X', region: 'unitedstates',
+      environmentSku: 'Bogus',
+    }),
+    /--environmentSku must be one of/,
+  );
+});
+
+test('happy path — environmentSku flows into the env-create POST body', async (t) => {
+  let capturedBody = null;
+  withMockedHttp(t, [
+    {
+      match: (u, args) => u.endsWith('/environments?api-version=2021-04-01') && args.method === 'POST',
+      respond: (args) => {
+        try { capturedBody = JSON.parse(args.body); } catch { capturedBody = args.body; }
+        return {
+          statusCode: 202,
+          headers: { location: 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/lifecycleOperations/op-sku?api-version=2021-04-01' },
+          body: JSON.stringify({
+            name: 'env-sku-1',
+            properties: { provisioningState: 'Creating' },
+          }),
+        };
+      },
+    },
+    {
+      match: (u, args) => u.includes('/lifecycleOperations/op-sku') && args.method === 'GET',
+      respond: () => ({
+        statusCode: 200,
+        body: JSON.stringify({
+          properties: {
+            provisioningState: 'Succeeded',
+            environmentSku: 'Sandbox',
+            displayName: 'Test Host Sandbox',
+            linkedEnvironmentMetadata: {
+              instanceUrl: 'https://sandboxhost.crm.dynamics.com/',
+              instanceApiUrl: 'https://sandboxhost.api.crm.dynamics.com',
+            },
+          },
+        }),
+      }),
+    },
+  ]);
+
+  const result = await provisionCustomHost({
+    bapToken: 'fake', displayName: 'Test Host Sandbox', region: 'unitedstates',
+    environmentSku: 'Sandbox',
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(result.status, 'Succeeded');
+  assert.equal(capturedBody.properties.environmentSku, 'Sandbox',
+    'request body should carry the requested SKU, not the Production default');
+  assert.equal(capturedBody.properties.linkedEnvironmentMetadata.templates[0], 'D365_ProjectHost',
+    'Pipelines template should still be applied regardless of SKU');
+});
+
+test('environmentSku defaults to Production when omitted', async (t) => {
+  let capturedBody = null;
+  withMockedHttp(t, [
+    {
+      match: (u, args) => u.endsWith('/environments?api-version=2021-04-01') && args.method === 'POST',
+      respond: (args) => {
+        try { capturedBody = JSON.parse(args.body); } catch { capturedBody = args.body; }
+        return {
+          statusCode: 200,
+          body: JSON.stringify({
+            properties: {
+              provisioningState: 'Succeeded',
+              environmentSku: 'Production',
+              linkedEnvironmentMetadata: { instanceApiUrl: 'https://e.api.crm.dynamics.com' },
+            },
+          }),
+        };
+      },
+    },
+  ]);
+
+  await provisionCustomHost({
+    bapToken: 'fake', displayName: 'X', region: 'unitedstates',
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(capturedBody.properties.environmentSku, 'Production',
+    'omitting environmentSku should default to Production for backward compatibility');
 });
 
 test('extractProvisioningState handles multiple lifecycle-op response shapes', () => {

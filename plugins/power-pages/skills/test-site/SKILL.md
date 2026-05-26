@@ -28,7 +28,7 @@ Test a deployed, activated Power Pages site at runtime. Navigate the site in a b
 
 ## Validation Test Categories
 
-Every run produces a categorized test report (`.last-test-site.json` — see Phase 6.7a). Stable category IDs and the source phase that produces each:
+Every run produces a categorized test report (`docs/alm/last-test-site.json` — see Phase 6.7a). Stable category IDs and the source phase that produces each:
 
 | Category `id` | Display Name | Source phase | What it covers |
 |---|---|---|---|
@@ -85,6 +85,8 @@ If no URL was provided, attempt auto-detection:
    - **If `error` is present**: Fall through to step 1.4.
 
 #### 1.4 Ask the User
+
+<!-- not-a-gate: site-URL fallback prompt — data-gathering when auto-detection fails; no Dataverse/state change -->
 
 If auto-detection failed or was inconclusive, use `AskUserQuestion`:
 
@@ -167,6 +169,9 @@ Review the browser snapshot from Phase 2.4 and the current browser URL for signs
 
 #### 3.2 Handle Private Site Gate
 
+<!-- gate: test-site:3.2.private-gate-login | category=pause | cancel-leaves=nothing -->
+> 🚦 **Gate (pause · test-site:3.2.private-gate-login):** External wait — site redirected to identity provider; skill pauses until user completes login or cancels.
+
 If a private site gate is detected, use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -177,6 +182,9 @@ If a private site gate is detected, use `AskUserQuestion`:
 
 1. Use `browser_snapshot` to verify the user is now on the actual site (site content visible, navigation present, URL is back on the `SITE_URL` domain).
 2. If still on the identity provider login page:
+   <!-- gate: test-site:3.2.login-retry | category=pause | cancel-leaves=nothing -->
+   > 🚦 **Gate (pause · test-site:3.2.login-retry):** Login not yet complete — re-prompt or cancel.
+
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 3. Once confirmed, re-run Phase 2.5 and 2.6 (capture console errors and network requests on the now-loaded homepage).
@@ -203,6 +211,9 @@ If neither a private site gate nor site-level authentication indicators are foun
 
 #### 3.5 Handle Site-Level Authentication
 
+<!-- gate: test-site:3.5.public-vs-auth | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · test-site:3.5.public-vs-auth):** Site has Sign-in UI — test as authenticated user, skip auth-gated pages, or cancel.
+
 If site-level authentication indicators are detected (login links in navigation, etc.), use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -213,6 +224,9 @@ If site-level authentication indicators are detected (login links in navigation,
 
 1. Use `browser_snapshot` to verify the user is now logged in (login link replaced with user name/profile, or authenticated content is visible).
 2. If the login form is still showing:
+   <!-- gate: test-site:3.5.login-retry | category=pause | cancel-leaves=nothing -->
+   > 🚦 **Gate (pause · test-site:3.5.login-retry):** Site-level login not yet complete — re-prompt or cancel.
+
    - Use `AskUserQuestion` again: "It looks like the login hasn't completed yet. The browser should still be open — please complete the login and try again."
    - Repeat until login is confirmed or user cancels.
 3. Create an additional task for testing authenticated scenarios using `TaskCreate`:
@@ -589,14 +603,15 @@ For each failure, reiterate the specific remediation guidance from Phase 5.4. Gr
 
 - Use `browser_close` to clean up the browser session.
 
-#### 6.7a Write Machine-Readable Report (`.last-test-site.json`)
+#### 6.7a Write Machine-Readable Report (`docs/alm/last-test-site.json`)
 
-Always write a structured JSON report to the project root so other skills (notably `plan-alm`) can ingest the run without re-parsing the markdown summary. The file is overwritten on every run.
+Always write a structured JSON report so other skills (notably `plan-alm`) can ingest the run without re-parsing the markdown summary. The file is overwritten on every run. Ensure the `docs/alm/` directory exists before writing — `node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"`.
 
 **Shape:**
 ```json
 {
   "url": "https://contoso.powerappsportals.com",
+  "stageName": "Staging",
   "runAt": "2026-04-29T08:50:00.000Z",
   "durationSec": 95,
   "runOutcome": "passed | passed-with-warnings | failed",
@@ -648,12 +663,38 @@ Always write a structured JSON report to the project root so other skills (notab
 | `auth-api`       | Authenticated API    | Phase 5.6 API tests                             |
 | `console`        | Console Health       | Aggregated console errors across all pages      |
 
+**Do NOT include a top-level `notes` string that embeds component counts, version numbers, or other run-specific data from prior deploys.** Real-world failure: a `last-test-site.json` notes field hardcoded `"4,037 components"` from a deploy two runs ago, then surfaced via plan-alm even though the latest deploy shipped 4,051 components. If the marker needs a freeform narrative, base it strictly on the CURRENT run's data — never carry numbers across runs. The structured `summary` + `categories[]` is the audit trail; prose summaries belong in the rendered HTML, not in the JSON marker.
+
 **Severity rules** (apply per test card):
 - HTTP 5xx response → `critical`
 - HTTP 4xx response on a public page or a documented public API → `high`
 - HTTP 4xx response on an authenticated-only resource accessed anonymously → `low` (expected gate)
 - Console errors on an otherwise-passing page → `medium`
 - All other findings (info-only) → `low`
+
+**Computing the `summary` object — read carefully.** The summary buckets MUST be aggregated by counting each test's `severity` field across all `categories[].tests[]`, not derived from the category itself or defaulted to `low`. plan-alm's Validation tab and the rendered HTML's severity grid both rely on the summary directly — if every test lands in `low` regardless of its actual severity, every stage looks healthy even when critical failures exist. Real-world reproduction (Citizens portal, 2026-05-21): four tests with severities `critical / high / high / low` were dumped into `summary: {critical:0, high:0, medium:0, low:4}` because the agent skipped per-test counting.
+
+Compute it as:
+
+```js
+const summary = { critical: 0, high: 0, medium: 0, low: 0, total: 0, automated: 0, manual: 0, passed: 0, failed: 0, skipped: 0 };
+for (const cat of (report.categories || [])) {
+  for (const test of (cat.tests || [])) {
+    summary.total += 1;
+    const sev = String(test.severity || '').toLowerCase();
+    if (sev === 'critical') summary.critical += 1;
+    else if (sev === 'high') summary.high += 1;
+    else if (sev === 'medium') summary.medium += 1;
+    else summary.low += 1;            // default for unknown / missing severity
+    if (test.type === 'manual') summary.manual += 1; else summary.automated += 1;
+    if (test.status === 'failed') summary.failed += 1;
+    else if (test.status === 'skipped') summary.skipped += 1;
+    else summary.passed += 1;
+  }
+}
+```
+
+The plan-alm renderer (`render-alm-plan.js` `buildValidationStagePane`) draws four severity cards — Critical / High / Medium / Low — independently. Each summary bucket must reflect the actual count for that severity, not a combined "Medium / Low" total.
 
 **Status rules**:
 - `passed` — assertion held (200, no console errors, expected redirect, etc.)
@@ -673,12 +714,29 @@ Always write a structured JSON report to the project root so other skills (notab
 
 **Write the file** (Node.js, run from the project root):
 ```bash
-node -e "require('fs').writeFileSync('.last-test-site.json', process.argv[1])" "$(cat <<'EOF'
+node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
+node -e "require('fs').writeFileSync('docs/alm/last-test-site.json', process.argv[1])" "$(cat <<'EOF'
 {...the JSON above...}
 EOF
 )"
 ```
-or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `.last-test-site.json` in the project root (sibling to `.last-deploy.json` and `.last-pipeline.json`).
+or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `docs/alm/last-test-site.json` (sibling to `docs/alm/last-deploy.json` and `docs/alm/last-pipeline.json`).
+
+**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — plan-alm Phase 7's per-target loop, `docs/alm/last-deploy.json`'s `stageName`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
+
+#### 6.7b Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase test-site \
+  --stageName "{stageName}" \
+  --render
+```
+
+`{stageName}` is the stage label this run tested (e.g. `Staging`, `Production`). Pass an empty string when unknown — `refreshTestSite` falls back to (1) the marker's `stageName` field (set in 6.7a above), then (2) the single target stage in `planData.stages` if there's only one. Multi-stage plans with no explicit stageName + no marker stageName won't be captured (the refresh re-renders without a per-stage validationRun update); always pass it explicitly when you can.
+
+The helper reads `docs/alm/last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 #### 6.8 Suggest Next Steps
 

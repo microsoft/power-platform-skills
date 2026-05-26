@@ -18,7 +18,9 @@ function makeTempDir() {
 }
 
 function writeMarker(dir, data) {
-  fs.writeFileSync(path.join(dir, '.last-host-check.json'), JSON.stringify(data), 'utf8');
+  const almDir = path.join(dir, 'docs', 'alm');
+  fs.mkdirSync(almDir, { recursive: true });
+  fs.writeFileSync(path.join(almDir, 'last-host-check.json'), JSON.stringify(data), 'utf8');
 }
 
 function runValidator(cwd) {
@@ -52,7 +54,7 @@ function validV2Marker(overrides = {}) {
   };
 }
 
-test('exits 0 when no .last-host-check.json found', () => {
+test('exits 0 when no docs/alm/last-host-check.json found', () => {
   const dir = makeTempDir();
   const r = runValidator(dir);
   assert.equal(r.code, 0);
@@ -160,7 +162,9 @@ test('blocks when ready: true but finalHostEnvUrl missing', () => {
 
 test('blocks on malformed JSON', () => {
   const dir = makeTempDir();
-  fs.writeFileSync(path.join(dir, '.last-host-check.json'), '{not json', 'utf8');
+  const almDir = path.join(dir, 'docs', 'alm');
+  fs.mkdirSync(almDir, { recursive: true });
+  fs.writeFileSync(path.join(almDir, 'last-host-check.json'), '{not json', 'utf8');
   const r = runValidator(dir);
   assert.notEqual(r.code, 0);
   assert.match(r.stdout + r.stderr, /could not be parsed/);

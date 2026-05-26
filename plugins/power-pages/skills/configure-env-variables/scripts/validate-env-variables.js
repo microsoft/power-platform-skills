@@ -7,15 +7,13 @@ const { approve, block, runValidation } = require('../../../scripts/lib/validati
 const fs = require('fs');
 const path = require('path');
 
-runValidation('configure-env-variables', () => {
+runValidation((cwd) => {
   // Find project root (look for deployment-settings.json or solution-manifest.json)
-  let projectRoot = process.cwd();
+  let projectRoot = cwd;
   const markers = ['deployment-settings.json', '.solution-manifest.json', 'powerpages.config.json'];
-  let found = false;
   for (let dir = projectRoot; dir !== path.dirname(dir); dir = path.dirname(dir)) {
     if (markers.some(m => fs.existsSync(path.join(dir, m)))) {
       projectRoot = dir;
-      found = true;
       break;
     }
   }

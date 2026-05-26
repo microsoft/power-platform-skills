@@ -219,7 +219,7 @@ test('AvailableUnboundCustomHost: unbound + exactly one Custom Host found', asyn
   assert.equal(result.ready, true);
 });
 
-test('cache fast-path: returns immediately when .last-host-check.json is fresh and host probes 200', async (t) => {
+test('cache fast-path: returns immediately when docs/alm/last-host-check.json is fresh and host probes 200', async (t) => {
   const tmp = makeTmpDir();
   const cached = {
     schemaVersion: 2,
@@ -238,7 +238,8 @@ test('cache fast-path: returns immediately when .last-host-check.json is fresh a
     candidates: { existingCustomHosts: [], existingPlatformHost: null, eligibleForAppInstall: [], inaccessibleEnvs: [] },
     telemetry: { correlationId: null },
   };
-  fs.writeFileSync(path.join(tmp, '.last-host-check.json'), JSON.stringify(cached));
+  fs.mkdirSync(path.join(tmp, 'docs', 'alm'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'docs', 'alm', 'last-host-check.json'), JSON.stringify(cached));
 
   let bindingCalled = false;
   withMockedHttp(t, [
@@ -270,7 +271,8 @@ test('cache fast-path: bypassed by --no-cache flag', async (t) => {
     finalHostEnvUrl: 'https://pascalepipelineshost.crm.dynamics.com/',
     ready: true,
   };
-  fs.writeFileSync(path.join(tmp, '.last-host-check.json'), JSON.stringify(cached));
+  fs.mkdirSync(path.join(tmp, 'docs', 'alm'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'docs', 'alm', 'last-host-check.json'), JSON.stringify(cached));
 
   let bindingCalled = false;
   withMockedHttp(t, [
@@ -333,7 +335,8 @@ test('cache fast-path: stale cache (>24h) is ignored', async (t) => {
     finalHostEnvUrl: 'https://x.crm.dynamics.com/',
     ready: true,
   };
-  fs.writeFileSync(path.join(tmp, '.last-host-check.json'), JSON.stringify(cached));
+  fs.mkdirSync(path.join(tmp, 'docs', 'alm'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'docs', 'alm', 'last-host-check.json'), JSON.stringify(cached));
 
   let bindingCalled = false;
   withMockedHttp(t, [
