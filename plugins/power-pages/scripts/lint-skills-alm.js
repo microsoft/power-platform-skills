@@ -29,9 +29,10 @@
 //              (matched by `` `AskUserQuestion` `` near a `:`).
 //     Require: the same section contains at least one preceding
 //              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
-//     Scope:   ALM skills (see ALM_SKILLS) → severity 'error'.
-//              Non-ALM skills → severity 'warning' (warn-only until the
-//              catalog in references/approval-gates.md is extended).
+//     Scope:   Every SKILL.md under plugins/power-pages/skills/ → severity 'error'.
+//              (v2 had a warn-only branch for non-ALM skills; v3 removed it once
+//              the catalog in references/approval-gates.md was extended to cover
+//              the full skill set — see §10 landing history.)
 //     Waivable: yes, inline `<!-- alm-lint-ignore: GATE-must-have-marker -->`
 //               or `.almlintignore` entry.
 //
@@ -45,7 +46,8 @@
 //     Trigger: any gate-id used in a SKILL.md marker.
 //     Require: the same gate-id appears (backticked) somewhere in
 //              references/approval-gates.md (the catalog).
-//     Scope:   ALM skills → 'error'. Non-ALM → 'warning'.
+//     Scope:   Every SKILL.md → 'error'. (Same v3 enforcement note as
+//              GATE-must-have-marker above.)
 //     Waivable: yes (inline + allowlist).
 //
 //   GATE-intent-must-call-helper
@@ -187,9 +189,13 @@ const KNOWN_RULES = new Set([
   'GATE-cancel-leaves-known-vocab',
 ]);
 
-// ALM skills get hard-fail severity; everything else gets warn-only until
-// the approval-gates catalog is extended to non-ALM skills (see §8 of
-// references/approval-gates.md). Folder name = skill name.
+// v2 had a separate ALM_SKILLS set used to flip lint severity between hard-fail
+// (ALM) and warn-only (non-ALM). v3 removed the carve-out — every skill under
+// plugins/power-pages/skills/ is hard-fail because the catalog in
+// references/approval-gates.md now covers all skills (see §10 landing history).
+// The set is kept as the canonical "ALM skill family" list for reference and
+// for downstream tooling that needs to enumerate ALM skills, but it no longer
+// influences lint severity.
 const ALM_SKILLS = new Set([
   'plan-alm',
   'setup-solution',
@@ -437,7 +443,11 @@ function skillNameFromFile(file) {
 }
 
 function severityForSkill(skillName) {
-  return ALM_SKILLS.has(skillName) ? 'error' : 'warning';
+  // v3: every skill under plugins/power-pages/skills/ is enforced at hard-fail.
+  // `skillName` retained as a parameter so future per-skill policy can hook in
+  // without rewiring the call sites.
+  void skillName;
+  return 'error';
 }
 
 // Parse the catalog file (references/approval-gates.md) and extract all

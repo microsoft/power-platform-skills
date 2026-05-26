@@ -154,6 +154,14 @@ Show the user:
 
 ### 3.2 Confirm Tables
 
+<!-- gate: integrate-webapi:3.2.confirm-tables | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:3.2.confirm-tables):** Final say on which tables get Web API integration code (client, types, services, hooks).
+>
+> **Trigger:** Explore agent surfaced candidate tables in Phase 3.1.
+> **Blast radius if skipped:** Auto-selecting all tables can generate orphaned TypeScript files for tables the user never intended to expose via Web API.
+> **Cancel leaves:** Nothing — no service/type/hook files written yet.
+
 Use `AskUserQuestion` to confirm:
 
 | Question | Options |
@@ -279,6 +287,14 @@ Present a table summarizing the verification:
 
 Both agents require the `.powerpages-site` folder. If it doesn't exist:
 
+<!-- gate: integrate-webapi:6.1.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.1.deploy-first):** `.powerpages-site` missing — needed by both architect agents. Deploy first, or skip permissions setup and finish without them.
+>
+> **Trigger:** Phase 6.1 found no `.powerpages-site` folder.
+> **Blast radius if skipped:** Auto-skipping leaves the integration broken (no permissions to back the Web API calls); auto-deploying picks the wrong env.
+> **Cancel leaves:** Nothing — services/types/hooks from Phase 4 stay on disk regardless.
+
 Use `AskUserQuestion`:
 
 | Question | Options |
@@ -290,6 +306,14 @@ Use `AskUserQuestion`:
 **If "Skip"**: Skip to Phase 7 with a note that permissions and site settings still need to be configured.
 
 ### 6.2 Choose Permissions Source
+
+<!-- gate: integrate-webapi:6.2.permissions-source | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-source):** Decide between uploading an existing permissions diagram (Path A) and letting the architect agents derive it (Path B). Choice routes the rest of Phase 6.
+>
+> **Trigger:** Entering Phase 6.2 after deployment prerequisite is satisfied.
+> **Blast radius if skipped:** Path A produces table permissions matching a stale or wrong diagram; Path B can take minutes to query Dataverse.
+> **Cancel leaves:** Nothing — no permission YAML written yet.
 
 Ask the user how they want to define the permissions using the `AskUserQuestion` tool:
 
@@ -321,6 +345,14 @@ If the user chooses to upload an existing diagram:
 4. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
 
 5. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
+
+<!-- gate: integrate-webapi:6.2.permissions-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-approval):** Final sign-off on the parsed permissions plan (from the uploaded diagram) before any web-role / table-permission / site-setting YAML write.
+>
+> **Trigger:** Path A — diagram parsed and Mermaid flowchart rendered.
+> **Blast radius if skipped:** Wrong scope / wrong CRUD flags get committed to `.powerpages-site/table-permissions/` — fixable but noisy in git history.
+> **Cancel leaves:** Nothing — no YAML files written yet.
 
 6. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
 
@@ -477,6 +509,14 @@ Present a summary of everything that was done:
 | Site Settings | Created | X setting files |
 
 ### 7.3 Ask to Deploy
+
+<!-- gate: integrate-webapi:7.3.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:7.3.deploy):** Post-integration deploy prompt — Web API calls won't work until permissions and site settings are deployed.
+>
+> **Trigger:** All integration code + permissions YAML committed.
+> **Blast radius if skipped:** Auto-deploy picks whatever env PAC CLI happens to point at.
+> **Cancel leaves:** Nothing — integration artifacts stay on disk; no deploy fired.
 
 Use `AskUserQuestion`:
 

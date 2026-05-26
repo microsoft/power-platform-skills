@@ -1,10 +1,12 @@
-# Approval Gates — ALM Skill Catalog (Draft v2)
+# Approval Gates — Power Pages Skill Catalog (v3)
 
-> **Status: DRAFT v2.** Addresses review feedback on v1.
+> **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: ALM skills only.** §6 enumerates every `AskUserQuestion` in the 12 ALM skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). Non-ALM skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §10. Catalog completeness is asserted only for ALM.
+> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 24 user-invocable skills (12 ALM + 12 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
 >
-> **Not yet applied to SKILL.md files.** This document defines terminology + marker + lint design. The follow-up PR will add the markers to each ALM SKILL.md and ship the lint rule. Run the decisions in §9 first.
+> **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
+>
+> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces the five GATE rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`) at error severity on every SKILL.md under `plugins/power-pages/skills/`.
 
 ---
 
@@ -468,27 +470,159 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-## 8. Non-ALM skills — explicitly deferred
+### 6.13 `create-site` (5 calls)
 
-Per the v1 review, the catalog was incomplete because it claimed full coverage but only covered ~30% of `AskUserQuestion` calls. v2 fixes this by **scoping to ALM only**. The 13 non-ALM skills below contain ~70 additional `AskUserQuestion` calls that need to be catalogued in a follow-up:
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
+| `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
+| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
 
-| Skill | `AskUserQuestion` count | Status |
-|---|---|---|
-| `create-site` | 11 | Deferred |
-| `deploy-site` | 9 | Deferred |
-| `add-server-logic` | 13 | Deferred |
-| `add-cloud-flow` | 7 | Deferred |
-| `setup-auth` | 5 | Deferred |
-| `integrate-webapi` | 6 | Deferred |
-| `setup-datamodel` | 3 | Deferred |
-| `add-sample-data` | 3 | Deferred |
-| `add-seo` | 3 | Deferred |
-| `create-webroles` | 3 | Deferred |
-| `audit-permissions` | 2 | Deferred |
-| `integrate-backend` | (see SKILL.md) | Deferred |
-| `report-issue` | 1 | Deferred (cross-plugin, may not need a gate) |
+---
 
-For non-ALM skills, the lint rules in §5 are **warn-only** until this section is extended. ALM lint rules are **hard-fail** from day one (per §9 decision).
+### 6.14 `deploy-site` (8 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `deploy-site:2.auth-url` | not-a-gate | — | 2 | Free-text env URL when PAC CLI not authenticated — data-gathering | — |
+| `deploy-site:3.confirm-env` | gate | consent | 3 | Echoes current env — *"Deploy to this environment? Yes / No, choose different"*. Covers the follow-up "pick different env" sub-prompt at the same step (single section, paired by marker proximity). Wrong-env deploy is destructive — confirmation is mandatory. | nothing |
+| `deploy-site:4.1.multi-project` | gate | plan | 4.1 | Multiple `powerpages.config.json` candidates found — *"Which project to deploy?"* | nothing |
+| `deploy-site:4.2.audit-permissions` | gate | plan | 4.2 | Re-deployment detected (`.powerpages-site` exists) — *"Run permissions audit first / Skip"* | nothing |
+| `deploy-site:5.5.1.activate` | gate | plan | 5.5.1 | Site not yet activated — *"Activate now / Skip"* | nothing |
+| `deploy-site:5.6.restart-cache` | gate | plan | 5.6 | Site activated — *"Restart site to flush cache? (brief downtime) / Skip"* | nothing |
+| `deploy-site:6.2.unblock-js` | gate | consent | 6.2 | Upload failed because `.js` is blocked — *"Remove .js block from `blockedattachments`? / No"*. Modifies tenant-wide env setting — destructive shared state. | `attachment-block-modified` |
+
+---
+
+### 6.15 `add-server-logic` (12 calls / 8 gates + 4 sub-prompts)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-server-logic:1.5.deploy-first` | gate | plan | 1.5 | `.powerpages-site` missing — *"Deploy now (Required) / Cancel"* — entry condition for the skill | nothing |
+| `add-server-logic:2.1.2.use-custom-actions` | gate | plan | 2.1.2 | Custom actions discovered — *"Wrap an existing custom action? Yes / No, build from scratch"* — changes implementation shape | nothing |
+| `add-server-logic:2.1.2.per-item-action` | not-a-gate | — | 2.1.2 | Per-item follow-up — *"For `<name>` endpoint, which custom action?"* — data-gathering sub-prompt under the previous gate's Yes path | — |
+| `add-server-logic:2.3.1.keyvault` | gate | plan | 2.3.1 | Secrets identified — *"Use Azure Key Vault (Recommended) / Store directly as env var"* — affects the Phase 4 plan and Phase 7 implementation | nothing |
+| `add-server-logic:2.4.clarify` | not-a-gate | — | 2.4 | Multi-question clarification when intent is ambiguous — data-gathering | — |
+| `add-server-logic:4.4.plan-approval` | gate | plan | 4.4 | HTML plan rendered — *"Approve and implement / Request changes / Cancel"* | nothing |
+| `add-server-logic:7.2a.select-vault` | not-a-gate | — | 7.2a | Pick which Key Vault to use — data-gathering sub-prompt under the Phase 2.3.1 Yes path | — |
+| `add-server-logic:7.2a.no-vaults` | gate | plan | 7.2a | No Key Vaults found — *"Create new (Recommended) / Fall back to plain env var"* — branches the secret-storage flow | nothing |
+| `add-server-logic:7.2a.vault-params` | not-a-gate | — | 7.2a | Vault name / RG / location free-text — data-gathering for the create call | — |
+| `add-server-logic:9.1.frontend-scope` | gate | plan | 9.1 | *"Fully integrate into UI (Recommended) / I'll handle frontend myself"* — decides Phase 9 work scope | nothing |
+| `add-server-logic:11.3.deploy` | gate | plan | 11.3 | *"Deploy now (Recommended) / Later"* — invokes `/deploy-site` on Yes | nothing |
+| `add-server-logic:11.3.test` | gate | plan | 11.3 | After successful deploy — *"Run `/test-site` now / Skip"* | nothing |
+
+---
+
+### 6.16 `add-cloud-flow` (6 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-cloud-flow:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Cancel"* | nothing |
+| `add-cloud-flow:3.1.select-flows` | gate | plan | 3.1 | Multi-select over discovered + already-registered flows — *"Which flows to add or integrate?"* | nothing |
+| `add-cloud-flow:3.3.scenario-clarify` | not-a-gate | — | 3.3 | Per-flow scenario clarification when flow name/description is ambiguous — data-gathering for Phase 4 role assignment | — |
+| `add-cloud-flow:5.3.plan-approval` | gate | plan | 5.3 | HTML plan rendered — *"Approve and implement / Request changes / Cancel"* | nothing |
+| `add-cloud-flow:8.4.deploy` | gate | plan | 8.4 | *"Deploy now (Recommended) / Later"* | nothing |
+| `add-cloud-flow:8.4.test` | gate | plan | 8.4 | After successful deploy — *"Run `/test-site` to validate flow integration / Skip"* | nothing |
+
+---
+
+### 6.17 `setup-auth` (5 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `setup-auth:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Later"* | nothing |
+| `setup-auth:1.4.create-webroles` | gate | plan | 1.4 | No web roles found — *"Create web roles first (Recommended) / Skip"* | nothing |
+| `setup-auth:2.1.requirements` | gate | plan | 2.1 | *"Which auth features? Login+Logout+RBAC / Login+Logout only / RBAC only"* — covers the follow-up "which roles get access" sub-prompt in the same step | nothing |
+| `setup-auth:2.2.plan-approval` | gate | plan | 2.2 | *"Approve and proceed / I'd like to make changes"* | nothing |
+| `setup-auth:8.4.deploy` | gate | plan | 8.4 | *"Deploy now (Recommended) / Later"* — auth doesn't work until deployed | nothing |
+
+---
+
+### 6.18 `integrate-webapi` (5 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `integrate-webapi:3.2.confirm-tables` | gate | plan | 3.2 | *"Which tables to integrate? All / Let me select / Add more"* | nothing |
+| `integrate-webapi:6.1.deploy-first` | gate | plan | 6.1 | `.powerpages-site` missing — *"Deploy now (Recommended) / Skip permissions setup"* | nothing |
+| `integrate-webapi:6.2.permissions-source` | gate | plan | 6.2 | *"Upload existing diagram / Let architects figure it out"* | nothing |
+| `integrate-webapi:6.2.permissions-approval` | gate | plan | 6.2 (Path A) | Parsed permissions plan rendered — *"Approve and create files / Request changes / Cancel"* | nothing |
+| `integrate-webapi:7.3.deploy` | gate | plan | 7.3 | *"Deploy now (Recommended) / Later"* — Web API calls won't work until deployed | nothing |
+
+---
+
+### 6.19 `setup-datamodel` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `setup-datamodel:2.source` | gate | plan | 2 | *"Upload existing ER diagram / Let the Data Model Architect figure it out"* | nothing |
+| `setup-datamodel:4.2.approval` | gate | plan | 4.2 | Data model proposal rendered — *"Approve and create tables (Recommended) / Request changes / Cancel"* | nothing |
+
+---
+
+### 6.20 `add-sample-data` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-sample-data:3.1.tables` | gate | plan | 3.1 | Multi-select over discovered tables — *"Which tables to populate?"* | nothing |
+| `add-sample-data:3.2.count` | gate | plan | 3.2 | *"How many records per table? 5 / 10 / 25 / Custom"* — covers the sub-prompt for the custom count | nothing |
+
+---
+
+### 6.21 `add-seo` (3 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-seo:2.config-call1` | not-a-gate | — | 2 | Production URL + exclusion choice — data-gathering for the upcoming Phase 3 plan | — |
+| `add-seo:2.config-call2` | not-a-gate | — | 2 | Meta description + OG-tag preference — data-gathering for the upcoming Phase 3 plan | — |
+| `add-seo:3.plan-approval` | gate | plan | 3 | SEO plan rendered inline — *"Approve and proceed (Recommended) / Make changes"* | nothing |
+
+---
+
+### 6.22 `create-webroles` (3 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `create-webroles:1.deploy-first` | gate | plan | 1 | `.powerpages-site` missing — *"Deploy now (Recommended) / Later"* | nothing |
+| `create-webroles:3.role-selection` | gate | plan | 3 | *"Which web roles to create?"* — multi-select over suggested + custom roles | nothing |
+| `create-webroles:6.deploy` | gate | plan | 6 | *"Deploy now (Recommended) / Later"* — roles don't take effect until deployed | nothing |
+
+---
+
+### 6.23 `audit-permissions` (1 call)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `audit-permissions:6.fix-offer` | gate | plan | 6 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
+
+---
+
+### 6.24 `integrate-backend` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `integrate-backend:2.2.clarify` | not-a-gate | — | 2.2 | Ambiguous-intent clarification (sync vs async, external APIs, secrets, one-off vs workflow) — data-gathering for the Phase 3 plan | — |
+| `integrate-backend:3.4.plan-approval` | gate | plan | 3.4 | HTML plan rendered — *"Approve and proceed / Change approach / Cancel"* — branches to the right child skill (`integrate-webapi` / `add-server-logic` / `add-cloud-flow`) | nothing |
+
+---
+
+### Cross-plugin shared skills — out of catalog scope
+
+`report-issue` — The power-pages SKILL.md wrapper at `plugins/power-pages/skills/report-issue/SKILL.md` is a thin re-export that contains no prompts. The actual workflow with `AskUserQuestion` calls lives in `shared/skills/report-issue/report-issue-workflow.md`, which is consumed by every plugin (not just power-pages). The shared workflow lies outside the per-plugin lint scope (`plugins/power-pages/skills/`), so its prompts are not catalogued here. If the shared workflow is ever ported into per-plugin SKILL.md files, add a `report-issue:*` section to this catalog.
+
+---
+
+## 8. Plugin-wide enforcement (was: non-ALM deferral)
+
+> **v3 update.** This section previously listed 13 deferred non-ALM skills. Those skills are now catalogued in §6.13–§6.24 above and the lint runs hard-fail across the whole plugin.
+
+The lint rules in §5 fire at `error` severity for **every** SKILL.md under `plugins/power-pages/skills/`. There is no skill-class carve-out. When you add a new skill:
+
+1. Catalog every `AskUserQuestion` call in §6 — pick category from §3, pick `cancel-leaves` from §4.3.
+2. Add `<!-- gate: ... -->` markers in the SKILL.md per §4.
+3. Mark every data-gathering prompt with `<!-- not-a-gate: ... -->`.
+4. Run `node scripts/lint-skills-alm.js`. CI will block the PR otherwise.
 
 ---
 
@@ -507,24 +641,17 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 ---
 
-## 10. Landing plan
+## 10. Landing history
 
-The reviewer's recommendation — **land §1–§5 + §7–§9 as documentation now; do the SKILL.md sweep + lint rule as a follow-up PR** — is the right shape. Concretely:
+**v2 PR (landed)** — `approval-gates.md` v2 doc; `<!-- gate: ID -->` markers added to the 12 ALM SKILL.md files; 5 GATE lint rules added to `scripts/lint-skills-alm.js` at hard-fail for ALM, warn-only for non-ALM.
 
-**This PR (proposed):**
-- Land this `approval-gates.md` v2 file.
-- Add a one-line pointer in `PLUGIN_DEVELOPMENT_GUIDE.md` (under the Three-Point Approval Pattern section).
-- No SKILL.md edits.
-- No new lint rule yet.
+**v3 PR (this branch — `users/nityagi/ApplyApprovalGatesPattern`)** — extends the catalog and enforcement to the 12 non-ALM skills:
 
-**Follow-up PR (after §9 decisions confirmed):**
-- For each ALM SKILL.md, add the `<!-- gate: ID -->` HTML comment + human `> 🚦 Gate (...)` block above every gate listed in §6.
-- Mark every "not-a-gate" row with `<!-- not-a-gate: <reason> -->`.
-- Add the 5 lint rules to `scripts/lint-skills-alm.js` with hard-fail for ALM, warn-only for non-ALM.
-- Update `references/deployment-error-catalog.md` to cross-reference the per-pattern gate IDs from §6.12.
-
-**Follow-up #2 (non-ALM extension):**
-- Sweep the 13 non-ALM skills, populate §8 with full catalog rows, switch their lint mode from warn to hard-fail.
+- §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
+- Markers added to all 12 non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt).
+- `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
+- `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.
+- `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope).
 
 ---
 

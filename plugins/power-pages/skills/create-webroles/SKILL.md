@@ -46,6 +46,14 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 
 1. Locate the project root (`**/powerpages.config.json`) and check for `.powerpages-site/web-roles/`.
 
+<!-- gate: create-webroles:1.deploy-first | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:1.deploy-first):** `.powerpages-site` missing — skill cannot proceed without that folder. Prompt to deploy first or stop.
+>
+> **Trigger:** Phase 1 found no `.powerpages-site` directory.
+> **Blast radius if skipped:** Web role YAML files written to a non-existent path will never get picked up by deploy; user thinks roles were created but they weren't.
+> **Cancel leaves:** Nothing — no YAML files written.
+
 2. **If `.powerpages-site` does NOT exist:** Ask the user to deploy first via `AskUserQuestion` (options: "Yes, deploy now (Recommended)", "No, I'll do it later"). If yes, invoke `/deploy-site` then resume from Phase 2. If no, stop.
 
 3. **If `.powerpages-site` exists but `web-roles/` does NOT:** Create the `<PROJECT_ROOT>/.powerpages-site/web-roles/` directory.
@@ -92,6 +100,14 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 **Goal**: Decide which new web roles to create based on site needs and user input
 
 **Actions**:
+
+<!-- gate: create-webroles:3.role-selection | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:3.role-selection):** Multi-select over suggested + custom web roles. Drives the Phase 4 YAML file writes.
+>
+> **Trigger:** Phase 2 inventoried existing roles; Phase 3 suggests new ones.
+> **Blast radius if skipped:** Wrong roles get created locally — fixable but adds churn to the `.powerpages-site/web-roles/` folder.
+> **Cancel leaves:** Nothing — no YAML files written yet.
 
 1. Based on the site's purpose and the existing roles, suggest appropriate web roles. Use `AskUserQuestion` to confirm with the user.
 
@@ -202,6 +218,14 @@ name: <Role Name>
    > |-----------|-----|-----------|---------------|
    > | Content Editors | `a1b2c3d4-...` | false | false |
    > | *(etc.)* |
+
+<!-- gate: create-webroles:6.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-webroles:6.deploy):** Final post-create prompt — deploy now to make the new roles take effect, or defer.
+>
+> **Trigger:** Phase 5 validation succeeded.
+> **Blast radius if skipped:** Auto-invoking `/deploy-site` would push the site to whatever env PAC CLI happens to point at — wrong-env push is messy to undo.
+> **Cancel leaves:** Nothing — the YAML files stay on disk; no deploy fired.
 
 3. Then ask the user if they want to deploy the site to apply the new roles:
 

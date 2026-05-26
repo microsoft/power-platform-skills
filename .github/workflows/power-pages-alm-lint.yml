@@ -1,3 +1,9 @@
+# Deliberately separate from `power-pages-script-tests.yml`.
+# This workflow runs policy enforcement (gate markers, ALM-aware-by-default,
+# discovery coverage) — pure-Node, OS-independent, completes in seconds, so
+# it runs on a single OS to surface red checks fast.
+# The sibling workflow runs functional unit tests across ubuntu × windows × macos.
+# See PLUGIN_DEVELOPMENT_GUIDE.md and references/approval-gates.md.
 name: power-pages-alm-lint
 
 on:

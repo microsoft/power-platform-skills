@@ -565,7 +565,9 @@ Ask via \`AskUserQuestion\`:
   assert.equal(match.severity, 'error', 'ALM skill → error severity');
 });
 
-test('GATE-must-have-marker: fires as warning for non-ALM skill', async (t) => {
+test('GATE-must-have-marker: fires as error for non-ALM skill (v3 plugin-wide enforcement)', async (t) => {
+  // v3 removed the ALM-vs-non-ALM severity carve-out: every skill is hard-fail.
+  // See references/approval-gates.md §10 landing history.
   const root = mkPluginRoot(t);
   writeSkill(
     root,
@@ -578,7 +580,7 @@ Ask via \`AskUserQuestion\`:
   const findings = collectFindings({ pluginRoot: root });
   const match = findings.find((f) => f.rule === 'GATE-must-have-marker');
   assert.ok(match);
-  assert.equal(match.severity, 'warning', 'non-ALM skill → warning severity');
+  assert.equal(match.severity, 'error', 'v3: all skills → error severity');
 });
 
 test('GATE-must-have-marker: passes when section has a gate marker before the prompt', async (t) => {

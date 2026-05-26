@@ -494,6 +494,15 @@ Present a summary to the user:
 1. **Critical findings count** — these need immediate attention
 2. **Warning findings count** — should be addressed
 3. **Report location** — where the HTML file was saved
+
+<!-- gate: audit-permissions:6.fix-offer | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · audit-permissions:6.fix-offer):** Offer to apply auto-fixes for critical/warning findings. The audit report has already been written; declining here just leaves the HTML report in place — no Dataverse / filesystem mutation.
+>
+> **Trigger:** Phase 6 has tallied findings and the HTML report is saved.
+> **Blast radius if skipped:** Tooling could silently invoke the table-permissions-architect agent — accept-by-default would write or mutate permission YAML against the user's intent.
+> **Cancel leaves:** Nothing — the audit report stays at its saved path. No web-role / table-permission files written.
+
 4. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the critical and warning findings."
 
 If the user wants fixes applied:
