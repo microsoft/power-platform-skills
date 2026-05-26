@@ -564,9 +564,11 @@ Store as `PROFILE_MAPPING_CHOICE`. Then ask:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Should profile info be updated on every login, or only once at first sign-in? | Sync frequency | Both — sync on first sign-in AND every login (Recommended for IdPs as source of truth), First sign-in only — let users edit their profile after registration without it being overwritten |
+| Should profile info be updated on every login, or only once at first sign-in? | Sync frequency | First sign-in only (Recommended) — copy claims once when the contact is created; let users edit their own profile afterwards without it being overwritten, Both — sync on first sign-in AND every login (use only when the IdP is the authoritative source of truth and you don't want users editing their profile in Power Pages) |
 
 Store as `PROFILE_SYNC_FREQUENCY`. This determines whether to write `LoginClaimsMapping` (every login) in addition to `RegistrationClaimsMapping` (first sign-in only).
+
+> **Why "First sign-in only" is now the default**: this skill optionally scaffolds a SPA profile page (`/user-profile`) where signed-in users can edit their own contact info. If `LoginClaimsMapping` is set, the server overwrites the user's edits with IdP claims on the very next login — which is confusing and silently undoes the user's work. "First sign-in only" lets the user own their profile after the contact is created. Switch to "Both" only when the IdP is the sole authoritative source for these fields (e.g., HR-managed workforce directory) and end-user edits should NOT persist.
 
 **Claim type values** — the mapping format is comma-separated `contactfield=claimtype` (NOT JSON). For OIDC providers like Entra External ID, use OIDC short names:
 
@@ -585,13 +587,15 @@ Ask whether to auto-link external sign-ins to existing contacts by email.
 
 | Question | Header | Options |
 |----------|--------|---------|
-| If a user signs in with an external provider and their email matches an existing Dataverse contact, what should happen? | Contact linking | Create a new contact (Recommended for security) — always create a fresh contact, never auto-link, Link to the existing contact — auto-link by email match (single-tenant providers only — see warning below) |
+| If a user signs in with an external provider and their email matches an existing Dataverse contact, what should happen? | Contact linking | Link to the existing contact (Recommended) — auto-link by email match so makers don't end up with duplicate contacts when admins pre-create records (single-tenant providers only — see warning below), Create a new contact — always create a fresh contact, never auto-link (safer choice when the IdP doesn't verify emails) |
 
 Store as `CONTACT_LINKING_CHOICE`. This drives `AllowContactMappingWithEmail` (`true` for "link", `false` for "create new").
 
+> **Why "Link to the existing contact" is the default**: the common flow is that admins pre-create contact records in Dataverse (often via invitation or import) and then expect those exact contacts to be picked up when the user signs in for the first time via the configured IdP. Without linking, the server creates a brand-new contact and the pre-created record sits orphaned — confusing for makers and easy to misdiagnose. Linking by verified email is the well-known pattern for joining IdP identity to an existing CRM record.
+>
 > **⚠ Multi-tenant safety**: For **multi-tenant Entra External ID** (Authority uses `/organizations/` or `/common/`, or `IssuerFilter` is a wildcard), the Power Pages server **forcibly disables** `AllowContactMappingWithEmail` regardless of the site setting (`BlockContactMappingSettingForMultitenantApp` feature flag in `LoginController.cs:2578-2587`). Reason: email claims can't be trusted across tenants. If the user selects "Link to the existing contact" but the Authority is multi-tenant, warn them that linking won't work and recommend single-tenant Authority.
 >
-> **⚠ Security**: When `AllowContactMappingWithEmail = true`, an attacker who can sign into the configured IdP using a victim's email can take over the victim's contact. Enable only when the IdP verifies emails (Entra External ID with single tenant verifies; arbitrary OIDC may not).
+> **⚠ Security**: When `AllowContactMappingWithEmail = true`, an attacker who can sign into the configured IdP using a victim's email can take over the victim's contact. Enable only when the IdP verifies emails (Entra External ID with single tenant verifies; arbitrary OIDC may not). Switch to "Create a new contact" if you're configuring an IdP whose email-verification stance you don't control (e.g., a generic OIDC endpoint).
 
 **For "Local Authentication"** (only if user explicitly requested it): Ask the user how they want users to identify themselves when logging in:
 
