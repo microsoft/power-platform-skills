@@ -37,6 +37,36 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 ---
 
+## Live Execution Report
+
+Throughout this skill, progress is mirrored to two files inside `<OUTPUT_DIR>`:
+
+- `migration-state.json` — single source of truth for current state
+- `skill-execution-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
+
+**Init point.** As soon as `<OUTPUT_DIR>` is resolved (end of step 1.2) AND WebSiteId is known (from `$ARGUMENTS=GUID`, `website.yml`, or step 1.3 site discovery), run once:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/update-state.js" --init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"
+```
+
+After init, each sub-step below ends with a **→ Update report** callout. Execute each as a `node update-state.js --output-dir "<OUTPUT_DIR>" <args>` call. The CLI accepts:
+
+| Command | Use |
+|---|---|
+| `--set-step <id> --status <s> --output "<text>"` | Mark sub-step status + write its output line (status: `pending`/`in-progress`/`completed`/`blocked`) |
+| `--set-phase <n> --status <s>` | Mark phase status (`pending`/`in-progress`/`completed`/`blocked`) |
+| `--set-site '<json>'` | Update site card fields. Allowed keys: `name`, `portalId`, `slug`, `currentDataModel`, `template`, `environment`, `migrationMode`, `siteRoot` |
+| `--set-approval <phaseId> <kind>` | Show approval banner; `kind` ∈ {`phase-start`, `in-phase`} |
+| `--clear-approval` | Hide approval banner once user has approved |
+| `--set-prompt <plugin\|dme> --status ready --path "<file>" --summary "<text>"` | Show augmented-prompt card |
+| `--set-activity "<text>"` / `--clear-activity` | "Currently doing" text for long-running ops |
+| `--render-only` | Re-render HTML from existing state (rare) |
+
+> **Best-effort:** if any `update-state.js` call fails (e.g., node missing), log a warning and continue — the live report is informational, never a blocker for migration work.
+
+---
+
 ## Phase 1: Pre-flight Setup
 
 **Goal**: Gather all context needed to plan and execute migration safely. Establish CLI context, identify the target site, detect any prior migration state, verify dependencies and template packages, and select migration mode.
@@ -157,6 +187,15 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 **Output**: WebSiteId captured; `<SITE_ROOT>` and `<OUTPUT_DIR>` resolved (or marked "download in step 2.2" for `<SITE_ROOT>`)
 
+> **→ Initialize live report.** If WebSiteId is now known (from `$ARGUMENTS=GUID` or `website.yml`), run `--init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"` once. Then mark steps 1.1 and 1.2 completed:
+>
+> ```
+> --set-step 1.1 --status completed --output "PAC CLI v<X> · auth <profile> · env <name>"
+> --set-step 1.2 --status completed --output "<SITE_ROOT> resolved; <OUTPUT_DIR> created"
+> ```
+>
+> If WebSiteId is not yet known, defer init to the end of step 1.3.
+
 ---
 
 ### 1.3 Site Discovery and Validate Data Model
@@ -207,6 +246,13 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    Store the chosen template — it drives the V2 package check in step 1.6. If "Other/Unknown", proceed with caution; step 1.6 will skip the template-specific package check and rely on `PowerPages_Core` validation only.
 
 **Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
+
+> **→ Update report.** If the live report wasn't initialized at end of 1.2, do it now (`--init` plus batched `--set-step 1.1` / `1.2` completed). Then:
+>
+> ```
+> --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","currentDataModel":"Standard (SDM) — eligible for migration","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
+> --set-step 1.3 --status completed --output "Site <NAME> · ModelVersion=Standard · template <TEMPLATE>"
+> ```
 
 ---
 
@@ -285,6 +331,8 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 **Output**: Migration history known; skill either short-circuits to the appropriate phase or proceeds normally with a clean tracker state
 
+> **→ Update report:** `--set-step 1.4 --status completed --output "Status: <STATUS> · <NOTES>"`. If the skill is short-circuiting to step 3.1 or 3.2 (in-flight or previously-completed migration), also `--set-phase 1 --status completed` and skip the Phase 2 approval gate — the user has effectively already approved this path by responding to the in-flight prompt.
+
 ---
 
 ### 1.5 Validate Required Dependencies
@@ -324,6 +372,8 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    - If "Yes": Proceed to step 1.6.
 
 **Output**: Required package versions verified (Dataverse base portal 9.3.2307.x+, Power Pages Core 1.0.2309.63+)
+
+> **→ Update report:** `--set-step 1.5 --status completed --output "CDSBasePortal <ver> · PowerPagesCore <ver> — both OK"`
 
 ---
 
@@ -395,6 +445,8 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 
 **Output**: V2 template package verified/installed (or explicitly skipped); PowerPages_Core available
 
+> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state> · PowerPages_Core <state>"`. If V2 package was installed via `pac application install`, mention that explicitly so the user can audit.
+
 ---
 
 ### 1.7 Determine Environment Type and Migration Mode
@@ -434,6 +486,17 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    Store final selected mode.
 
 **Output**: Environment type captured, migration mode selected
+
+> **→ Update report (end of Phase 1):**
+>
+> ```
+> --set-site '{"environment":"<DEV|TEST|UAT|PROD>","migrationMode":"<MODE>"}'
+> --set-step 1.7 --status completed --output "Env: <ENV_TYPE> · mode=<MODE>"
+> --set-phase 1 --status completed
+> --set-approval 2 phase-start
+> ```
+>
+> Then proceed to ask the user to approve Phase 2 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 2 --status in-progress`.
 
 ---
 
@@ -492,6 +555,8 @@ Guide the user through a comprehensive migration of an existing Power Pages site
    Show summary of customizations found (by category) or "No customizations found" if clean.
 
 **Output**: Customization report generated and analyzed
+
+> **→ Update report:** `--set-step 2.1 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"`
 
 ---
 
@@ -582,6 +647,17 @@ After steps 3 and 4, show the user:
 - Path to the Liquid suggestions report
 - Path to all `*.pre-edm.bak` files (so they can revert if needed)
 
+> **→ Update report (before asking for upload approval):** the plugin/DME augmented prompts written by step 3 of section 7 (Manual remediation reminders) are also written here so the prompt cards in the live report reflect what's ready. Use:
+>
+> ```
+> --set-step 2.2 --status in-progress --output "Auto-rewrites complete · awaiting diff review"
+> --set-prompt plugin --status ready --path "<OUTPUT_DIR>/plugin-remediation-prompt.txt" --summary "<N> custom plugins on adx_* entities"
+> --set-prompt dme    --status ready --path "<OUTPUT_DIR>/dme-remediation-prompt.txt"    --summary "<N> custom columns across <T> adx_* tables"
+> --set-approval 2 in-phase
+> ```
+>
+> (If a category has zero findings, skip its `--set-prompt` call — the placeholder card remains.)
+
   | Question | Header | Options |
   |----------|--------|---------|
   | Review the rewrites in `<diff-file>`. Approve and upload to Dataverse? | Approve Rewrites | Yes, upload now, No, cancel, Let me edit further first |
@@ -601,6 +677,8 @@ pac pages upload --path "<SITE_ROOT>" --modelVersion 1
 > - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the wrapper `./mysite`). See the "nested folder quirk" note above.
 
 This pushes the rewritten source files back to the SDM site's Dataverse records, ready for step 3.1 migration.
+
+> **→ Update report (after upload completes):** `--clear-approval`. The in-phase gate is now resolved.
 
 ### 7. Manual remediation reminders (for non-automatable categories)
 
@@ -645,6 +723,16 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 > **Why this gate exists:** Data Model Extension custom columns ideally land **before** migration so the data migrates cleanly into the new structure. Plugins and workflows can be fixed post-migration without data loss, but if deferred should be tracked. This gate makes the choice explicit rather than implicit.
 
 **Output**: FetchXML auto-rewrites applied and uploaded; Liquid rewrites suggested and uploaded after user review; manual remediation tasks surfaced; user has explicitly confirmed migration readiness or acknowledged deferred items
+
+> **→ Update report (end of Phase 2):**
+>
+> ```
+> --set-step 2.2 --status completed --output "Auto-rewrites uploaded · prompts handed off · readiness gate confirmed"
+> --set-phase 2 --status completed
+> --set-approval 3 phase-start
+> ```
+>
+> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
 
 ---
 
@@ -707,6 +795,8 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 
 **Output**: Migration executed and completed successfully
 
+> **→ Update report (during the polling loop):** call `--set-activity "Polling migration status — attempt <N>/30 · current step <STEP>"` on each poll. On completion, `--clear-activity` and `--set-step 3.1 --status completed --output "Migration <COMPLETED|FAILED> · final step <STEP>"`.
+
 ---
 
 ### 3.2 Update Data Model Version
@@ -760,6 +850,17 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
    Inform user: "Data model updated. Site now uses Enhanced Data Model. SDM record has been deactivated."
 
 **Output**: Portal ID captured, site switched to EDM
+
+> **→ Update report (end of Phase 3):**
+>
+> ```
+> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
+> --set-step 3.2 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-phase 3 --status completed
+> --set-approval 4 phase-start
+> ```
+>
+> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
 
 ---
 
@@ -829,6 +930,15 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
    Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 **Output**: Site validated, migration complete (or rolled back), reports generated
+
+> **→ Update report (end of Phase 4):**
+>
+> ```
+> --set-step 4.1 --status completed --output "<Validation passed · site live on EDM | Rolled back to SDM | Deferred>"
+> --set-phase 4 --status completed
+> ```
+>
+> No further approval gates after this — the live report header pill switches to "✅ Migration Complete" automatically.
 
 ---
 
