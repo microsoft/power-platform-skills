@@ -58,6 +58,7 @@ scripts/
   create-record.js             ← Creates one or many records (auto-batches via $batch)
   create-solution.js           ← Creates a Dataverse solution with env's Default Publisher
   add-to-solution.js           ← Adds an existing component to a solution
+  add-table-to-app.js          ← Registers a Dataverse entity as a component on the appmodule (Phase 6)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/

@@ -28,6 +28,15 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   patterns (typed `(window as any).Xrm` aliases, `pac solution list`,
   local enum mapping, etc.) — no rule loosening.
 
+### Fixed
+- **Tables referenced by uploaded pages now register as app components.**
+  `pac model genpage upload --data-sources` binds entities to the page but
+  doesn't add them to the appmodule, so the app designer's "Add a table"
+  picker showed "the app contains no tables" even when pages referenced
+  several. SKILL.md Phase 6 now invokes
+  `scripts/add-table-to-app.js` for every entity in `--data-sources` after
+  each upload (idempotent — safe on both create and update flows).
+
 ### Tests
 - 210 passing across `scripts/tests/` + `evals/.../tests/`.
 
