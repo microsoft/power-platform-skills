@@ -673,15 +673,32 @@ Then ask about optional features:
 >
 > **Invitation-based registration is NOT in this list anymore** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
 
-**Profile page** — ask whether to scaffold a `/user-profile` SPA page that lets signed-in users edit their own contact info (firstname, lastname, email, phone, address) via the Power Pages Web API. This is a standalone question because it has its own infrastructure implications (Web API site settings on the `contact` entity + Self-scope table permission).
+**Profile page** — ask whether to scaffold a SPA profile page that lets signed-in users edit their own contact info via the Power Pages Web API. This is a standalone question because it has its own infrastructure implications (Web API site settings on the `contact` entity + Self-scope table permission).
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Add a profile page that lets signed-in users edit their contact info via the Power Pages Web API? | Profile page | No (default) — no profile page; users can't edit their info from the SPA, Yes — create a /user-profile SPA page with edit form, accessible from the header user menu |
+| Add a profile page that lets signed-in users edit their contact info (firstname, lastname, middlename, email, mobile phone, full address) via the Power Pages Web API? | Profile page | No (default) — no profile page; users can't edit their info from the SPA, Yes — create a /user-profile SPA page with edit form, accessible from the header user menu |
 
 Store as `INCLUDE_PROFILE_PAGE` (boolean). Default `false`.
 
-When `true`, Phase 5.1.9 generates `src/pages/UserProfile.tsx`, extends `authService.ts` with `getMyProfile` / `updateMyProfile`, evolves the `AuthButton` from inline `[Avatar Name Sign Out]` to a dropdown menu with "My Profile" and "Sign Out", and adds the `/user-profile` route to `App.tsx`. Phase 8.1 writes the Web API site settings (`Webapi/contact/enabled = true`, `Webapi/contact/fields = contactid,firstname,...`) and a Self-scope table permission on `contact` for the Authenticated Users role. The dropdown shape becomes the new default for `AuthButton` regardless of `INCLUDE_PROFILE_PAGE` so the component is ready for future menu items.
+> **⚠ MANDATORY route name: `/user-profile` (NOT `/profile`)**. The path `/profile` is **reserved by the Power Pages server** for the legacy server-rendered profile page — using it as a SPA route creates a conflict that breaks the page. **Always use `/user-profile`** for the SPA route. The skill executor MUST NOT rename this route. Same for the file: **`src/pages/UserProfile.tsx`** (NOT `Profile.tsx`).
+
+When `true`, Phase 5.1.9 generates `src/pages/UserProfile.tsx` (file name mandatory), extends `authService.ts` with `getMyProfile` / `updateMyProfile` (function names mandatory), evolves the `AuthButton` from inline `[Avatar Name Sign Out]` to a dropdown menu with "My Profile" and "Sign Out", and adds the `/user-profile` route (path mandatory) to `App.tsx`. Phase 8.1 writes the Web API site settings (`Webapi/contact/enabled = true` and `Webapi/contact/fields` with the COMPLETE default field list documented in Phase 8.1 — not a subset) and a Self-scope table permission on `contact` for the Authenticated Users role. The dropdown shape becomes the new default for `AuthButton` regardless of `INCLUDE_PROFILE_PAGE` so the component is ready for future menu items.
+
+**Default field set** (the form MUST include ALL of these by default — do not reduce to just firstname/lastname):
+
+- First name (`firstname`)
+- Middle name (`middlename`)
+- Last name (`lastname`)
+- Email (`emailaddress1`)
+- Mobile phone (`mobilephone`)
+- Address line 1 (`address1_line1`)
+- City (`address1_city`)
+- State / Province (`address1_stateorprovince`)
+- Postal code (`address1_postalcode`)
+- Country (`address1_country`)
+
+All fields are optional on submit. The Web API `fields` site setting MUST include `contactid` plus all 10 fields above (lowercase). Phase 8.1 specifies the exact value verbatim.
 
 > **Prerequisite for `Yes`**: an "Authenticated Users" web role must exist (or any role with `authenticatedusersrole: true` flag). Phase 1.4 inventoried web roles — if none qualifies, warn the user that profile editing won't work until a role is assigned and offer to invoke `/create-webroles` first.
 
@@ -1641,32 +1658,68 @@ After the POST, the network panel may show the 302 Location target (e.g., the re
 
 **Conditional on `INCLUDE_PROFILE_PAGE = true`** (Phase 2.1). Skip this entire phase otherwise.
 
-Creates a `/user-profile` SPA page where signed-in users edit their contact record via the Power Pages Web API. Provider-agnostic — works for local + all external providers because it operates on the contact record after sign-in. Server-side `/profile` is reserved by Power Pages, hence the `/user-profile` route name.
+Creates a `/user-profile` SPA page where signed-in users edit their contact record via the Power Pages Web API. Provider-agnostic — works for local + all external providers because it operates on the contact record after sign-in.
+
+> **⚠ MANDATORY NAMING — do not deviate:**
+>
+> | Item | Required name | Wrong examples to AVOID |
+> |---|---|---|
+> | SPA route | `/user-profile` | ❌ `/profile` (server-reserved), `/my-profile`, `/account/profile` |
+> | Page component file | `src/pages/UserProfile.tsx` | ❌ `Profile.tsx`, `MyProfile.tsx`, `UserProfilePage.tsx` |
+> | Component export name | `UserProfile` (default export) | ❌ `Profile`, `ProfilePage` |
+> | Service function — read | `getMyProfile(contactId)` | ❌ `getOwnContact`, `getProfile`, `fetchProfile` |
+> | Service function — write | `updateMyProfile(contactId, payload)` | ❌ `patchOwnContact`, `updateProfile`, `saveProfile` |
+> | Type — contact shape | `ProfileContact` | ❌ `Contact`, `UserContact` |
+> | Type — patch payload | `ProfileUpdate` | ❌ `ContactUpdate`, `ProfilePatch` |
+>
+> Why naming matters: the file/route names are referenced by other parts of this skill (Phase 7.1 verification, Phase 8.3 summary), the auth-reference.md, and the eval scenarios. Renaming creates a broken-cross-reference cascade. The route `/profile` specifically MUST NOT be used because the Power Pages server reserves it for the legacy server-rendered profile page (`Authentication/Registration/ProfileRedirectEnabled` redirects users to `/profile` after sign-in by default — we set this to `false` to prevent the redirect, but creating a SPA route at the same path would cause conflicts).
 
 ##### 5.1.9.a Extend authService with profile functions
 
-Add to `src/services/authService.ts` (keep all related auth/profile logic in one place; reuse the existing `fetchAntiForgeryToken()` helper for the PATCH anti-forgery token):
+Add to `src/services/authService.ts` (keep all related auth/profile logic in one place; reuse the existing `fetchAntiForgeryToken()` helper for the PATCH anti-forgery token).
 
-- `ProfileContact` interface — typed contact shape with `contactid` + standard profile fields (firstname, lastname, middlename, emailaddress1, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all nullable strings
-- `ProfileUpdate` type — `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload
-- `getMyProfile(contactId)` — GETs `/_api/contacts({contactId})?$select=contactid,firstname,...,address1_country` with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object.
-- `updateMyProfile(contactId, payload)` — PATCHes `/_api/contacts({contactId})` with body containing only defined fields (skip undefined so partial updates don't blank fields). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success.
+**Use these EXACT names** — the executor MUST NOT invent shorter or differently-styled names like `patchOwnContact`, `getOwnContact`, `updateProfile`:
 
-Full reference code in `authentication-reference.md` "User Profile Page" section.
+| Required name | Kind | Description |
+|---|---|---|
+| `ProfileContact` | exported interface | Typed contact shape with `contactid` + the 10 default fields (firstname, middlename, lastname, emailaddress1, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all typed `string \| null` |
+| `ProfileUpdate` | exported type alias | `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload |
+| `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,...,address1_country` (the `$select` value MUST include all 11 fields — see Phase 8.1's MANDATORY field list for the exact comma-separated string) with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object. |
+| `updateMyProfile` | exported async function | Signature: `(contactId: string, payload: ProfileUpdate): Promise<void>`. PATCHes `/_api/contacts({contactId})` with body containing only DEFINED fields (skip `undefined` so partial updates don't blank-out unaffected columns — but DO send `null` for fields the user explicitly cleared). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success. |
+
+Full reference code in `authentication-reference.md` "User Profile Page" section. **Copy that code as-is** — do not rename functions or change signatures.
 
 ##### 5.1.9.b Create UserProfile.tsx
 
-Create `src/pages/UserProfile.tsx`:
+Create `src/pages/UserProfile.tsx` (filename mandatory, do NOT rename to `Profile.tsx`):
 
 - Read `user` and `refresh` from `useAuth()`. If `!isAuthenticated` redirect to `/login?returnUrl=/user-profile`
 - If `user.contactId` is empty or missing, show "Profile unavailable for this account. Your admin needs to set up the `RegistrationClaimsMapping` site setting for your auth provider so contacts get created with a valid ID." (handles the Entra workforce broken-claims-mapping edge case documented earlier in this skill)
 - On mount, call `getMyProfile(user.contactId)` to fetch current values. Show loading state.
-- Render a form with fields: First name, Middle name, Last name, Email, Mobile phone, Address line 1, City, State/Province, Postal code, Country — all optional, all editable
+
+**MANDATORY default field set — the form MUST include all 10 fields below**. Do NOT scope down to just firstname/lastname. The maker can remove fields later if they want, but the skill ships with the full set.
+
+| Form label | Form field `name` attr / contact column | Type | Required on submit? |
+|---|---|---|---|
+| First name | `firstname` | text | No (all optional) |
+| Middle name | `middlename` | text | No |
+| Last name | `lastname` | text | No |
+| Email | `emailaddress1` | email | No |
+| Mobile phone | `mobilephone` | tel | No |
+| Address line 1 | `address1_line1` | text | No |
+| City | `address1_city` | text | No |
+| State / Province | `address1_stateorprovince` | text | No |
+| Postal code | `address1_postalcode` | text | No |
+| Country | `address1_country` | text | No |
+
+All fields are optional. An empty string in the form is sent as `null` to the Web API (so users can clear values). The page layout groups Name fields (firstname/middlename/lastname), then Contact (email/mobile), then Address (all `address1_*` fields). Use a CSS grid with `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))` for responsive 1-2 column layout.
+
 - **Email field caveat note** — show only when `EXTERNAL_PROVIDERS.length > 0` (skill can detect this from the AUTH_PROVIDERS array): "If your site signs you in with an external provider that maps email from claims on every login, edits here may be overwritten on your next sign-in. Contact your admin to make this permanent."
 - Validate-on-blur using the existing pattern from `Login.tsx` / `Registration.tsx` (`touched` state, `validateField`, `show()` helper)
-- Field-level validation: email format if non-empty; mobile phone min 6 chars if non-empty. All fields optional — empty strings allowed and sent as `null` (so users can clear fields)
+- Field-level validation: email format if non-empty; mobile phone min 6 chars if non-empty. Other 8 fields have no format validation. All fields optional — empty strings allowed and sent as `null`.
 - Submit calls `updateMyProfile(contactId, payload)`. On success: set `successMessage` state to "Profile updated.", call `refresh()` from `useAuth()` so header avatar + name re-render. On error: show server error inline.
 - Use existing styles convention (CSS variables, card layout, max-width ~580)
+- See `authentication-reference.md` "User Profile Page" section for the complete reference implementation
 
 ##### 5.1.9.c Evolve AuthButton to dropdown
 
@@ -1685,11 +1738,17 @@ Update `src/components/AuthButton.tsx`. **Make the dropdown shape the default fo
 
 ##### 5.1.9.d Add route
 
-Add to `src/App.tsx`:
+Add to `src/App.tsx` — use **exactly this path** (`/user-profile`, NOT `/profile`):
 
 ```tsx
+import UserProfile from './pages/UserProfile'
+// ...inside <Routes>:
 <Route path="/user-profile" element={<UserProfile />} />
 ```
+
+> **⚠ DO NOT use `<Route path="/profile" ... />`.** The server reserves `/profile` for its legacy server-rendered page. Even though `ProfileRedirectEnabled` is set to `false` by this skill (which prevents the server from auto-redirecting users there after sign-in), creating a SPA route at the same path causes conflicts. Always use `/user-profile`.
+>
+> **Authentication gate**: the page itself handles the `!isAuthenticated` redirect to `/login?returnUrl=/user-profile` (see 5.1.9.b). If you have a `RequireAuth` wrapper component you prefer, you MAY use `<Route path="/user-profile" element={<RequireAuth><UserProfile /></RequireAuth>} />` — but only if the wrapper exists in the project already. Do not introduce a new `RequireAuth` component just for this page.
 
 ##### After save behavior
 
@@ -2316,6 +2375,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 When the maker opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
 
+> **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. The executor MUST NOT trim it to just `firstname,lastname`. All 11 fields must be present so the profile form can read AND write every default field:
+>
+> ```
+> contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country
+> ```
+>
+> This must match exactly the field set listed in Phase 2.1 (10 form fields + `contactid` for record identification). Skipping any field causes the corresponding form input to silently fail with a 403 from the Web API.
+
 ```powershell
 # Enable Web API on the contact table
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
@@ -2325,7 +2392,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable Web API access for contact table (profile page)" \
   --type boolean
 
-# Allowed fields — all lowercase Dataverse LogicalNames (case-sensitive — PascalCase causes 403)
+# Allowed fields — USE THE EXACT VALUE BELOW (all 11 fields, all lowercase)
+# Case-sensitive: PascalCase or Title Case produces 403 even if the column exists
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Webapi/contact/fields" \
@@ -2335,7 +2403,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 > **Field name format**: all entries in the `fields` value MUST be lowercase Dataverse LogicalNames. The Web API does case-sensitive literal matching — `FirstName` or `Firstname` will produce a 403 Forbidden response from the server even though the column exists. The list above is correct.
 >
-> **Customizing the field list**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx`. The skill ships with the OOB list only.
+> **Customizing the field list LATER**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with all 11 OOB fields above — do not pre-trim "for simplicity".
 
 #### 8.1.x Create Table Permission for Contact (When INCLUDE_PROFILE_PAGE = true)
 
