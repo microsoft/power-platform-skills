@@ -1,6 +1,6 @@
 {
   "skill_name": "genpage",
-  "eval_instructions": "See eval-runbook.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
+  "eval_instructions": "See EVAL_GUIDE.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
   "common_workflow_assertions": [
     "A workflow-log.md file is saved to the working directory documenting all phases attempted",
     "Phase 0: A working directory is created with a kebab-case name derived from the user's description",

@@ -1,19 +1,42 @@
 # Eval Guide — Model Apps `/genpage`
 
-Comprehensive guide to the `/genpage` evaluation suite. **What evals exist, how they're structured, how to run them, how to interpret results, and how to extend them.** Companion to `eval-runbook.md` (operational reference) and the plugin's `docs/architecture.md` (system overview).
+Comprehensive guide to the `/genpage` evaluation suite. **What evals exist, how they're structured, how to run them, how to interpret results, and how to extend them.** Companion to the plugin's `docs/architecture.md` (system overview).
 
 ## Table of contents
 
-1. [What we evaluate](#what-we-evaluate)
-2. [The three-layer grading model](#the-three-layer-grading-model)
-3. [Eval tiers (smoke / full / stress)](#eval-tiers)
-4. [Fixture types (synthetic vs real captures)](#fixture-types)
-5. [Running the suite](#running-the-suite)
-6. [Reading runner output (TAP)](#reading-runner-output)
-7. [Capturing real fixtures from `/genpage`](#capturing-real-fixtures)
-8. [Adding a new eval](#adding-a-new-eval)
-9. [Adding a new assertion](#adding-a-new-assertion)
-10. [Known-red fixtures and why they're allowed](#known-red-fixtures)
+1. [Related files](#related-files)
+2. [What we evaluate](#what-we-evaluate)
+3. [The three-layer grading model](#the-three-layer-grading-model)
+4. [Eval data — `evals.json` structure](#eval-data)
+5. [Eval tiers (smoke / full / stress)](#eval-tiers)
+6. [Fixture types (synthetic vs real captures)](#fixture-types)
+7. [Running the suite](#running-the-suite)
+8. [Cadence — when to run](#cadence)
+9. [Quick start — running one eval end-to-end](#quick-start)
+10. [Reading runner output (TAP)](#reading-runner-output)
+11. [Manual grep patterns (Layer 2 fallback)](#manual-grep-patterns)
+12. [Pass / fail summary](#pass-fail-summary)
+13. [Diagnosing failures (which agent owns what)](#diagnosing-failures)
+14. [Capturing real fixtures from `/genpage`](#capturing-real-fixtures)
+15. [Adding a new eval](#adding-a-new-eval)
+16. [Adding a new assertion](#adding-a-new-assertion)
+17. [Known-red fixtures and why they're allowed](#known-red-fixtures)
+
+---
+
+## Related files
+
+- **Skill definition:** `plugins/model-apps/skills/genpage/SKILL.md`
+- **Specialist agents:**
+  - `plugins/model-apps/agents/genpage-planner.md`
+  - `plugins/model-apps/agents/genpage-entity-builder.md`
+  - `plugins/model-apps/agents/genpage-page-builder.md`
+  - `plugins/model-apps/agents/genpage-edit-planner.md`
+- **References:**
+  - `plugins/model-apps/references/rules.md`
+  - `plugins/model-apps/references/plan-schema.md`
+  - `plugins/model-apps/references/troubleshooting.md`
+- **Sample pages:** `plugins/model-apps/samples/1-account-grid.tsx` through `11-kanban-with-dnd.tsx`
 
 ---
 
@@ -96,6 +119,18 @@ Plus per-eval `expectations` whose text starts with `Phase 5` (page-builder-spec
 **Pass criteria:** average score ≥ 8.5/10 across pages; no page below 7.
 
 **Not automated** — visual regression testing is a separate, expensive problem and out of scope for v2.2.
+
+---
+
+## Eval data
+
+All eval definitions live in `evals.json` alongside this file. The file contains:
+
+- `common_workflow_assertions`: 15 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log, `--prompt` scoping, prefix discipline at plan-format / resolved-names / solution-alignment).
+- `common_code_assertions`: 18 code-quality checks the generated `.tsx` must pass (Fluent UI V9 only, no forbidden patterns, etc.).
+- `evals`: 16 test cases — each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
+
+The `data` field specifies the user answers and environment state the eval assumes. During manual eval runs, the human grader role-plays this data. During automated runs, the eval harness provides these responses to `AskUserQuestion`.
 
 ---
 
@@ -229,6 +264,33 @@ Prints:
 
 ---
 
+## Cadence
+
+When to run which tier:
+
+- **Smoke tier:** on every PR that touches the skill, agents, or rules reference.
+- **Full + smoke:** nightly, or before merging a significant change.
+- **Stress tier:** with the full suite, or when changing the orchestrator probe logic, filename validation, or plan-mode handling.
+- **All tiers:** before bumping the plugin version (any 2.x.0 release).
+
+---
+
+## Quick start
+
+Example using eval id 1 (account gallery) — manual fixture capture if you don't have one yet:
+
+1. Open Claude Code with the `model-apps` plugin loaded.
+2. Send:
+   > /genpage Build a page showing Account records as a gallery of cards. Include name, website, email, phone number. Make the gallery scrollable and each card clickable to open the Account record.
+3. As the planner asks questions, answer per the eval's `data.question_answers` field.
+4. When the planner enters plan mode, approve it (or reject per the stress eval's `plan_revision_scenario`).
+5. Save the generated `workflow-log.md`, `genpage-plan.md`, and the produced `.tsx` files into a new `fixtures/1-<slug>/` folder. Use `scripts/capture-fixture.js` for this — it skips Phase 0.5 scaffolding automatically.
+6. **Layer 1 check:** `node run-layer-1.js --eval 1` grades the workflow-log + plan.
+7. **Layer 2 check:** `node run-layer-2.js --eval 1` grades the `.tsx`.
+8. **Layer 3 check:** Open the deployed page in the browser and score it against the UX rubric (manual).
+
+---
+
 ## Reading runner output
 
 The runners emit TAP v13. Each fixture is a subtest; each assertion is one `ok` / `not ok` line.
@@ -274,6 +336,56 @@ Read this output as:
 1. `no Dataverse files / no <feature> detected` — the fixture doesn't exercise this code path
 2. `requires AST analysis (not implemented)` — assertion needs more than regex; left as manual check until a parser-based implementation lands
 3. `no check registered for this expectation` — the assertion text in `evals.json` doesn't have a corresponding check in the runner library. Either add the check or accept the skip as documentation-only.
+
+---
+
+## Manual grep patterns
+
+For ad-hoc verification or assertions the Layer 2 runner currently skips, grep the source directly. Useful when you don't have a fixture yet or want to spot-check a single file before capturing.
+
+| Assertion | Grep pattern |
+|-----------|--------------|
+| Single file + default export | `^export default GeneratedComponent` |
+| Destructures `pageInput` | `const.*\{.*pageInput.*\}.*=.*props` |
+| Uses `makeStyles` | `makeStyles` |
+| No `100vh`/`100vw` | `grep -E '100v[hw]'` should return nothing |
+| No forbidden theme functions | `grep -E '(createTheme\|mergeThemes\|useTheme)'` should return nothing |
+| No `<FluentProvider>` wrapper | `grep '<FluentProvider'` should return nothing (except in Dark Mode Toggle pattern) |
+| No raw URL navigation | `grep -E '(window\.location\|href=.*pagetype=)'` should return nothing |
+| `Xrm.Navigation.navigateTo` | If navigation is used, must appear (literal or via `xrm?.Navigation?.navigateTo` alias) |
+| Unsized icons | `grep -E '\w+(16\|20\|24\|28\|32)(Regular\|Filled)\b'` should return nothing |
+| try-catch on dataApi | Each `await dataApi\.` must be inside a try block |
+| No placeholders | `grep -E '(TODO\|FIXME\|\.\.\..*$)'` should not match in function bodies |
+| FormattedValue for lookups | Any `_xxx_value` in a select must be paired with a FormattedValue access |
+| `createTableColumn` import | If `<DataGrid>` is used, must import `createTableColumn` |
+
+---
+
+## Pass / fail summary
+
+An eval run passes when:
+
+- **Layer 1:** 100% of workflow assertions pass
+- **Layer 2:** 100% of code assertions pass on every `.tsx`
+- **Layer 3:** average UX score ≥ 8.5, no page below 7
+
+An eval run fails if any layer's criteria isn't met. Skipped assertions never count as failures — they're either inapplicable to the fixture or pending AST-based implementation.
+
+---
+
+## Diagnosing failures
+
+When the runner reports a `not ok`, file the issue against the agent that owns the concern:
+
+| Failure type | Likely owner |
+|--------------|--------------|
+| Missed agent invocation, wrong phase order | Orchestrator (`SKILL.md`) |
+| Plan document missing sections or wrong structure | `genpage-planner.md` or `plan-schema.md` |
+| Entity created in wrong order or missing columns | `genpage-entity-builder.md` |
+| Generated code violates a `common_code_assertion` | `genpage-page-builder.md` or `rules.md` |
+| Edit modified the wrong thing or broke existing behavior | `genpage-edit-planner.md` or orchestrator edit flow |
+
+Use the failure's `reason` field (in the TAP YAML block) to find the offending file and pattern; cross-reference with the agent file to identify which rule the agent diverged from.
 
 ---
 

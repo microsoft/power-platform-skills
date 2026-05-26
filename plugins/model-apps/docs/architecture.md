@@ -190,4 +190,4 @@ Layer 1 (`run-layer-1.js`) and Layer 2 (`run-layer-2.js`) emit TAP v13. Both
 runners are stateless — they read fixtures, grep + structural-check, write
 results. CI can run both in seconds. Layer 3 (UX rubric) stays manual.
 
-See `evals/model-apps/genpage/eval-runbook.md` for the full grading flow.
+See `evals/model-apps/genpage/EVAL_GUIDE.md` for the full grading flow.

@@ -142,10 +142,8 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
 
 - **Comprehensive guide:** `evals/model-apps/genpage/EVAL_GUIDE.md` — what
   we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
-  (synthetic vs real captures), runner output, capture flow, adding evals
-  and assertions.
-- **Operational runbook:** `evals/model-apps/genpage/eval-runbook.md` —
-  step-by-step procedure for running the suite end-to-end.
+  (synthetic vs real captures), runner output, capture flow, cadence,
+  diagnosing failures, adding evals and assertions.
 - **Eval definitions:** `evals/model-apps/genpage/evals.json` — 16 evals
   with prompts, answers, and expectations.
 - **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —

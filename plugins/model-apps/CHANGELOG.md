@@ -29,7 +29,7 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Tests
-- 200 passing across `scripts/tests/` + `evals/.../tests/`.
+- 210 passing across `scripts/tests/` + `evals/.../tests/`.
 
 ## 2.1.0 — 2026-05-13
 
