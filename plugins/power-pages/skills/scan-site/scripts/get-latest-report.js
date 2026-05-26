@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`get-latest-report.js — Fetches the latest completed deep-scan report.
+const REQUEST_TIMEOUT_MS = 240_000; // 4 min — report fetch can be slow when alerts are numerous.
+
+const HELP = `get-latest-report.js — Fetches the latest completed deep-scan report.
 
 Usage:
   node get-latest-report.js --portalId <portal-id>
@@ -19,18 +26,19 @@ Exit codes:
 
 Example:
   node get-latest-report.js --portalId <portal-id>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-if (!portalId) {
-  fail('Usage: node get-latest-report.js --portalId <portal-id>', 1);
-}
+  const { portalId } = parseCliArgs(process.argv);
+  if (!portalId) {
+    fail('Usage: node get-latest-report.js --portalId <portal-id>', 1);
+  }
 
-(async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
@@ -38,16 +46,20 @@ if (!portalId) {
     context: ctx,
     method: 'GET',
     path: `/websites/${portalId}/scan/deep/getLatestCompletedReport`,
-    timeout: 240_000, // 4 min — report fetch can be slow when alerts are numerous
+    timeout: REQUEST_TIMEOUT_MS,
   });
 
-  // 204 No Content with Z003 means a scan is in progress and no completed report exists yet.
+  // 204 means a scan is in progress and no completed report exists yet.
   if (res.statusCode === 204) {
     process.stdout.write(JSON.stringify({ status: 'empty' }) + '\n');
     return;
   }
 
-  if (!res.ok) fail(`Get latest report failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  if (!res.ok) {
+    fail(`Get latest report failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  }
 
   process.stdout.write(JSON.stringify({ status: 'ok', body: res.body || {} }) + '\n');
-})();
+}
+
+runCli(module, main);

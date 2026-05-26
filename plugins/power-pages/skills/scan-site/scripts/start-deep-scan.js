@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`start-deep-scan.js — Triggers an asynchronous deep scan.
+const HELP = `start-deep-scan.js — Triggers an asynchronous deep scan.
 
 Usage:
   node start-deep-scan.js --portalId <portal-id>
@@ -19,18 +24,19 @@ Exit codes:
 
 Example:
   node start-deep-scan.js --portalId <portal-id>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-if (!portalId) {
-  fail('Usage: node start-deep-scan.js --portalId <portal-id>', 1);
-}
+  const { portalId } = parseCliArgs(process.argv);
+  if (!portalId) {
+    fail('Usage: node start-deep-scan.js --portalId <portal-id>', 1);
+  }
 
-(async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
@@ -40,15 +46,16 @@ if (!portalId) {
     path: `/websites/${portalId}/scan/deep/start`,
   });
 
-  // 202 Accepted = scan started; service runs it asynchronously.
   if (res.statusCode === 202) {
     process.stdout.write(JSON.stringify({ status: 'started' }) + '\n');
     return;
   }
-  // 204 No Content or 400/Z003 = a scan is already running; treat as success.
+  // 204 / 400+Z003 both mean a scan is already in flight.
   if (res.statusCode === 204 || (res.statusCode === 400 && res.error?.code === 'Z003')) {
     process.stdout.write(JSON.stringify({ status: 'already-running' }) + '\n');
     return;
   }
   fail(`Start deep scan failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
-})();
+}
+
+runCli(module, main);

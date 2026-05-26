@@ -59,7 +59,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" 
 { "status": "missing-settings", "findings": [], "details": {} }
 ```
 
-Each finding has the inventory shape `{ id, title, tag, details, fix? }` — no `severity` (the section is informational; the orchestrator does not roll these up into severity totals). `title` and `tag` are the site-setting name (e.g., `HTTP/X-Frame-Options`); `details` contains the agent-supplied description (when annotations were passed) followed by the current value. `fix` is present only when the annotations file supplied one for that header.
+Each finding has the inventory shape `{ id, title, details, fix? }` — no `severity` and no `tag` (the section is informational; the orchestrator does not roll these up into severity totals, and the header name already appears as the `title`). `details` contains the agent-supplied description (when annotations were passed) followed by the current value. `fix` is present only when the annotations file supplied one for that header.
 
 ### Exit codes
 

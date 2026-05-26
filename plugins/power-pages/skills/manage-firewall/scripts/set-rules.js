@@ -1,9 +1,20 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  hasErrorCode,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`set-rules.js — Creates or updates specific firewall rules.
+// Service rejects rule names with hyphens, underscores, dots, or spaces (B021).
+// Enforce locally so callers get a clear local error before the round-trip.
+const RULE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
+const REQUEST_TIMEOUT_MS = 240_000; // 4 min — rule creation exceeds the 15s default.
+
+const HELP = `set-rules.js — Creates or updates specific firewall rules.
 Only include the rules being added or modified; existing rules not in the payload are preserved.
 
 Usage:
@@ -22,35 +33,49 @@ Exit codes:
 
 Example:
   node set-rules.js --portalId <portal-id> --data-inline '<json-payload>'
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
-const dataInline = args['data-inline'] || args.dataInline;
-
-if (!portalId || !dataInline) {
-  fail('Usage: node set-rules.js --portalId <portal-id> --data-inline \'<json-payload>\'', 1);
-}
-
-let payload;
-try {
-  payload = JSON.parse(dataInline);
-} catch (err) {
-  fail(`Failed to parse JSON: ${err.message}`, 1);
-}
-
-const RULE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
-if (Array.isArray(payload.CustomRules)) {
+function validateRuleNames(payload) {
+  if (!Array.isArray(payload.CustomRules)) return;
   for (const rule of payload.CustomRules) {
     if (rule.name && !RULE_NAME_RE.test(rule.name)) {
-      fail(`Invalid rule name "${rule.name}": must start with a letter and contain only letters and numbers.`, 1);
+      fail(
+        `Invalid rule name "${rule.name}": must start with a letter and ` +
+          'contain only letters and numbers.',
+        1
+      );
     }
   }
 }
 
-(async () => {
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
+
+  const args = parseCliArgs(process.argv);
+  const portalId = args.portalId;
+  const dataInline = args['data-inline'] || args.dataInline;
+
+  if (!portalId || !dataInline) {
+    fail(
+      "Usage: node set-rules.js --portalId <portal-id> --data-inline '<json-payload>'",
+      1
+    );
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(dataInline);
+  } catch (err) {
+    fail(`Failed to parse JSON: ${err.message}`, 1);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    fail('--data-inline must be a JSON object containing CustomRules and/or ManagedRules.', 1);
+  }
+  validateRuleNames(payload);
+
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
@@ -59,13 +84,17 @@ if (Array.isArray(payload.CustomRules)) {
     method: 'PUT',
     path: `/websites/${portalId}/createWafRules`,
     body: payload,
-    timeout: 240_000, // 4 min — rule creation can take longer than the default 15s
+    timeout: REQUEST_TIMEOUT_MS,
   });
 
-  if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023')) {
+  if (hasErrorCode(res, 'B022', 'B023')) {
     fail(`Firewall not available: ${res.error?.message || ''}`, 4);
   }
-  if (!res.ok) fail(`Set firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  if (!res.ok) {
+    fail(`Set firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  }
 
   process.stdout.write(JSON.stringify({ status: 'ok', body: res.body }) + '\n');
-})();
+}
+
+runCli(module, main);

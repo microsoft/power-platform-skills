@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 
-// Shared client for the Power Platform API used by Power Pages operations
-// (security scans, firewall, etc.).
-//
-// Resolves auth/tenant/environment context from the local PAC + Azure CLI
-// state and issues HTTP requests with consistent error handling and
-// asynchronous-operation polling.
+// Shared client for Power Pages operations against the Power Platform API.
+// Resolves auth/tenant/environment context from local PAC + Azure CLI state
+// and issues HTTP requests with consistent error handling and async polling.
 
 const { execSync } = require('child_process');
 const {
@@ -15,18 +12,19 @@ const {
   CLOUD_TO_API,
 } = require('./validation-helpers');
 
-// Default polling cap for asynchronous operations. Surfaced as a flag rather
-// than embedded silently because long scans may legitimately exceed it.
 const DEFAULT_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
+const AZ_TIMEOUT_MS = 15_000;
+const API_VERSION = '2022-03-01-preview';
 
 function getTenantId() {
-  // The Power Platform CLI does not expose tenant id directly; read it from
-  // the active Azure CLI account, which shares the same identity in practice.
+  // PAC CLI does not expose tenant id; pull it from Azure CLI which shares
+  // the same identity. stdio settings suppress az's stderr noise on logout.
   try {
     const out = execSync('az account show --query tenantId -o tsv', {
       encoding: 'utf8',
-      timeout: 15000,
+      timeout: AZ_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     return out || null;
   } catch {
@@ -86,7 +84,7 @@ async function request({ context, method, path, query, body, extraHeaders, timeo
   if (!context || !context.baseUrl) throw new Error('context is required');
   if (!path.startsWith('/')) throw new Error('path must start with /');
 
-  const mergedQuery = { 'api-version': '2022-03-01-preview', ...query };
+  const mergedQuery = { 'api-version': API_VERSION, ...query };
   const url = `${context.baseUrl}${path}${buildQuery(mergedQuery)}`;
   const headers = {
     Authorization: `Bearer ${context.token}`,
@@ -104,9 +102,22 @@ async function request({ context, method, path, query, body, extraHeaders, timeo
     }
   }
 
-  const res = await makeRequest({ url, method, headers, body: payload, includeHeaders: true, ...(timeout != null && { timeout }) });
+  const res = await makeRequest({
+    url,
+    method,
+    headers,
+    body: payload,
+    includeHeaders: true,
+    ...(timeout != null && { timeout }),
+  });
   if (res.error) {
-    return { ok: false, statusCode: 0, body: null, headers: {}, error: { code: 'NetworkError', message: res.error } };
+    return {
+      ok: false,
+      statusCode: 0,
+      body: null,
+      headers: {},
+      error: { code: 'NetworkError', message: res.error },
+    };
   }
 
   const parsedBody = parseBody(res.body, res.headers || {});
@@ -119,8 +130,13 @@ async function request({ context, method, path, query, body, extraHeaders, timeo
 function parseBody(raw, headers) {
   if (!raw) return null;
   const ct = (headers['content-type'] || headers['Content-Type'] || '').toLowerCase();
-  if (ct.includes('application/json') || /^[\[{]/.test(raw.trim())) {
-    try { return JSON.parse(raw); } catch { /* fall through */ }
+  const first = typeof raw === 'string' ? raw.trimStart()[0] : '';
+  if (ct.includes('application/json') || first === '{' || first === '[') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Fall through and return the raw string.
+    }
   }
   return raw;
 }
@@ -135,20 +151,26 @@ function extractError(body, statusCode) {
   return { code: `HTTP_${statusCode}`, message: '' };
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Polls a status endpoint until a predicate returns truthy or timeout elapses.
  *
  * @param {object} options
  * @param {function} options.fetchStatus - async () => { ok, body }
- * @param {function} options.isDone      - (body) => boolean | { value }
+ * @param {function} options.isDone      - (body) => boolean
  * @param {number} [options.timeoutMs]
  * @param {number} [options.intervalMs]
  * @returns {Promise<{ ok: boolean, body?: any, error?: string, attempts: number }>}
  */
-async function pollUntil({ fetchStatus, isDone, timeoutMs = DEFAULT_POLL_TIMEOUT_MS, intervalMs = DEFAULT_POLL_INTERVAL_MS }) {
+async function pollUntil({
+  fetchStatus,
+  isDone,
+  timeoutMs = DEFAULT_POLL_TIMEOUT_MS,
+  intervalMs = DEFAULT_POLL_INTERVAL_MS,
+}) {
   const deadline = Date.now() + timeoutMs;
   let attempts = 0;
-  // First attempt is immediate; subsequent attempts wait `intervalMs`.
   while (Date.now() < deadline) {
     attempts += 1;
     const status = await fetchStatus();
@@ -162,8 +184,6 @@ async function pollUntil({ fetchStatus, isDone, timeoutMs = DEFAULT_POLL_TIMEOUT
   }
   return { ok: false, error: 'timeout', attempts };
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseCliArgs(argv) {
   const out = {};
@@ -191,13 +211,59 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
+/**
+ * Returns true when the response carries one of the given error codes. Power
+ * Platform error codes are unique per scenario (B022/B023 = 400, B003 = 409,
+ * etc.), so the helper does not constrain status.
+ */
+function hasErrorCode(res, ...codes) {
+  return codes.includes(res.error?.code);
+}
+
+/**
+ * Returns true when the response indicates the feature is not supported for
+ * this site (region restriction, trial site, etc.). Recognizes the documented
+ * error codes plus a "not supported" fallback in the message.
+ */
+function isFeatureUnsupported(res, ...codes) {
+  if (hasErrorCode(res, ...codes)) return true;
+  return res.statusCode === 400 && /not supported/i.test(res.error?.message || '');
+}
+
+/**
+ * Parses --timeoutMinutes (or any positive-integer-minute flag) into milliseconds.
+ * Calls `fail()` on non-finite or non-positive values.
+ */
+function parseTimeoutMs(value, defaultMinutes) {
+  const minutes = value === undefined ? defaultMinutes : Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    fail(`Invalid --timeoutMinutes value "${value}". Must be a positive number.`, 1);
+  }
+  return minutes * 60 * 1000;
+}
+
+/**
+ * Wraps an async `main` for CLI scripts. Caller passes its own `module` so the
+ * gate fires only when the script is executed directly, not when required.
+ */
+function runCli(callerModule, mainFn) {
+  if (require.main !== callerModule) return;
+  Promise.resolve()
+    .then(mainFn)
+    .catch((err) => fail(err?.message || String(err), 1));
+}
+
 module.exports = {
   resolveContext,
   request,
   pollUntil,
   parseCliArgs,
+  parseTimeoutMs,
   emitJson,
   fail,
+  hasErrorCode,
+  isFeatureUnsupported,
+  runCli,
   DEFAULT_POLL_TIMEOUT_MS,
   DEFAULT_POLL_INTERVAL_MS,
 };

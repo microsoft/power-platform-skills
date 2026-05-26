@@ -1,8 +1,8 @@
 # Conversation beats
 
-Rationale and example phrasing for phases 2–6 of the `security-review` skill. SKILL.md owns the executable workflow; this file explains *why* each user-facing beat looks the way it does so future edits stay consistent.
+Rationale and example phrasing for phases 2–5 of the `security-review` skill. SKILL.md owns the executable workflow; this file explains *why* each user-facing beat looks the way it does so future edits stay consistent.
 
-Phases 1 (prerequisites) and 7 (cleanup) are silent — no conversation beat.
+Phases 1 (prerequisites) and 6 (cleanup) are silent — no conversation beat.
 
 ## Phase 2 — Ask the goal
 
@@ -18,27 +18,20 @@ Authentication and authorization checks (**Access & Data Security Validation**) 
 
 Why not start by asking the user which skills to run? Because most users — including engineers — do not know the skill names yet, and listing them upfront reads as menu-driven interrogation. Ask the *outcome* the user wants and let the skill pick the right skills.
 
-## Phase 3 — Confirm and start
+Why no follow-up "are you sure?" prompt? Because the user just answered that question by picking a goal — asking again is friction without information. Surface any duration caveats inside the in-progress status line in phase 3 instead.
 
-Show a one-line plan in plain language and an explicit time estimate. Examples:
+## Phase 3 — Scan in progress
 
-- "I will check your authentication, web roles, and table permissions. This should be quick."
-- "I will scan your live site's public pages. This may take several minutes. You can keep working while it runs."
+Skills run as **parallel subagents launched in one batch** (see SKILL.md § 3.1). Open with a single line that names the slow check up front, then post a short progress line as each subagent completes. Examples:
 
-Confirmation matters because some skills are long-running. Surprising the user with an unexpectedly long wait is the fastest way to lose trust.
-
-## Phase 4 — Scan in progress
-
-Skills run as **parallel subagents launched in one batch** (see SKILL.md § 4.1). The user sees one progress line when each subagent completes. Examples:
-
-- "All checks are running now…"
+- "Starting checks — the live site scan can take several minutes. You can keep working while it runs."
 - "Permissions check finished — 1 important issue, 2 smaller ones."
 - "Live site scan finished — no critical issues found."
 - "All checks are complete."
 
 Do not narrate per-rule progress. Do not list every file scanned. The user wants reassurance, not telemetry.
 
-## Phase 5 — Results summary and findings
+## Phase 4 — Results summary and findings
 
 After all subagents complete, the skill builds the consolidated HTML and shows, in chat:
 
@@ -48,7 +41,7 @@ After all subagents complete, the skill builds the consolidated HTML and shows, 
 
 Put detail in the report, not in the chat. The HTML carries the per-section findings cards (title, severity, location, why this matters, suggested fix); the chat just orients the user.
 
-## Phase 6 — Next steps and guidance
+## Phase 5 — Next steps and guidance
 
 After the user has had a moment with the report, offer the next action with one `AskUserQuestion`: walk through the criticals now, re-run after changes, or stop here. Pick the option list to match the current state — if there are zero criticals, the offer to "walk through criticals" is not the first option.
 

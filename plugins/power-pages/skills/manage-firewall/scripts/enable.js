@@ -1,16 +1,27 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, pollUntil, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  pollUntil,
+  parseCliArgs,
+  parseTimeoutMs,
+  fail,
+  hasErrorCode,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`enable.js — Turns on the web application firewall for a site.
+const DEFAULT_TIMEOUT_MIN = 15;
+const POLL_INTERVAL_MS = 30_000;
+
+const HELP = `enable.js — Turns on the web application firewall for a site.
 
 Usage:
   node enable.js --portalId <portal-id> [--timeoutMinutes <n>]
 
 Flags:
   --portalId         Power Platform API portal identifier (resolved during prerequisites)
-  --timeoutMinutes   Maximum wait time (default: 15)
+  --timeoutMinutes   Maximum wait time (default: ${DEFAULT_TIMEOUT_MIN})
   --help             Show this help message
 
 Exit codes:
@@ -23,28 +34,34 @@ Exit codes:
 Example:
   node enable.js --portalId <portal-id>
   node enable.js --portalId <portal-id> --timeoutMinutes <minutes>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
-// 15 min default — WAF enable typically completes in 5-10 min; 15 allows headroom
-const timeoutMs = (parseInt(args.timeoutMinutes || '15', 10)) * 60 * 1000;
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-if (!portalId) {
-  fail('Usage: node enable.js --portalId <portal-id> [--timeoutMinutes <n>]', 1);
-}
+  const args = parseCliArgs(process.argv);
+  const { portalId } = args;
+  if (!portalId) {
+    fail('Usage: node enable.js --portalId <portal-id> [--timeoutMinutes <n>]', 1);
+  }
+  const timeoutMs = parseTimeoutMs(args.timeoutMinutes, DEFAULT_TIMEOUT_MIN);
 
-(async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
-  const start = await request({ context: ctx, method: 'POST', path: `/websites/${portalId}/enableWaf` });
-  if (start.statusCode === 400 && (start.error?.code === 'B022' || start.error?.code === 'B023')) {
+  const start = await request({
+    context: ctx,
+    method: 'POST',
+    path: `/websites/${portalId}/enableWaf`,
+  });
+  if (hasErrorCode(start, 'B022', 'B023')) {
     fail(`Firewall not available for this site: ${start.error?.message || ''}`, 4);
   }
-  if (start.statusCode === 409 && start.error?.code === 'B003') {
+  if (hasErrorCode(start, 'B003')) {
+    // 409/B003 = a sibling enable/disable is mid-flight; observing its outcome is idempotent.
     process.stderr.write('A firewall change is already in progress; will wait for it to settle.\n');
   } else if (start.statusCode !== 202) {
     fail(`Enable firewall failed (${start.statusCode}): ${start.error?.message || ''}`, 1);
@@ -52,21 +69,34 @@ if (!portalId) {
 
   const poll = await pollUntil({
     fetchStatus: async () => {
-      const r = await request({ context: ctx, method: 'GET', path: `/websites/${portalId}/getWafStatus` });
+      const r = await request({
+        context: ctx,
+        method: 'GET',
+        path: `/websites/${portalId}/getWafStatus`,
+      });
       if (!r.ok) return { ok: false, error: r.error?.message || `${r.statusCode}` };
-      const value = typeof r.body === 'string' ? r.body : (r.body?.status ?? r.body);
-      const lowered = String(value || '').toLowerCase();
-      if (lowered === 'failed') {
+      const raw = typeof r.body === 'string' ? r.body : r.body?.status;
+      const status = String(raw || '').toLowerCase();
+      // Two terminal states: "created" (success) and "failed" (permanent error).
+      // Anything else is intermediate; keep polling.
+      if (status === 'failed') {
         return { ok: false, error: 'enable operation reached the "Failed" terminal state' };
       }
-      return { ok: true, body: lowered };
+      return { ok: true, body: status };
     },
     isDone: (status) => status === 'created',
     timeoutMs,
-    intervalMs: 30_000, // 30s between polls — balances API load vs responsiveness
+    intervalMs: POLL_INTERVAL_MS,
   });
 
-  if (!poll.ok && poll.error === 'timeout') fail('Enable did not complete before timeout.', 3);
+  if (!poll.ok && poll.error === 'timeout') {
+    fail('Enable did not complete before timeout.', 3);
+  }
   if (!poll.ok) fail(`Polling failed: ${poll.error}`, 1);
-  process.stdout.write(JSON.stringify({ status: 'enabled', attempts: poll.attempts }) + '\n');
-})();
+
+  process.stdout.write(
+    JSON.stringify({ status: 'enabled', attempts: poll.attempts }) + '\n'
+  );
+}
+
+runCli(module, main);

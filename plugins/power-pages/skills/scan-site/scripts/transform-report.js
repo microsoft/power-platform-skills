@@ -1,13 +1,39 @@
 #!/usr/bin/env node
-// Fetches (or reads) a deep-scan report and emits unified section findings.
-// Strict to the documented response shape — no fallbacks for unseen variants.
-// Run with --help for flags.
 
 const fs = require('fs');
-const path = require('path');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`transform-report.js — Transforms a deep-scan report into findings JSON.
+const REQUEST_TIMEOUT_MS = 240_000; // 4 min — report fetch is slow with many alerts.
+
+// Risk → severity per scan-reference.md "Severity mapping".
+const RISK_TO_BUCKET = {
+  3: 'critical',
+  2: 'warning',
+  1: 'warning',
+  0: 'info',
+};
+
+const RULE_STATUS_BUCKET = {
+  RulePassed: 'pass',
+  RuleNotRun: 'warning',
+  RuleTimedOut: 'warning',
+  RuleFailed: 'warning', // only reachable when RuleFailed has zero alerts.
+};
+
+const RULE_STATUS_DETAILS = {
+  RulePassed: 'Rule ran and produced no alerts.',
+  RuleTimedOut: 'Rule started but did not finish within the time budget.',
+  RuleNotRun: 'Rule did not run for this site.',
+  RuleFailed: 'Rule reported a failure with no alerts attached — verify the scan report.',
+};
+
+const HELP = `transform-report.js — Transforms a deep-scan report into findings JSON.
 
 Usage:
   node transform-report.js --portalId <portal-id>
@@ -19,190 +45,182 @@ Flags:
   --help        Show this help message
 
 Exit codes:
-  0  Success (status "ok" or "empty")
+  0  Success (status "ok", "empty", or "malformed")
   2  Sign-in required (only --portalId)
   1  Other failure
 
 Examples:
   node transform-report.js --portalId <portal-id>
   node transform-report.js --reportFile <report-file>
-`);
-  process.exit(0);
-}
+`;
 
-function getArg(name, fallback = null) {
-  const idx = process.argv.indexOf('--' + name);
-  return idx !== -1 && idx + 1 < process.argv.length ? process.argv[idx + 1] : fallback;
-}
-
-// Cleans an API timestamp: "2026-05-14T05:35:57.0236778Z" → "2026-05-14 05:35:57 UTC".
-// Drops the T separator and fractional seconds, then appends the timezone label.
-// The deep-scan API returns UTC (the Z marker on EndTime confirms this); StartTime sometimes
-// arrives without the Z but represents the same UTC clock — always label UTC.
-// Returns "unknown" for missing/malformed timestamps so the HTML never renders the
-// literal string "undefined".
+// API timestamps arrive as "2026-05-14T05:35:57.0236778Z"; render as
+// "2026-05-14 05:35:57 UTC". Returns "unknown" for missing values so the HTML
+// never displays the literal string "undefined".
 function formatTimestamp(iso) {
   if (iso == null) return 'unknown';
   const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
   return match ? `${match[1]} ${match[2]} UTC` : String(iso);
 }
 
-// String coercion for envelope numeric fields. Returns "—" when the field is missing
-// rather than the literal "undefined" or "null" you'd get from String().
-function safeNum(value) {
+function formatNumOrDash(value) {
   return value == null ? '—' : String(value);
 }
 
-// Risk → severity, mirroring Power Pages Studio classification (per scan-reference.md).
-const RISK_TO_BUCKET = {
-  3: 'critical',
-  2: 'warning',
-  1: 'warning',
-  0: 'info',
-};
-
-const RULE_STATUS_TO_BUCKET = {
-  RulePassed: 'pass',
-  RuleNotRun: 'warning',
-  RuleTimedOut: 'warning',
-};
-
-// Report body shape (per zap-scan1.json sample):
-//   { TotalRuleCount, FailedRuleCount, TotalAlertCount, UserName, StartTime, EndTime,
-//     Rules: [ { RuleId, RuleName, RuleStatus, AlertsCount, Alerts: [ { AlertId, AlertName, Description, Mitigation, Risk, RuleId, LearnMoreLink } ] } ] }
-//
-// One finding per rule — the report finding count matches TotalRuleCount. For RuleFailed,
-// the rule's alerts are aggregated into the finding's details and fix.
-function transform(reportBody) {
-  const findings = [];
-  let counter = 1;
-
-  if (!reportBody || !Array.isArray(reportBody.Rules)) {
-    process.stderr.write('transform-report.js: report body missing "Rules" array — emitting "malformed" status.\n');
-    return {
-      status: 'malformed',
-      findings: [{
+function malformedReport() {
+  process.stderr.write(
+    'transform-report.js: report body missing "Rules" array — emitting "malformed" status.\n'
+  );
+  return {
+    status: 'malformed',
+    findings: [
+      {
         id: 'scan-site-malformed',
         severity: 'warning',
         title: 'Scan report could not be parsed',
-        details: 'The deep-scan API returned a response without the expected "Rules" array. Re-run the scan; if the problem persists, contact support.',
-      }],
-      details: {},
-    };
+        details:
+          'The deep-scan API returned a response without the expected "Rules" array. ' +
+          'Re-run the scan; if the problem persists, contact support.',
+      },
+    ],
+    details: {},
+  };
+}
+
+function failedRuleFinding(rule, alerts, id) {
+  // Alerts with missing/invalid Risk are filtered before Math.max so worstRisk is
+  // never NaN. Per scan-reference.md, missing risk → "warning".
+  const validRisks = alerts.map((a) => a.Risk).filter((r) => RISK_TO_BUCKET[r] !== undefined);
+  const worstRisk = validRisks.length > 0 ? Math.max(...validRisks) : null;
+  const severity = worstRisk !== null ? RISK_TO_BUCKET[worstRisk] : 'warning';
+
+  const description = alerts[0]?.Description || 'No description provided.';
+  const alertList = alerts.map((a) => `- ${a?.AlertName || '(unnamed alert)'}`).join('\n');
+  const mitigations = alerts
+    .map(
+      (a) =>
+        `- ${a?.AlertName || '(unnamed alert)'}: ${a?.Mitigation || 'No mitigation provided.'}`
+    )
+    .join('\n');
+  const learnMore = alerts
+    .flatMap((a) => a?.LearnMoreLink || [])
+    .filter((url, i, arr) => arr.indexOf(url) === i);
+
+  const count = alerts.length;
+  return {
+    id,
+    severity,
+    title: rule.RuleName,
+    tag: rule.RuleId,
+    location: learnMore[0] ?? null,
+    details: `${description}\n\n${count} alert${count === 1 ? '' : 's'}:\n${alertList}`,
+    fix: mitigations,
+  };
+}
+
+function passthroughRuleFinding(rule, id) {
+  const severity = RULE_STATUS_BUCKET[rule.RuleStatus] || 'warning';
+  const details =
+    RULE_STATUS_DETAILS[rule.RuleStatus] ||
+    `Rule reported an unrecognized status "${rule.RuleStatus}" — verify the scan report.`;
+  return { id, severity, title: rule.RuleName, tag: rule.RuleId, details };
+}
+
+function transform(reportBody) {
+  if (!reportBody || !Array.isArray(reportBody.Rules)) {
+    return malformedReport();
   }
+
+  const findings = [];
+  let counter = 1;
 
   for (const rule of reportBody.Rules) {
     const alerts = Array.isArray(rule.Alerts) ? rule.Alerts : [];
+    const id = `scan-site-${counter++}`;
     if (rule.RuleStatus === 'RuleFailed' && alerts.length > 0) {
-      // Severity = worst severity across alerts. Risk 3 > 2 > 1 > 0.
-      // Alerts with missing/invalid Risk are filtered out before Math.max so the result
-      // is never NaN; scan-reference.md § "Severity mapping" documents "missing → warning",
-      // applied via the `?? 'warning'` fallback below.
-      const validRisks = alerts.map(a => a.Risk).filter(r => RISK_TO_BUCKET[r] !== undefined);
-      const worstRisk = validRisks.length > 0 ? Math.max(...validRisks) : null;
-      const sharedDescription = alerts[0].Description || 'No description provided.';
-      const alertList = alerts.map(a => `- ${a.AlertName || '(unnamed alert)'}`).join('\n');
-      const mitigations = alerts.map(a => `- ${a.AlertName || '(unnamed alert)'}: ${a.Mitigation || 'No mitigation provided.'}`).join('\n');
-      const learnMore = alerts
-        .flatMap(a => a.LearnMoreLink || [])
-        .filter((url, i, arr) => arr.indexOf(url) === i);
-
-      findings.push({
-        id: `scan-site-${counter++}`,
-        severity: worstRisk !== null ? RISK_TO_BUCKET[worstRisk] : 'warning',
-        title: rule.RuleName,
-        tag: rule.RuleId,
-        location: learnMore.length > 0 ? learnMore[0] : null,
-        details: `${sharedDescription}\n\n${alerts.length} alert${alerts.length === 1 ? '' : 's'}:\n${alertList}`,
-        fix: mitigations,
-      });
+      findings.push(failedRuleFinding(rule, alerts, id));
     } else {
-      // RuleFailed with no alerts, or any unknown RuleStatus, defaults to warning so it
-      // surfaces for investigation rather than disappearing with undefined severity.
-      const severity = rule.RuleStatus === 'RulePassed'
-        ? 'pass'
-        : RULE_STATUS_TO_BUCKET[rule.RuleStatus] || 'warning';
-      const details = rule.RuleStatus === 'RulePassed'
-        ? 'Rule ran and produced no alerts.'
-        : rule.RuleStatus === 'RuleTimedOut'
-          ? 'Rule started but did not finish within the time budget.'
-          : rule.RuleStatus === 'RuleNotRun'
-            ? 'Rule did not run for this site.'
-            : rule.RuleStatus === 'RuleFailed'
-              ? 'Rule reported a failure with no alerts attached — verify the scan report.'
-              : `Rule reported an unrecognized status "${rule.RuleStatus}" — verify the scan report.`;
-      findings.push({
-        id: `scan-site-${counter++}`,
-        severity,
-        title: rule.RuleName,
-        tag: rule.RuleId,
-        details,
-      });
+      findings.push(passthroughRuleFinding(rule, id));
     }
   }
 
-  const details = {
+  const scanDetails = {
     kind: 'kv',
     label: 'Scan details',
     entries: [
       { key: 'Started', value: formatTimestamp(reportBody.StartTime) },
       { key: 'Ended', value: formatTimestamp(reportBody.EndTime) },
-      { key: 'Rules evaluated', value: safeNum(reportBody.TotalRuleCount) },
-      { key: 'Rules failed', value: safeNum(reportBody.FailedRuleCount) },
-      { key: 'Alerts', value: safeNum(reportBody.TotalAlertCount) },
+      { key: 'Rules evaluated', value: formatNumOrDash(reportBody.TotalRuleCount) },
+      { key: 'Rules failed', value: formatNumOrDash(reportBody.FailedRuleCount) },
+      { key: 'Alerts', value: formatNumOrDash(reportBody.TotalAlertCount) },
     ],
   };
 
-  return { status: 'ok', findings, details };
+  return { status: 'ok', findings, details: scanDetails };
+}
+
+function readReportFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    process.stderr.write(`Report file not found: ${filePath}\n`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    process.stderr.write(`Failed to parse ${filePath}: ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function fetchReportBody(portalId) {
+  const ctx = resolveContext();
+  if (ctx.error) fail(ctx.error, 2);
+
+  const res = await request({
+    context: ctx,
+    method: 'GET',
+    path: `/websites/${portalId}/scan/deep/getLatestCompletedReport`,
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+
+  if (res.statusCode === 204) return null;
+  if (!res.ok) {
+    fail(`Get latest report failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  }
+  return res.body;
 }
 
 async function main() {
-  const portalId = getArg('portalId');
-  const reportFile = getArg('reportFile');
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-  let reportBody = null;
+  const { portalId, reportFile } = parseCliArgs(process.argv);
 
+  let reportBody;
   if (reportFile) {
-    if (!fs.existsSync(reportFile)) {
-      process.stderr.write(`Report file not found: ${reportFile}\n`);
-      process.exit(1);
-    }
-    let raw;
-    try {
-      raw = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
-    } catch (err) {
-      process.stderr.write(`Failed to parse ${reportFile}: ${err.message}\n`);
-      process.exit(1);
-    }
+    const raw = readReportFile(reportFile);
     if (raw.status === 'empty') {
-      process.stdout.write(JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n');
+      process.stdout.write(
+        JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n'
+      );
       return;
     }
     // Accept either get-latest-report.js stdout ({ status, body }) or the bare body.
     reportBody = 'body' in raw ? raw.body : raw;
   } else if (portalId) {
-    const { resolveContext, request, fail } = require(path.join(__dirname, '..', '..', '..', 'scripts', 'lib', 'power-platform-api'));
-    const ctx = resolveContext();
-    if (ctx.error) fail(ctx.error, 2);
-
-    const res = await request({
-      context: ctx,
-      method: 'GET',
-      path: `/websites/${portalId}/scan/deep/getLatestCompletedReport`,
-      timeout: 240_000,
-    });
-
-    if (res.statusCode === 204) {
-      process.stdout.write(JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n');
+    reportBody = await fetchReportBody(portalId);
+    if (reportBody == null) {
+      process.stdout.write(
+        JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n'
+      );
       return;
     }
-    if (!res.ok) {
-      process.stderr.write(`Get latest report failed (${res.statusCode}): ${res.error?.message || ''}\n`);
-      process.exit(1);
-    }
-    reportBody = res.body;
   } else {
-    process.stderr.write('Usage: node transform-report.js --portalId <portal-id> | --reportFile <report-file>\n');
+    process.stderr.write(
+      'Usage: node transform-report.js --portalId <portal-id> | --reportFile <report-file>\n'
+    );
     process.exit(1);
   }
 
@@ -211,9 +229,4 @@ async function main() {
 
 module.exports = { transform };
 
-if (require.main === module) {
-  main().catch(err => {
-    process.stderr.write(`transform-report.js failed: ${err.message}\n`);
-    process.exit(1);
-  });
-}
+runCli(module, main);

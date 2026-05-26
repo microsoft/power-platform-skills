@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  isFeatureUnsupported,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`get-rules.js — Returns the firewall rules for a site (custom and managed).
+const HELP = `get-rules.js — Returns the firewall rules for a site (custom and managed).
 
 Usage:
   node get-rules.js --portalId <portal-id> [--ruleType <name>]
@@ -21,19 +27,19 @@ Exit codes:
 Example:
   node get-rules.js --portalId <portal-id>
   node get-rules.js --portalId <portal-id> --ruleType <Custom|Managed>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
-const ruleType = args.ruleType;
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-if (!portalId) {
-  fail('Usage: node get-rules.js --portalId <portal-id> [--ruleType <name>]', 1);
-}
+  const { portalId, ruleType } = parseCliArgs(process.argv);
+  if (!portalId) {
+    fail('Usage: node get-rules.js --portalId <portal-id> [--ruleType <name>]', 1);
+  }
 
-(async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
@@ -44,12 +50,21 @@ if (!portalId) {
     query: ruleType ? { ruleType } : undefined,
   });
 
-  if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023' || /not supported/i.test(res.error?.message || ''))) {
-    process.stdout.write(JSON.stringify({ status: 'unsupported', message: res.error?.message || 'Firewall not available' }) + '\n');
+  if (isFeatureUnsupported(res, 'B022', 'B023')) {
+    process.stdout.write(
+      JSON.stringify({
+        status: 'unsupported',
+        message: res.error?.message || 'Firewall not available',
+      }) + '\n'
+    );
     return;
   }
 
-  if (!res.ok) fail(`Get firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  if (!res.ok) {
+    fail(`Get firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  }
 
   process.stdout.write(JSON.stringify({ status: 'ok', body: res.body || {} }) + '\n');
-})();
+}
+
+runCli(module, main);

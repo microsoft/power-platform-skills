@@ -28,17 +28,16 @@ The skill never asks the user technical questions. The conversation stays in pla
 
 ## Workflow
 
-The skill has seven phases. Phases 2–6 each map to one conversation beat with the user; phases 1 and 7 are silent setup and cleanup. See `references/flow.md` for the rationale behind each beat.
+The skill has six phases. Phases 2–5 each map to one conversation beat with the user; phases 1 and 6 are silent setup and cleanup. See `references/flow.md` for the rationale behind each beat.
 
 | Phase | What happens | User-facing beat |
 |-------|--------------|------------------|
 | 1 — Prerequisites | Locate project, set up working folders | (silent setup) |
 | 2 — Scope | Capture goal — one question, three answers, plain language | Ask the goal |
-| 3 — Confirm | Show a one-line plan, give the user a chance to back out | Confirm and start |
-| 4 — Skills | Run the matching skills, surface progress | Scan in progress |
-| 5 — Report | Build the consolidated report — totals + per-section findings | Results summary + Findings |
-| 6 — Present | Present results, offer remediation follow-ups | Next steps and guidance |
-| 7 — Cleanup | Remove temporary files | (silent cleanup) |
+| 3 — Skills | Run the matching skills, surface progress | Scan in progress |
+| 4 — Report | Build the consolidated report — totals + per-section findings | Results summary + Findings |
+| 5 — Present | Present results, offer remediation follow-ups | Next steps and guidance |
+| 6 — Cleanup | Remove temporary files | (silent cleanup) |
 
 ## Task Tracking
 
@@ -57,9 +56,8 @@ Only this one task. Do not create any other tasks until prerequisites complete.
 | Task subject | activeForm |
 |--------------|------------|
 | Capture goal | Capturing goal |
-| Confirm the plan | Confirming the plan |
 
-**Group 3 — create after the user confirms the plan:**
+**Group 3 — create after the goal is captured:**
 
 | Task subject | activeForm |
 |--------------|------------|
@@ -116,27 +114,15 @@ Goal mapping (internal):
 
 ### 2.2 Capture the chosen skill set
 
-Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `access-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 4.2 below). This is the **Access & Data Security Validation** component.
+Build a `selectedSkills` list based on the answer. Always include the read-only check of `setup-auth` for the `access-config` and `release` goals (it consists of reading existing YAML, not running the skill itself — see § 3.2 below). This is the **Access & Data Security Validation** component.
 
 ---
 
-## 3. Confirm the plan
-
-Tell the user, in plain language, what will run and the rough time it will take. Use `AskUserQuestion`:
-
-| Question | Options |
-|----------|---------|
-| I will <one-line description>. Continue? | Yes, run it (Recommended); Change the plan |
-
-When the user confirms, mark the **Run skills** task `in_progress` and continue.
-
----
-
-## 4. Run the matching skills
+## 3. Run the matching skills
 
 Spawn each selected skill as a background subagent via the `Agent` tool. Each subagent invokes its skill with the argument `--review <SYSTEM_TEMP>/security-review/`. Each skill handles its own authentication, error reporting, and progress.
 
-### 4.1 Skill invocation via subagents
+### 3.1 Skill invocation via subagents
 
 Skills run as **parallel subagents** using the `Agent` tool.
 
@@ -144,11 +130,11 @@ Skills run as **parallel subagents** using the `Agent` tool.
 
 **Fallback — staggered launch.** If the harness rejects a parallel-batch call for any reason, launch `scan-site` first and then the remaining skills in a follow-up message. This is a tool-affordance fallback, not the preferred path.
 
-**Inline checks (run while subagents work).** `audit-permissions` and `setup-auth` do not support `--review` and MUST NOT be launched via `Agent` — handle them inline as described in § 4.2.
+**Inline checks (run while subagents work).** `audit-permissions` and `setup-auth` do not support `--review` and MUST NOT be launched via `Agent` — handle them inline as described in § 3.2.
 
 Wait for all subagents to complete before proceeding to the report-building step.
 
-### 4.1.1 Subagent prompt pattern
+### 3.1.1 Subagent prompt pattern
 
 Each subagent receives a self-contained prompt that includes:
 
@@ -168,7 +154,7 @@ Agent({
 
 **Verbatim rule:** the subagent's output JSON must contain only the findings emitted by the skill's transform script. The orchestrator must not append findings, rewrite titles, add severity, or otherwise editorialize.
 
-### 4.1.2 Expected output
+### 3.1.2 Expected output
 
 After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-review/<skill-name>.json`. Each file has the shape `{ status, findings, details? }` produced by the skill's transform script:
 
@@ -182,7 +168,7 @@ After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-revie
 
 If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
 
-### 4.1.3 Severity policy
+### 3.1.3 Severity policy
 
 Only findings that come from a tool that genuinely outputs severity may carry a `severity` field:
 
@@ -194,9 +180,9 @@ Only findings that come from a tool that genuinely outputs severity may carry a 
 | `audit-permissions` | Web roles & table permissions audit | **No** |
 | `setup-auth` | Site settings & auth-related source code audit | **No** |
 
-For inventory sections, do **not** add `severity` to findings — not even `info`. The subagent and orchestrator must write the transform output **verbatim** without inserting opinionated severity-bearing findings.
+For inventory sections, do **not** add `severity` to findings — not even `info`. The subagent and orchestrator must write the transform output **verbatim** without inserting opinionated severity-bearing findings. The `tag` field is **also** off-limits as a severity workaround: it is reserved for short mechanical identifiers from tools (e.g. ZAP rule ids, CWE codes) and MUST NOT carry severity-equivalent strings (`critical`, `warning`, `info`), since the report template renders it as a visible chip next to the title.
 
-### 4.1.4 Annotations policy (plain-language text)
+### 3.1.4 Annotations policy (plain-language text)
 
 The transform scripts for `manage-firewall` and `manage-headers` produce only structured raw data — they do **not** hardcode plain-language descriptions. The subagent must generate an annotations JSON file and pass it to the transform via `--annotations`. The annotations supply:
 
@@ -205,27 +191,32 @@ The transform scripts for `manage-firewall` and `manage-headers` produce only st
 
 See each skill's `SKILL.md` § 5.1 for the annotation file shape. The agent's job is to write accurate, terse descriptions based on the raw data — not to invent severities or fabricate issues.
 
-### 4.2 Skills without `--review` mode
+### 3.2 Skills without `--review` mode
 
 `audit-permissions` and `setup-auth` do not support `--review`. Handle them inline (not as background subagents):
 
-- **audit-permissions** — invoke via the `Skill` tool (not `Agent`). The skill audits **both web roles and table permissions** — capture both in its output. After it completes, read its output and write `<SYSTEM_TEMP>/security-review/audit-permissions.json` in the unified `{ status, findings, details? }` shape (mapping each audit finding into the common finding fields: `id`, `title`, `tag`, `location`, `details`, `fix`). **Do NOT include a `severity` field** — audit-permissions findings are inventory, not tool-output severities.
+- **audit-permissions** — invoke via the `Skill` tool (not `Agent`). The skill audits **both web roles and table permissions** — capture both in its output. After it completes, read its output and write `<SYSTEM_TEMP>/security-review/audit-permissions.json` in the unified `{ status, findings, details? }` shape (mapping each audit finding into the common finding fields: `id`, `title`, `location`, `details`, `fix`).
 - **setup-auth** — do not invoke as a skill. Instead, read `.powerpages-site/site-settings/` YAML files directly and check for:
   - identity provider configured? (`Authentication/OpenIdConnect/*/Authority`)
   - profile redirect disabled? (`Authentication/Registration/ProfileRedirectEnabled = false`)
   - cookie SameSite setting? (`HTTP/SameSite/Default`)
 
-Write the resulting findings to `<SYSTEM_TEMP>/security-review/setup-auth.json` in the same format. **Do NOT include a `severity` field** on these findings — see § 4.1.3.
+Write the resulting findings to `<SYSTEM_TEMP>/security-review/setup-auth.json` in the same format.
 
-### 4.3 Status updates
+**Field policy for both sections** — these are inventory sections, not tool-output severities (see § 3.1.3):
+
+- **Do NOT include a `severity` field** on any finding.
+- **Do NOT include a `tag` field.** The `tag` field is reserved for short mechanical identifiers from tools (`HTTP/X-Frame-Options`, ZAP rule id `10055`, CWE codes). It MUST NOT carry severity-equivalent strings (`critical`, `warning`, `info`) — the report template renders `tag` as a visible chip next to the title, so stashing LLM-judged severity there would visually re-introduce the severity bucketing this section explicitly forbids.
+
+### 3.3 Status updates
 
 Tell the user that all checks are running in parallel. As each subagent completes, give a short progress line (e.g., "Code check finished — 2 important issues, 4 smaller ones."). Avoid technical jargon. Do not narrate skill internal steps. Once all subagents have finished, confirm that all checks are complete before moving to the report-building step.
 
 ---
 
-## 5. Build the consolidated report
+## 4. Build the consolidated report
 
-### 5.1 Consolidate
+### 4.1 Consolidate
 
 Write up to four plain-language next-step recommendations as a JSON string array to `<SYSTEM_TEMP>/security-review/next-steps.json`. Compose a 2–4 sentence plain-language `summary` of the overall state.
 
@@ -241,7 +232,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/build-review-data.js" \
   --output "<SYSTEM_TEMP>/security-review/security-review-data.json"
 ```
 
-### 5.2 Render the master HTML
+### 4.2 Render the master HTML
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
@@ -251,19 +242,19 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/render-review.js" \
 
 ---
 
-## 6. Present and follow-ups
+## 5. Present and follow-ups
 
-### 6.1 Open in browser
+### 5.1 Open in browser
 
 Open `<DOCS_PATH>` in the user's default browser.
 
-### 6.2 Record skill usage
+### 5.2 Record skill usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "SecurityReview"`.
 
-### 6.3 In-chat summary
+### 5.3 In-chat summary
 
 Show a short plain-language summary in the chat: counts of critical / warning / info findings, where the report lives. Then offer the next action with `AskUserQuestion`:
 
@@ -277,7 +268,7 @@ If the user picks "re-run", invoke this skill again with the same goal and scope
 
 ---
 
-## 7. Clean up
+## 6. Clean up
 
 Delete the entire `<SYSTEM_TEMP>/security-review/` folder. The final HTML, located in `docs/`, must remain. Confirm to the user that temporary files have been removed.
 
@@ -288,7 +279,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 ## Constraints
 
 - **Plain language with users** — never lead with technical terms.
-- **Parallel subagent delegation** — every selected skill runs as a parallel subagent via the `Agent` tool, launched in a single message. Perform the inline read-only `setup-auth` check while subagents work. Use the staggered launch (§ 4.1 fallback) only if the harness rejects the parallel-batch call.
+- **Parallel subagent delegation** — every selected skill runs as a parallel subagent via the `Agent` tool, launched in a single message. Perform the inline read-only `setup-auth` check while subagents work. Use the staggered launch (§ 3.1 fallback) only if the harness rejects the parallel-batch call.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
 - **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
@@ -296,4 +287,4 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 
 ## References
 
-- `references/flow.md` — rationale and example phrasing for the conversation beats in phases 2–6
+- `references/flow.md` — rationale and example phrasing for the conversation beats in phases 2–5

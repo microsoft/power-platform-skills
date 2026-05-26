@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  hasErrorCode,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`delete-rules.js — Deletes custom firewall rules by name.
+const REQUEST_TIMEOUT_MS = 240_000; // 4 min — deletion exceeds the 15s default.
+
+const HELP = `delete-rules.js — Deletes custom firewall rules by name.
 
 Usage:
   node delete-rules.js --portalId <portal-id> --names <name1,name2,...>
@@ -21,22 +29,26 @@ Exit codes:
 
 Example:
   node delete-rules.js --portalId <portal-id> --names <RuleName1>,<RuleName2>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
-const namesArg = args.names;
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
 
-if (!portalId || !namesArg) {
-  fail('Usage: node delete-rules.js --portalId <portal-id> --names <name1,name2,...>', 1);
-}
+  const args = parseCliArgs(process.argv);
+  const { portalId, names: namesArg } = args;
+  if (!portalId || !namesArg) {
+    fail('Usage: node delete-rules.js --portalId <portal-id> --names <name1,name2,...>', 1);
+  }
 
-const names = namesArg.split(',').map((n) => n.trim()).filter(Boolean);
-if (names.length === 0) fail('No rule names provided.', 1);
+  const names = namesArg
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  if (names.length === 0) fail('No rule names provided.', 1);
 
-(async () => {
   const ctx = resolveContext();
   if (ctx.error) fail(ctx.error, 2);
 
@@ -45,14 +57,17 @@ if (names.length === 0) fail('No rule names provided.', 1);
     method: 'PUT',
     path: `/websites/${portalId}/deleteWafCustomRules`,
     body: names,
-    timeout: 240_000, // 4 min — deletion can take longer than the default 15s
+    timeout: REQUEST_TIMEOUT_MS,
   });
 
-  if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023')) {
+  if (hasErrorCode(res, 'B022', 'B023')) {
     fail(`Firewall not available: ${res.error?.message || ''}`, 4);
   }
-  if (res.statusCode !== 202 && !res.ok) {
+  if (!res.ok) {
     fail(`Delete firewall rules failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
   }
+
   process.stdout.write(JSON.stringify({ status: 'accepted', deleted: names }) + '\n');
-})();
+}
+
+runCli(module, main);

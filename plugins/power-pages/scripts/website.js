@@ -29,7 +29,13 @@
  *   2 = sign-in required
  */
 
-const { resolveContext, request, parseCliArgs, fail } = require('./lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  runCli,
+} = require('./lib/power-platform-api');
 
 // Hard cap on pagination — far above any realistic site count. Exists only
 // so a misbehaving server cannot keep the helper looping forever.
@@ -86,6 +92,9 @@ function recordIdOf(website) {
  * @returns {Promise<object|null>}
  */
 async function findWebsite(websiteId) {
+  if (typeof websiteId !== 'string' || websiteId.length === 0) {
+    throw new Error('websiteId must be a non-empty string.');
+  }
   const target = websiteId.toLowerCase();
   const context = resolveContext();
   if (context.error) throw new Error(context.error);
@@ -107,17 +116,17 @@ async function findWebsite(websiteId) {
     }
 
     const advance = nextSkipFrom(body['@odata.nextLink'] || body.nextLink);
-    if (advance === null) break;
-    if (advance <= (skip || 0)) break; // server is not advancing — stop rather than loop
+    // null = no more pages; non-advancing = malformed server response → stop either way.
+    if (advance == null || advance <= (skip ?? 0)) break;
     skip = advance;
   }
 
   return null;
 }
 
-(async () => {
+async function main() {
   const args = parseCliArgs(process.argv);
-  if (!args.websiteId) {
+  if (typeof args.websiteId !== 'string') {
     fail('Usage: node website.js --websiteId <guid>', 1);
   }
   try {
@@ -127,4 +136,8 @@ async function findWebsite(websiteId) {
     const message = err.message || String(err);
     fail(message, SIGN_IN_HINT.test(message) ? 2 : 1);
   }
-})();
+}
+
+module.exports = { findWebsite, nextSkipFrom, recordIdOf };
+
+runCli(module, main);

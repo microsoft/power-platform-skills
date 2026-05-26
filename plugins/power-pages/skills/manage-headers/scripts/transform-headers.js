@@ -1,71 +1,17 @@
 #!/usr/bin/env node
-// Emits one section-data finding per HTTP/* site setting. Plain-language descriptions are NOT
-// hardcoded — the agent provides them via --annotations.
-// Run with --help for flags.
 
 const fs = require('fs');
 const path = require('path');
-const { loadSiteSettings } = require(path.join(__dirname, '..', '..', '..', 'scripts', 'lib', 'powerpages-config'));
+const { loadSiteSettings } = require('../../../scripts/lib/powerpages-config');
 
-function getArg(name, argv, fallback = null) {
-  const idx = argv.indexOf('--' + name);
-  return idx !== -1 && idx + 1 < argv.length ? argv[idx + 1] : fallback;
-}
+const CSP_HEADER_NAMES = new Set([
+  'HTTP/Content-Security-Policy',
+  'HTTP/Content-Security-Policy-Report-Only',
+]);
 
-function readJson(filePath, label) {
-  if (!fs.existsSync(filePath)) {
-    process.stderr.write(`${label} not found: ${filePath}\n`);
-    process.exit(1);
-  }
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (err) {
-    process.stderr.write(`Failed to parse ${label} (${filePath}): ${err.message}\n`);
-    process.exit(1);
-  }
-}
+const EMPTY_RESULT = { status: 'ok', findings: [], details: {} };
 
-// Format a CSP value into one directive per line for readability. Non-CSP values pass through.
-function formatValue(name, value) {
-  if (name === 'HTTP/Content-Security-Policy' || name === 'HTTP/Content-Security-Policy-Report-Only') {
-    const stripped = value.trim().replace(/^"|"$/g, '');
-    const directives = stripped.split(';').map(d => d.trim()).filter(Boolean);
-    if (directives.length > 1) return directives.map(d => `  ${d};`).join('\n');
-  }
-  return value;
-}
-
-function transform(records, annotations) {
-  const httpRecords = records.filter(r => r && typeof r.name === 'string' && r.name.startsWith('HTTP/'));
-  httpRecords.sort((a, b) => a.name.localeCompare(b.name));
-
-  const headerAnnotations = annotations.headers || {};
-
-  const findings = httpRecords.map((rec, i) => {
-    const value = rec.value != null ? String(rec.value) : '';
-    const annotation = headerAnnotations[rec.name] || {};
-    const detailParts = [];
-    if (annotation.description) detailParts.push(annotation.description);
-    detailParts.push('Current value:\n' + (value ? formatValue(rec.name, value) : '  (empty)'));
-    return {
-      id: `headers-${i + 1}`,
-      title: rec.name,
-      tag: rec.name,
-      details: detailParts.join('\n\n'),
-      ...(annotation.fix ? { fix: annotation.fix } : {}),
-    };
-  });
-
-  return {
-    status: 'ok',
-    findings,
-    details: {},
-  };
-}
-
-function main(argv = process.argv) {
-  if (argv.includes('--help')) {
-    process.stdout.write(`transform-headers.js — Emit HTTP/* site-setting inventory as section data.
+const HELP = `transform-headers.js — Emit HTTP/* site-setting inventory as section data.
 
 Usage:
   node transform-headers.js --projectRoot <path> [--annotations <path>]
@@ -89,24 +35,87 @@ Exit codes:
 Examples:
   node transform-headers.js --projectRoot <project-root>
   node transform-headers.js --projectRoot <project-root> --annotations <annotations-file>
-`);
+`;
+
+function getArg(name, argv) {
+  const idx = argv.indexOf('--' + name);
+  return idx !== -1 && idx + 1 < argv.length ? argv[idx + 1] : null;
+}
+
+function readJson(filePath, label) {
+  if (!fs.existsSync(filePath)) {
+    process.stderr.write(`${label} not found: ${filePath}\n`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    process.stderr.write(`Failed to parse ${label} (${filePath}): ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+// CSP values are long single-line strings; render one directive per line.
+function formatValue(name, value) {
+  if (!CSP_HEADER_NAMES.has(name)) return value;
+  const stripped = value.trim().replace(/^"|"$/g, '');
+  const directives = stripped
+    .split(';')
+    .map((d) => d.trim())
+    .filter(Boolean);
+  if (directives.length <= 1) return stripped;
+  return directives.map((d) => `  ${d};`).join('\n');
+}
+
+function buildFinding(rec, idx, annotation) {
+  // YAML scalars aren't always strings (booleans, numbers, nulls all pass through here).
+  const value = rec.value != null ? String(rec.value) : '';
+  const detailParts = [];
+  if (annotation.description) detailParts.push(annotation.description);
+  detailParts.push(
+    'Current value:\n' + (value ? formatValue(rec.name, value) : '  (empty)')
+  );
+  return {
+    id: `headers-${idx + 1}`,
+    title: rec.name,
+    details: detailParts.join('\n\n'),
+    ...(annotation.fix ? { fix: annotation.fix } : {}),
+  };
+}
+
+function transform(records, annotations) {
+  const httpRecords = records
+    .filter((r) => r.name?.startsWith('HTTP/'))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const headerAnnotations = annotations.headers || {};
+  const findings = httpRecords.map((rec, i) =>
+    buildFinding(rec, i, headerAnnotations[rec.name] || {})
+  );
+
+  return { status: 'ok', findings, details: {} };
+}
+
+function main(argv = process.argv) {
+  if (argv.includes('--help')) {
+    process.stdout.write(HELP);
     return 0;
   }
 
   const projectRoot = getArg('projectRoot', argv);
   const annotationsFile = getArg('annotations', argv);
   if (!projectRoot) {
-    process.stderr.write('Usage: node transform-headers.js --projectRoot <path> [--annotations <path>]\n');
+    process.stderr.write(
+      'Usage: node transform-headers.js --projectRoot <path> [--annotations <path>]\n'
+    );
     return 1;
   }
 
   const siteSettingsDir = path.join(projectRoot, '.powerpages-site', 'site-settings');
   if (!fs.existsSync(siteSettingsDir)) {
-    process.stdout.write(JSON.stringify({
-      status: 'missing-settings',
-      findings: [],
-      details: {},
-    }) + '\n');
+    process.stdout.write(
+      JSON.stringify({ ...EMPTY_RESULT, status: 'missing-settings' }) + '\n'
+    );
     return 0;
   }
 

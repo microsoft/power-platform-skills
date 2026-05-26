@@ -122,16 +122,10 @@ If the site's state does not warrant a specific recommendation, do not force one
 
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.
+- For options that trigger a new scan, surface the relevant caveats inside that option's `description` so the user has them at decision time. Do not ask a separate confirmation question after the user picks the option.
 - Include `preview` only when the option represents a concrete change (starting a new scan). Do not add `preview` to "show latest" or informational choices.
 - Only show options that are actionable given the current state. If a scan is already running, do not offer "Start a new scan".
 - Mark "(Recommended)" only when the site's state justifies it.
-
-### Confirm before scanning
-
-Before starting a new scan, warn the user:
-- Scan duration depends on site size — small sites finish in minutes, large sites can take hours.
-- The service may throttle repeated scans on the same site.
-- The service will email a notification when the scan completes.
 
 ---
 

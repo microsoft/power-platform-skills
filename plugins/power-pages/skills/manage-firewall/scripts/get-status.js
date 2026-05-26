@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 
-const { resolveContext, request, parseCliArgs, fail } = require('../../../scripts/lib/power-platform-api');
+const {
+  resolveContext,
+  request,
+  parseCliArgs,
+  fail,
+  isFeatureUnsupported,
+  runCli,
+} = require('../../../scripts/lib/power-platform-api');
 
-if (process.argv.includes('--help')) {
-  process.stdout.write(`get-status.js — Returns the current firewall status for a site.
+const HELP = `get-status.js — Returns the current firewall status for a site.
 
 Usage:
   node get-status.js --portalId <portal-id>
@@ -19,31 +25,45 @@ Exit codes:
 
 Example:
   node get-status.js --portalId <portal-id>
-`);
-  process.exit(0);
-}
+`;
 
-const args = parseCliArgs(process.argv);
-const portalId = args.portalId;
-
-if (!portalId) {
-  fail('Usage: node get-status.js --portalId <portal-id>', 1);
-}
-
-(async () => {
-  const ctx = resolveContext();
-  if (ctx.error) fail(ctx.error, 2);
-
-  const res = await request({ context: ctx, method: 'GET', path: `/websites/${portalId}/getWafStatus` });
-
-  if (res.statusCode === 400 && (res.error?.code === 'B022' || res.error?.code === 'B023' || /not supported/i.test(res.error?.message || ''))) {
-    const body = { status: 'unsupported', message: res.error?.message || 'Firewall not available for this site' };
-    process.stdout.write(JSON.stringify(body) + '\n');
+async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
     return;
   }
 
-  if (!res.ok) fail(`Get firewall status failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  const { portalId } = parseCliArgs(process.argv);
+  if (!portalId) {
+    fail('Usage: node get-status.js --portalId <portal-id>', 1);
+  }
 
-  const value = typeof res.body === 'string' ? res.body : (res.body?.status ?? res.body);
-  process.stdout.write(JSON.stringify({ status: 'ok', value }) + '\n');
-})();
+  const ctx = resolveContext();
+  if (ctx.error) fail(ctx.error, 2);
+
+  const res = await request({
+    context: ctx,
+    method: 'GET',
+    path: `/websites/${portalId}/getWafStatus`,
+  });
+
+  if (isFeatureUnsupported(res, 'B022', 'B023')) {
+    process.stdout.write(
+      JSON.stringify({
+        status: 'unsupported',
+        message: res.error?.message || 'Firewall not available for this site',
+      }) + '\n'
+    );
+    return;
+  }
+
+  if (!res.ok) {
+    fail(`Get firewall status failed (${res.statusCode}): ${res.error?.message || ''}`, 1);
+  }
+
+  // The service returns either the bare string ("Created") or { status: "Created" }.
+  const value = typeof res.body === 'string' ? res.body : res.body?.status;
+  process.stdout.write(JSON.stringify({ status: 'ok', value: value ?? null }) + '\n');
+}
+
+runCli(module, main);
