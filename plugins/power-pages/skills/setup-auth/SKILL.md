@@ -673,6 +673,20 @@ Then ask about optional features:
 >
 > **Invitation-based registration is NOT in this list anymore** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
 
+**Profile page** — ask whether to scaffold a `/user-profile` SPA page that lets signed-in users edit their own contact info (firstname, lastname, email, phone, address) via the Power Pages Web API. This is a standalone question because it has its own infrastructure implications (Web API site settings on the `contact` entity + Self-scope table permission).
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Add a profile page that lets signed-in users edit their contact info via the Power Pages Web API? | Profile page | No (default) — no profile page; users can't edit their info from the SPA, Yes — create a /user-profile SPA page with edit form, accessible from the header user menu |
+
+Store as `INCLUDE_PROFILE_PAGE` (boolean). Default `false`.
+
+When `true`, Phase 5.1.9 generates `src/pages/UserProfile.tsx`, extends `authService.ts` with `getMyProfile` / `updateMyProfile`, evolves the `AuthButton` from inline `[Avatar Name Sign Out]` to a dropdown menu with "My Profile" and "Sign Out", and adds the `/user-profile` route to `App.tsx`. Phase 8.1 writes the Web API site settings (`Webapi/contact/enabled = true`, `Webapi/contact/fields = contactid,firstname,...`) and a Self-scope table permission on `contact` for the Authenticated Users role. The dropdown shape becomes the new default for `AuthButton` regardless of `INCLUDE_PROFILE_PAGE` so the component is ready for future menu items.
+
+> **Prerequisite for `Yes`**: an "Authenticated Users" web role must exist (or any role with `authenticatedusersrole: true` flag). Phase 1.4 inventoried web roles — if none qualifies, warn the user that profile editing won't work until a role is assigned and offer to invoke `/create-webroles` first.
+
+> **Cross-provider compatibility**: the profile page works the same regardless of auth provider (local, Entra ID, Entra External ID, OIDC, social) because it operates on the contact record after sign-in — not on IdP-specific session state. The only provider-specific consideration is that the email field's value may be overwritten on next sign-in if `LoginClaimsMapping` includes `emailaddress1` (covered with an inline caveat note on the form).
+
 **If "Terms and Conditions" is selected**, first surface the GDPR prerequisite **before** collecting content — terms only function if the underlying solution is installed:
 
 > **GDPR prerequisite**: Terms require ALL THREE of these to be in place for the server to actually enforce them:
@@ -1623,6 +1637,67 @@ After the POST, the network panel may show the 302 Location target (e.g., the re
 - **`SameSite=Strict`**: If the `__External` cookie is configured with `SameSite=Strict`, the SPA's fetch won't include it and `fetchExternalLoginDetails` throws `ExternalLoginCookieExpiredError` immediately. Default is `Lax` (set via `SameSiteCookieHelper.GetOwinSameSiteFromSiteSettings`) — works fine.
 - **Invited user via external login**: Invitation code is captured from the form action URL by `fetchExternalLoginDetails` and re-sent on the POST. The server redeems the invitation as part of contact creation.
 
+#### 5.1.9 Create Profile Page (When INCLUDE_PROFILE_PAGE = true)
+
+**Conditional on `INCLUDE_PROFILE_PAGE = true`** (Phase 2.1). Skip this entire phase otherwise.
+
+Creates a `/user-profile` SPA page where signed-in users edit their contact record via the Power Pages Web API. Provider-agnostic — works for local + all external providers because it operates on the contact record after sign-in. Server-side `/profile` is reserved by Power Pages, hence the `/user-profile` route name.
+
+##### 5.1.9.a Extend authService with profile functions
+
+Add to `src/services/authService.ts` (keep all related auth/profile logic in one place; reuse the existing `fetchAntiForgeryToken()` helper for the PATCH anti-forgery token):
+
+- `ProfileContact` interface — typed contact shape with `contactid` + standard profile fields (firstname, lastname, middlename, emailaddress1, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all nullable strings
+- `ProfileUpdate` type — `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload
+- `getMyProfile(contactId)` — GETs `/_api/contacts({contactId})?$select=contactid,firstname,...,address1_country` with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object.
+- `updateMyProfile(contactId, payload)` — PATCHes `/_api/contacts({contactId})` with body containing only defined fields (skip undefined so partial updates don't blank fields). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success.
+
+Full reference code in `authentication-reference.md` "User Profile Page" section.
+
+##### 5.1.9.b Create UserProfile.tsx
+
+Create `src/pages/UserProfile.tsx`:
+
+- Read `user` and `refresh` from `useAuth()`. If `!isAuthenticated` redirect to `/login?returnUrl=/user-profile`
+- If `user.contactId` is empty or missing, show "Profile unavailable for this account. Your admin needs to set up the `RegistrationClaimsMapping` site setting for your auth provider so contacts get created with a valid ID." (handles the Entra workforce broken-claims-mapping edge case documented earlier in this skill)
+- On mount, call `getMyProfile(user.contactId)` to fetch current values. Show loading state.
+- Render a form with fields: First name, Middle name, Last name, Email, Mobile phone, Address line 1, City, State/Province, Postal code, Country — all optional, all editable
+- **Email field caveat note** — show only when `EXTERNAL_PROVIDERS.length > 0` (skill can detect this from the AUTH_PROVIDERS array): "If your site signs you in with an external provider that maps email from claims on every login, edits here may be overwritten on your next sign-in. Contact your admin to make this permanent."
+- Validate-on-blur using the existing pattern from `Login.tsx` / `Registration.tsx` (`touched` state, `validateField`, `show()` helper)
+- Field-level validation: email format if non-empty; mobile phone min 6 chars if non-empty. All fields optional — empty strings allowed and sent as `null` (so users can clear fields)
+- Submit calls `updateMyProfile(contactId, payload)`. On success: set `successMessage` state to "Profile updated.", call `refresh()` from `useAuth()` so header avatar + name re-render. On error: show server error inline.
+- Use existing styles convention (CSS variables, card layout, max-width ~580)
+
+##### 5.1.9.c Evolve AuthButton to dropdown
+
+Update `src/components/AuthButton.tsx`. **Make the dropdown shape the default for the authenticated state regardless of `INCLUDE_PROFILE_PAGE`** so the component is consistent and ready for future menu items:
+
+- Anonymous state: unchanged — `<Link to="/login" className="btn-primary">Sign In</Link>`
+- Authenticated state (NEW):
+  - Trigger: `[Avatar] {displayName} ▾` — clickable
+  - Menu (state-based, opened via `useState<boolean>`): renders when open
+  - Menu items when `INCLUDE_PROFILE_PAGE = true`: "My Profile" (Link to `/user-profile`) + "Sign Out" (calls `logout('/')`)
+  - Menu items when `INCLUDE_PROFILE_PAGE = false`: just "Sign Out"
+  - `useEffect` listens for `mousedown` outside the dropdown container → close. Listens for `Escape` key → close. Cleanup on unmount.
+  - "My Profile" link's `onClick` also closes the dropdown
+  - ARIA: trigger has `aria-haspopup="menu"`, `aria-expanded={open}`; menu has `role="menu"`; items have `role="menuitem"`
+  - Styling: menu uses existing CSS variables (`var(--color-surface)`, `var(--color-border)`, `var(--shadow-md)`, `var(--radius-sm)`)
+
+##### 5.1.9.d Add route
+
+Add to `src/App.tsx`:
+
+```tsx
+<Route path="/user-profile" element={<UserProfile />} />
+```
+
+##### After save behavior
+
+When `updateMyProfile` resolves successfully:
+1. Set inline `successMessage` state ("Profile updated.") — green banner at top of form, dismissable
+2. Call `useAuth().refresh()` — re-reads `window.Microsoft.Dynamic365.Portal.User`. Note that `Portal.User` is a snapshot from initial page load and won't have the new values until full page reload. So the right pattern is to also update local UI state (form fields stay as the user typed; header avatar may briefly show old initials until refresh propagates). Document this caveat in the reference.
+3. Stay on the page — no auto-redirect.
+
 #### 5.2 Integrate into Navigation
 
 Find the site's navigation component and integrate the auth button:
@@ -1737,8 +1812,11 @@ Confirm the following files were created:
 - Terms page (e.g., `src/pages/Terms.tsx` for React) — only when terms are enabled
 - Reset password page (e.g., `src/pages/ResetPassword.tsx` for React) — only when local auth with reset password is configured
 - **Redeem invitation page (e.g., `src/pages/RedeemInvitation.tsx` for React) — only when `REGISTRATION_MODE` is `Invitation-only` or `Both`**
+- **User profile page (e.g., `src/pages/UserProfile.tsx` for React) — only when `INCLUDE_PROFILE_PAGE = true`. Plus `getMyProfile` + `updateMyProfile` functions in `authService.ts`, AuthButton evolved to dropdown shape, `/user-profile` route in `App.tsx`.**
 - Code-Site-Shell-Header template (`.powerpages-site/web-templates/code-site-shell-header/`) with redirect script — entries depend on enabled features (resetpassword, redeeminvitation)
 - `website.yml` updated to point `headerwebtemplateid` to Code-Site-Shell-Header
+- **Web API site settings (`Webapi/contact/enabled`, `Webapi/contact/fields`) — only when `INCLUDE_PROFILE_PAGE = true`**
+- **Table permission `.powerpages-site/table-permissions/My-Profile-Edit-Own-Contact.tablepermission.yml` with `scope: 756150004` (Self) — only when `INCLUDE_PROFILE_PAGE = true`**
 
 Read each file and verify it contains the expected exports and functions:
 
@@ -2234,6 +2312,83 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --type boolean
 ```
 
+**Web API for contact entity — conditional on `INCLUDE_PROFILE_PAGE = true`**
+
+When the maker opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
+
+```powershell
+# Enable Web API on the contact table
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Webapi/contact/enabled" \
+  --value "true" \
+  --description "Enable Web API access for contact table (profile page)" \
+  --type boolean
+
+# Allowed fields — all lowercase Dataverse LogicalNames (case-sensitive — PascalCase causes 403)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --name "Webapi/contact/fields" \
+  --value "contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country" \
+  --description "Fields allowed via Web API for profile page (read + write)"
+```
+
+> **Field name format**: all entries in the `fields` value MUST be lowercase Dataverse LogicalNames. The Web API does case-sensitive literal matching — `FirstName` or `Firstname` will produce a 403 Forbidden response from the server even though the column exists. The list above is correct.
+>
+> **Customizing the field list**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx`. The skill ships with the OOB list only.
+
+#### 8.1.x Create Table Permission for Contact (When INCLUDE_PROFILE_PAGE = true)
+
+**Conditional on `INCLUDE_PROFILE_PAGE = true`.** Skip otherwise.
+
+Enabling Web API for the contact table is NOT sufficient — the Power Pages server also requires a matching `adx_entitypermission` record granting the signed-in user read/write access. Without it, all `/_api/contacts(...)` calls return 403 even when the site settings allow the entity.
+
+For the profile-page use case, **Self scope (`756150004`)** is the correct choice — it grants access only to the user's own contact record. The `create-table-permission.js` script validates this and rejects Contact scope for the contact table itself.
+
+**Step 1 — Discover the Authenticated Users web role UUID.**
+
+Phase 1.4 already inventoried web roles. Find the role with `authenticatedusersrole: true` in `.powerpages-site/web-roles/*.yml`. Typical filename: `Authenticated-Users.webrole.yml`. Extract its `id` field.
+
+If no such role exists, warn the user:
+
+> "No 'Authenticated Users' web role found on this site. Profile editing won't work for any user until a role with `authenticatedusersrole: true` exists and is assigned to users. Run `/create-webroles` to add one, then re-run this skill."
+
+Skip the rest of this phase if no role found.
+
+**Step 2 — Create the table permission.**
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --permissionName "My Profile - Edit Own Contact" \
+  --tableName "contact" \
+  --webRoleIds "<authenticated-users-role-uuid>" \
+  --scope "Self" \
+  --read \
+  --write
+```
+
+The script will create `.powerpages-site/table-permissions/My-Profile-Edit-Own-Contact.tablepermission.yml`:
+
+```yaml
+adx_entitypermission_webrole:
+- <authenticated-users-role-uuid>
+append: false
+appendto: false
+create: false
+delete: false
+entitylogicalname: contact
+entityname: My Profile - Edit Own Contact
+id: <generated-uuid>
+read: true
+scope: 756150004
+write: true
+```
+
+Note: `create: false` + `delete: false` — users can read and update their own contact but NOT create new contacts or delete existing ones. This is the principle-of-least-privilege default for profile editing.
+
+**Permission boundary verification**: with Self scope, even if a user crafts a malicious request like `PATCH /_api/contacts({someone-elses-contact-id})` from DevTools, the server returns 403. Self scope enforces row-level security based on the signed-in user's `contactid` from the session cookie.
+
 **Facebook** — uses `AppId` (not `ClientId`). The App ID was collected in Phase 2.1:
 
 ```powershell
@@ -2475,8 +2630,11 @@ Present a summary of everything created:
 | Terms Page | `src/pages/Terms.tsx` (or framework equivalent) — when terms enabled | Created (if applicable) |
 | Terms Snippet | `Account/Signin/TermsAndConditionsCopy` content snippet | Created (if applicable) |
 | Reset Password Page | `src/pages/ResetPassword.tsx` (or framework equivalent) — local auth only | Created (if applicable) |
+| User Profile Page | `src/pages/UserProfile.tsx` (or framework equivalent) — when `INCLUDE_PROFILE_PAGE = true`. Plus AuthButton dropdown, `getMyProfile`/`updateMyProfile` in authService, `/user-profile` route | Created (if applicable) |
 | Shell Header | `Code-Site-Shell-Header` web template — redirects server auth pages to SPA | Created (survives uploads) |
 | Site Setting | `ProfileRedirectEnabled = false`, `Enabled`, `OpenRegistrationEnabled`, `InvitationEnabled` per registration mode | Created |
+| Web API Site Settings | `Webapi/contact/enabled = true`, `Webapi/contact/fields = ...` — when `INCLUDE_PROFILE_PAGE = true` | Created (if applicable) |
+| Table Permission | `My Profile - Edit Own Contact` (contact, Self scope, read+write, Authenticated Users role) — when `INCLUDE_PROFILE_PAGE = true` | Created (if applicable) |
 
 #### 8.4 Ask to Deploy
 

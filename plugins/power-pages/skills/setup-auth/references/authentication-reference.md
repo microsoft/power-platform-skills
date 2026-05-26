@@ -3249,3 +3249,508 @@ This is the best endpoint for keepalive because:
 - **Security**: Always validate permissions server-side via table permissions. Client-side auth checks are for UX only -- a direct API call bypasses all client-side checks. Never commit secrets (`ClientSecret`, `AppSecret`) to source control -- use the Power Pages admin center for sensitive values.
 - **Provider configuration**: The identity provider must be configured in the Power Pages admin center (for Entra ID) or via site settings (for OIDC, SAML2, WS-Fed, Social, Entra External ID). This skill creates the client-side code and site settings but does not configure the external identity provider itself.
 - **Multiple providers**: Power Pages supports multiple identity providers simultaneously. Users see all configured providers on the login page. To configure multiple providers, create separate site settings for each and update the auth service to support provider selection.
+
+---
+
+## User Profile Page
+
+A `/user-profile` SPA page where signed-in users edit their own contact record via the Power Pages Web API. Created only when the maker opts in via the Phase 2.1 `INCLUDE_PROFILE_PAGE` question. Provider-agnostic — works the same for local + all external providers because it operates on the contact record after sign-in (not on IdP-specific session state).
+
+### Server-side requirements (set by the skill in Phase 8.1)
+
+- `Webapi/contact/enabled = true`
+- `Webapi/contact/fields = contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (all lowercase Dataverse LogicalNames; mixed casing causes 403)
+- Table permission `My Profile - Edit Own Contact`: `entitylogicalname: contact`, `scope: 756150004` (Self), `read: true`, `write: true`, associated with the Authenticated Users web role
+
+Self scope ensures a user can read and update ONLY their own contact record. Even a crafted `PATCH /_api/contacts({someone-elses-id})` request from DevTools returns 403.
+
+### Auth service additions
+
+Add to `src/services/authService.ts` (reuses the existing `fetchAntiForgeryToken()` helper for the PATCH anti-forgery token — no need for a separate Web API client):
+
+```typescript
+export interface ProfileContact {
+  contactid: string;
+  firstname: string | null;
+  lastname: string | null;
+  middlename: string | null;
+  emailaddress1: string | null;
+  mobilephone: string | null;
+  address1_line1: string | null;
+  address1_city: string | null;
+  address1_stateorprovince: string | null;
+  address1_postalcode: string | null;
+  address1_country: string | null;
+}
+
+export type ProfileUpdate = Partial<Omit<ProfileContact, 'contactid'>>;
+
+const PROFILE_FIELDS = [
+  'contactid', 'firstname', 'lastname', 'middlename', 'emailaddress1',
+  'mobilephone', 'address1_line1', 'address1_city', 'address1_stateorprovince',
+  'address1_postalcode', 'address1_country',
+].join(',');
+
+export async function getMyProfile(contactId: string): Promise<ProfileContact> {
+  if (isDevelopment) {
+    return {
+      contactid: contactId,
+      firstname: 'Dev', lastname: 'User', middlename: null,
+      emailaddress1: 'dev@contoso.com', mobilephone: null,
+      address1_line1: null, address1_city: null,
+      address1_stateorprovince: null, address1_postalcode: null, address1_country: null,
+    };
+  }
+
+  const url = `/_api/contacts(${encodeURIComponent(contactId)})?$select=${PROFILE_FIELDS}`;
+  const response = await fetch(url, { credentials: 'same-origin' });
+  if (!response.ok) {
+    throw new Error(`Failed to load profile (status ${response.status}).`);
+  }
+  return response.json();
+}
+
+export async function updateMyProfile(
+  contactId: string,
+  payload: ProfileUpdate
+): Promise<void> {
+  if (isDevelopment) {
+    return;
+  }
+
+  const token = await fetchAntiForgeryToken();
+
+  // Only include defined fields — undefined means "don't touch this column".
+  // Explicit null clears the column.
+  const body: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined) body[key] = value;
+  }
+
+  const response = await fetch(`/_api/contacts(${encodeURIComponent(contactId)})`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'If-Match': '*',
+      '__RequestVerificationToken': token,
+    },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+
+  if (!response.ok) {
+    // Try to parse OData error envelope
+    try {
+      const errorBody = await response.json();
+      const message = errorBody?.error?.message
+        ?? `Failed to update profile (status ${response.status}).`;
+      throw new Error(message);
+    } catch {
+      throw new Error(`Failed to update profile (status ${response.status}).`);
+    }
+  }
+}
+```
+
+### React: UserProfile page
+
+Create `src/pages/UserProfile.tsx`:
+
+```tsx
+import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+import {
+  getMyProfile,
+  updateMyProfile,
+  EXTERNAL_PROVIDERS,
+  type ProfileContact,
+} from '../services/authService'
+
+const validateEmail = (v: string) => {
+  if (!v) return ''  // optional
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'Enter a valid email'
+  return ''
+}
+const validatePhone = (v: string) => {
+  if (!v) return ''  // optional
+  if (v.length < 6) return 'Enter a valid phone number'
+  return ''
+}
+
+export default function UserProfile() {
+  const { user, isAuthenticated, refresh } = useAuth()
+  const navigate = useNavigate()
+  const [profile, setProfile] = useState<ProfileContact | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | undefined>()
+  const [serverError, setServerError] = useState<string | undefined>()
+  const [successMessage, setSuccessMessage] = useState<string | undefined>()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Form state mirrors the profile values; empty string = clear column
+  const [form, setForm] = useState<Record<string, string>>({
+    firstname: '', lastname: '', middlename: '', emailaddress1: '',
+    mobilephone: '', address1_line1: '', address1_city: '',
+    address1_stateorprovince: '', address1_postalcode: '', address1_country: '',
+  })
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate('/login?returnUrl=' + encodeURIComponent('/user-profile'))
+      return
+    }
+    if (!user?.contactId) {
+      setLoadError(
+        'Profile unavailable for this account. Your contact record is missing or has no ID. ' +
+        'If you signed in with workforce Entra ID, your admin needs to ensure RegistrationClaimsMapping ' +
+        'is configured so contacts are created with the correct fields.'
+      )
+      setIsLoading(false)
+      return
+    }
+    getMyProfile(user.contactId)
+      .then(p => {
+        setProfile(p)
+        setForm({
+          firstname: p.firstname ?? '',
+          lastname: p.lastname ?? '',
+          middlename: p.middlename ?? '',
+          emailaddress1: p.emailaddress1 ?? '',
+          mobilephone: p.mobilephone ?? '',
+          address1_line1: p.address1_line1 ?? '',
+          address1_city: p.address1_city ?? '',
+          address1_stateorprovince: p.address1_stateorprovince ?? '',
+          address1_postalcode: p.address1_postalcode ?? '',
+          address1_country: p.address1_country ?? '',
+        })
+        setIsLoading(false)
+      })
+      .catch(err => {
+        setLoadError(err instanceof Error ? err.message : 'Failed to load profile.')
+        setIsLoading(false)
+      })
+  }, [isAuthenticated, user?.contactId, navigate])
+
+  function validateField(name: string, value: string) {
+    let error = ''
+    if (name === 'emailaddress1') error = validateEmail(value)
+    else if (name === 'mobilephone') error = validatePhone(value)
+    setErrors(prev => {
+      if (error) return { ...prev, [name]: error }
+      const next = { ...prev }; delete next[name]; return next
+    })
+    return error
+  }
+
+  function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
+    setTouched(prev => ({ ...prev, [e.target.name]: true }))
+    validateField(e.target.name, e.target.value)
+  }
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+    if (serverError) setServerError(undefined)
+    if (successMessage) setSuccessMessage(undefined)
+    if (touched[e.target.name]) validateField(e.target.name, e.target.value)
+  }
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!profile) return
+
+    // Validate the two fields that have format checks
+    const emailErr = validateEmail(form.emailaddress1)
+    const phoneErr = validatePhone(form.mobilephone)
+    const errs: Record<string, string> = {}
+    if (emailErr) errs.emailaddress1 = emailErr
+    if (phoneErr) errs.mobilephone = phoneErr
+    setErrors(errs)
+    setTouched({ emailaddress1: true, mobilephone: true })
+    if (Object.keys(errs).length > 0) return
+
+    // Build payload: convert empty strings to null (clear column);
+    // skip unchanged fields by comparing to loaded profile values
+    const payload: Record<string, string | null> = {}
+    for (const key of Object.keys(form)) {
+      const newValue = form[key] === '' ? null : form[key]
+      const oldValue = (profile as Record<string, string | null>)[key] ?? null
+      if (newValue !== oldValue) payload[key] = newValue
+    }
+    if (Object.keys(payload).length === 0) {
+      setSuccessMessage('No changes to save.')
+      return
+    }
+
+    setIsSubmitting(true)
+    setServerError(undefined)
+    updateMyProfile(profile.contactid, payload).then(() => {
+      setSuccessMessage('Profile updated.')
+      // Update local profile snapshot so the next save's diff is correct
+      setProfile(prev => prev ? { ...prev, ...payload } as ProfileContact : prev)
+      // Refresh the useAuth() user state so the header avatar/name picks up
+      // changes on next navigation. Note: window.Microsoft.Dynamic365.Portal.User
+      // is a snapshot from initial page load, so the header won't reflect the new
+      // values until full page reload — see "useAuth.refresh() mechanics" below.
+      refresh()
+      setIsSubmitting(false)
+    }).catch(err => {
+      setServerError(err instanceof Error ? err.message : 'Failed to save profile.')
+      setIsSubmitting(false)
+    })
+  }
+
+  const show = (f: string) => touched[f] ? errors[f] : undefined
+  const showEmailCaveat = EXTERNAL_PROVIDERS.length > 0
+
+  if (isLoading) {
+    return (
+      <section style={styles.page}>
+        <div style={styles.card}>
+          <p style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>Loading profile...</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <section style={styles.page}>
+        <div style={styles.card}>
+          <h1 style={styles.title}>Profile unavailable</h1>
+          <p style={{ color: 'var(--color-text-muted)', marginBottom: 24 }}>{loadError}</p>
+          <Link to="/" style={{ color: 'var(--color-primary)' }}>Back to home</Link>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section style={styles.page}>
+      <div className="animate-in" style={styles.card}>
+        <h1 style={styles.title}>My Profile</h1>
+        <p style={styles.subtitle}>Update your contact information. All fields are optional.</p>
+
+        {successMessage && <div style={styles.successMessage} role="status">{successMessage}</div>}
+        {serverError && <div style={styles.serverError} role="alert">{serverError}</div>}
+
+        <form onSubmit={handleSubmit} noValidate style={styles.form}>
+          <div style={styles.grid}>
+            <Field name="firstname" label="First name" value={form.firstname} onBlur={handleBlur} onChange={handleChange} error={show('firstname')} />
+            <Field name="middlename" label="Middle name" value={form.middlename} onBlur={handleBlur} onChange={handleChange} error={show('middlename')} />
+            <Field name="lastname" label="Last name" value={form.lastname} onBlur={handleBlur} onChange={handleChange} error={show('lastname')} />
+            <Field name="emailaddress1" label="Email" type="email" value={form.emailaddress1} onBlur={handleBlur} onChange={handleChange} error={show('emailaddress1')} />
+            <Field name="mobilephone" label="Mobile phone" type="tel" value={form.mobilephone} onBlur={handleBlur} onChange={handleChange} error={show('mobilephone')} />
+          </div>
+
+          {showEmailCaveat && (
+            <p style={styles.caveat}>
+              If your site signs you in with an external provider that maps email from claims on every login,
+              edits to your email here may be overwritten on your next sign-in. Contact your admin to make this permanent.
+            </p>
+          )}
+
+          <h2 style={styles.sectionHeading}>Address</h2>
+          <div style={styles.grid}>
+            <Field name="address1_line1" label="Street" value={form.address1_line1} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_city" label="City" value={form.address1_city} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_stateorprovince" label="State / Province" value={form.address1_stateorprovince} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_postalcode" label="Postal code" value={form.address1_postalcode} onBlur={handleBlur} onChange={handleChange} />
+            <Field name="address1_country" label="Country" value={form.address1_country} onBlur={handleBlur} onChange={handleChange} />
+          </div>
+
+          <button type="submit" className="btn-primary" disabled={isSubmitting}
+            style={{ marginTop: 24, justifyContent: 'center' }}>
+            {isSubmitting ? 'Saving...' : 'Save changes'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+function Field({ name, label, value, onChange, onBlur, error, type = 'text' }: {
+  name: string; label: string; value: string; type?: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+  error?: string;
+}) {
+  return (
+    <div style={styles.field}>
+      <label htmlFor={`p-${name}`} style={styles.label}>{label}</label>
+      <input id={`p-${name}`} name={name} type={type} value={value} onChange={onChange} onBlur={onBlur}
+        style={{ ...styles.input, ...(error ? styles.inputError : {}) }}
+        aria-invalid={!!error} />
+      {error && <span style={styles.error} role="alert">{error}</span>}
+    </div>
+  )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { minHeight: 'calc(100vh - 64px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '48px 24px', background: 'var(--color-bg)' },
+  card: { width: '100%', maxWidth: 580, background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)', padding: 40, boxShadow: 'var(--shadow-md)', border: '1px solid var(--color-border)' },
+  title: { fontSize: '1.5rem', fontWeight: 600, marginBottom: 8 },
+  subtitle: { fontSize: '0.875rem', color: 'var(--color-text-muted)', marginBottom: 24 },
+  sectionHeading: { fontSize: '1rem', fontWeight: 600, marginTop: 24, marginBottom: 12 },
+  form: { display: 'flex', flexDirection: 'column' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 },
+  field: { display: 'flex', flexDirection: 'column', gap: 6 },
+  label: { fontSize: '0.875rem', fontWeight: 500 },
+  input: { fontFamily: 'var(--font-body)', fontSize: '0.875rem', padding: '10px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)', outline: 'none' },
+  inputError: { borderColor: '#DA1E28' },
+  error: { fontSize: '0.75rem', color: '#DA1E28' },
+  caveat: { fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 8, padding: '8px 12px', background: 'rgba(15,98,254,0.05)', borderLeft: '3px solid var(--color-primary)', borderRadius: 'var(--radius-sm)' },
+  successMessage: { padding: '12px 16px', background: '#DEFBE6', border: '1px solid #24A148', borderRadius: 'var(--radius-sm)', color: '#0E6027', fontSize: '0.875rem', marginBottom: 20 },
+  serverError: { padding: '12px 16px', background: '#FFF1F1', border: '1px solid #DA1E28', borderRadius: 'var(--radius-sm)', color: '#DA1E28', fontSize: '0.875rem', marginBottom: 20 },
+}
+```
+
+### Updated AuthButton with dropdown
+
+`src/components/AuthButton.tsx`:
+
+```tsx
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+
+const INCLUDE_PROFILE_PAGE = true  // set by skill based on Phase 2.1 answer
+
+export default function AuthButton() {
+  const { isAuthenticated, isLoading, displayName, initials, logout } = useAuth()
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  if (isLoading) return null
+
+  if (!isAuthenticated) {
+    return (
+      <Link to="/login" className="btn-primary" style={{ padding: '8px 20px', fontSize: '0.875rem', textDecoration: 'none' }}>
+        Sign In
+      </Link>
+    )
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+        }}>
+        <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--color-primary)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }} aria-hidden="true">{initials}</div>
+        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>{displayName}</span>
+        <span aria-hidden="true" style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>▾</span>
+      </button>
+
+      {open && (
+        <div role="menu"
+          style={{
+            position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+            minWidth: 180,
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-sm)',
+            boxShadow: 'var(--shadow-md)',
+            padding: 4,
+            zIndex: 100,
+          }}>
+          {INCLUDE_PROFILE_PAGE && (
+            <Link to="/user-profile" role="menuitem"
+              onClick={() => setOpen(false)}
+              style={menuItemStyle}>
+              My Profile
+            </Link>
+          )}
+          <button type="button" role="menuitem"
+            onClick={() => { setOpen(false); logout('/'); }}
+            style={{ ...menuItemStyle, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
+            Sign Out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const menuItemStyle: React.CSSProperties = {
+  display: 'block',
+  padding: '10px 14px',
+  fontSize: '0.875rem',
+  color: 'var(--color-text)',
+  textDecoration: 'none',
+  borderRadius: 'var(--radius-sm)',
+}
+```
+
+### Routing
+
+In `src/App.tsx`:
+
+```tsx
+import UserProfile from './pages/UserProfile'
+// ...
+<Route path="/user-profile" element={<UserProfile />} />
+```
+
+### `useAuth().refresh()` mechanics
+
+After `updateMyProfile` succeeds, the code calls `refresh()` from `useAuth()`. **Caveat**: `useAuth` reads from `window.Microsoft.Dynamic365.Portal.User`, which is set on initial page load. The Web API PATCH updates the contact in Dataverse but does not modify the in-memory `Portal.User` object. So `refresh()` will re-read the same stale snapshot — the header avatar/name won't visually reflect the new values until a full page reload.
+
+The pattern accepts this trade-off:
+- Form fields stay at the new values the user typed → immediate visual confirmation on the profile page
+- Header may briefly show old initials/name → corrects on next full page navigation (e.g., when the user clicks a nav link that causes a page load)
+- Avoids a forced reload that would disorient the user
+
+An alternative is to optimistically update `Portal.User` directly in the SPA after a successful save:
+```typescript
+if (typeof window !== 'undefined' && window.Microsoft?.Dynamic365?.Portal?.User) {
+  if (payload.firstname !== undefined) window.Microsoft.Dynamic365.Portal.User.firstName = payload.firstname ?? ''
+  if (payload.lastname !== undefined) window.Microsoft.Dynamic365.Portal.User.lastName = payload.lastname ?? ''
+  if (payload.emailaddress1 !== undefined) window.Microsoft.Dynamic365.Portal.User.email = payload.emailaddress1 ?? ''
+}
+refresh()
+```
+This makes `refresh()` actually update the header immediately. Document this as an optional enhancement — the skill ships without it for simplicity.
+
+### Empty contactId edge case
+
+If `user.contactId` is empty or missing, the page shows a friendly error pointing the user to the `RegistrationClaimsMapping` site setting (see the workforce Entra ID empty-contact issue documented elsewhere in this reference). The user can't edit a contact that doesn't exist or has no ID.
+
+### Permission boundary verification
+
+To verify Self-scope is enforcing row-level security:
+1. Sign in as user A → note their contactId (e.g., visible in `window.Microsoft.Dynamic365.Portal.User.contactId`)
+2. In DevTools console, try to PATCH a different user's contact:
+   ```javascript
+   fetch('/_api/contacts(SOMEONE-ELSES-GUID)', {
+     method: 'PATCH',
+     headers: { 'Content-Type': 'application/json', 'If-Match': '*' },
+     body: JSON.stringify({ firstname: 'Hacked' }),
+     credentials: 'same-origin',
+   }).then(r => console.log(r.status))
+   ```
+3. Expect 403. If you get 200, the table permission is misconfigured (wrong scope or wrong role assignment).
