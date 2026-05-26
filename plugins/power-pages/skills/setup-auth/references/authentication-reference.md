@@ -1876,6 +1876,37 @@ Pattern: `Authentication/OpenIdConnect/{ProviderName}/{SettingName}`
 | `RegistrationClaimsMapping` | **Comma-separated `contactfield=claimtype` pairs** (NOT JSON). Applied once at first sign-in. Example: `firstname=given_name,lastname=family_name,emailaddress1=email`. |
 | `LoginClaimsMapping` | Same format. Applied every login (overwrites contact fields). Use sparingly to avoid overwriting manual edits. |
 
+> **Workforce Entra ID (AzureAD provider) — different claim mapping needed.** The Power-Pages-auto-configured AzureAD provider uses v1.0 tokens by default (issuer `sts.windows.net/{tid}/`). **v1.0 workforce tokens do NOT include the `email` claim** by default. To populate `emailaddress1` for workforce users, use `upn` instead — it's the user's principal name (`user@contoso.com`) and is always emitted for workforce accounts. The correct mapping for workforce Entra ID is:
+>
+> ```
+> firstname=given_name,lastname=family_name,emailaddress1=upn
+> ```
+>
+> The setup-auth skill writes these settings silently in Phase 8.1 when Microsoft Entra ID is configured — no question is asked because the mapping is deterministic for workforce. Without it, contacts created on first sign-in have the `oid` link but empty firstname/lastname/email (`window.Microsoft.Dynamic365.Portal.User` renders with `contactId` but all profile fields empty).
+
+### v1.0 vs v2.0 tokens — claim availability by Entra product
+
+Different Entra products issue different token versions with different claim defaults. **This matters for the `RegistrationClaimsMapping` value** because some claim types don't exist in v1.0 tokens.
+
+| Entra product | Default token version | Issuer pattern | `email` claim | `upn` claim | `preferred_username` claim | `given_name` / `family_name` |
+|---|---|---|---|---|---|---|
+| **Microsoft Entra ID (workforce, AzureAD)** | v1.0 | `sts.windows.net/{tid}/` | ❌ Not by default (requires v2.0 + email scope + verified email) | ✅ Yes (`user@tenant.onmicrosoft.com` or custom domain) | ❌ v2.0-only | ✅ Yes |
+| **Microsoft Entra External ID (OpenIdConnect)** | v2.0 | `{subdomain}.ciamlogin.com/{tid}/v2.0` | ✅ Yes (with email user flow attribute) | ❌ Not typically emitted | ✅ Yes | ✅ Yes (with user flow attributes) |
+| **Azure AD B2C (legacy)** | v2.0 | `{tenant}.b2clogin.com/{policy}/v2.0/` | ✅ Yes (if email user flow attribute selected) | ❌ Not typically | ✅ Yes | ✅ Yes (with user flow attributes) |
+
+**Implication for `RegistrationClaimsMapping`**:
+- **AzureAD (workforce)**: `emailaddress1=upn` (skill writes this silently)
+- **Entra External ID**: `emailaddress1=email` (skill asks via Profile mapping question; default uses `email`)
+- **Other v2.0 OIDC providers**: depends on provider — Okta, Auth0, etc. mostly emit `email`. User can choose.
+
+If you need workforce Entra ID to emit the `email` claim instead of relying on UPN (e.g., for organizations where UPN ≠ email):
+
+1. Edit the app registration in Entra admin center → **Token configuration** → **Add optional claim** → `email`
+2. Verify the user has a verified email in their Entra profile (`mail` attribute)
+3. The token will then include `email` and you can switch the mapping to `emailaddress1=email`
+
+But for the default config that Power Pages auto-creates, `upn` is the reliable choice.
+
 ### Entra External ID Provider Settings
 
 Entra External ID uses the same `Authentication/OpenIdConnect/{ProviderName}/{SettingName}` path as generic OIDC. The authority URL may use `ciamlogin.com` (default) or a custom domain configured for the tenant.
