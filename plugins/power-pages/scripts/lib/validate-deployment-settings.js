@@ -327,12 +327,19 @@ function parseArgs(argv) {
 }
 
 // Entry reader: delegates to verify-env-var-values.js#readSettingsFile,
-// which handles all three deployment-settings.json shapes and now returns
-// `{ schemaName, value, stageLabel }` on each entry (so we don't need a
-// duplicate parser to preserve stage attribution).
+// which handles all three deployment-settings.json shapes and returns
+// `{ schemaName, value, stageLabel }` on each entry.
+//
+// `preserveAllStages: true` is critical here — without it, the default
+// readSettingsFile path dedupes by schemaName (keeping only the first
+// stage's value for each env var). For VALIDATION we must inspect every
+// stage's value independently: the same schema can be valid in Staging
+// and invalid in Production, and the validator must catch both.
 async function validateSettings({ settingsFile, envUrl, stageLabel, token }) {
   if (!settingsFile) throw new Error('--settingsFile is required');
-  const entries = readSettingsFile(settingsFile, stageLabel);
+  const entries = readSettingsFile(settingsFile, stageLabel, {
+    preserveAllStages: true,
+  });
 
   // Collect unique schema names for the type lookup pass.
   const uniqueSchemas = Array.from(new Set(entries.map((e) => e.schemaName).filter(Boolean)));

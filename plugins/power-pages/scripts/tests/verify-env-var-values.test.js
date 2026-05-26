@@ -153,6 +153,107 @@ test('readSettingsFile with no stageLabel flattens Stages[]', async (t) => {
   assert.equal(entries[1].schemaName, 'foo_b');
 });
 
+test('readSettingsFile accepts mixed-case `Stages` key when it is an object (regression — Copilot review)', async (t) => {
+  // Shape 2's array check handles `Stages: []`; shape 3's object check
+  // must handle `stages` / `Stages` / `STAGES` when the value is a plain
+  // object. Earlier code only checked `parsed.stages || parsed.STAGES`,
+  // so a hand-authored file with `Stages: { ... }` (mixed case + object)
+  // returned 0 entries.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'deployment-settings.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      Stages: {
+        Staging: { EnvironmentVariables: [{ SchemaName: 'foo_a', Value: 'sv' }] },
+        Production: { EnvironmentVariables: [{ SchemaName: 'foo_b', Value: 'pv' }] },
+      },
+    })
+  );
+  const all = readSettingsFile(file);
+  // Without preserveAllStages, distinct schemas → no dedupe collision.
+  assert.equal(all.length, 2);
+  assert.equal(all[0].stageLabel, 'Staging');
+  assert.equal(all[1].stageLabel, 'Production');
+});
+
+test('readSettingsFile dedupes by schemaName by default; preserveAllStages keeps per-stage entries (regression — Copilot review)', async (t) => {
+  // Real-world case: same env var ships under multiple stages with
+  // different per-stage values. The default (dedupe) is correct for
+  // "tell me the configured value of X" callers, but VALIDATION must
+  // see every stage's value to catch a Staging-valid / Production-invalid
+  // mismatch.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'deployment-settings.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      stages: {
+        Staging: {
+          EnvironmentVariables: [
+            { SchemaName: 'c311_api_secret', Value: 'https://kv.vault.azure.net/secrets/staging-secret' },
+          ],
+        },
+        Production: {
+          EnvironmentVariables: [
+            { SchemaName: 'c311_api_secret', Value: '@KeyVault(vaultName=prod-kv;secretName=secret)' },
+          ],
+        },
+      },
+    })
+  );
+  // Default: dedupe — caller sees one value for c311_api_secret.
+  const deduped = readSettingsFile(file);
+  assert.equal(deduped.length, 1);
+  // preserveAllStages: every stage's entry preserved.
+  const all = readSettingsFile(file, null, { preserveAllStages: true });
+  assert.equal(all.length, 2);
+  const stages = all.map((e) => e.stageLabel).sort();
+  assert.deepEqual(stages, ['Production', 'Staging']);
+});
+
+test('validateSettings catches a Production-only invalid value even when Staging is valid (regression — Copilot review)', async (t) => {
+  // The end-to-end shape of the bug Copilot flagged: validateSettings
+  // delegates to readSettingsFile, which deduped by schemaName when the
+  // same schema appeared in multiple stages. With dedupe, the Staging
+  // (valid) value won and the Production (invalid) value was silently
+  // skipped. validateSettings now passes preserveAllStages: true so
+  // both entries are inspected.
+  const { validateSettings } = require('../lib/validate-deployment-settings');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'deployment-settings.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      stages: {
+        Staging: {
+          EnvironmentVariables: [
+            // Valid canonical Key Vault URI
+            { SchemaName: 'c311_api_secret', Value: 'https://lakeshore-kv.vault.azure.net/secrets/api-secret' },
+          ],
+        },
+        Production: {
+          EnvironmentVariables: [
+            // Same schema name; the broken @KeyVault(...) placeholder format
+            { SchemaName: 'c311_api_secret', Value: '@KeyVault(vaultName=prod-kv;secretName=api-secret)' },
+          ],
+        },
+      },
+    })
+  );
+  const result = await validateSettings({ settingsFile: file });
+  assert.equal(result.summary.total, 2, 'validator must inspect both stages, not just the first');
+  const prodFinding = result.findings.find(
+    (f) => f.stageLabel === 'Production' && f.schemaName === 'c311_api_secret'
+  );
+  assert.ok(prodFinding, 'expected Production-stage finding to be present');
+  assert.equal(prodFinding.valueFormat, 'kv-placeholder');
+  assert.equal(prodFinding.status, 'invalid');
+});
+
 test('readSettingsFile reads keyed-object Stages shape (Microsoft schema 2024)', async (t) => {
   // The Microsoft-standard `deployment-settings/2024` schema and the file
   // configure-env-variables emits use a KEYED OBJECT for stages, not an

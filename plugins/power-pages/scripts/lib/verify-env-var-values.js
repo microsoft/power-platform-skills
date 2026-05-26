@@ -96,9 +96,22 @@ function parseArgs(argv) {
 //      consumed by Power Platform Pipelines — see schemas.microsoft.com/
 //      power-platform/deployment-settings/2024. Discovered as a real-world gap
 //      against the Citizens portal site, 2026-05-26.)
-// Returns `[{ schemaName, value, stageLabel }]` filtered to stageLabel when provided.
-// stageLabel is included on each entry for shape 2/3; shape 1 sets stageLabel: null.
-function readSettingsFile(filePath, stageLabel) {
+//
+// Options:
+//   stageLabel       — narrows the result to a single stage's entries (matched
+//                      case-insensitively against `Name` for shape 2 or the
+//                      keyed-object's key for shape 3).
+//   preserveAllStages — when true, returns EVERY entry verbatim without
+//                      dedupe — critical for validators that must inspect
+//                      each stage's value independently. Default false
+//                      (matches the old single-source-of-truth semantics for
+//                      legacy callers like verify-env-var-values that report
+//                      a single value per schema).
+//
+// Returns `[{ schemaName, value, stageLabel }]`.
+// stageLabel is the stage name for shape 2/3 entries; null for shape 1.
+function readSettingsFile(filePath, stageLabel, options = {}) {
+  const preserveAllStages = options.preserveAllStages === true;
   let raw;
   try {
     raw = fs.readFileSync(filePath, 'utf8');
@@ -129,7 +142,7 @@ function readSettingsFile(filePath, stageLabel) {
           }
         }
       }
-      return dedupeBySchemaName(all);
+      return preserveAllStages ? all : dedupeBySchemaName(all);
     }
     const stage = parsed.Stages.find(
       (s) => (s.Name || '').toLowerCase() === lowerLabel
@@ -142,11 +155,15 @@ function readSettingsFile(filePath, stageLabel) {
     }));
   }
 
-  // Shape 3: per-stage keyed object (`stages: { "<name>": {...} }`).
+  // Shape 3: per-stage keyed object (e.g. `stages: { "<name>": {...} }`).
   // This is the schema emitted by configure-env-variables and the one
-  // Power Platform Pipelines actually accepts. Accept either casing of
-  // the `stages`/`Stages` key + match stage labels case-insensitively.
-  const stagesObj = parsed.stages || parsed.STAGES;
+  // Power Platform Pipelines actually accepts. Accept any common casing of
+  // the top-level key (`stages`, `Stages`, `STAGES`) so hand-authored files
+  // with mixed casing still resolve. (The shape 2 array check above only
+  // matches when `parsed.Stages` is an Array; if it's a plain object, this
+  // branch picks it up.)
+  const stagesObj =
+    parsed.stages || parsed.Stages || parsed.STAGES || null;
   if (
     stagesObj &&
     typeof stagesObj === 'object' &&
@@ -165,7 +182,7 @@ function readSettingsFile(filePath, stageLabel) {
           }
         }
       }
-      return dedupeBySchemaName(all);
+      return preserveAllStages ? all : dedupeBySchemaName(all);
     }
     // Case-insensitive key match
     const matchKey = Object.keys(stagesObj).find(
