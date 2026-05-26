@@ -1385,7 +1385,13 @@ export function useAuth(): UseAuthReturn {
   const [isLoading, setIsLoading] = useState(true);
 
   const refresh = useCallback(() => {
-    setUser(getCurrentUser());
+    // Spread `getCurrentUser()` into a new object so React sees a fresh
+    // reference. Otherwise refresh() after an in-place mutation of
+    // `window.Microsoft.Dynamic365.Portal.User` (used by the profile page
+    // to reflect saves without a full reload) would be a no-op: setState
+    // with the same reference is skipped by React.
+    const current = getCurrentUser();
+    setUser(current ? { ...current } : undefined);
     setIsLoading(false);
   }, []);
 
@@ -3353,6 +3359,35 @@ export async function updateMyProfile(
     }
   }
 }
+
+/**
+ * After a successful contact PATCH, mirror the saved name fields into the
+ * in-memory `window.Microsoft.Dynamic365.Portal.User` snapshot so the
+ * header avatar / display name reflect the new values without a full
+ * page reload.
+ *
+ * Why this is needed: `Portal.User` is set ONCE by the server when the
+ * page is rendered. Our Web API PATCH updates Dataverse but does NOT
+ * touch this client-side object. `useAuth()` reads from it via
+ * `getCurrentUser()`, so without this helper the header keeps showing
+ * the pre-save name until the next full page navigation.
+ *
+ * Only the fields the header actually uses are mirrored (firstName,
+ * lastName). Other contact fields stay untouched. Call this AFTER the
+ * PATCH has succeeded, then call `refresh()` from useAuth to trigger a
+ * re-render.
+ */
+export function applyContactUpdateLocally(payload: ProfileUpdate): void {
+  if (typeof window === 'undefined') return;
+  const portalUser = window.Microsoft?.Dynamic365?.Portal?.User;
+  if (!portalUser) return;
+  if (payload.firstname !== undefined) {
+    portalUser.firstName = payload.firstname ?? '';
+  }
+  if (payload.lastname !== undefined) {
+    portalUser.lastName = payload.lastname ?? '';
+  }
+}
 ```
 
 ### React: UserProfile page
@@ -3366,6 +3401,7 @@ import { useAuth } from '../hooks/useAuth'
 import {
   getMyProfile,
   updateMyProfile,
+  applyContactUpdateLocally,
   type ProfileContact,
 } from '../services/authService'
 
@@ -3486,10 +3522,13 @@ export default function UserProfile() {
       setSuccessMessage('Profile updated.')
       // Update local profile snapshot so the next save's diff is correct
       setProfile(prev => prev ? { ...prev, ...payload } as ProfileContact : prev)
-      // Refresh the useAuth() user state so the header avatar/name picks up
-      // changes on next navigation. Note: window.Microsoft.Dynamic365.Portal.User
-      // is a snapshot from initial page load, so the header won't reflect the new
-      // values until full page reload — see "useAuth.refresh() mechanics" below.
+      // Mirror the saved name fields into window.Microsoft.Dynamic365.Portal.User
+      // so the header avatar / display name picks up the new values immediately.
+      // Without this, refresh() below re-reads the unchanged Portal.User snapshot
+      // and the header keeps showing the old name until the next full page load.
+      applyContactUpdateLocally(payload)
+      // refresh() re-reads getCurrentUser() and (because useAuth's refresh spreads
+      // the result into a fresh object) triggers a re-render so AuthButton repaints.
       refresh()
       setIsSubmitting(false)
     }).catch(err => {
@@ -3736,24 +3775,17 @@ import UserProfile from './pages/UserProfile'
 <Route path="/user-profile" element={<UserProfile />} />
 ```
 
-### `useAuth().refresh()` mechanics
+### `useAuth().refresh()` mechanics — why the header updates immediately
 
-After `updateMyProfile` succeeds, the code calls `refresh()` from `useAuth()`. **Caveat**: `useAuth` reads from `window.Microsoft.Dynamic365.Portal.User`, which is set on initial page load. The Web API PATCH updates the contact in Dataverse but does not modify the in-memory `Portal.User` object. So `refresh()` will re-read the same stale snapshot — the header avatar/name won't visually reflect the new values until a full page reload.
+`useAuth()` derives `displayName` and `initials` by reading from `window.Microsoft.Dynamic365.Portal.User` — a global snapshot the Power Pages server sets when the page is first rendered. Two things have to be true for the header to repaint after a successful profile save:
 
-The pattern accepts this trade-off:
-- Form fields stay at the new values the user typed → immediate visual confirmation on the profile page
-- Header may briefly show old initials/name → corrects on next full page navigation (e.g., when the user clicks a nav link that causes a page load)
-- Avoids a forced reload that would disorient the user
+1. **`Portal.User` itself must reflect the new values.** The Web API PATCH only updates Dataverse, not this in-memory object. The `applyContactUpdateLocally(payload)` helper in `authService.ts` mirrors the saved `firstname` / `lastname` back into `Portal.User` after the PATCH succeeds.
 
-An alternative is to optimistically update `Portal.User` directly in the SPA after a successful save:
-```typescript
-if (typeof window !== 'undefined' && window.Microsoft?.Dynamic365?.Portal?.User) {
-  if (payload.firstname !== undefined) window.Microsoft.Dynamic365.Portal.User.firstName = payload.firstname ?? ''
-  if (payload.lastname !== undefined) window.Microsoft.Dynamic365.Portal.User.lastName = payload.lastname ?? ''
-}
-refresh()
-```
-This makes `refresh()` actually update the header immediately. Document this as an optional enhancement — the skill ships without it for simplicity. (Email isn't included because it isn't editable on the page.)
+2. **`refresh()` must trigger a re-render.** The hook's `loadUser`/`refresh` function calls `setUser(getCurrentUser())` — but `getCurrentUser()` returns the same `Portal.User` reference every time, so a naive `setUser(getCurrentUser())` is a no-op (React skips re-renders when the state reference is identical). The reference impl above spreads the user into a fresh object: `setUser(current ? { ...current } : undefined)`. That forces React to see a new ref and re-run `AuthButton`, which re-reads `getUserDisplayName()` / `getUserInitials()` — now returning the new values because `Portal.User` was mutated in step 1.
+
+Both pieces are required. Drop either one and the header stays stale until a full page navigation.
+
+Email is intentionally NOT mirrored by `applyContactUpdateLocally`, since the profile page makes email read-only and never PATCHes it.
 
 ### Empty contactId edge case
 

@@ -1701,8 +1701,11 @@ Add to `src/services/authService.ts` (keep all related auth/profile logic in one
 | `ProfileUpdate` | exported type alias | `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload |
 | `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (the `$select` value MUST exactly match the 9-entry list in Phase 8.1's `Webapi/contact/fields` site setting) with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object. |
 | `updateMyProfile` | exported async function | Signature: `(contactId: string, payload: ProfileUpdate): Promise<void>`. PATCHes `/_api/contacts({contactId})` with body containing only DEFINED fields (skip `undefined` so partial updates don't blank-out unaffected columns — but DO send `null` for fields the user explicitly cleared). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success. |
+| `applyContactUpdateLocally` | exported function | Signature: `(payload: ProfileUpdate): void`. Mirrors the saved `firstname` / `lastname` from `payload` back into `window.Microsoft.Dynamic365.Portal.User` (mutating `firstName` / `lastName` properties in place — note the camelCase on the snapshot, lowercase on the payload). Returns early if `window` or `Portal.User` is unavailable. Only mirrors `firstname` and `lastname` — the other fields aren't used by the header. **Without this helper, the header keeps showing the old name after a save until the next full page reload — see the "header refresh after save" requirement in 5.1.9.b.** |
 
 Full reference code in `authentication-reference.md` "User Profile Page" section. **Copy that code as-is** — do not rename functions or change signatures.
+
+> **Also update `useAuth()` (`src/hooks/useAuth.ts`)** to spread the user object inside `refresh()` / `loadUser()` — `setUser(current ? { ...current } : undefined)` instead of `setUser(getCurrentUser())`. Reason: after `applyContactUpdateLocally` mutates `Portal.User` in place, the returned reference from `getCurrentUser()` is the same object instance. React's `setState` skips re-renders when the new state ref is identical to the current ref. Spreading into a new object forces React to see a fresh ref and re-run consumers, so `AuthButton` repaints with the new name. (Framework-equivalent change for Vue/Angular: ensure the user ref/Subject emits a fresh value, not the same instance.)
 
 ##### 5.1.9.b Create UserProfile.tsx
 
@@ -1762,7 +1765,13 @@ The executor MUST NOT add any of these — they're either redundant with existin
 
 - Validate-on-blur using the existing pattern from `Login.tsx` / `Registration.tsx` (`touched` state, `validateField`, `show()` helper)
 - Field-level validation: mobile phone min 6 chars if non-empty. Other 7 fields have no format validation. All fields optional — empty strings allowed and sent as `null`.
-- Submit calls `updateMyProfile(contactId, payload)`. On success: set `successMessage` state to "Profile updated.", call `refresh()` from `useAuth()` so header avatar + name re-render. On error: show server error inline.
+- Submit calls `updateMyProfile(contactId, payload)`. On success, in this exact order:
+  1. Set `successMessage` state to "Profile updated."
+  2. Update the local `profile` snapshot (so the form's diff calculation on the next save is correct)
+  3. **Call `applyContactUpdateLocally(payload)`** — mirrors the saved name fields back into `window.Microsoft.Dynamic365.Portal.User`. **This is REQUIRED for the header to repaint** — without it, the header keeps showing the pre-save name until the user navigates to a route that triggers a full page load.
+  4. **Call `refresh()` from `useAuth()`** — re-reads `Portal.User` (now mutated) into React state with a spread (the useAuth update above), which triggers a re-render of `AuthButton`. Without the spread, this is a no-op because `setState` with an identical reference is skipped by React.
+
+  On error: show server error inline.
 - **Set the browser tab title** — add a `useEffect` near the top of the component (matching the convention used on `Login.tsx`, `Registration.tsx`, `ForgotPassword.tsx`, `ResetPassword.tsx`, `RedeemInvitation.tsx`, `ExternalLoginConfirmation.tsx`, `Terms.tsx`, etc.):
 
   ```tsx
