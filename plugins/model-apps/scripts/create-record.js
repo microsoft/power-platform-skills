@@ -155,14 +155,7 @@ async function main() {
   }
 
   const parsed = readJsonArg(flags.body);
-  const rawBatchSize = flags['batch-size'] === undefined ? 100 : Number(flags['batch-size']);
-  if (!Number.isInteger(rawBatchSize) || rawBatchSize < 1 || rawBatchSize > 1000) {
-    process.stderr.write(
-      `--batch-size must be an integer in [1, 1000] (got "${flags['batch-size']}").\n`,
-    );
-    process.exit(1);
-  }
-  const batchSize = rawBatchSize;
+  const batchSize = Math.min(Number(flags['batch-size'] || 100), 1000);
 
   try {
     if (Array.isArray(parsed)) {

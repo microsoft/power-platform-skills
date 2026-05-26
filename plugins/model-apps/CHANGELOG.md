@@ -2,6 +2,108 @@
 
 All notable changes to the **model-apps** plugin.
 
+## [Unreleased] — 2.2.0
+
+Local-dev ergonomics (the "Three Asks"), additional sample coverage, full
+contributor docs, and an automated eval suite with real and synthetic
+fixtures. Builds on v2.1; no breaking changes.
+
+### Added — Three Asks (local-dev ergonomics)
+- **Phase 0.5 — local-dev manifest.** Every working dir now gets a
+  `package.json` (Ask 2) and `genpage.d.ts` (Ask 3) written right after
+  Phase 0. Run `npm install` once and VSCode IntelliSense, type-checking,
+  and "go to definition" work for `window.Xrm`, the window cache key
+  pattern, and React / Fluent / D3 imports.
+- `references/supported-dependencies.md` — versioned package list (Ask 1)
+  with confidence levels. `@fluentui/react-icons@2.0.326` is pinned to
+  match the verified-icons regeneration; React 17 is pinned to runtime;
+  other packages are `compatible` defaults pending upstream confirmation.
+- `scripts/lib/supported-dependencies.js` — single source of truth used by
+  both the reference doc and the manifest generator.
+- `scripts/generate-page-manifest.js` — idempotent CLI; `--features
+  charts,datepicker,timepicker` adds optional deps; `--force` overwrites.
+
+### Added — Eval suite (automated grading + capture)
+- `evals/model-apps/genpage/run-layer-1.js` — TAP v13 runner for the 15
+  `common_workflow_assertions` + per-eval `Phase`/`Edit Phase` expectations.
+  Reads `workflow-log.md`, `genpage-plan.md`, and (when present)
+  `entity-creation-log.md`.
+- `evals/model-apps/genpage/run-layer-2.js` — TAP v13 runner for the 18
+  `common_code_assertions` + per-eval `Phase 5` expectations. Reads every
+  `.tsx` in the fixture (excluding `RuntimeTypes.ts`).
+- `evals/model-apps/genpage/lib/` — assertion-mapping libraries
+  (`assertions-layer-1.js`, `assertions-layer-2.js`), fixture loader, and
+  TAP reporter. Each assertion text maps to a check function.
+- `scripts/capture-fixture.js` — copies a `/genpage` working dir into a
+  fixture folder, skipping Phase 0.5 scaffolding (`package.json`,
+  `genpage.d.ts`) and noise (`node_modules`, `*.log`), then runs both
+  layers and reports pass/fail with named offenders.
+- `evals/model-apps/genpage/EVAL_GUIDE.md` — comprehensive guide to the
+  3-layer model, eval tiers, fixture types, runner output, capture flow,
+  and procedures for adding evals / assertions.
+- `evals/model-apps/genpage/fixtures/` — **10 fixtures**:
+  - 6 synthetic (v2.2-compliant): evals 1, 2, 4, 7, 11, 13
+  - 4 real captures: 2 pre-v2.2-spec (red, documented), 2 v2.2-spec
+    (green) — eval 11 and eval 15
+- Each fixture has its own `README.md` documenting source, status, and
+  (for red fixtures) the path to remediation.
+
+### Added — Samples + docs
+- `samples/11-kanban-with-dnd.tsx` — kanban board with native HTML5
+  drag-and-drop (`onDragStart` / `onDragOver` / `onDrop`), no external DnD
+  library; `dataApi.updateRow` on drop with optimistic update + rollback.
+- `docs/architecture.md` — one-page architecture overview with ASCII
+  diagrams of the create + edit flows + working-dir layout.
+- `plugins/model-apps/CONTRIBUTING.md` — how to add samples, rules, evals,
+  scripts, fixtures; PR checklist; style guide.
+
+### Changed — Spec tightening (drives green captures)
+- `agents/genpage-planner.md`: new "Workflow-log requirements" section
+  before Step 1 requires command-verbatim entries (`node --version`,
+  `pac auth list`, `AskUserQuestion: <text> → <answer>`,
+  `EnterPlanMode called`).
+- `agents/genpage-page-builder.md`: promoted `pageInput` destructure to the
+  first Mandatory Rule with explicit "even on mock-data pages" emphasis
+  and forbidden form (`void props;`).
+- `skills/genpage/SKILL.md` Phase 6: required template echoes the full
+  `pac model genpage upload` command including `--prompt` and all flags.
+- `skills/genpage/SKILL.md` Phase 8: structured per-phase log format
+  replaces the prior "summarizing the run" template; lists the exact grep
+  tokens the runner looks for.
+
+### Fixed — Runner false positives (8 patterns)
+These were surfaced by real captures and accept *functionally-equivalent*
+alternatives only (no rule loosening):
+- `[^]*?` lazy-quantifier regex tightened to `[\s\S]*?` (works reliably
+  with trailing anchors in Node)
+- Forbidden-pattern checks now strip JS/TS comments before matching so
+  rule-documentation comments don't trip the regex
+- `pac auth list` active-env detection accepts any Dataverse env URL near
+  the auth-list output (real captures don't put the literal word
+  "environment" before the URL)
+- New-or-edit question detection accepts implicit-new flag via plan's
+  `## Pages` section
+- `newAppNeeded` plan detection accepts `App: create new:` wording in the
+  plan's `## Environment` section
+- Solution enumeration accepts `pac solution list` as an alternative to
+  `dataverse-request.js /solutions` (both functionally enumerate solutions)
+- Multi-page parallel dispatch detection accepts singular "page-builder"
+  alongside plural "page-builders"
+- `Xrm.Navigation.navigateTo` detection accepts optional chaining and
+  alias patterns (`xrm?.Navigation?.navigateTo` with `(window as any).Xrm`)
+- `check-auth.js ok:true` detection accepts `ok=true` (equals form) in
+  addition to `ok: true` and `"ok": true`
+- Window cache detection accepts `(window as any).__cache` paren-cast and
+  `window as any` typed-alias patterns
+- Choice column display detection accepts local enum mapping with
+  `100000000+` constants alongside `dataApi.getChoices()` and
+  `FormattedValue` annotations
+
+### Test coverage
+- **200 tests passing** across `scripts/tests/` (97) + `evals/.../tests/`
+  (103). Each runner has parameterized unit tests covering pass / fail /
+  skip cases plus CLI integration tests.
+
 ## 2.1.0 — 2026-05-13
 
 Replaces the Dataverse MCP server + Python SDK fallback with Node.js Web API

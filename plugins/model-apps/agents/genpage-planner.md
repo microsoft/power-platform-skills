@@ -34,6 +34,29 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 ---
 
+## Workflow-log requirements (applies to every step below)
+
+As you work through the steps, append a Phase 1 section to
+`<working-dir>/workflow-log.md` (create the file if it doesn't exist). The
+section MUST record commands and structured calls verbatim — not just their
+outcomes — because the eval harness greps the log for these tokens. Concretely:
+
+- Every shell command invocation is recorded on its own line as
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
+- Every `AskUserQuestion` call is recorded as
+  `AskUserQuestion: <question text> → <selected option>`. The literal string
+  `AskUserQuestion` is required.
+- The plan-presentation call is recorded as `EnterPlanMode called` followed
+  by the user's response (`approved` / `revised`).
+- The PAC CLI version output is recorded explicitly (the assertion checks
+  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
+  form).
+
+Decisions and outcomes can be summarized at the end of the section, but they
+do **not** substitute for command-level entries. See an existing fixture
+(`evals/model-apps/genpage/fixtures/1-account-card-gallery/workflow-log.md`)
+for the expected format.
+
 ## Step 1 — Validate Prerequisites
 
 Run these checks (first invocation per session only). Run each command separately —

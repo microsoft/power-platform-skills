@@ -26,27 +26,6 @@ test('parseArgs: repeated flag overwrites', () => {
   assert.equal(flags.foo, '2');
 });
 
-test('parseArgs: --key=value form', () => {
-  const { positional, flags } = parseArgs(['x', '--foo=bar', '--baz=qux', 'y']);
-  assert.deepEqual(positional, ['x', 'y']);
-  assert.deepEqual(flags, { foo: 'bar', baz: 'qux' });
-});
-
-test('parseArgs: --key=value with empty value', () => {
-  const { flags } = parseArgs(['--foo=']);
-  assert.equal(flags.foo, '');
-});
-
-test('parseArgs: --key=value preserves additional = signs in value', () => {
-  const { flags } = parseArgs(['--query=a=b=c']);
-  assert.equal(flags.query, 'a=b=c');
-});
-
-test('parseArgs: mixed --key=value and --key value forms', () => {
-  const { flags } = parseArgs(['--foo=bar', '--baz', 'qux']);
-  assert.deepEqual(flags, { foo: 'bar', baz: 'qux' });
-});
-
 test('readJsonArg: inline JSON', () => {
   assert.deepEqual(readJsonArg('{"a":1}'), { a: 1 });
 });

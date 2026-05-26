@@ -183,12 +183,21 @@ const GeneratedComponent = (props: Props) => {
 export default GeneratedComponent;
 ```
 
-Always destructure `pageInput` (even if unused on a particular page) — the eval
-suite enforces this and downstream features (dark mode, navigation state) rely
-on it.
-
 ### Mandatory Rules
 
+- **Always destructure `pageInput`** — even on mock-data pages and pages that
+  don't consume it. The eval suite enforces this and downstream features (dark
+  mode, navigation state injection) rely on it. Acceptable forms:
+  ```typescript
+  const { dataApi, pageInput } = props;       // Dataverse page
+  const { pageInput } = props;                 // mock page
+  const { dataApi, pageInput } = props;        // Dataverse, pageInput unused
+  void pageInput;                              // mark intentional-unused (NOT `void props`)
+  ```
+  **Forbidden:** `void props;` or any pattern that omits `pageInput` from
+  destructuring. The runner greps for
+  `const { ... pageInput ... } = props` — `void props` is detected as missing
+  the destructure and fails.
 - **React 17 + TypeScript** — all generated code
 - **Fluent UI V9** — `@fluentui/react-components` exclusively
   - DatePicker from `@fluentui/react-datepicker-compat`

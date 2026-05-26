@@ -1,6 +1,128 @@
 # Eval Runbook for `genpage`
 
-How to evaluate the `genpage` skill. Three layers, run in order.
+How to evaluate the `genpage` skill. Three layers, run in order. Layers 1 and 2
+can be automated against captured fixtures; Layer 3 (UX) stays manual.
+
+## Running the eval suite — TL;DR
+
+```bash
+# Run both automated layers against all fixtures
+node evals/model-apps/genpage/run-layer-1.js
+node evals/model-apps/genpage/run-layer-2.js
+
+# Smoke tier only (every PR)
+node evals/model-apps/genpage/run-layer-1.js --tier smoke
+node evals/model-apps/genpage/run-layer-2.js --tier smoke
+
+# One specific eval (debugging)
+node evals/model-apps/genpage/run-layer-1.js --eval 2
+node evals/model-apps/genpage/run-layer-2.js --eval 2
+
+# Custom fixtures directory (e.g., a fresh batch of /genpage outputs)
+node evals/model-apps/genpage/run-layer-1.js --fixtures /path/to/captures
+```
+
+Both runners output TAP v13. Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| 0    | All fixtures passed (failing-assertion count = 0) |
+| 1    | At least one fixture had a failing assertion |
+| 2    | Runner error (missing fixtures dir, bad arguments, malformed `evals.json`) |
+
+Skipped assertions (`ok # SKIP <reason>`) never cause failure — they're either
+not applicable to the fixture (e.g., a Dataverse-only check on a mock page) or
+require analysis the runner doesn't implement yet (AST-level checks).
+
+## End-to-end eval workflow
+
+The full pipeline for one eval looks like this:
+
+```
+            ┌────────────────────────────────────────────────────┐
+            │  1. Capture a fixture from a real /genpage run     │
+            │     - Run /genpage with eval N's prompt + answers  │
+            │     - Copy *.tsx, workflow-log.md, genpage-plan.md │
+            │       (+ entity-creation-log.md if entities made)  │
+            │       into fixtures/<N>-<slug>/                    │
+            └────────────────────────────────────────────────────┘
+                                  │
+                                  v
+            ┌────────────────────────────────────────────────────┐
+            │  2. Layer 1 (workflow assertions) — automated      │
+            │     node run-layer-1.js --eval N                   │
+            │     Grades workflow-log + plan + entity log        │
+            └────────────────────────────────────────────────────┘
+                                  │
+                                  v
+            ┌────────────────────────────────────────────────────┐
+            │  3. Layer 2 (code assertions) — automated          │
+            │     node run-layer-2.js --eval N                   │
+            │     Grades every .tsx in the fixture               │
+            └────────────────────────────────────────────────────┘
+                                  │
+                                  v
+            ┌────────────────────────────────────────────────────┐
+            │  4. Layer 3 (UX rubric) — manual                   │
+            │     Open the deployed page in the browser; score   │
+            │     against the rubric below                       │
+            └────────────────────────────────────────────────────┘
+```
+
+Once a fixture is captured, Layers 1 and 2 are re-runnable in seconds. Capture
+is the slow part — it requires a real Dataverse env, a real `/genpage`
+session, and ~5 minutes per eval.
+
+### Capturing a fixture
+
+1. Open Claude Code with the `model-apps` plugin loaded:
+   ```bash
+   claude --plugin-dir /path/to/plugins/model-apps
+   ```
+2. Send the eval's `prompt` from `evals.json` verbatim. Example for eval 1:
+   ```
+   /genpage Build a page showing Account records as a gallery of cards.
+   Include name, website, email, phone number. Make the gallery
+   scrollable and each card clickable to open the Account record.
+   ```
+3. As the planner asks `AskUserQuestion` calls, respond per the eval's
+   `data.question_answers` field. For stress evals with `plan_revision_scenario`
+   or `planner_scenario`, follow the scripted behavior.
+4. When the planner enters plan mode, approve it (or reject per the eval's
+   scripted scenario, then approve the revision).
+5. After the run completes, copy from the working directory into a new fixture
+   folder:
+   ```
+   fixtures/
+     <eval-id>-<short-slug>/
+       *.tsx                       # every page produced (NOT RuntimeTypes.ts)
+       workflow-log.md             # required
+       genpage-plan.md             # required for create-flow evals
+       genpage-edit-plan.md        # required for edit-flow evals
+       entity-creation-log.md      # only when entities were created
+   ```
+6. Validate locally:
+   ```bash
+   node evals/model-apps/genpage/run-layer-1.js --eval <id>
+   node evals/model-apps/genpage/run-layer-2.js --eval <id>
+   ```
+7. Commit. Open a PR titled `Add eval fixture for <eval-id>` or
+   `Regenerate fixtures for <rule version>`.
+
+See `evals/model-apps/genpage/fixtures/README.md` for fixture directory format
+and naming conventions.
+
+### Regenerating fixtures when rules change
+
+When the page-builder rules change (a new `common_code_assertion` is added or
+an existing one tightens), captured fixtures become stale. To regenerate:
+
+1. Re-run `/genpage` for every affected eval against the new agent.
+2. Replace fixture contents wholesale — incremental diffs aren't meaningful
+   because the agent may legitimately restructure files.
+3. Run both layers: `node run-layer-1.js && node run-layer-2.js`. Both must
+   exit 0.
+4. Commit as one PR titled `Regenerate eval fixtures for <rule version>`.
 
 ## Related files
 
@@ -68,18 +190,62 @@ To run only a subset, filter by `tier` (e.g., `smoke`-only for quick validation)
 ### Step 2: Layer 1 — Workflow assertions
 
 For each eval, verify:
-- All 15 `common_workflow_assertions` — generic workflow guarantees that every run must satisfy
-- All of the eval's own `expectations` — the eval-specific workflow checks
+- All 15 `common_workflow_assertions` — generic workflow guarantees every run must satisfy
+- All of the eval's own `expectations` — eval-specific workflow checks
 
-These are checked against the `workflow-log.md` and the files in the working directory. No browser or deployment needed for this layer.
+These are checked against `workflow-log.md`, `genpage-plan.md`, and (when
+present) `entity-creation-log.md`. No browser or deployment needed.
 
-**Pass criteria:** Every assertion passes. Zero missed agent invocations, zero skipped phases, zero misordered operations.
+**Automated path (preferred).** Use the Layer 1 runner:
+
+```bash
+node evals/model-apps/genpage/run-layer-1.js
+node evals/model-apps/genpage/run-layer-1.js --eval 2          # one fixture
+node evals/model-apps/genpage/run-layer-1.js --tier smoke      # smoke tier only
+```
+
+The runner outputs TAP v13 — exit 0 when every fixture passes, 1 on any
+failing assertion. Failures include the file path and a short reason.
+
+Assertions that require interactive observation (e.g., "user approves the
+revised plan on the second presentation") emit `ok # SKIP` rather than
+guessing — they need to be captured into the workflow log in a parseable form,
+or graded manually.
+
+**Manual path.** Read the workflow log and tick each assertion by hand against
+the recorded behavior. Slow (5-10 min per eval); use only when capturing a
+fixture for the first time and you want to verify the agent's behavior before
+committing.
+
+**Pass criteria:** Every assertion passes. Zero missed agent invocations, zero
+skipped phases, zero misordered operations.
 
 ### Step 3: Layer 2 — Code quality
 
 For every generated `.tsx` file, check against the 18 `common_code_assertions`.
 
-These can be verified with grep / regex against the source:
+**Automated path (preferred).** Use the Layer 2 runner:
+
+```bash
+node evals/model-apps/genpage/run-layer-2.js
+node evals/model-apps/genpage/run-layer-2.js --eval 2          # one fixture
+node evals/model-apps/genpage/run-layer-2.js --tier smoke      # smoke tier only
+```
+
+Fixtures live in `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` and each
+contains the `.tsx` files a real `/genpage` run produced (RuntimeTypes.ts is
+excluded from checks). The runner outputs TAP v13 — exit code 0 when every
+fixture passes, 1 on any failing assertion. See
+`evals/model-apps/genpage/fixtures/README.md` for fixture format and how to
+capture new ones from real `/genpage` sessions.
+
+Assertions that require AST analysis (Rule 14 batched setState, nested-function
+detection, translate() coverage, exact column-name verification) currently emit
+`ok # SKIP` rather than guessing — they remain manual checks until a parser-based
+implementation lands.
+
+**Manual path.** For ad-hoc verification or assertions the runner skips, grep
+the source directly:
 
 | Assertion | Grep pattern |
 |-----------|--------------|

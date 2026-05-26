@@ -310,16 +310,12 @@ import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
 <div style={themeToVars(theme)} className={styles.root}>
 
 // CORRECT — outer div sets CSS vars only, inner div reads them via className
-// CRITICAL: outer div MUST have height: 100% and overflow: hidden so the inner
-// div can scroll. Without this, the page content overflows invisibly with no scrollbar.
-<div style={{ ...themeToVars(isDarkMode ? webDarkTheme : webLightTheme), height: "100%", overflow: "hidden" }}>
+<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
     <div className={styles.root}>
         {/* all Fluent descendants inherit the theme via CSS variables */}
     </div>
 </div>
 ```
-
-**Root div scrolling:** The inner `styles.root` div must have `height: "100%"` and `overflowY: "auto"` so the page content is scrollable. The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable.
 
 ### Data Caching Across Navigations
 
@@ -418,9 +414,7 @@ return (
 8. **Preserve API signatures** - Don't rename dataApi methods/parameters
 9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
 10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
-11. **queryTable returns `{ rows: T[] }`, NOT a raw array** — `dataApi.queryTable()` returns a `DataTable<T>` object with `.rows`, `.hasMoreRows`, and `.loadMoreRows()`. Always access the records via `result.rows`. `retrieveRow()` returns the row object directly (no wrapper).
-12. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
-
+11. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
 
 ```typescript
 // WRONG — causes runtime error
@@ -491,16 +485,6 @@ const result = await dataApi.queryTable("table1", {
   pageSize: 50,
 });
 // result.hasMoreRows + result.loadMoreRows() for pagination
-
-// IMPORTANT: queryTable returns DataTable<T> = { rows: T[], hasMoreRows: boolean }
-// Access the array via result.rows — it is NOT a raw array
-const records = result.rows;
-
-// Load more pages
-if (result.hasMoreRows && result.loadMoreRows) {
-  const nextPage = await result.loadMoreRows();
-  const moreRecords = nextPage.rows;
-}
 
 // Create / Update / Retrieve
 const id = await dataApi.createRow("table1", { name: "New", status: 0 });

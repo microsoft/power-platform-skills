@@ -190,12 +190,8 @@ async function getDefaultPublisherPrefix(envUrl) {
 }
 
 /**
- * Parses CLI args. Accepts both space-separated (`--flag value`) and
- * equals-separated (`--flag=value`) forms, plus bare boolean flags (`--bool`).
- *   <positional> [--flag value] [--flag=value] [--bool]
+ * Parses CLI args of the form: <positional> [--flag value] [--flag2 value2] [--bool]
  * Returns { positional: [...], flags: { key: value } }. Repeated --flag overwrites.
- * For `--flag=value`, only the first `=` is treated as the separator so values
- * containing `=` (e.g. OData filters) are preserved.
  */
 function parseArgs(argv) {
   const positional = [];
@@ -203,17 +199,12 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg.startsWith('--')) {
-      const body = arg.slice(2);
-      const eq = body.indexOf('=');
-      if (eq !== -1) {
-        flags[body.slice(0, eq)] = body.slice(eq + 1);
-        continue;
-      }
+      const key = arg.slice(2);
       const next = argv[i + 1];
       if (next === undefined || next.startsWith('--')) {
-        flags[body] = true;
+        flags[key] = true;
       } else {
-        flags[body] = next;
+        flags[key] = next;
         i++;
       }
     } else {
