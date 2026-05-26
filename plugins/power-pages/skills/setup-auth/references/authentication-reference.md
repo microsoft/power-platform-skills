@@ -3395,6 +3395,9 @@ export default function UserProfile() {
     address1_stateorprovince: '', address1_postalcode: '', address1_country: '',
   })
 
+  // Document title — same `<Page> — <Site Name>` convention as other auth pages
+  useEffect(() => { document.title = 'My Profile — Site Name' }, [])
+
   useEffect(() => {
     if (!isAuthenticated) {
       navigate('/login?returnUrl=' + encodeURIComponent('/user-profile'))

@@ -1761,6 +1761,13 @@ The executor MUST NOT add any of these — they're either redundant with existin
 - Validate-on-blur using the existing pattern from `Login.tsx` / `Registration.tsx` (`touched` state, `validateField`, `show()` helper)
 - Field-level validation: mobile phone min 6 chars if non-empty. Other 7 fields have no format validation. All fields optional — empty strings allowed and sent as `null`.
 - Submit calls `updateMyProfile(contactId, payload)`. On success: set `successMessage` state to "Profile updated.", call `refresh()` from `useAuth()` so header avatar + name re-render. On error: show server error inline.
+- **Set the browser tab title** — add a `useEffect` near the top of the component (matching the convention used on `Login.tsx`, `Registration.tsx`, `ForgotPassword.tsx`, `ResetPassword.tsx`, `RedeemInvitation.tsx`, `ExternalLoginConfirmation.tsx`, `Terms.tsx`, etc.):
+
+  ```tsx
+  useEffect(() => { document.title = 'My Profile — <SITE_NAME>' }, [])
+  ```
+
+  Substitute `<SITE_NAME>` with the actual site display name discovered in Phase 1 (the same value used in the other auth pages — e.g., `Contoso Portal`). Format MUST match the existing pages exactly: `<Page Title> — <Site Name>` (em-dash `—`, space on each side). Do NOT use `|`, `:`, or a hyphen.
 - Use existing styles convention (CSS variables, card layout, max-width ~580)
 - See `authentication-reference.md` "User Profile Page" section for the complete reference implementation
 

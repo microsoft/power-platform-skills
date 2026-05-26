@@ -497,6 +497,7 @@
         "Phase 5.1.9 creates src/pages/UserProfile.tsx at exactly that path and filename (NOT Profile.tsx, NOT /profile route)",
         "Route is /user-profile (NOT /profile — /profile is reserved by the server)",
         "Service functions are named getMyProfile and updateMyProfile (NOT patchOwnContact, fetchProfile, saveProfile, etc.)",
+        "UserProfile page sets document.title in a useEffect using the same `<Page> — <Site Name>` convention as other auth pages (e.g., 'My Profile — Contoso Portal'), with the actual site name substituted in",
         "UserProfile page reads user.contactId from useAuth() and calls getMyProfile(contactId) on mount",
         "UserProfile page has a read-only Account Details section at the top showing ONLY the user's full name (firstname + lastname combined) and email (sourced from useAuth().user.email — no Web API roundtrip needed)",
         "Account Details section does NOT display contactId, web roles, claims, or any other metadata — only full name + email",
