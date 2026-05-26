@@ -241,10 +241,10 @@ Normal report:
 { "status": "ok", "findings": [ ], "details": { "kind": "kv", "label": "Scan details", "entries": [ ] } }
 ```
 
-No completed scan exists for this site (fresh site, or current scan still running):
+No completed scan exists for this site (fresh site, or current scan still running). The script emits a single `info` finding so review-mode output never produces an empty section:
 
 ```json
-{ "status": "empty", "findings": [], "details": {} }
+{ "status": "empty", "findings": [{ "id": "scan-site-empty", "severity": "info", "title": "No completed scan report available", "details": "..." }], "details": {} }
 ```
 
 API returned a response missing the `Rules` array — the report cannot be parsed. The script emits a single `warning` finding so the orchestrator can surface the failure:

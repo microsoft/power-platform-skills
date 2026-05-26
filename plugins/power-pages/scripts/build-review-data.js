@@ -86,7 +86,6 @@ function skippedSection(meta, reason) {
     findings: [
       {
         id: `${meta.id}-skipped`,
-        severity: 'info',
         title: `${meta.label} check was skipped`,
         details: reason || 'No additional detail.',
       },
@@ -116,7 +115,6 @@ function buildSections(inputDir, outputBasename) {
 
     if (raw?.status === 'skipped') {
       sections.push(skippedSection(meta, raw.reason));
-      totals.info += 1;
       continue;
     }
 

@@ -166,7 +166,7 @@ After all subagents complete, expect JSON files at `<SYSTEM_TEMP>/security-revie
 └── audit-permissions.json   (when invoked)
 ```
 
-If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }` so the report-building step can render it as a single `info` finding for that section.
+If a skill's subagent fails or is skipped, write a placeholder file with shape `{ "status": "skipped", "reason": "<plain-language reason>" }`. The report-building step renders this as a single non-severity finding for that section (no `severity` field, to stay consistent with § 3.1.3).
 
 ### 3.1.3 Severity policy
 
@@ -281,7 +281,7 @@ If the cleanup fails (file lock, permission), warn the user and continue — the
 - **Plain language with users** — never lead with technical terms.
 - **Parallel subagent delegation** — every selected skill runs as a parallel subagent via the `Agent` tool, launched in a single message. Perform the inline read-only `setup-auth` check while subagents work. Use the staggered launch (§ 3.1 fallback) only if the harness rejects the parallel-batch call.
 - **Single consolidated HTML** — never produce per-skill HTML reports during this run. Skills run in `--review` mode.
-- **Same look and feel** — use the shared template under `assets/`. The generated report must match the existing audit-permissions report visually.
+- **Same look and feel** — rendering goes through the shared template at `${CLAUDE_PLUGIN_ROOT}/scripts/lib/templates/security-review-report.html` via `scripts/render-review.js`. Do not author per-skill HTML or duplicate the template; the generated report must match the existing audit-permissions report visually.
 - **Cleanup is mandatory** — the cleanup step is not optional. Failing to clean up is treated as a non-fatal warning, but the skill always tries.
 - **Never run destructive sub-actions automatically** — skills that propose changes (e.g., editing site settings, deleting WAF rules) must operate in read-only `--review` mode during this orchestration. Apply changes only via the explicit "walk me through fixes" follow-up, after the user picks an action.
 

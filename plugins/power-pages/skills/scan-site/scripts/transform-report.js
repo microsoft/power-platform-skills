@@ -159,6 +159,24 @@ function transform(reportBody) {
   return { status: 'ok', findings, details: scanDetails };
 }
 
+function emptyReport() {
+  return {
+    status: 'empty',
+    findings: [
+      {
+        id: 'scan-site-empty',
+        severity: 'info',
+        title: 'No completed scan report available',
+        details:
+          'The deep-scan service has no completed report for this site yet. ' +
+          'Either no scan has been run, or a scan is currently in progress. ' +
+          'Wait for the active scan to finish, or start a new scan via `/scan-site`.',
+      },
+    ],
+    details: {},
+  };
+}
+
 function readReportFile(filePath) {
   if (!fs.existsSync(filePath)) {
     process.stderr.write(`Report file not found: ${filePath}\n`);
@@ -202,9 +220,7 @@ async function main() {
   if (reportFile) {
     const raw = readReportFile(reportFile);
     if (raw.status === 'empty') {
-      process.stdout.write(
-        JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n'
-      );
+      process.stdout.write(JSON.stringify(emptyReport()) + '\n');
       return;
     }
     // Accept either get-latest-report.js stdout ({ status, body }) or the bare body.
@@ -212,9 +228,7 @@ async function main() {
   } else if (portalId) {
     reportBody = await fetchReportBody(portalId);
     if (reportBody == null) {
-      process.stdout.write(
-        JSON.stringify({ status: 'empty', findings: [], details: {} }) + '\n'
-      );
+      process.stdout.write(JSON.stringify(emptyReport()) + '\n');
       return;
     }
   } else {
@@ -227,6 +241,6 @@ async function main() {
   process.stdout.write(JSON.stringify(transform(reportBody)) + '\n');
 }
 
-module.exports = { transform };
+module.exports = { transform, emptyReport };
 
 runCli(module, main);
