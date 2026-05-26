@@ -531,6 +531,23 @@
         "Sets the ProfileRedirectEnabled site setting to false",
         "Prompts the user to deploy the updated site"
       ]
+    },
+    {
+      "id": 25,
+      "prompt": "Set up authentication for my Power Pages React site with local login and Terms and Conditions enabled.",
+      "expected_output": "Auth setup for a React site with local login + Terms and Conditions. Before asking the user about the Privacy Extensions solution prerequisite, the skill automatically runs check-solution-installed.js against the current Dataverse environment to detect whether msdynce_PortalPrivacyExtensions is installed. Based on the JSON result, the skill either confirms the prerequisite (and skips the question), or tells the user clearly that Terms & Conditions will NOT be enforced server-side and asks whether to continue scaffolding anyway or skip Terms entirely. If the auto-detection fails (no PAC env, expired token, missing permissions), the skill falls back to the manual three-option confirmation question.",
+      "files": [],
+      "expectations": [
+        "Detects the site as a React framework project",
+        "Asks the optional features question in Phase 2.1 and the user selects Terms and Conditions",
+        "Runs `node \"${CLAUDE_PLUGIN_ROOT}/scripts/check-solution-installed.js\" --solutionName \"msdynce_PortalPrivacyExtensions\"` BEFORE asking the GDPR prerequisite question",
+        "Parses the script's stdout JSON result and branches based on the `installed` boolean",
+        "When the script returns installed: true, skips the manual prerequisite confirmation entirely and tells the user the solution is detected (including the version from the JSON) before proceeding to collect Terms content",
+        "When the script returns installed: false, tells the user clearly that Terms and Conditions will NOT be enforced by the server until msdynce_PortalPrivacyExtensions is installed (Authentication/Registration/TermsAgreementEnabled is silently ignored without it), then asks via AskUserQuestion whether to continue scaffolding anyway or skip Terms entirely (two options, not three)",
+        "When the script exits non-zero (infrastructure failure: no env URL, expired Azure CLI token, missing Read permission on the solutions table, network error), tells the user we couldn't auto-detect the solution and falls back to the manual three-option question (Yes / Continue anyway / Cancel)",
+        "Sets the ProfileRedirectEnabled site setting to false",
+        "Prompts the user to deploy the updated site"
+      ]
     }
   ]
 }

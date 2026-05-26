@@ -732,13 +732,23 @@ The Web API `fields` site setting MUST include `contactid` plus the 8 editable f
 >
 > Without the Privacy Extensions solution, the server silently ignores `TermsAgreementEnabled`. The setup-auth skill will still write all three pieces — but unless the solution is installed in Dataverse, the terms gate won't be enforced server-side.
 
-Use `AskUserQuestion`:
+**Auto-detect the Privacy Extensions solution before asking.** Run:
 
-| Question | Header | Options |
-|----------|--------|---------|
-| Do you have the GDPR/Privacy Extensions solution installed, or are you okay with terms being a no-op until you install it? | Privacy solution | Yes — solution installed (or I'll install it), Continue anyway — set up terms; I understand they won't be enforced until I install the solution, Cancel — I don't want terms |
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "msdynce_PortalPrivacyExtensions"
+```
 
-**If "Cancel"**: skip the Terms branch entirely, do not set `TermsAgreementEnabled`, do not create the Terms page or snippets.
+The script prints JSON to stdout: `{ "installed": true, "version": "..." }` if found, or `{ "installed": false }` if the solution isn't in the environment. On infrastructure failure (no PAC environment, expired Azure CLI token, missing Read permission on the solutions table, network error), it exits non-zero and writes a human-readable reason to stderr.
+
+Branch on the result:
+
+| Script result | What to do |
+|---|---|
+| `installed: true` | Skip the prereq question entirely and proceed to collecting terms content (next section). Briefly tell the user: *"Confirmed `msdynce_PortalPrivacyExtensions` v{version} is installed in your environment — terms enforcement will work."* |
+| `installed: false` | **Tell the user clearly that terms and conditions will NOT work**: *"The `msdynce_PortalPrivacyExtensions` solution is NOT installed in your Dataverse environment. The Terms and Conditions feature will NOT be enforced by the server until that solution is installed — `Authentication/Registration/TermsAgreementEnabled` is silently ignored without it. The site setting, Terms page, and content snippets will still be scaffolded, but the gate is a no-op until the solution is in place."* Then ask via `AskUserQuestion`: **header** "Privacy solution", **question** "Would you still like to set up Terms and Conditions now (it can be enabled later once you install the solution), or skip it?", **options**: "Continue anyway — scaffold the Terms infrastructure; I'll install the solution later", "Cancel — skip Terms and Conditions for this site". |
+| Script exited non-zero (infrastructure failure) | Tell the user we couldn't auto-detect the solution (include the stderr message succinctly so they understand why — e.g., "couldn't reach Dataverse", "missing permissions on the solutions table"). Fall back to the manual prompt: **question** "We couldn't auto-detect whether `msdynce_PortalPrivacyExtensions` is installed. Do you have the GDPR/Privacy Extensions solution installed?", **options**: "Yes — solution is installed (or I'll install it)", "Continue anyway — set up terms; I understand they won't be enforced until I install the solution", "Cancel — I don't want terms". |
+
+**If the user picks "Cancel" (in either the not-installed or fallback path)**: skip the Terms branch entirely, do not set `TermsAgreementEnabled`, do not create the Terms page or snippets.
 
 Otherwise, collect the terms content. The server uses 4 content snippets — the skill hardcodes these values into the SPA Terms page component. Ask the user:
 
