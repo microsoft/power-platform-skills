@@ -6,7 +6,7 @@
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
-> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces the five GATE rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`) at error severity on every SKILL.md under `plugins/power-pages/skills/`.
+> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces seven rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `CATALOG-row-must-have-marker`, `GATE-prose-block-required`) at error severity on every SKILL.md under `plugins/power-pages/skills/`.
 
 ---
 
