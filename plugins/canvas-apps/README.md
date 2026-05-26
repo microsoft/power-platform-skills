@@ -39,9 +39,9 @@ or edit an existing one based on the current app state.
 
 ### `/configure-canvas-mcp`
 
-Register the Canvas Authoring MCP server with Claude Code or GitHub Copilot.
+Configure the Canvas Authoring MCP server for the current coauthoring session. The MCP server is auto-registered by the plugin — this skill connects it to a specific app.
 
-**Usage:** Invoke directly with `/configure-canvas-mcp`, or use any of the keywords below to trigger the skill automatically:
+**Usage:** Invoke directly with `/configure-canvas-mcp`, or use any of the keywords below to trigger it automatically:
 
 - `Configure MCP for Canvas Apps`
 - `Set up the Canvas Authoring MCP server`
@@ -53,6 +53,7 @@ The `canvas-authoring` MCP server exposes the following tools:
 
 | Tool | Description |
 |------|-------------|
+| `configure` | Configures the MCP server for a specific coauthoring session (environment ID, app ID, cluster category) |
 | `compile_canvas` | Validates canvas app YAML files in a directory using the Power Apps authoring service |
 | `describe_api` | Gets detailed information about a specific API (connector) including its operations and parameters |
 | `describe_control` | Gets detailed information about a specific Power Apps control including properties, variants, and metadata |

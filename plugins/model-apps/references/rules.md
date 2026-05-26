@@ -14,11 +14,13 @@ Comprehensive rules for generating generative page code. Read this file during c
 6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
 7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
-9. **Icons**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`)
+9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
 11. **No FluentProvider**: Already provided at root — adding another causes a double-render flicker in React 17. For dark mode/theme overrides, use the `themeToVars` two-div pattern in **Special Patterns > Dark Mode Toggle**.
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
+14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
+15. **Data fetching — inline IIFE + cache guard (Dataverse list/detail pages)**: For pages where the user navigates away and returns (list paired with detail, tabbed UIs), use the module-level `window` cache + inline async IIFE pattern documented in `references/data-caching.md`. Never use `useCallback` for data-fetching functions — `dataApi` gets a new object reference after the initial render, so a `useCallback` recreates, re-fires the effect, and any `setData(loading: true)` call resets the spinner causing flicker. The cache guard (`if (cache.has(key)) return`) is the fix. **Do NOT apply this pattern to forms, single-visit dashboards, or mock-data pages.** See the reference for the full pattern.
 
 ---
 
@@ -143,232 +145,83 @@ export default GeneratedComponent;
 
 ## Localization
 
-### When to Apply
+Localization guidance has been moved to a separate reference that is loaded
+**conditionally** — only when `pac model list-languages` returns multiple
+configured languages OR any non-English language. For English-only environments,
+skip this entirely.
 
-Only apply localization when `pac model list-languages` (run in Step 2) returns **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+See: `${CLAUDE_PLUGIN_ROOT}/references/localization.md`
 
-### Language Detection
-
-Detect the user's UI language at component mount using the Xrm global context:
-
-```typescript
-const language = React.useMemo(() => {
-  const uiLanguageId = (typeof Xrm !== "undefined" &&
-    Xrm.Utility?.getGlobalContext()?.userSettings?.languageId) || 1033;
-  const langMap: Record<number, { code: string; name: string; isRtl: boolean }> = {
-    // Populate entries from pac model list-languages output, mapped to LCID info.
-    // Example: 1033: { code: "en-US", name: "English", isRtl: false },
-  };
-  return langMap[uiLanguageId] || { code: "en-US", name: "English", isRtl: false };
-}, []);
-```
-
-### Translation Dictionary
-
-Create a translations dictionary with entries for every language detected in Step 2. All user-visible text must come from this dictionary — **NEVER hardcode display text in JSX**.
-
-**IMPORTANT:** Do NOT put date formats, currency symbols, or number formats in the translations dictionary. These MUST come from the user's Dataverse `usersettings` via `dataApi` (see User Settings for Formatting section below).
-
-```typescript
-const translations: Record<string, Record<string, string>> = {
-  "en-US": {
-    title: "Dashboard",
-    save: "Save",
-    cancel: "Cancel",
-    // ... all user-visible strings
-  },
-  "ar-SA": {
-    title: "لوحة القيادة",
-    save: "حفظ",
-    cancel: "إلغاء",
-  },
-  // ... one entry per detected language
-};
-
-const translate = (key: string): string =>
-  translations[language.code]?.[key] || translations["en-US"]?.[key] || key;
-```
-
-Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
-
-### RTL Layout Support
-
-Detect RTL from the language LCID. Arabic (1025, 2049, 3073, 4097, 5121) and Hebrew (1037) are RTL.
-
-- Wrap the root element with the `dir` attribute: `<div dir={language.isRtl ? "rtl" : "ltr"}>`.
-- Use **logical CSS properties** instead of physical ones:
-  - `marginInlineStart` / `marginInlineEnd` (not `marginLeft` / `marginRight`)
-  - `paddingInlineStart` / `paddingInlineEnd` (not `paddingLeft` / `paddingRight`)
-  - `insetInlineStart` / `insetInlineEnd` (not `left` / `right`)
-  - `borderInlineStart` / `borderInlineEnd` (not `borderLeft` / `borderRight`)
-  - `textAlign: "start"` / `textAlign: "end"` (not `"left"` / `"right"`)
-- For flexbox, use `flexDirection: language.isRtl ? "row-reverse" : "row"` only when logical properties are insufficient.
-
-### User Settings for Formatting
-
-**MANDATORY:** Fetch user formatting preferences from the `usersettings` system table via `dataApi`. This is required even for mock data pages — `usersettings` is always available.
-
-Retrieve these columns: `uilanguageid`, `localeid`, `decimalsymbol`, `numberseparator`, `currencysymbol`, `dateformatstring`, `dateseparator`.
-
-```typescript
-const [userSettings, setUserSettings] = React.useState<any>(null);
-
-React.useEffect(() => {
-  const fetchUserSettings = async () => {
-    try {
-      const currentUserId = (typeof Xrm !== "undefined" &&
-        Xrm.Utility?.getGlobalContext()?.userSettings?.userId)
-        ?.replace("{", "").replace("}", "");
-      if (!currentUserId) return;
-      const settings = await dataApi.retrieveRow("usersettings" as any, {
-        id: currentUserId,
-        select: ["uilanguageid", "localeid", "decimalsymbol", "numberseparator",
-                 "currencysymbol", "dateformatstring", "dateseparator"] as any,
-      });
-      setUserSettings(settings);
-    } catch (error) {
-      console.error("Failed to fetch user settings", error);
-    }
-  };
-  void fetchUserSettings();
-}, [dataApi]);
-```
-
-Provide formatting helpers that use these settings. **NEVER hardcode date formats or currency symbols.**
-
-**CRITICAL rules for formatting:**
-- Do NOT use `Intl.NumberFormat` with a hardcoded currency code as the primary formatter — always use the helpers below that read from `usersettings`.
-- Do NOT display raw number or currency values — always wrap them with the appropriate formatting helper.
-- WRONG: `<span>${amount}</span>` or `{currencyValue}` — hardcodes `$` or displays raw number without locale formatting.
-- WRONG: `new Intl.NumberFormat(language, { style: 'currency', currency: 'USD' })` — hardcodes currency code; the user's currency comes from `usersettings.currencysymbol`, not from a hardcoded ISO code.
-- CORRECT: `{translate('amount')}: {formatCurrency(amount)}` — use `translate()` for labels and `formatCurrency()` for monetary values.
-
-```typescript
-const formatDate = (date: Date | string | null): string => {
-  if (!date) return "";
-  const d = typeof date === "string" ? new Date(date) : date;
-  if (!userSettings) return d.toLocaleDateString();
-  const fmt = userSettings.dateformatstring;
-  const sep = userSettings.dateseparator;
-  if (!fmt || !sep) return d.toLocaleDateString();
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
-  return fmt
-    .replace(/[/\-.]/g, sep)
-    .replace(/yyyy|yy|MM|M|dd|d/g, (token: string) => {
-      switch (token) {
-        case "yyyy": return String(year);
-        case "yy": return String(year).slice(-2);
-        case "MM": return String(month).padStart(2, "0");
-        case "M": return String(month);
-        case "dd": return String(day).padStart(2, "0");
-        case "d": return String(day);
-        default: return token;
-      }
-    });
-};
-
-const formatNumber = (num: number): string => {
-  if (!userSettings?.decimalsymbol || !userSettings?.numberseparator) {
-    return num.toLocaleString();
-  }
-  const [intPart, decPart] = num.toString().split(".");
-  const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, userSettings.numberseparator);
-  return decPart ? `${formatted}${userSettings.decimalsymbol}${decPart}` : formatted;
-};
-
-const formatCurrency = (amount: number): string => {
-  if (!userSettings?.currencysymbol) {
-    return formatNumber(amount);
-  }
-  return `${userSettings.currencysymbol}${formatNumber(amount)}`;
-};
-```
 
 ---
 
 ## Page Input
 
-The generated component may receive an optional `pageInput` prop for accepting context from the hosting page (e.g., a selected record or custom data).
+The generated component receives an optional `pageInput` prop from the hosting
+page (selected record context, custom data). Already in `GeneratedComponentProps`
+— destructure with `const { dataApi, pageInput } = props;`.
 
-### PageInput Interface
+### Interface
 
 ```typescript
 export interface PageInput {
-    /** The logical name of the entity associated with the current page context. */
-    entityName?: string;
-    /** The unique identifier (GUID) of the selected record. */
-    recordId?: string;
-    /**
-     * A key-value map of additional data passed from the page.
-     * Keys are strings, values are primitives of unknown type (string, number, boolean, etc.).
-     * No functions are allowed as values.
-     */
-    data?: Record<string, unknown>;
+    entityName?: string;   // logical name (not display name)
+    recordId?: string;     // record GUID
+    data?: Record<string, unknown>;  // custom values — primitives only, type unknown
 }
 ```
 
-`PageInput` is already part of `GeneratedComponentProps` — destructure it from props: `const { dataApi, pageInput } = props;`
-
 ### Rules
 
-- Only use `pageInput` when the user specifically asks for it — do not assume what inputs are needed.
-- **CRITICAL:** Do not give default values for `pageInput` fields if they are not provided.
-- `entityName` is an entity's logical name, not display name.
-- The `data` object values are primitives of unknown type — never assume the type, always cast robustly.
+- Only use `pageInput` when the user explicitly asks — don't speculate on inputs.
+- Never set defaults for missing `pageInput` fields.
+- `data` values are unknown-typed primitives — cast robustly, never assume.
 
-### Rendering Pattern for Pages with pageInput
+### Rendering pattern (avoid double-render flicker)
 
-`pageInput` is available synchronously on the first render when opened via `Xrm.Navigation.navigateTo`. To avoid double-render flicker:
+`pageInput` is available synchronously on the first render via `Xrm.Navigation.navigateTo`:
 
-- **Derive values synchronously from props** — use `const recordId = pageInput?.recordId` (not `useState`). State initialization triggers re-renders; prop derivation doesn't.
-- **Use early returns** — if `recordId` is missing, return immediately. Don't wrap the body in conditional blocks inside a wrapper div.
-- **No artificial delays** — never use `setTimeout` or a `pageInputReady` flag. A 500ms delay causes the platform to show the previous page as a fallback.
-- **Initialize `loading` as `true`** when `recordId` is present — so a spinner shows on frame 0, not a blank page that flips to a spinner after a delay.
+- **Derive synchronously from props**, not `useState`. State init triggers re-renders.
+- **Early-return** if a required field is missing — no conditional wrapper divs.
+- **No `setTimeout` or `pageInputReady` flags** — 500ms delays let the platform fall back to the previous page.
+- **Initialize `loading: true`** when `recordId` is present — spinner on frame 0, not blank-flip-to-spinner.
 
-### Usage Examples
-
-**Using `dataApi` with `pageInput.entityName` and `pageInput.recordId`:**
+### Example — record context
 
 ```typescript
 const { dataApi, pageInput } = props;
 const recordId = pageInput?.recordId;
 const entityName = pageInput?.entityName;
-
-const [selectedRowData, setSelectedRowData] = useState(undefined);
+const [row, setRow] = useState(undefined);
 
 useEffect(() => {
-    // Replace these example logical names with the exact verified names from your RuntimeTypes/TableRegistrations.
     if (entityName === "account" && recordId && dataApi) {
         (async () => {
-            const row = await dataApi.retrieveRow("account", {
+            const r = await dataApi.retrieveRow("account", {
                 id: recordId,
                 select: ["statuscode", "name", "_primarycontactid_value"],
             });
-            setSelectedRowData(row);
+            setRow(r);
         })();
     }
 }, [dataApi, entityName, recordId]);
 ```
 
-**Using `pageInput.data` with safe type casting:**
+### Example — `data` with safe casting
 
 ```typescript
-// IMPORTANT: Never assume the type of data values. Robustly handle type casting.
-function toNumberOrDefault(value: unknown, fallback: number): number {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string") {
-        const parsed = Number(value);
+function toNumberOrDefault(v: unknown, fallback: number): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+        const parsed = Number(v);
         if (Number.isFinite(parsed)) return parsed;
     }
     return fallback;
 }
 
 const { pageInput } = props;
-// Always handle pageInput, pageInput.data, or any value potentially being null or undefined
-const [latitude, setLatitude] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
-const [longitude, setLongitude] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
+const [lat] = useState(toNumberOrDefault(pageInput?.data?.latitude, 0));
+const [lng] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
 ```
 
 ---
@@ -382,9 +235,6 @@ Use `Xrm.Navigation.navigateTo` for all in-app navigation. Raw URL construction 
 ```typescript
 const xrm = (window as any).Xrm;
 
-// Entity record
-xrm.Navigation.navigateTo({ pageType: "entityrecord", entityName: "account", entityId: recordId });
-
 // Another generative page with record context (entityName and recordId arrive as props.pageInput)
 xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId });
 
@@ -394,6 +244,48 @@ xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, data: 
 // Combining record context with additional custom data
 xrm.Navigation.navigateTo({ pageType: "generative", pageId: targetPageId, entityName: "account", recordId: selectedRecordId, data: { view: "summary" } });
 ```
+
+**CRITICAL — never use `pageType: "entityrecord"` or `pageType: "entitylist"` to navigate to another generative page.** Those open the standard OOB form/list, not the custom page. Always use `pageType: "generative"` with the target page's GUID.
+
+**Passing a record ID between pages:** Always put custom identifiers in `data`, not `recordId`. `recordId` is reserved for standard Dataverse record context (used by OOB forms/views); values placed there may not arrive reliably on the receiving genpage. Use `data: { accountId: selectedId }` and read it as `pageInput?.data?.accountId` on the target page. Never rely on `recordId` as the delivery channel for a custom ID.
+
+**Receiving navigation state:** On any page reachable via `navigateTo` (e.g., a detail page, or an explorer page the user navigates back to), initialize shared UI state — dark mode toggle, active filters, selected view — from `pageInput.data` first. URL params are a valid secondary source (e.g., for bookmarked URLs or direct links), but `pageInput.data` takes priority because `navigateTo` does not populate URL params. Pattern:
+
+```typescript
+// CORRECT — pageInput.data takes priority; URL param is a valid fallback
+const isDark =
+    pageInput?.data?.darkMode === true || pageInput?.data?.darkMode === "true"
+        ? true
+        : pageInput?.data?.darkMode === false || pageInput?.data?.darkMode === "false"
+        ? false
+        : new URLSearchParams(window.location.search).get("darkMode") === "true";
+const [isDarkMode, setIsDarkMode] = useState(isDark);
+```
+
+#### Multi-page builds: use `PAGEREF_` placeholders
+
+In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
+`PAGEREF_<filename-without-tsx>` placeholder as the `pageId` — the skill replaces
+these with real GUIDs in a second pass after all pages are deployed.
+
+```typescript
+// Navigating to a sibling page — use PAGEREF_ placeholder at build time
+xrm.Navigation.navigateTo({
+    pageType: "generative",
+    pageId: "PAGEREF_pet-gallery",    // replaced with real GUID post-deploy
+    entityName: "adopt_pet",
+    recordId: selectedId,
+});
+```
+
+The placeholder format is `PAGEREF_` followed by the sibling page's filename without
+`.tsx` (e.g., `pet-gallery.tsx` → `PAGEREF_pet-gallery`).
+
+**Must be quoted.** The skill's Phase 6.5 fix-up looks for `"PAGEREF_<name>"` as a
+quoted token to avoid partial-string collisions (e.g., `PAGEREF_pet` inside
+`PAGEREF_pet-gallery`). Always emit the placeholder as a string literal inside
+double quotes — assign it to `pageId` as a string, never construct it via
+concatenation.
 
 ### Dark Mode Toggle
 
@@ -418,12 +310,16 @@ import { webDarkTheme, webLightTheme } from "@fluentui/react-components";
 <div style={themeToVars(theme)} className={styles.root}>
 
 // CORRECT — outer div sets CSS vars only, inner div reads them via className
-<div style={themeToVars(isDarkMode ? webDarkTheme : webLightTheme)}>
+// CRITICAL: outer div MUST have height: 100% and overflow: hidden so the inner
+// div can scroll. Without this, the page content overflows invisibly with no scrollbar.
+<div style={{ ...themeToVars(isDarkMode ? webDarkTheme : webLightTheme), height: "100%", overflow: "hidden" }}>
     <div className={styles.root}>
         {/* all Fluent descendants inherit the theme via CSS variables */}
     </div>
 </div>
 ```
+
+**Root div scrolling:** The inner `styles.root` div must have `height: "100%"` and `overflowY: "auto"` so the page content is scrollable. The genpage host provides a fixed-height container — if neither the outer nor inner div establishes a scroll context, content below the fold is unreachable.
 
 ### Data Caching Across Navigations
 
@@ -443,13 +339,34 @@ Use `window.__pp<EntityName>Cache` as a naming convention to avoid collisions wi
 
 **When to apply:** Any time a page fetches Dataverse data and the user may navigate away and return (e.g., an explorer page paired with a detail page). First visit shows a spinner; return visits render instantly.
 
-See [9-data-caching.tsx](../../samples/9-data-caching.tsx) for complete list-page and detail-page caching examples.
+See [`references/data-caching.md`](./data-caching.md) for complete list-page and detail-page caching examples.
 
 ### Charts and Visualization
 - Use D3.js for all charts
 - D3 uses `group()` not `nest()`
 - Include tooltips, hover states, click behaviors
 - Smooth transitions (300-500ms)
+- **D3 animation guard (required):** The genpage runtime may re-evaluate modules or remount components, causing D3 transitions in `useEffect` to replay visibly. Any D3 animation (arc tweens, number counters, bar transitions, etc.) must use a `window`-level flag to ensure the animation runs only once. On subsequent effect invocations, draw the final state immediately. Also add an early-return guard if the SVG already contains rendered content. Pattern:
+  ```typescript
+  const ANIM_KEY = "__ppMyChartAnimated";
+  function MyChart(props: { value: number }) {
+      const svgRef = useRef<SVGSVGElement>(null);
+      useEffect(() => {
+          if (!svgRef.current) return;
+          const svg = d3.select(svgRef.current);
+          const w = window as any;
+          // Skip entirely if already drawn
+          if (w[ANIM_KEY] && svg.selectAll("path").size() > 0) return;
+          const shouldAnimate = !w[ANIM_KEY];
+          w[ANIM_KEY] = true;
+          svg.selectAll("*").remove();
+          // ... draw chart ...
+          if (shouldAnimate) { /* .transition().duration(800)... */ }
+          else { /* draw final state directly */ }
+      }, [props.value]);
+  }
+  ```
+  Use a unique `ANIM_KEY` per chart component (e.g., `"__ppScoreGaugeAnimated"`, `"__ppBarChartAnimated"`). Do NOT use `useRef` or module-level variables for the flag — neither survives runtime module re-evaluation.
 
 ### Image Generation
 - You CANNOT generate images or media files
@@ -501,7 +418,9 @@ return (
 8. **Preserve API signatures** - Don't rename dataApi methods/parameters
 9. **Check TableRegistrations** - Only use tables defined in TableRegistrations interface
 10. **Follow dataApi_definition** - Use the DataAPI interfaces defined below
-11. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
+11. **queryTable returns `{ rows: T[] }`, NOT a raw array** — `dataApi.queryTable()` returns a `DataTable<T>` object with `.rows`, `.hasMoreRows`, and `.loadMoreRows()`. Always access the records via `result.rows`. `retrieveRow()` returns the row object directly (no wrapper).
+12. **Lookup display-name fields cannot be in $select** - Any field ending in `name` or `yominame` that corresponds to a Foreign Key column (e.g., `primarycontactidname`, `parentaccountidname`, `regardingobjectidname`, `owneridname`, `createdbyname`) is an OData annotation, not a selectable column. This applies to **every** such field in the schema, not just the example. Select the FK column (e.g., `_primarycontactid_value`) and read the display name from its `@OData.Community.Display.V1.FormattedValue` annotation instead:
+
 
 ```typescript
 // WRONG — causes runtime error
@@ -519,157 +438,93 @@ const name = row["_regardingobjectid_value@OData.Community.Display.V1.FormattedV
 - Enable column filtering when appropriate for user data exploration
 - Don't connect to Dataverse without explicit table registrations
 - Use mocked data if no data source provided
+- **Column sizing — always required:** Set `columnSizingOptions` with `defaultWidth` and `minWidth` for every column, and add `resizableColumns` to the `DataGrid`. Without explicit widths the browser distributes space unevenly and variable-length content bleeds into adjacent columns.
+- **Text overflow in cells:** For any cell that may contain variable-length text (URLs, email addresses, long names, descriptions), apply truncation to the inner element and `minWidth: 0` on the `TableCellLayout` so the cell can actually shrink. Add a `title` attribute for full-value tooltip on hover:
+
+```typescript
+// CORRECT — truncates long URLs without bleeding into the next column
+<TableCellLayout style={{ overflow: "hidden", minWidth: 0 }}>
+    <a
+        href={normalizedUrl}
+        title={url}          // full value visible on hover
+        style={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+        }}
+    >
+        {url}
+    </a>
+</TableCellLayout>
+```
 
 ---
 
 ## DataAPI Type Definitions
 
-```typescript
-// Core Types
-export type DataColumnValue = string | number | boolean | Date | null;
-export type RowKeyDataColumnValue = string;
+The canonical TypeScript types live in `./RuntimeTypes.ts`, auto-generated by
+`pac model genpage generate-types` per build with the actual entity tables,
+enum registrations, and a fully-instantiated `GeneratedComponentProps`. The
+page-builder reads that file in Step 2. **Do not duplicate the types here**
+— anything we'd write would be stale relative to the generated source.
 
-export interface DataRow {
-  [column: string]: DataColumnValue
-}
-
-export type TableRow<R extends DataRow = DataRow> = R;
-
-export interface DataTable<T> {
-  rows: T[];
-  hasMoreRows: boolean;
-  loadMoreRows?: () => Promise<DataTable<T>>;
-}
-
-export type ExtractFields<T, FieldType = DataColumnValue> = {
-  [K in keyof T as Required<T>[K] extends FieldType ? K : never]: T[K]
-};
-
-export type ExtractSelectable<E> = {
-  [K in keyof ExtractFields<E, DataColumnValue>]: E[K]
-};
-
-export type ReadableTableRow<E> = ExtractSelectable<E> & {
-  [K in keyof ExtractFields<E, DataColumnValue> as `${Extract<K, string>}@OData.Community.Display.V1.FormattedValue`]?: string
-};
-
-// Helper to exclude readonly properties
-export type ExcludeReadonly<T> = {
-  [P in keyof T as (<Q>() => Q extends { [K in P]: T[P] } ? 1 : 2) extends
-    (<Q>() => Q extends { -readonly [K in P]: T[P] } ? 1 : 2) ? P : never]: T[P]
-};
-
-export type WritableTableRow<E extends TableRow> = {
-  [K in keyof ExcludeReadonly<ExtractFields<E, DataColumnValue>>]: E[K]
-}
-
-// Query Options
-export interface QueryTableOptions<E extends TableRow> {
-  select?: (keyof ExtractSelectable<E>)[];
-  pageSize?: number;
-  filter?: string;  // ODATA $filter
-  orderBy?: string; // ODATA $orderby
-}
-
-export interface RetrieveRowOptions<E extends TableRow> {
-  id: string;
-  select?: (keyof ExtractSelectable<E>)[];
-}
-
-// Registrations
-export interface BaseTableRegistrations {
-  [tableName: string]: TableRow;
-}
-
-export interface BaseEnumRegistrations {
-  [enumName: string]: number;
-}
-
-export interface EnumChoice<E extends EnumName<ER>, ER extends BaseEnumRegistrations> {
-  label: string;
-  value: ER[E];
-}
-
-// Main API Interface
-export interface BaseUxAgentDataApi<TR extends BaseTableRegistrations, ER extends BaseEnumRegistrations> {
-  createRow<T extends keyof TR>(tableName: T, row: WritableTableRow<TR[T]>): Promise<RowKeyDataColumnValue>;
-  updateRow<T extends keyof TR>(tableName: T, rowId: RowKeyDataColumnValue, row: WritableTableRow<TR[T]>): Promise<void>;
-  deleteRow<T extends keyof TR>(tableName: T, rowId: RowKeyDataColumnValue): Promise<void>;
-  retrieveRow<T extends keyof TR>(tableName: T, options: RetrieveRowOptions<TR[T]>): Promise<ReadableTableRow<TR[T]>>;
-  queryTable<T extends keyof TR>(tableName: T, query: QueryTableOptions<TR[T]>): Promise<DataTable<ReadableTableRow<TR[T]>>>;
-  getChoices<E extends EnumName<ER>>(enumName: E): Promise<EnumChoice<E, ER>[]>;
-}
-```
+What you can rely on from RuntimeTypes:
+- `TableRow`, `ReadableTableRow<E>`, `WritableTableRow<E>` — table row shapes
+- `DataColumnValue`, `RowKeyDataColumnValue` — primitive value types
+- `QueryTableOptions<E>`, `RetrieveRowOptions<E>` — query parameter shapes
+- `TableRegistrations`, `EnumRegistrations` — env-specific table/enum maps
+- `GeneratedComponentProps` — the top-level props (includes `dataApi`, `pageInput`)
+- `BaseUxAgentDataApi<TR, ER>` — the dataApi interface with `createRow`,
+  `updateRow`, `deleteRow`, `retrieveRow`, `queryTable`, `getChoices`
 
 ---
 
 ## DataAPI Usage Examples
 
 ```typescript
-// User-provided type definitions example (when provided):
-const enum Table1Status { Active = 0, Dormant = 1 }
-
-type Table1 = TableRow<{
-  readonly id: RowKeyDataColumnValue;
-  name: string;
-  phoneNumber?: string;
-  status?: Table1Status;
-}>
-
-interface TableRegistrations extends BaseTableRegistrations {
-  "table1": Table1; // Use logical name as key
-}
-
-interface EnumRegistrations extends BaseEnumRegistrations {
-  "table1-status": Table1Status;
-}
-
-declare const dataApi: BaseUxAgentDataApi<TableRegistrations, EnumRegistrations>;
-
-// Query with pagination
+// Query
 const result = await dataApi.queryTable("table1", {
   select: ["name", "status"],
   filter: `contains(name,'test')`,
   orderBy: `name asc`,
-  pageSize: 50
+  pageSize: 50,
 });
+// result.hasMoreRows + result.loadMoreRows() for pagination
+
+// IMPORTANT: queryTable returns DataTable<T> = { rows: T[], hasMoreRows: boolean }
+// Access the array via result.rows — it is NOT a raw array
+const records = result.rows;
 
 // Load more pages
 if (result.hasMoreRows && result.loadMoreRows) {
   const nextPage = await result.loadMoreRows();
+  const moreRecords = nextPage.rows;
 }
 
-// Create
-await dataApi.createRow("table1", {
-  name: "New Record",
-  status: Table1Status.Active
-});
+// Create / Update / Retrieve
+const id = await dataApi.createRow("table1", { name: "New", status: 0 });
+await dataApi.updateRow("table1", id, { name: "Updated" });
+const row = await dataApi.retrieveRow("table1", { id, select: ["name", "status"] });
 
-// Update
-await dataApi.updateRow("table1", "record-id", {
-  name: "Updated"
-});
+// Formatted values (enums, lookups, dates) — use @OData.Community.Display.V1.FormattedValue:
+const statusLabel = row["status@OData.Community.Display.V1.FormattedValue"];
+const contactName = row["_primarycontactid_value@OData.Community.Display.V1.FormattedValue"];
 
-// Retrieve
-const row = await dataApi.retrieveRow("table1", {
-  id: "record-id",
-  select: ["name", "status"]
-});
-
-// Access formatted values (for enums, lookups, dates, etc.)
-const formattedStatus = row["status@OData.Community.Display.V1.FormattedValue"];
-
-// Lookup fields: raw value is a GUID — use formatted value for display name
-const contactGuid = row._primarycontactid_value;                                           // GUID — don't display this
-const contactName = row["_primarycontactid_value@OData.Community.Display.V1.FormattedValue"]; // "John Smith" — display this
-
-// Get enum choices
+// Enum choices
 const choices = await dataApi.getChoices("table1-status");
 ```
+
+For lookups: `_<field>_value` is the GUID — never display it. Always read the
+paired `..._value@OData.Community.Display.V1.FormattedValue` for the label.
 
 ---
 
 ## Common Errors
+
+**Scope:** generation-time anti-patterns the page-builder must not emit.
+For deployment / runtime / env issues (PAC CLI failures, auth, browser
+verification, etc.), see `references/troubleshooting.md`.
 
 ### 1. Undefined Identifier
 Every identifier must be defined or imported. Don't assume implicit availability.

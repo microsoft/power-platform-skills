@@ -146,6 +146,9 @@ This outputs a string like `site-a3f2b1`. Resolve the correct site URL domain fr
 | `UsGovDod` | `appsplatform.us` |
 | `China` | `powerappsportals.cn` |
 
+<!-- gate: activate-site:2.2.subdomain | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · activate-site:2.2.subdomain):** Confirm or override the generated subdomain. Subdomain is part of the resulting site URL; Cancel exits before any provisioning call.
+
 Present the generated subdomain to the user and ask them to accept or enter their own using `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -177,6 +180,9 @@ Parse the output to find the website record that matches the site name. Extract 
 **Goal:** Present all activation parameters to the user and get explicit approval before making the API call.
 
 ### Actions
+
+<!-- gate: activate-site:3.confirm | category=final | cancel-leaves=nothing -->
+> 🚦 **Gate (final · activate-site:3.confirm):** Last-call before the activation API call. All activation parameters echoed back; Cancel exits cleanly before provisioning. **Fires fresh on every skill invocation.** When `plan-alm` orchestrates multi-stage activation (Staging + Production), it invokes `activate-site` **once per stage** — each invocation hits this gate fresh with its own `siteName`, `subdomain`, and target env. The Staging activation consent does NOT cover Production. Each stage's site URL is a separate go-live decision (different audiences, different timing).
 
 Present all activation parameters to the user using `AskUserQuestion`:
 
@@ -257,17 +263,57 @@ Power Pages site activated successfully!
 
 The script already resolves the correct cloud-specific site URL domain, so use the `siteUrl` value directly.
 
+#### 5.1b Write `docs/alm/last-activate.json` Marker
+
+For consumers like the rendered ALM plan (Manual path's per-target Activate steps), write a structured marker that captures the post-activation state. Ensure the `docs/alm/` directory exists first:
+
+```bash
+node -e "require('fs').mkdirSync('docs/alm',{recursive:true})"
+# Determine the stage label this activation was for. plan-alm orchestration
+# passes it via context (e.g. "Staging", "Production"); standalone invocations
+# may leave it null — refreshActivateSite falls back to env-URL matching
+# against planData.stages[].envUrl.
+node -e "require('fs').writeFileSync('docs/alm/last-activate.json', JSON.stringify({
+  stageName: <stageNameOrNull>,
+  siteName: '<siteName>',
+  siteUrl: '<siteUrl>',
+  websiteRecordId: '<websiteRecordId>',
+  environmentUrl: '<envUrl>',
+  environmentId: '<environmentId>',
+  activatedAt: new Date().toISOString(),
+  status: 'Activated',
+  cloud: '<cloud>',
+}, null, 2))"
+```
+
+When the activation was an **already-activated** detection (Phase 1.4), still write the marker — the rendered plan should reflect "this stage is live at https://..." regardless of whether activation was performed this run or pre-existing. Set `status: 'AlreadyActivated'` and use the existing `siteUrl` from Phase 1.4's check.
+
 #### 5.2 Record Skill Usage
 
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ActivateSite"`.
 
+#### 5.2b Refresh the ALM plan (if one exists)
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase activate-site \
+  --stageName "{stageNameOrEmpty}" \
+  --render
+```
+
+`{stageNameOrEmpty}` is the Manual-path target stage label (e.g. `Staging`, `Production`) the agent was activating — usually carried in by plan-alm Phase 7 orchestration. Pass an empty string when unknown; `refreshActivateSite` falls back to URL-matching `docs/alm/last-activate.json`'s `environmentUrl` against `planData.stages[].envUrl`, so standalone invocations still get captured.
+
+The helper reads `docs/alm/last-activate.json`, writes a per-target entry into `planData.activations[stageName]` (siteUrl, status, activatedAt), and re-renders `docs/alm-plan.html` so the matching `Activate site in {stageName}` checklist step shows an `ACTIVATED` badge with the live site URL inline. When `docs/.alm-plan-data.json` is absent (standalone, not via plan-alm), the helper returns `ok:false` as a soft no-op.
+
 #### 5.3 Suggest Next Steps
 
 After the summary, suggest:
 
 - Test the site: `/test-site` — Verify the site loads correctly and API calls are working
+- Set up ALM: `/power-pages:plan-alm` — Set up ALM to promote this site to staging or production (creates a solution, configures a deployment pipeline or export/import strategy)
 - Set up the data model: `/setup-datamodel`
 - Add sample data: `/add-sample-data`
 - View the site in the browser at the provisioned URL (note: it may take a few minutes for DNS to propagate)

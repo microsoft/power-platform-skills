@@ -37,6 +37,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
 | test-site | TestSite | Site/AI/Skills/TestSite |
 | audit-permissions | AuditPermissions | Site/AI/Skills/AuditPermissions |
+| plan-alm | PlanAlm | Site/AI/Skills/PlanAlm |
 | add-server-logic | AddServerLogic | Site/AI/Skills/AddServerLogic |
 | add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
@@ -44,6 +45,15 @@ If the tracking script creates or updates site setting YAML files, include those
 | manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
 | manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
 | security-review | SecurityReview | Site/AI/Skills/SecurityReview |
+| setup-solution | SetupSolution | Site/AI/Skills/SetupSolution |
+| export-solution | ExportSolution | Site/AI/Skills/ExportSolution |
+| import-solution | ImportSolution | Site/AI/Skills/ImportSolution |
+| diagnose-deployment | DiagnoseDeployment | Site/AI/Skills/DiagnoseDeployment |
+| configure-env-variables | ConfigureEnvVariables | Site/AI/Skills/ConfigureEnvVariables |
+| setup-pipeline | SetupPipeline | Site/AI/Skills/SetupPipeline |
+| deploy-pipeline | DeployPipeline | Site/AI/Skills/DeployPipeline |
+| ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
+| force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 
 ## YAML Format
 

@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Common issues when building and deploying generative pages.
+Deployment, runtime, and environment issues. For generation-time anti-patterns
+(things the page-builder must not emit), see `references/rules.md` →
+"Common Errors".
 
 ---
 
@@ -18,7 +20,7 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 - Install: `dotnet tool install --global Microsoft.PowerApps.CLI.Tool`
 - Update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`
 - Or download from the [Microsoft Power Platform CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) page
-- Verify: `pac help` (version must be >= 2.3.1)
+- Verify: `pac help` (version must be >= 2.7.0)
 
 ---
 
