@@ -30,11 +30,9 @@ claude --plugin-dir /path/to/plugins/model-apps
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
-CONTRIBUTING.md                ← Contributor guide (add samples, rules, evals, scripts)
 CHANGELOG.md                   ← Keep-a-Changelog
 docs/
   architecture.md              ← One-page architecture overview with diagrams
-  v2.2/                        ← Forward-looking design docs
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)

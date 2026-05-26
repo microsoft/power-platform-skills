@@ -1,7 +1,6 @@
 # Model Apps Plugin — Architecture
 
-How `/genpage` is wired together. One page, ASCII diagrams. For an authoring
-walkthrough of where to add things, see `CONTRIBUTING.md`. For per-component
+How `/genpage` is wired together. One page, ASCII diagrams. For per-component
 behavioral specs, see `AGENTS.md`.
 
 ## High-level flow
@@ -116,10 +115,8 @@ plugins/model-apps/
 ├── AGENTS.md / CLAUDE.md              <-- agent guidance (this is the source)
 ├── README.md                          <-- user-facing intro
 ├── CHANGELOG.md                       <-- Keep-a-Changelog
-├── CONTRIBUTING.md                    <-- contributor guide
 ├── docs/
-│   ├── architecture.md                <-- this file
-│   └── v2.2/                          <-- v2.2 planning + design docs
+│   └── architecture.md                <-- this file
 ├── skills/
 │   └── genpage/
 │       ├── SKILL.md                   <-- orchestrator phases (always loaded)
