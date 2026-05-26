@@ -8,7 +8,7 @@ description: >
   "configure OpenID Connect", "add OIDC", "set up SAML",
   "set up WS-Federation", "set up local login", "add username password",
   "add Facebook login", "add Google sign in", "add Microsoft Account",
-  "enable 2FA", "set up invitation login", or otherwise wants to set up
+  "set up invitation login", or otherwise wants to set up
   authentication (login/logout) and role-based authorization for their
   Power Pages code site using any supported identity provider
   (Microsoft Entra ID, Entra External ID, OpenID Connect, SAML2,
@@ -23,7 +23,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including two-factor authentication (2FA), invitation-based registration, and "remember me" functionality. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (generic), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including invitation-based registration and Terms & Conditions acceptance. Power Pages built-in 2FA is intentionally not scaffolded because the SendCode/VerifyCode pages are server-rendered and cannot be integrated into a SPA experience — use IdP-level MFA instead. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -667,11 +667,13 @@ Then ask about optional features:
 
 | Question | Options |
 |----------|---------|
-| Would you like to enable any of these optional features? | None (Recommended), Terms and Conditions — require users to accept terms before accessing the site, Two-factor authentication (2FA) — users verify with a code after login |
+| Would you like to enable any of these optional features? | None (Recommended), Terms and Conditions — require users to accept terms before accessing the site |
 
-> **Note:** The user can select multiple options. If they select 2FA, Phase 8.1 will create the `TwoFactorEnabled` site settings. If they select Terms and Conditions, follow the Terms flow below.
+> **Note:** If they select Terms and Conditions, follow the Terms flow below.
 >
-> **Invitation-based registration is NOT in this list anymore** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
+> **Invitation-based registration is NOT in this list** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
+>
+> **Two-factor authentication (2FA) is intentionally NOT offered.** Power Pages' built-in 2FA flow is server-rendered (`/Account/Login/SendCode` → `/Account/Login/VerifyCode`) and cannot be intercepted from the SPA — there's no SPA-equivalent UI for the code entry step, and bouncing the user out to a server page mid-login breaks the SPA experience. If the user explicitly asks for 2FA, tell them: "Power Pages built-in 2FA requires the legacy server-rendered SendCode/VerifyCode pages, which we don't support in SPA-based code sites yet. For external providers (Entra ID, Entra External ID, OIDC), enable MFA at the identity provider instead — it's transparent to Power Pages and stays inside the IdP's branded experience. For local accounts, 2FA on SPA sites is not currently supported." Do NOT create `TwoFactorEnabled`, `RememberMeEnabled`, or `RememberBrowserEnabled` site settings.
 
 **Profile page** — ask whether to scaffold a SPA profile page that lets signed-in users edit their own contact info via the Power Pages Web API. This is a standalone question because it has its own infrastructure implications (Web API site settings on the `contact` entity + Self-scope table permission).
 
@@ -2560,7 +2562,7 @@ Providers that **may** require a secret:
 - **Local Authentication** — no
 - **Microsoft Entra ID** — no (configured via Power Pages admin center)
 
-**If no provider requires a secret, skip this entire phase 8.1.1 and proceed to the invitation/2FA blocks.**
+**If no provider requires a secret, skip this entire phase 8.1.1 and proceed to the invitation block.**
 
 For secrets (`ClientSecret`, `AppSecret`), **never store them in site setting YAML files or as plain-text environment variables**. Use Azure Key Vault to store secrets, then reference them via Dataverse environment variables with `--type secret`.
 
@@ -2675,32 +2677,7 @@ Tell the user to update each placeholder via:
 
 Present the list of environment variables that need updating (display name and schema name for each).
 
-**Two-Factor Authentication** — when 2FA is requested:
-
-> **Recommendation for external auth sites:** Power Pages 2FA is **server-rendered** (the SMS code entry happens via `/Account/Login/SendCode` and `/Account/Login/VerifyCode` pages that cannot be SPA-ified — the 2FA token state lives in server-side cookies between the credential POST and the code-verification POST). If your site uses an external IdP (Entra External ID, OIDC, etc.), **prefer enabling 2FA at the IdP layer** (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.). IdP-level 2FA is transparent to Power Pages and keeps the entire UX inside the IdP's branded experience. Use Power-Pages-layered 2FA only when local authentication is the primary or only sign-in method.
-
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/TwoFactorEnabled" \
-  --value "true" \
-  --description "Enable two-factor authentication" \
-  --type boolean
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/RememberMeEnabled" \
-  --value "true" \
-  --description "Show Remember Me checkbox on login form" \
-  --type boolean
-
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
-  --projectRoot "<PROJECT_ROOT>" \
-  --name "Authentication/Registration/RememberBrowserEnabled" \
-  --value "true" \
-  --description "Allow remembering browser to skip 2FA" \
-  --type boolean
-```
+**Two-Factor Authentication** — **NOT supported.** The skill must NOT create `Authentication/Registration/TwoFactorEnabled`, `Authentication/Registration/RememberMeEnabled`, or `Authentication/Registration/RememberBrowserEnabled` site settings. Power Pages' built-in 2FA flow uses server-rendered `/Account/Login/SendCode` and `/Account/Login/VerifyCode` pages — the 2FA token state lives in server-side cookies between the credential POST and the code-verification POST, and there's no SPA-equivalent UI we can ship. If 2FA is needed, recommend the user enable it at the identity provider layer (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.) — IdP-level 2FA is transparent to Power Pages and keeps the entire UX inside the IdP's branded experience.
 
 **Terms and Conditions** — when terms are enabled:
 
@@ -2796,8 +2773,8 @@ After deployment (or if skipped), remind the user with provider-specific guidanc
   - **Entra External ID**: Register the application in the Entra External ID tenant. Update the `ClientId` site setting. Set the redirect URI to `{site-url}/signin-{provider}`. The authority URL may use `{tenant}.ciamlogin.com` or a custom domain.
 - **Auth failure handling (keep users in SPA)**: When OIDC/SAML2/WS-Fed auth fails, the server redirects to `/Account/Login/ExternalAuthenticationFailed` — a server-rendered page that breaks the SPA. To keep users in the SPA on failure, edit the Dataverse content snippets `Account/Register/ExternalAuthenticationFailed` and `Account/Register/ExternalAuthenticationFailed/AccessDenied` in the Power Pages admin center to inject a `<script>` that redirects to `/login?message={error-code}`. The SPA's `getAuthError()` will then display the error inline. See authentication-reference.md for the exact script.
 - **User profile display**: After login, the auth service's `getUserDisplayName()` falls back through `firstName + lastName` → `firstName` → `lastName` → `email` → `userName` → `'User'`. **Email beats userName** because for external providers (Entra External ID, OIDC) the `userName` field is the OIDC subject identifier — a long opaque string like `vs25QwNe1ZAHqlWK1Naw9dVEBe-TbF5tZEpb0XjAEZQ` that's ugly and meaningless in a navigation bar. Power Pages populates `firstName`/`lastName`/`email` from standard OIDC claims (`given_name`, `family_name`, `email`). Entra External ID user flows often don't include `given_name`/`family_name` in the returned claims by default — if you want names populated, ensure the user flow has both attributes selected under "User attributes to collect" AND "Application claims" / "User attributes to return as claims" (see Phase 2.1 Entra External ID Step 3). The `email` claim is almost always emitted, so emails reliably populate even when names don't. `getUserInitials()` follows the same priority chain using the first character of each fallback source.
-- **Two-Factor Authentication**: If 2FA is enabled (`Authentication/Registration/TwoFactorEnabled = true`), users will be prompted for a verification code after primary login. 2FA is entirely server-managed -- no client-side code changes are needed. Configure 2FA providers in the Power Pages admin center
-- **Invitation-based registration**: If invitations are enabled (`REGISTRATION_MODE` is `Invitation-only` or `Both`), generate invitation codes by creating Invitation records in Dataverse (`adx_invitation` table) — the `adx_invitationcode` field is the value to use in the URL. Share invitation links in the format `{site-url}/Account/Login/RedeemInvitation?invitation={code}` — the Code-Site-Shell-Header script redirects this to the SPA `/redeem-invitation?invitation={code}` route automatically. After redemption, the invitation is linked to the user's contact (single-redemption invitations are marked redeemed; group invitations track redeemed contacts in a collection). 2FA, terms, and external login flows all preserve the invitation code through the auth flow.
+- **Two-Factor Authentication**: This skill does NOT scaffold Power Pages built-in 2FA — the `SendCode`/`VerifyCode` flow is server-rendered and cannot be integrated into the SPA experience. For MFA needs, configure it at the identity provider layer (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.) — IdP-level MFA is transparent to Power Pages and stays inside the IdP's branded experience.
+- **Invitation-based registration**: If invitations are enabled (`REGISTRATION_MODE` is `Invitation-only` or `Both`), generate invitation codes by creating Invitation records in Dataverse (`adx_invitation` table) — the `adx_invitationcode` field is the value to use in the URL. Share invitation links in the format `{site-url}/Account/Login/RedeemInvitation?invitation={code}` — the Code-Site-Shell-Header script redirects this to the SPA `/redeem-invitation?invitation={code}` route automatically. After redemption, the invitation is linked to the user's contact (single-redemption invitations are marked redeemed; group invitations track redeemed contacts in a collection). Terms acceptance and external login flows preserve the invitation code through the auth flow.
 - **Assign web roles**: Users must be assigned appropriate web roles in the Power Pages admin center
 - **Table permissions**: Client-side auth checks are for UX only — configure server-side table permissions via `/integrate-webapi` for actual data security
 - **Local development**: The auth service includes mock data for testing on localhost — remove or disable before production

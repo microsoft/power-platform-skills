@@ -2047,6 +2047,8 @@ Entra External ID uses the same OpenID Connect site setting path:
 
 ## Two-Factor Authentication (2FA)
 
+> **NOT scaffolded by this skill.** Power Pages built-in 2FA uses server-rendered `SendCode` and `VerifyCode` pages between the credential POST and successful sign-in. These pages cannot be SPA-ified — the 2FA token state lives in server-side cookies (`TwoFactorCookie`), the code-entry view is an ASP.NET MVC page rendered by the server, and there's no client-side hook to replace it. Bouncing the user out to a server-rendered page mid-login breaks the SPA experience. The skill therefore does NOT create `TwoFactorEnabled`, `RememberMeEnabled`, or `RememberBrowserEnabled` site settings. For MFA needs, recommend enabling it at the identity provider layer (Entra External ID conditional access, B2C user flow MFA, Auth0 Guardian, Okta Verify, etc.) — IdP-level MFA is transparent to Power Pages and keeps the entire UX inside the IdP's branded experience. The rest of this section documents Power Pages' server-side 2FA behavior for reference (so the executor can recognize and explain it if a maker has it enabled manually) but does NOT instruct the skill to create the settings.
+
 Two-factor authentication is an optional follow-on step that occurs after primary authentication (either local login or external login). It is controlled by the `Authentication/Registration/TwoFactorEnabled` site setting.
 
 ### 2FA Site Settings
