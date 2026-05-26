@@ -343,7 +343,6 @@ Assemble the plan JSON (kept in memory — not written to disk). Include all sel
 ```
 
 For **`integration-only`** flows, `webRoles` should reflect the existing roles from the `.cloudflowconsumer.yml` (read-only — not being changed). The `rationale` should describe where the flow will be additionally integrated (e.g., "Wiring existing Contact Form flow into the support page").
-```
 
 ### 5.2 Render HTML Plan
 

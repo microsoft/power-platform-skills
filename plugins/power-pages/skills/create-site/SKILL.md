@@ -72,18 +72,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Actions**:
 
-1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. If site purpose is clear from arguments:
-   - Summarize understanding
-   - Identify site type (portal, dashboard, landing page, blog, etc.)
 <!-- gate: create-site:1.purpose | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded.
+> 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded. Fires only on the "site purpose unclear" branch (step 3 below).
 >
 > **Trigger:** Phase 1 when site purpose was not provided in `$ARGUMENTS`.
 > **Blast radius if skipped:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
 > **Cancel leaves:** Nothing — no scaffolding has started yet.
 
+1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
+2. If site purpose is clear from arguments:
+   - Summarize understanding
+   - Identify site type (portal, dashboard, landing page, blog, etc.)
 3. If site purpose is unclear, use `AskUserQuestion`:
 
    | Question | Header | Options |
@@ -227,6 +227,14 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 **Goal**: Determine what pages, components, and design elements the site needs — while the user previews the running scaffold
 
+<!-- gate: create-site:3.requirements | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:3.requirements):** Three sub-prompts (features multi-select, aesthetic, mood) — shape the Phase 4 plan and the Phase 5 implementation. Fires at step 2 of the action list below.
+>
+> **Trigger:** Phase 3 entry; scaffold loader is up.
+> **Blast radius if skipped:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
+> **Cancel leaves:** Nothing — scaffold loader files are throwaway artifacts replaced wholesale in Phase 5.
+
 **Actions**:
 
 1. **Raise the "awaiting input" banner** so the user notices the terminal prompt even while the browser loader is full-screen. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
@@ -236,14 +244,6 @@ Immediately after the dev server starts, verify the scaffold is working:
    ```
 
    Immediately after the user answers, `Write` the same file again with `"awaitingInput": false` so the banner disappears.
-
-<!-- gate: create-site:3.requirements | category=plan | cancel-leaves=nothing -->
-
-> 🚦 **Gate (plan · create-site:3.requirements):** Three sub-prompts (features multi-select, aesthetic, mood) — shape the Phase 4 plan and the Phase 5 implementation.
->
-> **Trigger:** Phase 3 entry; scaffold loader is up.
-> **Blast radius if skipped:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
-> **Cancel leaves:** Nothing — scaffold loader files are throwaway artifacts replaced wholesale in Phase 5.
 
 2. Use `AskUserQuestion` to collect feature and design requirements:
 
@@ -566,6 +566,14 @@ Present a summary table to the user:
 
 **Goal**: Ensure the site meets user expectations and all pages work correctly
 
+<!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
+>
+> **Trigger:** Phase 7 has verified all pages render via Playwright.
+> **Blast radius if skipped:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
+> **Cancel leaves:** Nothing — site files stay as-is on disk.
+
 **Actions**:
 
 1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
@@ -581,15 +589,6 @@ Present a summary table to the user:
    ```
 
 3. Share the dev server URL with the user and list all available routes
-
-<!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
-
-> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating.
->
-> **Trigger:** Phase 7 has verified all pages render via Playwright.
-> **Blast radius if skipped:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
-> **Cancel leaves:** Nothing — site files stay as-is on disk.
-
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
 5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
@@ -604,6 +603,14 @@ Present a summary table to the user:
 
 > **This phase is MANDATORY. Do NOT end the session without asking about deployment.**
 
+<!-- gate: create-site:8.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 2 of the action list below.
+>
+> **Trigger:** Phase 8 entry; Phase 7 review approved.
+> **Blast radius if skipped:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
+> **Cancel leaves:** Nothing — site files stay on disk; no deploy fired.
+
 **Actions**:
 
 1. Record skill usage:
@@ -611,14 +618,6 @@ Present a summary table to the user:
    > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
-
-<!-- gate: create-site:8.deploy | category=plan | cancel-leaves=nothing -->
-
-> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later.
->
-> **Trigger:** Phase 8 entry; Phase 7 review approved.
-> **Blast radius if skipped:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
-> **Cancel leaves:** Nothing — site files stay on disk; no deploy fired.
 
 2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
    > "Would you like to deploy your site to Power Pages now?"

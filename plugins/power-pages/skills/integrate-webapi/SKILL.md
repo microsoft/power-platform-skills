@@ -328,6 +328,14 @@ Route to the appropriate path:
 
 #### Path A: Upload Existing Permissions Diagram
 
+<!-- gate: integrate-webapi:6.2.permissions-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-approval):** Final sign-off on the parsed permissions plan (from the uploaded diagram) before any web-role / table-permission / site-setting YAML write. Fires at step 6 of the Path A sequence below.
+>
+> **Trigger:** Path A — diagram parsed and Mermaid flowchart rendered.
+> **Blast radius if skipped:** Wrong scope / wrong CRUD flags get committed to `.powerpages-site/table-permissions/` — fixable but noisy in git history.
+> **Cancel leaves:** Nothing — no YAML files written yet.
+
 If the user chooses to upload an existing diagram:
 
 1. Ask the user to provide their permissions diagram. Supported formats:
@@ -345,14 +353,6 @@ If the user chooses to upload an existing diagram:
 4. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
 
 5. Generate a Mermaid flowchart from the parsed data (if the user provided an image or text) for visual confirmation.
-
-<!-- gate: integrate-webapi:6.2.permissions-approval | category=plan | cancel-leaves=nothing -->
-
-> 🚦 **Gate (plan · integrate-webapi:6.2.permissions-approval):** Final sign-off on the parsed permissions plan (from the uploaded diagram) before any web-role / table-permission / site-setting YAML write.
->
-> **Trigger:** Path A — diagram parsed and Mermaid flowchart rendered.
-> **Blast radius if skipped:** Wrong scope / wrong CRUD flags get committed to `.powerpages-site/table-permissions/` — fixable but noisy in git history.
-> **Cancel leaves:** Nothing — no YAML files written yet.
 
 6. Present the parsed permissions plan to the user for approval using `AskUserQuestion`:
 

@@ -268,7 +268,6 @@ Prepare a JSON object with these keys:
 { "approach": "serverlogic", "name": "Validate Transition", "detail": "Checks Draft→Submitted" },
 { "approach": "webapi", "name": "Update Status", "detail": "PATCH status to Submitted" }
 ```
-```
 
 Write the plan to `<PROJECT_ROOT>/docs/backend-plan.html` (create `docs/` if needed). Use the render script:
 

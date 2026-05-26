@@ -442,19 +442,22 @@ function skillNameFromFile(file) {
   return parts[idx + 1];
 }
 
-function severityForSkill(skillName) {
-  // v3: every skill under plugins/power-pages/skills/ is enforced at hard-fail.
-  // `skillName` retained as a parameter so future per-skill policy can hook in
-  // without rewiring the call sites.
-  void skillName;
-  return 'error';
-}
+// v3: every skill under plugins/power-pages/skills/ is enforced at hard-fail.
+// Kept as a named constant rather than a no-op function so the call sites are
+// honest about the lack of per-skill policy. If a future PR needs per-skill
+// severity, restore a function here and pass the skill name in.
+const SKILL_SEVERITY = 'error';
 
 // Parse the catalog file (references/approval-gates.md) and extract all
 // backticked gate-id strings. Returns a Set, or null if the catalog isn't
 // present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
 // hard-broken when the catalog is removed/renamed).
-const CATALOG_GATE_ID_PATTERN = /`([a-z][a-z0-9-]*:[A-Za-z0-9._-]+)`/g;
+//
+// Case-insensitive to align with GATE_MARKER_PATTERN — SKILL.md gate markers
+// allow any case in the skill-name segment, so the catalog scan must too,
+// otherwise a CamelCase or underscored skill would fail GATE-must-be-in-catalog
+// even with a correct catalog row.
+const CATALOG_GATE_ID_PATTERN = /`([A-Za-z][A-Za-z0-9_-]*:[A-Za-z0-9._-]+)`/g;
 
 function loadCatalogGateIds(pluginRoot) {
   const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
@@ -486,7 +489,11 @@ function checkSectionPairing(content) {
       (l) => sectionStart - 1 + l
     );
     for (const promptLine of prompts) {
-      const hasPreceding = fileMarkerLines.some((m) => m <= promptLine);
+      // Marker must be on a line STRICTLY BEFORE the prompt line.
+      // `<=` would let a marker sit on the same line as the prompt (or be
+      // smuggled inside the prompt's line via inline HTML), which trivially
+      // satisfies the rule without matching its intent.
+      const hasPreceding = fileMarkerLines.some((m) => m < promptLine);
       if (!hasPreceding) unmatched.push({ heading: section.heading, lineNum: promptLine });
     }
   }
@@ -521,8 +528,6 @@ function collectFindings({ pluginRoot }) {
   for (const file of skillFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const ignores = extractIgnores(content);
-    const skillName = skillNameFromFile(file);
-    const skillSeverity = severityForSkill(skillName);
 
     if (!ignores.has('SKILL-must-read-manifest')) {
       const touches = touchesDataverseWrites(content);
@@ -568,7 +573,7 @@ function collectFindings({ pluginRoot }) {
       for (const u of unmatched) {
         findings.push({
           rule: 'GATE-must-have-marker',
-          severity: skillSeverity,
+          severity: SKILL_SEVERITY,
           file,
           message:
             `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
@@ -624,7 +629,7 @@ function collectFindings({ pluginRoot }) {
         if (!catalogGateIds.has(gm.gateId)) {
           findings.push({
             rule: 'GATE-must-be-in-catalog',
-            severity: skillSeverity,
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
@@ -707,26 +712,19 @@ function main(argv) {
   }
 
   const findings = collectFindings({ pluginRoot });
-  const errors = findings.filter((f) => f.severity === 'error');
-  const warnings = findings.filter((f) => f.severity === 'warning');
 
   if (findings.length === 0) {
     process.stdout.write('alm-lint: 0 findings\n');
     return 0;
   }
 
-  // Warnings go to stdout (informational); errors go to stderr.
-  for (const f of warnings) process.stdout.write(formatFinding(f, pluginRoot));
-  for (const f of errors) process.stderr.write(formatFinding(f, pluginRoot));
-
-  if (errors.length === 0) {
-    process.stdout.write(
-      `\nalm-lint: ${warnings.length} warning(s) in ${pluginRoot} (no errors)\n`
-    );
-    return 0;
-  }
+  // v3: every finding is `severity: 'error'`. The warn-only branch existed
+  // pre-v3 for non-ALM skills; once the catalog covered every skill the
+  // branch became unreachable. Any future re-introduction of a 'warning'
+  // severity should restore the stdout-vs-stderr split here.
+  for (const f of findings) process.stderr.write(formatFinding(f, pluginRoot));
   process.stderr.write(
-    `\nalm-lint: ${errors.length} error(s), ${warnings.length} warning(s) in ${pluginRoot}\n`
+    `\nalm-lint: ${findings.length} error(s) in ${pluginRoot}\n`
   );
   return 1;
 }

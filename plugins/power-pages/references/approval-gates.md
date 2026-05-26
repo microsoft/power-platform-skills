@@ -266,7 +266,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `plan-alm:2.q1b-override` | gate | consent | 2 (Q1b) | User picked "keep single" — *"Confirm override + free-text reason"* | nothing |
 | `plan-alm:2.q2-strategy` | gate | plan | 2 (Q2) | *"PP Pipelines / Manual export-import / Already have pipeline / Help me decide"* | nothing |
 | `plan-alm:2.q3-stages` | gate | plan | 2 (Q3 PP) | *"How many deployment stages?"* | nothing |
-| `plan-alm:2.q4-stage-env` | gate | plan | 2 (Q4 PP per stage) | *"Target env URL for stage {N}?"* | nothing |
+| `plan-alm:2.q4-host` | gate | plan | 2 (Q4 PP) | Host environment selection — branched table consuming `HOST_RESOLUTION` status (use-detected / pick from list / NoHost host-type menu / Sandbox confirm / CannotRedirect block / manual paste). Per-stage env URLs are inferred from the Q3 stage-layout answer + `pac env list`, not collected via a separate prompt. | nothing |
 | `plan-alm:2.q5-approval` | gate | plan | 2 (Q5 PP) | *"Approvals: required each stage / staging auto + prod required / no gates"* | nothing |
 | `plan-alm:2.q3-manual` | gate | plan | 2 (Q3 Manual) | *"How many target envs?"* | nothing |
 | `plan-alm:2.q4-manual-target` | gate | plan | 2 (Q4 Manual per stage) | *"URL for target env {N}?"* | nothing |
@@ -339,7 +339,8 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:7.6.4.strip-secret-values` | gate | consent | 7.6.4 | Reactive Secret-reference validation failure — *"Strip invalid Secret values from `deployment-settings.json` and retry? Yes / No"* | `invalid-secret-in-file` |
 | `deploy-pipeline:7.7.activate` | gate | plan | 7.7 | Site deployed, not yet activated — *"Activate now / later"* | nothing |
 | `deploy-pipeline:7.cloud-flow-register` | gate | plan | 7 (cloud-flow path) | Cloud flows in solution — *"Registered in target? Yes / Later"* (informational continue) | nothing |
-| `deploy-pipeline:6.1.pac-fallback-consent` | gate | final | 6.1 | `VALIDATE_PACKAGE_UNAVAILABLE=true` path uses `pac pipeline deploy` instead of `DeployPackageAsync` — same shape as `6.0` | `validated-stage-run` |
+
+The previously-listed `deploy-pipeline:6.1.pac-fallback-consent` row was merged into `6.0.final-consent` — the 6.0 marker's prose explicitly covers both the `DeployPackageAsync` and `pac pipeline deploy` paths, so a separate ID would have been redundant and the new row produced no second prompt.
 
 (Three additional `AskUserQuestion` calls in this skill are sub-prompts inside the gates above — env-var value entry per variable inside `5.env-vars`, validation `Approved? Yes / No` follow-ups inside `4.pending-approval` and `6.pending-approval`. They share the parent gate's marker.)
 
@@ -384,8 +385,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 |---|---|---|---|---|---|
 | `configure-env-variables:0.no-plan` | gate | intent | 0 | `check-alm-plan.js` `exists:false` — *"Run plan-alm? / Continue / Cancel"* | nothing |
 | `configure-env-variables:0.stale-plan` | gate | intent | 0 | `check-alm-plan.js` `stale:true` — *"Refresh / Continue / Cancel"* | nothing |
-| `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"* | nothing |
-| `configure-env-variables:6.confirm-matrix` | gate | plan | 6 | `deployment-settings.json` assembled — *"Confirm matrix before write"* | nothing |
+| `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"* — the per-stage values matrix is built inside this same multi-question prompt, so a separate "confirm matrix" gate would be redundant. | nothing |
 | `configure-env-variables:6.1.invalid-secret-values` | gate | consent | 6.1 | Pre-write validation found Secret refs in invalid formats — hard-stop, *"Fix or abort"* | nothing |
 
 ---
@@ -409,15 +409,15 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.9 `force-link-environment` (5 calls)
+### 6.9 `force-link-environment` (3 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `force-link-environment:2.host-url` | gate | plan | 2 | Host URL not resolved from markers — *"Pick host"* | nothing |
-| `force-link-environment:2.dev-env` | gate | plan | 2 | Dev env BAP GUID not resolved — *"Pick / paste"* | nothing |
+| `force-link-environment:2.host-url` | gate | plan | 2 | Host URL not resolved from `--host` arg / `last-host-check.json` / `last-pipeline.json` — *"Pick host (with paste-URL fallback)"* | nothing |
+| `force-link-environment:2.dev-env` | gate | plan | 2 | Dev env BAP GUID not resolved from `--dev-env` arg or `pac env who` confirmation — *"Pick / paste"* | nothing |
 | `force-link-environment:4.destructive` | gate | consent | 4 | Mandatory gate before `ManageEnvironmentStamp` — *"DESTRUCTIVE: confirm cross-host stamp move"* | nothing |
-| `force-link-environment:2.host-fallback` | not-a-gate | — | 2 | Free-text host URL — data-gathering | — |
-| `force-link-environment:2.dev-fallback` | not-a-gate | — | 2 | Free-text dev env GUID — data-gathering | — |
+
+The previously-listed `2.host-fallback` / `2.dev-fallback` not-a-gate rows were redundant — they described the free-text fallback option of the gate above, not a separate prompt.
 
 ---
 

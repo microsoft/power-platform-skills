@@ -111,7 +111,7 @@ Read each file and compile a list of existing web roles (name, id, flags).
 > **Blast radius if skipped:** Auto-invoking `/create-webroles` runs another full skill; auto-skipping leaves RBAC checks against an empty role set.
 > **Cancel leaves:** Nothing — no auth files written yet.
 
-**If no web roles exist**: Warn the user that web roles are needed for authorization. Ask if they want to create them first:
+**If no web roles exist**: Warn the user that web roles are needed for authorization. Ask via `AskUserQuestion` whether to create them first:
 
 | Question | Options |
 |----------|---------|
