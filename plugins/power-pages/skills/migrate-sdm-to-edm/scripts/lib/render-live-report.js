@@ -101,7 +101,7 @@ function subtitleFor(state) {
   const gate = state.approvalGate;
   if (gate && gate.kind === APPROVAL_KIND.PHASE_START) {
     const phaseTitle = state.phases.find((p) => p.id === gate.phaseId)?.title || '';
-    if (gate.phaseId === 1) return 'Skill initialized. Approve to begin Phase 1 (Pre-flight Setup).';
+    if (gate.phaseId === 1) return 'Skill initialized. Approve to begin Phase 1 (Site Discovery & Pre-checks).';
     return `Phase ${gate.phaseId - 1} complete. Approve to begin Phase ${gate.phaseId} (${phaseTitle}).`;
   }
   const allDone = state.phases.every((p) => p.status === PHASE_STATUS.COMPLETED);
@@ -241,7 +241,7 @@ ${subStepsBlock}
 // no specific copy is registered.
 const APPROVAL_COPY = {
   '1:phase-start': {
-    heading: '👀 Approve to start Phase 1: Pre-flight Setup',
+    heading: '👀 Approve to start Phase 1: Site Discovery & Pre-checks',
     body: [
       'Phase 1 is mostly read-only context-gathering: PAC version check, auth profile, site discovery, dependency verification, migration mode selection.',
       '<strong>The one potential write</strong> is in step 1.6 — if your site\'s template needs a V2 EDM solution that isn\'t installed, the skill will ask for your explicit consent before running <code>pac application install</code>. This installs a Microsoft-published solution to your environment (not to your site source or data).',

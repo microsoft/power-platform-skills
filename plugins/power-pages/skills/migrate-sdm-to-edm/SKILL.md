@@ -16,7 +16,7 @@ model: sonnet
 
 # Migrate Power Pages Site from Standard to Enhanced Data Model
 
-Guide the user through a comprehensive migration of an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The skill is organized into **four high-level phases** — Pre-flight Setup, Customization Remediation, Migration Execution, and Post-Migration Validation. Each phase contains numbered sub-steps for granular execution and progress tracking.
+Guide the user through a comprehensive migration of an existing Power Pages site from the Standard Data Model (SDM) to the Enhanced Data Model (EDM). The skill is organized into **four high-level phases** — Site Discovery & Pre-checks, Customization Remediation, Migration Execution, and Post-Migration Validation. Each phase contains numbered sub-steps for granular execution and progress tracking.
 
 > **Important:** This is a preview feature. EDM migration behavior may change before GA.
 
@@ -67,7 +67,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 ---
 
-## Phase 1: Pre-flight Setup
+## Phase 1: Site Discovery & Pre-checks
 
 **Goal**: Gather all context needed to plan and execute migration safely. Establish CLI context, identify the target site, detect any prior migration state, verify dependencies and template packages, and select migration mode.
 
@@ -1031,7 +1031,7 @@ Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 
 | Phase | Task Subject | Active Form |
 |-------|-------------|-------------|
-| Phase 1 | Pre-flight Setup | Setting up for migration |
+| Phase 1 | Site Discovery & Pre-checks | Setting up for migration |
 | Phase 2 | Customization Remediation | Remediating customizations |
 | Phase 3 | Migration Execution | Executing migration |
 | Phase 4 | Post-Migration Validation | Validating and completing migration |

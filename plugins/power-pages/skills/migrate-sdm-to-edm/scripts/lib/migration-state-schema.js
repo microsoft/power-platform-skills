@@ -44,7 +44,7 @@ const PROMPT_STATUS = Object.freeze({
 const PHASE_BLUEPRINT = [
   {
     id: 1,
-    title: 'Pre-flight Setup',
+    title: 'Site Discovery & Pre-checks',
     subSteps: [
       { id: '1.1', label: 'Establish CLI Context' },
       { id: '1.2', label: 'Identify Site Context' },
