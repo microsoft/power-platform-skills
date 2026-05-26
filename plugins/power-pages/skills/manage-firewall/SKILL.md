@@ -133,6 +133,8 @@ MUST NOT proactively offer actions that reduce security (disabling the firewall,
 
 ### Option rules
 
+<!-- not-a-gate: meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. The actual destructive firewall changes (enable/disable/add-rule/remove-rule) are gated by the prose-described "apply only after user approval" rule in §3 Plan-validate-execute and §4 Apply the change. See approval-gates.md §6.24a + §6.25. -->
+
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.
 - Include `preview` **only** when the option represents a concrete change (create, update, or delete a rule) — use it to show the configuration that will be applied so the user can review before approving. Do not add `preview` to navigation or informational choices.

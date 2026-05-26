@@ -607,6 +607,50 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
+### 6.24a Security skills — runtime-loop pattern
+
+The four security skills introduced in PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`) use `AskUserQuestion` differently from the other skills: they don't have phase-numbered, statically-locatable prompt sites. Most calls happen inside a "recommend then ask" runtime loop that's described in prose (e.g., *"recommend the single most relevant action"* in `manage-firewall` §3 and `scan-site` §3). The marker convention treats these as follows:
+
+- **Meta-mention sections** (`### Option rules` in `manage-firewall` and `scan-site`) are tagged `<!-- not-a-gate -->` — they document HOW to construct prompts, they aren't prompt sites themselves.
+- **Concrete prompt sites** that exist as literal "`AskUserQuestion`:" blocks (e.g. `manage-headers` §3 per-finding loop, `security-review` §2.1 and §5.3) get full `<!-- gate -->` markers.
+
+Future hardening (out of scope for v3): the runtime-loop calls in `manage-firewall` and `scan-site` could be made statically locatable by moving the "recommend an action" block into a numbered subsection like `### 3.1 Recommend` with a literal AskUserQuestion code example. The PR #151 authors can revisit if the loop pattern proves hard to audit.
+
+---
+
+### 6.25 `manage-firewall` (1 lint-caught meta-mention + dynamic runtime loop)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `manage-firewall:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Documentation describing how to structure `AskUserQuestion` options in this skill — not a call site itself. The actual destructive firewall changes (enable/disable/add-rule/remove-rule) gate via the prose-described "apply only after user approval" rule in §3 Plan-validate-execute and §4 Apply the change. | — |
+
+---
+
+### 6.26 `manage-headers` (1 call)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `manage-headers:3.per-finding` | gate | plan | 3 (`### Default approach`) | Per-finding loop — *"For each finding, present via `AskUserQuestion`: accept the recommendation, customize, or skip"*. Fires PER FINDING; skipped findings leave the header at its current value. | nothing |
+
+---
+
+### 6.27 `scan-site` (1 lint-caught meta-mention + dynamic runtime loop)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `scan-site:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Documentation describing how to structure `AskUserQuestion` options. The actual prompt — *"use existing report / run a fresh scan"* — fires dynamically in §3 Default approach and triggers a long-running scan but no destructive site change. | — |
+
+---
+
+### 6.28 `security-review` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Access & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
+| `security-review:5.3.next-action` | gate | plan | 5.3 | Post-report prompt — *"Walk me through the fixes / Re-run the review / Done for now"*. Drives whether remediation skills get invoked next. | nothing |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — The power-pages SKILL.md wrapper at `plugins/power-pages/skills/report-issue/SKILL.md` is a thin re-export that contains no prompts. The actual workflow with `AskUserQuestion` calls lives in `shared/skills/report-issue/report-issue-workflow.md`, which is consumed by every plugin (not just power-pages). The shared workflow lies outside the per-plugin lint scope (`plugins/power-pages/skills/`), so its prompts are not catalogued here. If the shared workflow is ever ported into per-plugin SKILL.md files, add a `report-issue:*` section to this catalog.
@@ -615,7 +659,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ## 8. Plugin-wide enforcement (was: non-ALM deferral)
 
-> **v3 update.** This section previously listed 13 deferred non-ALM skills. Those skills are now catalogued in §6.13–§6.24 above and the lint runs hard-fail across the whole plugin.
+> **v3 update.** This section previously listed 13 deferred non-ALM skills. Those skills are now catalogued in §6.13–§6.24 above (plus the security skills introduced by PR #151 in §6.25–§6.28) and the lint runs hard-fail across the whole plugin.
 
 The lint rules in §5 fire at `error` severity for **every** SKILL.md under `plugins/power-pages/skills/`. There is no skill-class carve-out. When you add a new skill:
 
@@ -645,10 +689,11 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 **v2 PR (landed)** — `approval-gates.md` v2 doc; `<!-- gate: ID -->` markers added to the 12 ALM SKILL.md files; 5 GATE lint rules added to `scripts/lint-skills-alm.js` at hard-fail for ALM, warn-only for non-ALM.
 
-**v3 PR (this branch — `users/nityagi/ApplyApprovalGatesPattern`)** — extends the catalog and enforcement to the 12 non-ALM skills:
+**v3 PR (this branch — `users/nityagi/ApplyApprovalGatesPattern`)** — extends the catalog and enforcement to the 12 non-ALM skills plus the 4 security skills picked up in the rebase:
 
 - §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
-- Markers added to all 12 non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt).
+- §6.24a–§6.28 added — security skills introduced by PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`). The new skills use a runtime-loop prompt pattern; §6.24a documents the marker convention for that pattern. 3 gates + 2 not-a-gates.
+- Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.
 - `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope).

@@ -120,6 +120,8 @@ If the site's state does not warrant a specific recommendation, do not force one
 
 ### Option rules
 
+<!-- not-a-gate: meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. The actual prompt ("use existing report / run a fresh scan") fires dynamically in §3 Default approach. See approval-gates.md §6.24a + §6.27. -->
+
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.
 - For options that trigger a new scan, surface the relevant caveats inside that option's `description` so the user has them at decision time. Do not ask a separate confirmation question after the user picks the option.
