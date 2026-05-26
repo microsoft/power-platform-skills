@@ -599,6 +599,23 @@ Auto-fix and semi-auto fix both require the site source files to be on disk:
 
   > **Important — nested folder quirk:** `pac pages download --path ./mysite` creates a slug-named child folder inside (e.g., `./mysite/site-1---site-k5s85/website.yml`). The actual site root with `website.yml` is one level deeper than `--path`. Update the resolved `<SITE_ROOT>` to point at that inner folder (use `Get-ChildItem .\mysite -Directory` to find it). Subsequent rewrite and upload steps must use `<SITE_ROOT>` (the inner path), not `./mysite`.
 
+### 2.5. Capture SDM snapshot (data-validation baseline)
+
+After the site is downloaded but **before** any rewrites or upload, snapshot the SDM site source. This baseline is what Phase 4 will diff the migrated EDM site against to verify every record made it through.
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+  --site-root "<SITE_ROOT>" `
+  --output-dir "<OUTPUT_DIR>" `
+  --label sdm
+```
+
+Output: `<OUTPUT_DIR>/sdm-snapshot.json` — a deterministic JSON catalog of every web page, snippet, web link, template, file, setting, role, and other site artifact discoverable from the downloaded YAML. Console prints a count summary per category.
+
+> **Important — snapshot BEFORE rewrites.** The FetchXML / Liquid auto-rewriters in step 3/4 modify the on-disk YAML. We want the baseline to reflect what's currently in Dataverse on SDM, so this step has to come before step 3.
+>
+> **→ Update report:** `--set-site '{"siteRoot":"<SITE_ROOT>"}'` (now that the path is finalized) and capture the snapshot summary in the activity field for context.
+
 ### 3. Run automated FetchXML rewrites
 
 ```powershell
@@ -880,56 +897,124 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 
 **Actions**:
 
-1. **Present Validation Checklist**
+This step has three parts: an **automated data diff** (mechanical check that every record migrated), an **optional runtime smoke test** (hand-off to `/test-site`), and an **optional rollback** if the user is unhappy.
 
-   > **Post-Migration Validation:**
-   > - [ ] Browse all site pages for rendering issues
-   > - [ ] Test forms and data operations
-   > - [ ] Test web API calls
-   > - [ ] Test authentication flows
-   > - [ ] Verify web roles and permissions
-   > - [ ] Test customization-affected pages
-   > - [ ] Run functional smoke tests
+### 1. Re-download the migrated site as EDM
 
-2. **Get Validation Status**
+```powershell
+pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+```
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Did validation pass without issues? | Validation | Yes, all good, Issues found — rollback needed |
+This produces a fresh local copy of the site as it exists on EDM. As with step 2.2, the actual site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture that inner path as `<SITE_ROOT_EDM>` (use `Get-ChildItem .\mysite-edm -Directory`).
 
-   - If "Issues found":
+### 2. Snapshot the EDM site
 
-     Confirm the Portal ID collected in step 3.2 is still correct before proceeding:
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+  --site-root "<SITE_ROOT_EDM>" `
+  --output-dir "<OUTPUT_DIR>" `
+  --label edm
+```
 
-     | Question | Header | Options |
-     |----------|--------|---------|
-     | Confirm Portal ID for rollback: `<PORTAL_ID>` (from step 3.2). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+Output: `<OUTPUT_DIR>/edm-snapshot.json` — same shape as `sdm-snapshot.json` captured in step 2.5.
 
-     If "No": Ask user to re-open `<SITE_URL>/_services/about` and provide the correct Portal ID.
+### 3. Diff SDM vs EDM
 
-     ```powershell
-     pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
-     ```
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+  --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
+  --edm "<OUTPUT_DIR>/edm-snapshot.json" `
+  --output-dir "<OUTPUT_DIR>"
+```
 
-     Inform user: "Site reverted to SDM. EDM record deactivated, SDM record reactivated."
+Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. Exit code is `1` if `overallStatus === 'fail'`, else `0` (pass or warn).
 
-   - If "Yes": Present success summary
+Classify the result:
 
-3. **Success Summary**
+- **pass** — every record in SDM matched an EDM record by identity; no count differences, no state changes
+- **warn** — identity match but some records changed statecode or value (e.g., a site setting value differs)
+- **fail** — at least one SDM record is missing from EDM, or an unexpected new record appeared in EDM, or counts differ
 
-   > **Migration Complete**
-   > - Site: `<SITE_NAME>` (ID: `<WEBSITEID>`)
-   > - Previous model: Standard (SDM)
-   > - Current model: Enhanced (EDM)
-   > - Customizations requiring fixes: `<COUNT>` (or "None")
-   > - Environment: `<ENV_TYPE>`
-   > - Reports available in: `./migration-reports/`
+### 4. Surface the diff and let the user decide
 
-4. **Record Skill Usage**
+Show the user the diff table (read it from console output or the JSON file) and ask:
 
-   Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+| Question | Header | Options |
+|----------|--------|---------|
+| Data diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed, `<V>` value-changed. Review `<OUTPUT_DIR>/migration-data-diff.json` for details. How to proceed? | Diff Decision | Looks fine — continue to runtime check, Concerning — rollback to SDM, Pause — I'll investigate manually |
 
-**Output**: Site validated, migration complete (or rolled back), reports generated
+**If "Looks fine"**: proceed to step 5 (runtime smoke hand-off).
+
+**If "Concerning"**: proceed to step 7 (rollback).
+
+**If "Pause"**: halt the skill cleanly. The user can re-invoke later; their SDM source is still in `<SITE_ROOT>` and the EDM site is live.
+
+### 5. Suggest runtime smoke test (hand-off to `/test-site`)
+
+Print a hand-off message to the user (this is informational — the skill does **not** invoke the test-site skill itself):
+
+> **Runtime smoke test (optional but recommended)**
+>
+> Your migrated site is at `<SITE_URL>` (constructed from URL slug + cloud domain, or available in `pac pages list -v` output).
+>
+> Open a separate Claude Code session and run:
+>
+> ```
+> /test-site <SITE_URL>
+> ```
+>
+> That skill opens a browser via Playwright, crawls up to 25 pages, captures API calls and console errors, and reports pass/fail per page and per endpoint. It's independent of data model — it just exercises the live site.
+>
+> Common things `/test-site` catches that the data diff cannot:
+> - A page that has all its records intact but renders empty because a FetchXML rewrite has the wrong `powerpagecomponenttype` filter
+> - Table permissions that don't grant the same access on EDM as they did on SDM (401/403 on Web API calls)
+> - Liquid runtime errors visible in browser console but not in the data layer
+
+### 6. Get final validation status
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Migration is complete. Validation status? | Final Status | Validated — all good, Validated — but rollback needed, Deferred — I'll validate later |
+
+**If "Validated — all good"**: proceed to step 8 (success summary).
+**If "Validated — but rollback needed"**: proceed to step 7 (rollback).
+**If "Deferred"**: skip to step 8 with a note that final validation was deferred.
+
+### 7. Rollback (if user opted for it)
+
+Confirm the Portal ID collected in step 3.2 is still correct before proceeding:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Confirm Portal ID for rollback: `<PORTAL_ID>` (from step 3.2). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+
+If "No": Ask user to re-open `<SITE_URL>/_services/about` and provide the correct Portal ID.
+
+```powershell
+pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
+```
+
+Inform user: "Site reverted to SDM. EDM record deactivated, SDM record reactivated."
+
+### 8. Success Summary
+
+> **Migration Complete**
+> - Site: `<SITE_NAME>` (ID: `<WEBSITEID>`)
+> - Previous model: Standard (SDM)
+> - Current model: Enhanced (EDM) [or: Reverted to Standard (SDM)]
+> - Data diff: `<PASS|WARN|FAIL>` — `<summary>`
+> - Customizations requiring fixes: `<COUNT>` (or "None")
+> - Environment: `<ENV_TYPE>`
+> - Reports available in: `<OUTPUT_DIR>`
+>   - `migration-data-diff.json` — full diff report
+>   - `sdm-snapshot.json` / `edm-snapshot.json` — baselines
+>   - `skill-execution-report.html` — live execution timeline
+
+### 9. Record Skill Usage
+
+Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+
+**Output**: Site validated via SDM↔EDM data diff, runtime hand-off offered, migration complete (or rolled back), reports generated
 
 > **→ Update report (end of Phase 4):**
 >
