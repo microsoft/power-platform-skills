@@ -97,8 +97,8 @@ test('readSettingsFile reads top-level EnvironmentVariables shape', async (t) =>
   );
   const entries = readSettingsFile(file);
   assert.deepEqual(entries, [
-    { schemaName: 'foo_a', value: 'a-value' },
-    { schemaName: 'foo_b', value: 'b-value' },
+    { schemaName: 'foo_a', value: 'a-value', stageLabel: null },
+    { schemaName: 'foo_b', value: 'b-value', stageLabel: null },
   ]);
 });
 
@@ -125,7 +125,9 @@ test('readSettingsFile filters Stages[] by stageLabel (case-insensitive)', async
     })
   );
   const stagingEntries = readSettingsFile(file, 'staging');
-  assert.deepEqual(stagingEntries, [{ schemaName: 'foo_a', value: 'staging-a' }]);
+  assert.deepEqual(stagingEntries, [
+    { schemaName: 'foo_a', value: 'staging-a', stageLabel: 'Staging' },
+  ]);
   const prodEntries = readSettingsFile(file, 'Production');
   assert.equal(prodEntries.length, 2);
   assert.equal(prodEntries[1].value, 'prod-b');
@@ -149,6 +151,47 @@ test('readSettingsFile with no stageLabel flattens Stages[]', async (t) => {
   assert.equal(entries.length, 2);
   assert.equal(entries[0].schemaName, 'foo_a');
   assert.equal(entries[1].schemaName, 'foo_b');
+});
+
+test('readSettingsFile reads keyed-object Stages shape (Microsoft schema 2024)', async (t) => {
+  // The Microsoft-standard `deployment-settings/2024` schema and the file
+  // configure-env-variables emits use a KEYED OBJECT for stages, not an
+  // array. Real-world discovery against C:/Projects/Citizens portal — pre-fix,
+  // readSettingsFile returned 0 entries for this shape, which made
+  // validate-deployment-settings.js silently pass even for known-broken
+  // values like `@KeyVault(...)`.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-env-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'deployment-settings.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      $schema: 'https://schemas.microsoft.com/power-platform/deployment-settings/2024',
+      stages: {
+        'Deploy to Staging': {
+          EnvironmentVariables: [
+            { SchemaName: 'c311_label', Value: 'Staging' },
+            {
+              SchemaName: 'c311_api_secret',
+              Value: '@KeyVault(vaultName=lakeshore-staging-kv;secretName=api-secret)',
+            },
+          ],
+          ConnectionReferences: [],
+        },
+      },
+    })
+  );
+  const all = readSettingsFile(file);
+  assert.equal(all.length, 2);
+  assert.equal(all[0].schemaName, 'c311_label');
+  assert.equal(all[0].stageLabel, 'Deploy to Staging');
+  assert.equal(all[1].schemaName, 'c311_api_secret');
+  // stageLabel filter (case-insensitive on the stage-name key)
+  const filtered = readSettingsFile(file, 'deploy to staging');
+  assert.equal(filtered.length, 2);
+  assert.equal(filtered[0].stageLabel, 'Deploy to Staging');
+  // Unknown stage label → empty
+  assert.equal(readSettingsFile(file, 'nope').length, 0);
 });
 
 test('readSettingsFile throws on missing file', () => {
