@@ -514,6 +514,7 @@
         "Updates src/components/AuthButton.tsx to a dropdown shape with state-based open/close, outside-click handler, Escape key handler, and ARIA attributes",
         "Dropdown shows 'My Profile' link to /user-profile and 'Sign Out' button when INCLUDE_PROFILE_PAGE is true",
         "Adds <Route path='/user-profile' element={<UserProfile />} /> to src/App.tsx",
+        "Adds '/signin': '/login' to the Code-Site-Shell-Header template's redirect map so that when the server bounces unauthenticated users from server-protected paths (e.g., /profile) to /SignIn?ReturnUrl=..., they land on the SPA /login page instead of the legacy server sign-in UI",
         "After successful save, UserProfile calls refresh() from useAuth() and shows inline 'Profile updated.' message — does not redirect",
         "Phase 8.1 writes Webapi/contact/enabled = true site setting",
         "Phase 8.1 writes Webapi/contact/fields site setting with exactly 9 lowercase logical names (contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country) — emailaddress1 and middlename are NOT in this list",

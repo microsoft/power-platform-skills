@@ -3759,6 +3759,23 @@ This makes `refresh()` actually update the header immediately. Document this as 
 
 If `user.contactId` is empty or missing, the page shows a friendly error pointing the user to the `RegistrationClaimsMapping` site setting (see the workforce Entra ID empty-contact issue documented elsewhere in this reference). The user can't edit a contact that doesn't exist or has no ID.
 
+### Unauthenticated `/SignIn` bounce — keep the SPA experience
+
+The SPA `UserProfile` component handles `!isAuthenticated` by navigating to `/login?returnUrl=/user-profile`. **But the legacy server-rendered `/profile` path is a different story**: if a user types `/profile` (or follows an old link) while unauthenticated, the server short-circuits its own auth check and 302s the user to `/SignIn?ReturnUrl=/profile` — the legacy ASP.NET sign-in page, which drops them out of the SPA UI entirely.
+
+This is solved at the `Code-Site-Shell-Header` redirect-map layer (the same template that already handles `/Account/Login/ResetPassword`, `/Account/Login/ExternalAuthenticationFailed`, etc.). Add `/signin` to the redirect map:
+
+```js
+var redirects = {
+  // ...other entries...
+  '/signin': '/login'  // ← catches the server's "you need to sign in" bounce
+};
+```
+
+The existing template already appends `window.location.search` to the SPA URL, so `?ReturnUrl=/profile` (server casing) is carried through unchanged. The SPA `Login` page currently ignores `ReturnUrl` and always navigates to `/` after sign-in, which is fine — no further wiring is needed. If you later want the SPA to honor it, mirror the `invitationCode` / `InvitationCode` dual-casing pattern in `Login.tsx`.
+
+This redirect should be added regardless of which auth flow is configured — `/SignIn` is the server's universal sign-in entry point, and any server-protected route (`/profile`, `/Account/Manage`, anything gated by web roles) bounces through it.
+
 ### Permission boundary verification
 
 To verify Self-scope is enforcing row-level security:

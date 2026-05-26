@@ -1452,7 +1452,8 @@ name: Code-Site-Shell-Header
       '/account/login/register': '/registration',
       '/account/login/externallogincallback': '/external-login-confirmation',
       '/account/login/termsandconditions': '/terms',
-      '/account/login/externalauthenticationfailed': '/login'
+      '/account/login/externalauthenticationfailed': '/login',
+      '/signin': '/login'
     };
     // Special case: ExternalAuthenticationFailed may arrive with no query string
     // (generic failure) or with ?message=access_denied (user-denied at IdP).
@@ -1482,6 +1483,7 @@ name: Code-Site-Shell-Header
 | `'/account/login/externallogincallback': '/external-login-confirmation'` | Any external provider is configured (Phase 5.1.8) — captures first-time external sign-in into the SPA |
 | `'/account/login/termsandconditions': '/terms'` | Terms & Conditions are enabled (any auth flow — see Phase 5.1.5) — captures the server's post-auth Terms redirect for external providers |
 | `'/account/login/externalauthenticationfailed': '/login'` | Any external provider is configured. **The server redirects here when external auth fails** — invalid token, issuer mismatch, user-denied at IdP, IdP outage, etc. This path is hardcoded in OWIN startup and cannot be overridden via site settings (per `authentication-reference.md`). The redirect script special-cases this URL: when the server appends `?message=access_denied` (user-denied case), it carries through and `getAuthError()` shows "Access was denied." When the server appends no query string (generic failure), the script injects `?message=external_auth_failed` so the Login page shows "Sign-in with the external provider failed. Please try again." (add this code to `AUTH_ERROR_MESSAGES` in authService). |
+| `'/signin': '/login'` | **Always include** (any auth flow). `/SignIn` is the server's legacy sign-in page — the server bounces unauthenticated users there whenever they hit a protected server-rendered path (e.g., `/profile`, `/Account/Manage`, any server page gated by web roles). Without this entry, the user gets dropped out of the SPA into the server-rendered sign-in UI. Any `?ReturnUrl=...` query param the server appends is carried through unchanged — the SPA `/login` page currently ignores it (always returns to `/` after sign-in), which is acceptable behavior. |
 
 > **About the two new entries (`/register` and `/account/login/register`):** these handle a specific external-auth flow that's hard to discover otherwise. When an external user (Entra External ID, OIDC, SAML2, social) clicks the "Sign in" button WITHOUT first clicking an invitation email link, and they don't have an existing contact in Dataverse, the server forces them through a server-rendered invitation flow:
 >
