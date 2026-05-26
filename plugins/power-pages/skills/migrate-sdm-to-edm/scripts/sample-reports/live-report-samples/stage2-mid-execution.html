@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SDM→EDM Migration — In Progress</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f5f7fa; color: #1f2937; line-height: 1.5; }
+  .header { background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); color: white; padding: 32px 48px; }
+  .header h1 { margin: 0 0 8px 0; font-size: 28px; font-weight: 600; }
+  .header .status-pill { display: inline-block; background: rgba(255,255,255,0.25); padding: 4px 14px; border-radius: 12px; font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+  .header .subtitle { font-size: 15px; opacity: 0.95; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 48px; }
+  .site-card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  .site-card h2 { margin: 0 0 16px 0; font-size: 18px; color: #111827; }
+  .site-card table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .site-card td { padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
+  .site-card td:first-child { color: #6b7280; width: 200px; font-weight: 500; }
+  .site-card td:last-child { color: #111827; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px; }
+  .phase-card { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 16px; overflow: hidden; }
+  .phase-header { padding: 18px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #f3f4f6; }
+  .phase-status-icon { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; flex-shrink: 0; }
+  .status-done { background: #d1fae5; color: #065f46; }
+  .status-progress { background: #dbeafe; color: #1e40af; animation: pulse 2s infinite; }
+  .status-pending { background: #f3f4f6; color: #9ca3af; }
+  .status-blocked { background: #fef3c7; color: #92400e; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .phase-title { flex: 1; }
+  .phase-title h3 { margin: 0; font-size: 16px; color: #111827; }
+  .phase-title .phase-meta { font-size: 13px; color: #6b7280; margin-top: 2px; }
+  .phase-status-label { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .label-done { background: #d1fae5; color: #065f46; }
+  .label-progress { background: #dbeafe; color: #1e40af; }
+  .label-pending { background: #f3f4f6; color: #6b7280; }
+  .label-blocked { background: #fef3c7; color: #92400e; }
+  .sub-steps { padding: 8px 24px 16px 72px; font-size: 14px; }
+  .sub-step { padding: 8px 0; display: flex; align-items: flex-start; gap: 10px; border-bottom: 1px dashed #f3f4f6; }
+  .sub-step:last-child { border-bottom: none; }
+  .sub-step-icon { color: #10b981; font-size: 14px; font-weight: 600; min-width: 14px; }
+  .sub-step-icon.pending { color: #9ca3af; }
+  .sub-step-icon.progress { color: #2563eb; font-size: 13px; animation: pulse 2s infinite; }
+  .sub-step-icon.blocked { color: #d97706; }
+  .sub-step-text { flex: 1; }
+  .sub-step-label { color: #111827; font-weight: 500; }
+  .sub-step-label.pending { color: #6b7280; }
+  .sub-step-output { color: #4b5563; font-size: 13px; margin-top: 4px; font-family: 'Cascadia Code', Consolas, monospace; }
+  .sub-step-output strong { color: #111827; font-family: inherit; }
+  .findings-mini-table { margin-top: 8px; font-size: 13px; font-family: inherit; }
+  .findings-mini-table td { padding: 2px 12px 2px 0; }
+  .findings-mini-table .count { color: #2563eb; font-weight: 600; }
+  .approval-banner { background: #fef3c7; border: 2px solid #f59e0b; border-radius: 8px; padding: 24px; margin-top: 24px; }
+  .approval-banner h3 { margin: 0 0 12px 0; color: #92400e; font-size: 18px; }
+  .approval-banner p { margin: 8px 0; color: #78350f; }
+  .approval-banner .action-cmd { background: #1f2937; color: #f9fafb; padding: 12px 16px; border-radius: 6px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px; margin-top: 12px; }
+  .prompts-section { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-top: 24px; padding: 24px; }
+  .prompts-section h2 { margin: 0 0 16px 0; font-size: 18px; color: #111827; }
+  .prompt-card { padding: 16px; background: #f9fafb; border-radius: 6px; margin-top: 12px; border-left: 4px solid #d1d5db; }
+  .prompt-card.pending { opacity: 0.7; }
+  .prompt-card.ready { border-left-color: #2563eb; }
+  .prompt-card h4 { margin: 0 0 6px 0; font-size: 15px; color: #111827; }
+  .prompt-card p { margin: 6px 0; font-size: 14px; color: #374151; }
+  .prompt-card .prompt-state { font-size: 13px; color: #6b7280; }
+  .prompt-card .links { margin-top: 8px; font-size: 13px; font-family: 'Cascadia Code', Consolas, monospace; }
+  .prompt-card .links a { color: #2563eb; text-decoration: underline; display: block; padding: 2px 0; }
+  .timestamp { color: #6b7280; font-size: 12px; }
+  .footer-note { color: #6b7280; font-size: 13px; text-align: center; margin-top: 32px; padding: 16px; border-top: 1px solid #e5e7eb; }
+  .progress-bar { background: rgba(255,255,255,0.2); height: 8px; border-radius: 4px; margin: 16px 0; overflow: hidden; }
+  .progress-bar-fill { background: white; height: 100%; transition: width 0.3s; }
+  .summary-mini { display: flex; gap: 24px; margin: 16px 0 0 0; font-size: 13px; }
+  .summary-mini .stat { color: rgba(255,255,255,0.85); }
+  .summary-mini .stat strong { color: white; font-size: 15px; font-weight: 600; }
+  details > summary { cursor: pointer; color: #2563eb; font-size: 13px; padding: 4px 0; }
+  details[open] > summary { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="status-pill">🔵 In Progress · Phase 2 of 4</div>
+  <h1>SDM → EDM Migration</h1>
+  <div class="subtitle">Customization Remediation in progress · awaiting user review of auto-rewrites</div>
+  <div class="progress-bar"><div class="progress-bar-fill" style="width: 42%;"></div></div>
+  <div class="summary-mini">
+    <span class="stat">Overall: <strong>42%</strong></span>
+    <span class="stat">Sub-steps complete: <strong>8 of 12</strong></span>
+    <span class="stat">Elapsed: <strong>12m 04s</strong></span>
+    <span class="stat">Last updated: <strong>09:54:22</strong></span>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="site-card">
+    <h2>Site & Migration Details</h2>
+    <table>
+      <tr><td>Site name</td><td>Contoso Portal</td></tr>
+      <tr><td>Website Id</td><td>076bf556-9ae6-ee11-a203-6045bdf0328e</td></tr>
+      <tr><td>Portal Id</td><td>07f35d71-c45a-4a05-9702-8f127559e48e</td></tr>
+      <tr><td>URL slug</td><td>contoso-portal</td></tr>
+      <tr><td>Current data model</td><td>Standard (SDM) — eligible for migration</td></tr>
+      <tr><td>Template</td><td>Starter Layout 1</td></tr>
+      <tr><td>Environment</td><td>Development</td></tr>
+      <tr><td>Migration mode</td><td><strong>all</strong></td></tr>
+      <tr><td>Site root</td><td>.\mysite\contoso-portal\</td></tr>
+      <tr><td>Output directory</td><td>.\migration-reports\</td></tr>
+      <tr><td>Skill started</td><td><span class="timestamp">2026-05-26 09:42:18</span></td></tr>
+      <tr><td>Phase 2 approved at</td><td><span class="timestamp">2026-05-26 09:46:31</span></td></tr>
+    </table>
+  </div>
+
+  <!-- Phase 1 — completed (collapsed details) -->
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-status-icon status-done">✓</div>
+      <div class="phase-title">
+        <h3>Phase 1: Pre-flight Setup</h3>
+        <div class="phase-meta">7 sub-steps · completed in 4m 12s</div>
+      </div>
+      <div class="phase-status-label label-done">Completed</div>
+    </div>
+    <div class="sub-steps">
+      <details>
+        <summary>Show 7 completed sub-steps</summary>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.1 Establish CLI Context</div><div class="sub-step-output">PAC CLI v1.47.1 · environment "Ashmigration"</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.2 Identify Site Context</div><div class="sub-step-output">WebSiteId pasted by user · no website.yml in cwd</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.3 Site Discovery and Validate Data Model</div><div class="sub-step-output">"Contoso Portal" · Standard · Starter Layout 1</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.4 Check Existing Migration Status</div><div class="sub-step-output">NotStarted · proceeding fresh</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.5 Validate Required Dependencies</div><div class="sub-step-output">CDSBasePortal 9.3.2603.238 · PowerPages_Core 1.1.2603.246</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.6 Validate Site Template and V2 Package</div><div class="sub-step-output">DefaultPortalTemplate_V2 installed via <code>pac application install</code> (with user approval) · 1.0.2603.x</div></div></div>
+        <div class="sub-step"><div class="sub-step-icon">✓</div><div class="sub-step-text"><div class="sub-step-label">1.7 Determine Env Type and Migration Mode</div><div class="sub-step-output">Dev · mode=all · plan approved at 09:45:11</div></div></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Phase 2 — in progress -->
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-status-icon status-progress">⏳</div>
+      <div class="phase-title">
+        <h3>Phase 2: Customization Remediation</h3>
+        <div class="phase-meta">2.1 done · 2.2 in progress · started 7m 51s ago</div>
+      </div>
+      <div class="phase-status-label label-progress">In Progress</div>
+    </div>
+    <div class="sub-steps">
+      <div class="sub-step">
+        <div class="sub-step-icon">✓</div>
+        <div class="sub-step-text">
+          <div class="sub-step-label">2.1 Generate Customization Report</div>
+          <div class="sub-step-output">
+            CSV: <strong>.\migration-reports\SiteCustomization.csv</strong> · 51 findings total
+            <table class="findings-mini-table">
+              <tr><td>Liquid contains adx references</td><td><span class="count">8</span></td><td>(7 false positives · 1 needs rewrite)</td></tr>
+              <tr><td>FetchXML contains adx references</td><td><span class="count">4</span></td><td>(all auto-rewritable)</td></tr>
+              <tr><td>Data Model Extension</td><td><span class="count">28</span></td><td>(grouped into 7 source tables)</td></tr>
+              <tr><td>Plugins registered on adx entities</td><td><span class="count">6</span></td><td>(1 Microsoft · 1 Adxstudio · 4 custom)</td></tr>
+              <tr><td>Custom workflow</td><td><span class="count">5</span></td><td>(generic guidance)</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="sub-step">
+        <div class="sub-step-icon progress">●</div>
+        <div class="sub-step-text">
+          <div class="sub-step-label">2.2 Remediate Customizations <span style="color: #6b7280; font-weight: 400; font-size: 13px;">— 5 of 10 sub-actions complete, awaiting user diff review</span></div>
+          <div class="sub-step-output">
+            <details>
+              <summary>Show 10 sub-actions</summary>
+              <table class="findings-mini-table" style="margin-top: 8px;">
+                <tr><td>Download site (<code>pac pages download</code>)</td><td>✅ 406 files into .\mysite\contoso-portal\</td></tr>
+                <tr><td>FetchXML auto-rewriter</td><td>✅ 1 file modified · diff at .\migration-reports\fetchxml-rewrites.diff</td></tr>
+                <tr><td>Liquid annotator</td><td>✅ 0 entities['adx_*'] usages found (7 Liquid findings were all false positives)</td></tr>
+                <tr><td>Plugin remediation prompt</td><td>✅ .\migration-reports\plugin-remediation-prompt.txt</td></tr>
+                <tr><td>DME remediation prompt</td><td>✅ .\migration-reports\dme-remediation-prompt.txt</td></tr>
+                <tr><td>User reviews diff &amp; approves upload</td><td><strong style="color: #d97706;">⏸ awaiting user</strong></td></tr>
+                <tr><td>pac pages upload (after approval)</td><td>⏳ queued</td></tr>
+                <tr><td>Manual: plugin remediation (separate session)</td><td>⏸ user-driven</td></tr>
+                <tr><td>Manual: DME remediation (separate session)</td><td>⏸ user-driven</td></tr>
+                <tr><td>Final readiness gate</td><td>⏳ after upload</td></tr>
+              </table>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 3 — pending -->
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-status-icon status-pending">3</div>
+      <div class="phase-title">
+        <h3>Phase 3: Migration Execution</h3>
+        <div class="phase-meta">2 sub-steps · mode=all</div>
+      </div>
+      <div class="phase-status-label label-pending">Pending</div>
+    </div>
+    <div class="sub-steps">
+      <div class="sub-step"><div class="sub-step-icon pending">○</div><div class="sub-step-text"><div class="sub-step-label pending">3.1 Migrate Site Data Model</div><div class="sub-step-output">Will start after Phase 2 readiness gate · approval banner will appear here</div></div></div>
+      <div class="sub-step"><div class="sub-step-icon pending">○</div><div class="sub-step-text"><div class="sub-step-label pending">3.2 Update Data Model Version</div></div></div>
+    </div>
+  </div>
+
+  <!-- Phase 4 — pending -->
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-status-icon status-pending">4</div>
+      <div class="phase-title">
+        <h3>Phase 4: Post-Migration Validation</h3>
+        <div class="phase-meta">1 sub-step</div>
+      </div>
+      <div class="phase-status-label label-pending">Pending</div>
+    </div>
+    <div class="sub-steps">
+      <div class="sub-step"><div class="sub-step-icon pending">○</div><div class="sub-step-text"><div class="sub-step-label pending">4.1 Validation, Optional Rollback, and Final Summary</div></div></div>
+    </div>
+  </div>
+
+  <!-- In-phase approval gate: diff review before upload -->
+  <div class="approval-banner">
+    <h3>👀 Approve upload to continue Phase 2</h3>
+    <p>Step 2.2 has finished auto-rewriting FetchXML and Liquid where safe. Before <code>pac pages upload</code> writes changes back to Dataverse, please review the diff and rewritten files.</p>
+    <p><strong>Files to inspect:</strong></p>
+    <p style="margin-left: 16px;">
+      → <code>.\migration-reports\fetchxml-rewrites.diff</code> (1 rewrite)<br>
+      → <code>.\mysite\contoso-portal\web-templates\migration-check-demo\Migration-Demo-check.webtemplate.source.html</code> (rewritten file, backup as <code>*.pre-edm.bak</code>)
+    </p>
+    <p style="margin-top: 12px;">Also see the prompts in the section below for plugin and DME work that must run in fresh Claude sessions before Phase 3.</p>
+    <p style="margin-top: 16px;"><strong>To approve and continue Phase 2</strong>, respond in your Claude Code chat with:</p>
+    <div class="action-cmd">› Approve upload</div>
+    <p style="margin-top: 12px;"><strong>To cancel</strong>:</p>
+    <div class="action-cmd">› Cancel — stop before upload</div>
+    <p style="margin-top: 16px; font-size: 13px; color: #92400e;">A separate approval banner for Phase 3 will appear here once Phase 2 completes.</p>
+  </div>
+
+  <!-- Augmented Prompts section (always present, populated when prompts are generated) -->
+  <div class="prompts-section">
+    <h2>📋 Augmented Prompts for Customer-Owned Code</h2>
+    <p style="font-size: 14px; color: #6b7280; margin: 0 0 16px 0;">
+      Generated by step 2.1. The skill does not modify customer-owned plugin source or Dataverse schema directly — paste these prompts into fresh Claude Code sessions to drive that work.
+    </p>
+    <div class="prompt-card ready">
+      <h4>🔌 Plugin Remediation Prompt</h4>
+      <p>The skill detected <strong>4 custom plugins</strong> on adx_* entities that need code-level refactoring (1 Microsoft.* and 1 Adxstudio.* plugin were skipped — platform / V2 solution territory). The prompt is ready to paste into a fresh Claude Code session pointed at your plugin source repo.</p>
+      <div class="links">
+        <a href="../plugin-remediation-prompt.txt">📄 plugin-remediation-prompt.txt</a>
+      </div>
+      <p style="margin-top: 8px;"><strong>Action:</strong> open new <code>claude</code> in your plugin repo, paste the prompt as the first message, review the diff it produces.</p>
+    </div>
+    <div class="prompt-card ready">
+      <h4>🗂️ Data Model Extension Remediation Prompt</h4>
+      <p>The skill detected <strong>28 custom columns across 7 adx_* tables</strong>. The prompt produces a Dataverse solution package (.zip) for your review and import — no direct OData calls.</p>
+      <div class="links">
+        <a href="../dme-remediation-prompt.txt">📄 dme-remediation-prompt.txt</a>
+      </div>
+      <p style="margin-top: 8px;"><strong>Action:</strong> open new <code>claude</code> in any working directory, paste the prompt, follow the publisher prefix prompts, review the generated <code>edm-migration-solution.zip</code>, then <code>pac solution import</code>.</p>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    Generated by <strong>migrate-sdm-to-edm</strong> skill · Stage 2: Mid-execution (Phase 2 in progress) · Refresh this page anytime to see live status
+  </div>
+
+</div>
+</body>
+</html>
