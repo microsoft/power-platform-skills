@@ -66,6 +66,26 @@
 //     Waivable: yes — custom slugs allowed; rule flags only typos /
 //               non-kebab values.
 //
+//   CATALOG-row-must-have-marker
+//     Trigger: every `| `<gate-id>` | gate | ...` row in §6 of the catalog
+//              (references/approval-gates.md). Only rows tagged `gate` —
+//              `not-a-gate` rows are skipped because not-a-gate markers in
+//              SKILL.md don't carry an ID to match against.
+//     Require: at least one `<!-- gate: <gate-id> ... -->` marker in some
+//              SKILL.md under plugins/power-pages/skills/.
+//     Waivable: yes — inline `<!-- alm-lint-ignore: CATALOG-row-must-have-marker -->`
+//               in the catalog row's section, or `.almlintignore` entry.
+//
+//   GATE-prose-block-required
+//     Trigger: any `<!-- gate: ID ... -->` marker.
+//     Require: within the next 10 lines, a line carrying the 🚦 sentinel
+//              appears. Catches the "future PR deletes the prose block"
+//              drift case without forcing the v3 3-label structure on 80+
+//              legacy v2 single-line markers. The richer structured fields
+//              (Trigger / Why we ask / Cancel leaves) are recommended in
+//              §4.1 of references/approval-gates.md but not enforced.
+//     Waivable: yes — inline ignore comment.
+//
 // Usage:
 //   node scripts/lint-skills-alm.js [--plugin-root <path>]
 //   Exit 0 when no findings (or only warnings); exit 1 when at least one
@@ -187,28 +207,8 @@ const KNOWN_RULES = new Set([
   'GATE-must-be-in-catalog',
   'GATE-intent-must-call-helper',
   'GATE-cancel-leaves-known-vocab',
-]);
-
-// v2 had a separate ALM_SKILLS set used to flip lint severity between hard-fail
-// (ALM) and warn-only (non-ALM). v3 removed the carve-out — every skill under
-// plugins/power-pages/skills/ is hard-fail because the catalog in
-// references/approval-gates.md now covers all skills (see §10 landing history).
-// The set is kept as the canonical "ALM skill family" list for reference and
-// for downstream tooling that needs to enumerate ALM skills, but it no longer
-// influences lint severity.
-const ALM_SKILLS = new Set([
-  'plan-alm',
-  'setup-solution',
-  'setup-pipeline',
-  'deploy-pipeline',
-  'export-solution',
-  'import-solution',
-  'configure-env-variables',
-  'ensure-pipelines-host',
-  'force-link-environment',
-  'activate-site',
-  'test-site',
-  'diagnose-deployment',
+  'CATALOG-row-must-have-marker',
+  'GATE-prose-block-required',
 ]);
 
 // `category=intent` markers must be backed by a real helper invocation.
@@ -442,10 +442,7 @@ function skillNameFromFile(file) {
   return parts[idx + 1];
 }
 
-// v3: every skill under plugins/power-pages/skills/ is enforced at hard-fail.
-// Kept as a named constant rather than a no-op function so the call sites are
-// honest about the lack of per-skill policy. If a future PR needs per-skill
-// severity, restore a function here and pass the skill name in.
+// v3: hard-fail uniformly across every SKILL.md under plugins/power-pages/skills/.
 const SKILL_SEVERITY = 'error';
 
 // Parse the catalog file (references/approval-gates.md) and extract all
@@ -453,11 +450,13 @@ const SKILL_SEVERITY = 'error';
 // present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
 // hard-broken when the catalog is removed/renamed).
 //
-// Case-insensitive to align with GATE_MARKER_PATTERN — SKILL.md gate markers
-// allow any case in the skill-name segment, so the catalog scan must too,
-// otherwise a CamelCase or underscored skill would fail GATE-must-be-in-catalog
-// even with a correct catalog row.
-const CATALOG_GATE_ID_PATTERN = /`([A-Za-z][A-Za-z0-9_-]*:[A-Za-z0-9._-]+)`/g;
+// Case-insensitive on the skill-name segment to align with GATE_MARKER_PATTERN
+// — SKILL.md gate markers allow any case in the skill-name segment, so the
+// catalog scan must too, otherwise a CamelCase skill would fail
+// GATE-must-be-in-catalog even with a correct catalog row. Underscores are
+// intentionally NOT allowed — current naming convention is kebab-case for
+// skill names; allow only [A-Za-z][A-Za-z0-9-]* on that segment.
+const CATALOG_GATE_ID_PATTERN = /`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`/g;
 
 function loadCatalogGateIds(pluginRoot) {
   const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
@@ -467,6 +466,26 @@ function loadCatalogGateIds(pluginRoot) {
   CATALOG_GATE_ID_PATTERN.lastIndex = 0;
   let m;
   while ((m = CATALOG_GATE_ID_PATTERN.exec(content)) !== null) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+// Catalog row pattern: matches `| `<id>` | gate | ...` rows in §6 tables.
+// Only rows tagged `gate` (not `not-a-gate`) need a matching marker — not-a-gate
+// markers in SKILL.md don't carry an ID (they're free-text reasons), so the
+// reverse check is meaningless for them.
+const CATALOG_GATE_ROW_PATTERN =
+  /^\|\s*`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`\s*\|\s*gate\s*\|/gm;
+
+function loadCatalogGateRows(pluginRoot) {
+  const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
+  if (!fs.existsSync(catalogFile)) return null;
+  const content = fs.readFileSync(catalogFile, 'utf8');
+  const ids = new Set();
+  CATALOG_GATE_ROW_PATTERN.lastIndex = 0;
+  let m;
+  while ((m = CATALOG_GATE_ROW_PATTERN.exec(content)) !== null) {
     ids.add(m[1]);
   }
   return ids;
@@ -604,6 +623,37 @@ function collectFindings({ pluginRoot }) {
       }
     }
 
+    // GATE-prose-block-required — every `<!-- gate: -->` must be followed
+    // within 10 lines by a line carrying the 🚦 sentinel. This is the minimum
+    // viable check against "future PR deletes the human-readable block" drift:
+    // it catches deletion + ID-line tampering without forcing a structural
+    // rewrite of legacy v2 single-line prose. The richer structured fields
+    // (`> **Trigger:**`, `> **Why we ask:**`, `> **Cancel leaves:**`) are
+    // recommended in §4.1 of references/approval-gates.md for new markers but
+    // not lint-enforced — keeping the rule tight enough that 80+ existing v2
+    // markers don't need to be rewritten in the same PR.
+    if (!ignores.has('GATE-prose-block-required')) {
+      const lines = content.split(/\r?\n/);
+      for (const gm of gateMarkers) {
+        const startIdx = gm.lineNum - 1; // 0-based
+        const windowLines = lines.slice(startIdx + 1, startIdx + 11);
+        const hasSentinel = windowLines.some((l) => l.includes('🚦'));
+        if (!hasSentinel) {
+          findings.push({
+            rule: 'GATE-prose-block-required',
+            severity: 'error',
+            file,
+            message:
+              `Gate \`${gm.gateId}\` (line ${gm.lineNum}) is missing the 🚦 ` +
+              `prose block within 10 lines. Every gate marker must be followed ` +
+              `by a \`> 🚦 **Gate (...)**\` line so humans see the same ` +
+              `context the lint sees.`,
+            hint: 'See references/approval-gates.md §4.1 for the marker + prose template.',
+          });
+        }
+      }
+    }
+
     // GATE-cancel-leaves-known-vocab — value must be in vocab OR kebab-case.
     if (!ignores.has('GATE-cancel-leaves-known-vocab')) {
       for (const gm of gateMarkers) {
@@ -662,6 +712,30 @@ function collectFindings({ pluginRoot }) {
         `Gate IDs must be globally unique across the plugin.`,
       hint: 'Re-anchor one of the markers to a different phase id, or merge them into a single gate.',
     });
+  }
+
+  // CATALOG-row-must-have-marker — every `kind: gate` catalog row must have at
+  // least one matching <!-- gate: ID --> marker in a SKILL.md. This is the
+  // reverse of GATE-must-be-in-catalog and prevents the orphan-row class of
+  // bug that v3 closed by hand: catalog rows that describe gates with no
+  // corresponding SKILL.md anchor accumulate silently otherwise.
+  const catalogGateRows = loadCatalogGateRows(pluginRoot);
+  if (catalogGateRows) {
+    const markerIdSet = new Set(allGateMarkers.map((m) => m.gateId));
+    const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
+    for (const gateId of catalogGateRows) {
+      if (markerIdSet.has(gateId)) continue;
+      findings.push({
+        rule: 'CATALOG-row-must-have-marker',
+        severity: 'error',
+        file: catalogFile,
+        message:
+          `Catalog row \`${gateId}\` (kind: gate) has no matching ` +
+          `\`<!-- gate: ${gateId} ... -->\` marker in any SKILL.md. Either add ` +
+          `the marker to the owning skill, or remove/retag the catalog row.`,
+        hint: 'See references/approval-gates.md §7 (How to add a new gate) and §10 (catalog completeness).',
+      });
+    }
   }
 
   // Rule 2 — SCRIPT-must-use-resolver.
@@ -740,7 +814,6 @@ module.exports = {
   parseAllowlist,
   allowlistPathMatches,
   KNOWN_RULES,
-  ALM_SKILLS,
   INTENT_HELPERS,
   CANCEL_LEAVES_VOCAB,
   // Approval Gate parsing helpers (exported for tests):

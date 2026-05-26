@@ -77,7 +77,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 > 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded. Fires only on the "site purpose unclear" branch (step 3 below).
 >
 > **Trigger:** Phase 1 when site purpose was not provided in `$ARGUMENTS`.
-> **Blast radius if skipped:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
+> **Why we ask:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
 > **Cancel leaves:** Nothing — no scaffolding has started yet.
 
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
@@ -232,7 +232,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 > 🚦 **Gate (plan · create-site:3.requirements):** Three sub-prompts (features multi-select, aesthetic, mood) — shape the Phase 4 plan and the Phase 5 implementation. Fires at step 2 of the action list below.
 >
 > **Trigger:** Phase 3 entry; scaffold loader is up.
-> **Blast radius if skipped:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
+> **Why we ask:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
 > **Cancel leaves:** Nothing — scaffold loader files are throwaway artifacts replaced wholesale in Phase 5.
 
 **Actions**:
@@ -365,7 +365,7 @@ Immediately after the user answers, `Write` the same file again with `"awaitingI
 > 🚦 **Gate (plan · create-site:4.7.plan-approval):** Final sign-off on the rendered HTML plan before Phase 5 starts replacing the scaffold with real pages, components, and design tokens.
 >
 > **Trigger:** Phase 4.3 rendered `docs/create-site-plan.html`; Phase 4.4 opened it in the browser.
-> **Blast radius if skipped:** Phase 5 rewrites the entire scaffold (theme.css, Layout, Home page, components, routes) — undoing that touches every commit in the implementation phase.
+> **Why we ask:** Phase 5 rewrites the entire scaffold (theme.css, Layout, Home page, components, routes) — undoing that touches every commit in the implementation phase.
 > **Cancel leaves:** Nothing destructive — the scaffold itself can be deleted with the project directory; no Dataverse / deploy fired.
 
 Use `AskUserQuestion`:
@@ -571,7 +571,7 @@ Present a summary table to the user:
 > 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
 >
 > **Trigger:** Phase 7 has verified all pages render via Playwright.
-> **Blast radius if skipped:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
+> **Why we ask:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
 > **Cancel leaves:** Nothing — site files stay as-is on disk.
 
 **Actions**:
@@ -608,7 +608,7 @@ Present a summary table to the user:
 > 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 2 of the action list below.
 >
 > **Trigger:** Phase 8 entry; Phase 7 review approved.
-> **Blast radius if skipped:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
+> **Why we ask:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
 > **Cancel leaves:** Nothing — site files stay on disk; no deploy fired.
 
 **Actions**:

@@ -302,7 +302,7 @@ In the CLI, give only a brief summary:
 > 🚦 **Gate (plan · integrate-backend:3.4.plan-approval):** Approve the integration plan before invoking the appropriate child skill (`integrate-webapi` / `add-server-logic` / `add-cloud-flow`). The plan HTML stays on disk regardless of choice — Cancel just stops the dispatch.
 >
 > **Trigger:** Phase 3.3 has rendered the HTML plan and surfaced a brief CLI summary.
-> **Blast radius if skipped:** Wrong child skill gets dispatched — `add-server-logic` for a Web API task wastes minutes; `add-cloud-flow` for a Web API task creates orphaned flow YAML.
+> **Why we ask:** Wrong child skill gets dispatched — `add-server-logic` for a Web API task wastes minutes; `add-cloud-flow` for a Web API task creates orphaned flow YAML.
 > **Cancel leaves:** Nothing — no child skill invoked, HTML plan stays at its saved path.
 
 Use `AskUserQuestion`:

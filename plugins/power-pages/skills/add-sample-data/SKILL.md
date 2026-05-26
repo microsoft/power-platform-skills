@@ -85,7 +85,7 @@ Show the user the list of discovered tables with their columns so they can choos
 > 🚦 **Gate (plan · add-sample-data:3.1.tables):** Multi-select over discovered tables — decides which tables get populated with sample data.
 >
 > **Trigger:** Phase 2 discovery completed.
-> **Blast radius if skipped:** Auto-selecting all tables can pollute production-shape tables (e.g. `contact`) with throwaway records.
+> **Why we ask:** Auto-selecting all tables can pollute production-shape tables (e.g. `contact`) with throwaway records.
 > **Cancel leaves:** Nothing — no record inserts yet.
 
 Use `AskUserQuestion` to ask which tables they want to populate (use `multiSelect: true`). List all discovered tables as options.
@@ -97,7 +97,7 @@ Use `AskUserQuestion` to ask which tables they want to populate (use `multiSelec
 > 🚦 **Gate (plan · add-sample-data:3.2.count):** Pick records-per-table (5 / 10 / 25 / Custom). Custom branch is a follow-up free-text prompt under the same gate.
 >
 > **Trigger:** Tables selected in 3.1.
-> **Blast radius if skipped:** Inserting hundreds of records can blow past Dataverse storage / API throttling budgets.
+> **Why we ask:** Inserting hundreds of records can blow past Dataverse storage / API throttling budgets.
 > **Cancel leaves:** Nothing — no record inserts yet.
 
 Use `AskUserQuestion` to ask how many sample records per table:

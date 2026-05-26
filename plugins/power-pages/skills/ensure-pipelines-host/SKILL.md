@@ -427,7 +427,7 @@ A PE already exists in the tenant (one is provisioned automatically the first ti
 > 🚦 **Gate (plan · ensure-pipelines-host:3.C.host-type):** Top-level host-type prompt — pick Platform Host / Custom Host / PPAC manual / Manual export-import strategy / Cancel. Drives the rest of Phase 3 and Phase 4 routing.
 >
 > **Trigger:** Status `NoHost` AND no upstream `hostResolution.willProvision*` flag carries the answer.
-> **Blast radius if skipped:** Auto-picking provisions an env (PE or Custom Host) without consent; PE is tenant-singleton and admin-non-deletable.
+> **Why we ask:** Auto-picking provisions an env (PE or Custom Host) without consent; PE is tenant-singleton and admin-non-deletable.
 > **Cancel leaves:** Nothing — no provisioning fired yet.
 
 <!-- gate: ensure-pipelines-host:3.C.env-pick | category=plan | cancel-leaves=nothing -->
@@ -435,7 +435,7 @@ A PE already exists in the tenant (one is provisioned automatically the first ti
 > 🚦 **Gate (plan · ensure-pipelines-host:3.C.env-pick):** Sub-prompt under 3.C top-level option "Custom Host" — present the eligible-env list (capped at 5) with role labels (`dev env`, `source env`, `staging env`, `production env`) and the "Other (paste URL)" fallback. Fires only on the Custom-Host branch of the host-type menu.
 >
 > **Trigger:** User picked "Custom Host" in 3.C top-level.
-> **Blast radius if skipped:** Auto-picking the wrong env routes pipelines through a host the user didn't intend.
+> **Why we ask:** Auto-picking the wrong env routes pipelines through a host the user didn't intend.
 > **Cancel leaves:** Nothing — no app install fired.
 
 The prompt asks the user to pick the **host type** first (Platform Host, Custom Host, PPAC manual, or cancel). Picking Custom Host opens a sub-prompt for the install method (existing env vs. create-new). The Platform-Host path is the lowest-friction default and is presented first.
@@ -591,7 +591,7 @@ Surface the specific failure to the user. Out of automated remediation scope. Re
 > 🚦 **Gate (consent · ensure-pipelines-host:4.0.pre-call):** Echo the tenant identity in the request body before firing the BAP `getOrCreate` Platform Host call. NON-SKIPPABLE even when upstream `hostResolution.willProvisionPlatform === true`. PE is tenant-singleton and admin-non-deletable — this gate is the principal wrong-tenant mitigation.
 >
 > **Trigger:** Phase 4.0 entry (routed in from 3.C or upstream).
-> **Blast radius if skipped:** PE provisioned in wrong tenant; cannot be deleted by tenant admin.
+> **Why we ask:** PE provisioned in wrong tenant; cannot be deleted by tenant admin.
 > **Cancel leaves:** Nothing — no provisioning fired yet.
 
 The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreate` endpoint with a `D365_1stPartyAdminApps` + `Platform` body. Same call `make.powerapps.com → Pipelines` page makes when a user clicks "Get started" — we just invoke it directly. Spec from `useGetOrCreatePlatformEnvironment.v4.ts`. New helper `provision-platform-host.js`.
@@ -634,7 +634,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
 > 🚦 **Gate (consent · ensure-pipelines-host:4.A.pre-call):** Echo the BAP env-create request body (region + display name + template) before firing the Custom Host create call. NON-SKIPPABLE even when upstream `hostResolution.willProvisionCustom === true`. Last chance to catch a wrong-tenant/wrong-region provisioning. Bug fixed 2026-05-05 was caused by skipping this gate.
 >
 > **Trigger:** Phase 4.A entry; sub-prompts (display name, region, admin attestation) collected.
-> **Blast radius if skipped:** Custom Host provisioned in wrong tenant or wrong region; consumes Azure capacity quota; potentially attributes the env to the wrong organization.
+> **Why we ask:** Custom Host provisioned in wrong tenant or wrong region; consumes Azure capacity quota; potentially attributes the env to the wrong organization.
 > **Cancel leaves:** Nothing — no provisioning fired yet.
 
 <!-- gate: ensure-pipelines-host:4.sandbox-confirm | category=consent | cancel-leaves=nothing -->
@@ -642,7 +642,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
 > 🚦 **Gate (consent · ensure-pipelines-host:4.sandbox-confirm):** When the picked install-target env has `environmentSku=Sandbox`, surface the sandbox-limits warning and require explicit re-confirmation before installing. Fires once per Sandbox-SKU env selected.
 >
 > **Trigger:** Phase 4.B / Phase 3.C sub-option a — picked env is Sandbox SKU.
-> **Blast radius if skipped:** Installing Pipelines onto a Sandbox env without consent — sandbox envs are deletable on inactivity and have reduced capacity; pipelines may break unexpectedly.
+> **Why we ask:** Installing Pipelines onto a Sandbox env without consent — sandbox envs are deletable on inactivity and have reduced capacity; pipelines may break unexpectedly.
 > **Cancel leaves:** Nothing — no app install fired.
 
 Standard env-create API with the `D365_ProjectHost` template (eng.ms-documented; same template PPAC `New custom host` uses internally). New helper `provision-custom-host.js`.
@@ -796,7 +796,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
 > 🚦 **Gate (progress · ensure-pipelines-host:4.C.ppac-done):** External-system wait gate — user must complete the PPAC "New custom host" flow manually, then return to confirm. Skill polls BAP afterward for the new env.
 >
 > **Trigger:** Phase 4.C entry; PPAC URL printed.
-> **Blast radius if skipped:** Skill proceeds without confirming the new env exists; downstream `setup-pipeline` then fails with no host. Worse, if PPAC creation succeeded partway and the user cancelled the gate, the host binding is partially established (a `D365_ProjectHost`-templated env exists in tenant).
+> **Why we ask:** Skill proceeds without confirming the new env exists; downstream `setup-pipeline` then fails with no host. Worse, if PPAC creation succeeded partway and the user cancelled the gate, the host binding is partially established (a `D365_ProjectHost`-templated env exists in tenant).
 > **Cancel leaves:** `host-binding` — a manually-created env may be left in tenant; user must clean up via PPAC.
 
 1. Print: `https://admin.powerplatform.microsoft.com/deployments` and instructions: *"Click 'New custom host' → fill name (suggested: '{tenant} Pipelines Host') → choose Production environment in tenant home region → Create. Provisioning takes 5–10 min."*

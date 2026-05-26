@@ -288,7 +288,7 @@ Authorization: Bearer {HOST_TOKEN}
 > 🚦 **Gate (plan · setup-pipeline:4.3.name-conflict):** A pipeline with the same name already exists in the host env. Pick: reuse the existing pipeline ID, or create a new one with a different name. Auto-reusing risks attaching to a pipeline owned by someone else; auto-overwriting loses their stage history.
 >
 > **Trigger:** Phase 4.3 query returned a hit.
-> **Blast radius if skipped:** Either a foreign pipeline gets its stages overwritten, or a duplicate pipeline gets created that pollutes the host env's pipeline list.
+> **Why we ask:** Either a foreign pipeline gets its stages overwritten, or a duplicate pipeline gets created that pollutes the host env's pipeline list.
 > **Cancel leaves:** Nothing — no Dataverse write yet.
 
 If found: ask via `AskUserQuestion` whether to use the existing pipeline ID or create a new one with a different name.
@@ -491,7 +491,7 @@ Confirm `statecode = 0` (Active). If the query fails, report as "verification in
 > 🚦 **Gate (plan · setup-pipeline:6b.v2-migration):** v2 `pipelines[]` manifest detected on re-run. Pick: migrate to v3 (delete the N-1 extra pipelines and collapse to one) or keep the legacy layout.
 >
 > **Trigger:** Re-running setup-pipeline on a project whose `docs/alm/last-pipeline.json` is `schemaVersion: 2`.
-> **Blast radius if skipped:** Auto-migrating deletes Dataverse pipeline records — destructive against host env state, irreversible without re-running setup-pipeline.
+> **Why we ask:** Auto-migrating deletes Dataverse pipeline records — destructive against host env state, irreversible without re-running setup-pipeline.
 > **Cancel leaves:** Nothing — no pipeline records deleted yet.
 
 > **Migration note:** Earlier versions of this skill used `schemaVersion: 2` with a `pipelines[]` array (one Dataverse pipeline record per solution). Projects pinned to v2 continue to work with the old `deploy-pipeline` MULTI_PIPELINE_MODE path; the v3 format should be used for all new setups. When re-running `setup-pipeline` on a v2 project, ask via `AskUserQuestion` whether to migrate (delete the N-1 extra pipelines and collapse to a single one) or keep the legacy layout.

@@ -120,7 +120,7 @@ Present the SEO additions that will be made as a clear, inline summary:
 > 🚦 **Gate (plan · add-seo:3.plan-approval):** Final sign-off on the SEO additions before any `robots.txt` / `sitemap.xml` / `index.html` write.
 >
 > **Trigger:** Phase 3 has presented the full plan inline (robots.txt, sitemap.xml, meta tags, favicon).
-> **Blast radius if skipped:** SEO assets land on disk with the wrong production URL, wrong exclusions, or unwanted OG tags — fixable but noisy in git history.
+> **Why we ask:** SEO assets land on disk with the wrong production URL, wrong exclusions, or unwanted OG tags — fixable but noisy in git history.
 > **Cancel leaves:** Nothing — no file writes yet.
 
 After presenting the plan, use `AskUserQuestion` to get approval:

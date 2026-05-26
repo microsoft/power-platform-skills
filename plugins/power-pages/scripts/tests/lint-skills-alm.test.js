@@ -12,7 +12,6 @@ const {
   parseAllowlist,
   allowlistPathMatches,
   KNOWN_RULES,
-  ALM_SKILLS,
   CANCEL_LEAVES_VOCAB,
   extractGateMarkers,
   extractNotAGateMarkers,
@@ -615,6 +614,27 @@ Ask via \`AskUserQuestion\`:
   assert.equal(findings.filter((f) => f.rule === 'GATE-must-have-marker').length, 0);
 });
 
+test('GATE-must-have-marker: fails when marker is on the SAME line as the prompt (strict precede)', async (t) => {
+  // v3 tightened m <= promptLine to m < promptLine. A single-line shape like
+  // `<!-- gate: ... --> Use \`AskUserQuestion\` for X:` matches both regexes
+  // at the same line number; under the old <= rule this passed trivially.
+  // The new < rule requires the marker to be on a line STRICTLY BEFORE the
+  // prompt.
+  const root = mkPluginRoot(t);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing --> Use \`AskUserQuestion\` for X:
+`
+  );
+  writeCatalog(root, ['plan-alm:1.foo']);
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-must-have-marker');
+  assert.ok(match, 'expected GATE-must-have-marker to fire — marker on prompt line should not satisfy pairing');
+});
+
 test('GATE-must-have-marker: pairing is per-section (marker in earlier section does NOT cover later section)', async (t) => {
   const root = mkPluginRoot(t);
   writeSkill(
@@ -758,18 +778,6 @@ Ask via \`AskUserQuestion\`:
   writeCatalog(root, ['plan-alm:1.x']);
   const findings = collectFindings({ pluginRoot: root });
   assert.equal(findings.filter((f) => f.rule === 'GATE-cancel-leaves-known-vocab').length, 0);
-});
-
-test('ALM_SKILLS export includes the 12 documented ALM skills', () => {
-  const required = [
-    'plan-alm', 'setup-solution', 'setup-pipeline', 'deploy-pipeline',
-    'export-solution', 'import-solution', 'configure-env-variables',
-    'ensure-pipelines-host', 'force-link-environment', 'activate-site',
-    'test-site', 'diagnose-deployment',
-  ];
-  for (const skill of required) {
-    assert.ok(ALM_SKILLS.has(skill), `ALM_SKILLS missing: ${skill}`);
-  }
 });
 
 test('CANCEL_LEAVES_VOCAB export has the documented values', () => {

@@ -80,6 +80,8 @@ Each gate fits one of six categories. Each gets a one-word prefix in the marker 
 
 **Mechanism:** Skill presents a rendered artifact and a 2–4 option `AskUserQuestion`. Cancel exits without any Dataverse / filesystem write.
 
+> **Deploy-dispatch prompts ("Deploy now?") are `plan`, not `consent`.** Many non-ALM skills (`create-site:8.deploy`, `add-server-logic:11.3.deploy`, `add-cloud-flow:8.4.deploy`, etc.) end with a "Deploy now / Later" prompt that invokes `/deploy-site`. These are `plan` gates — the user is choosing *whether to dispatch a child skill*, not approving the destructive action itself. The destructive Dataverse write lives inside `/deploy-site`'s own `consent` gate at `deploy-site:3.confirm-env`, which echoes the target env and requires explicit confirmation. The pattern is dispatch-then-consent: `plan` here, `consent` there. Compare `deploy-site:6.2.unblock-js` (`consent`, modifies tenant-wide `blockedattachments`) — that one IS destructive at its call site and is tagged accordingly. If a future "Deploy now?" prompt skips the dispatch and writes directly to Dataverse, retag it `consent`.
+
 ### 3.3 `progress` — Mid-flow re-confirmation gate
 **Defining attribute:** A condition emerged mid-run that wasn't visible at planning time; the user re-confirms before the skill continues with the delta.
 
@@ -151,7 +153,7 @@ Every gate gets a structural marker in SKILL.md. The marker has two parts: a **m
 > 🚦 **Gate (plan · skill-name:phase-id):** One-line summary of what the user is approving.
 >
 > **Trigger:** When this gate fires.
-> **Blast radius if skipped:** What goes wrong if a tool bypasses the prompt.
+> **Why we ask:** What goes wrong if a tool bypasses the prompt.
 > **Cancel leaves:** Explicit state description — either `nothing` (clean exit) or a specific state.
 ```
 
@@ -194,7 +196,7 @@ Custom values are allowed when none of the above fits — lint accepts any kebab
 > 🚦 **Gate (final · deploy-pipeline:6.0):** Final consent before DeployPackageAsync.
 >
 > **Trigger:** Validation passed (Phase 5); no completeness drift outstanding; no env-var override prompts outstanding. About to fire `DeployPackageAsync` or the `pac pipeline deploy` fallback.
-> **Blast radius if skipped:** Wrong-stage deploy. Non-transactional — partial failure leaves whatever already imported on the target.
+> **Why we ask:** Wrong-stage deploy. Non-transactional — partial failure leaves whatever already imported on the target.
 > **Cancel leaves:** Validated stage run on host (no `docs/alm/last-deploy.json` written). User can retry by re-invoking `deploy-pipeline`.
 
 [arbitrarily long rationale prose explaining why this gate exists, what alternatives were considered, etc.]
@@ -340,9 +342,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:7.7.activate` | gate | plan | 7.7 | Site deployed, not yet activated — *"Activate now / later"* | nothing |
 | `deploy-pipeline:7.cloud-flow-register` | gate | plan | 7 (cloud-flow path) | Cloud flows in solution — *"Registered in target? Yes / Later"* (informational continue) | nothing |
 
-The previously-listed `deploy-pipeline:6.1.pac-fallback-consent` row was merged into `6.0.final-consent` — the 6.0 marker's prose explicitly covers both the `DeployPackageAsync` and `pac pipeline deploy` paths, so a separate ID would have been redundant and the new row produced no second prompt.
-
-(Three additional `AskUserQuestion` calls in this skill are sub-prompts inside the gates above — env-var value entry per variable inside `5.env-vars`, validation `Approved? Yes / No` follow-ups inside `4.pending-approval` and `6.pending-approval`. They share the parent gate's marker.)
+(Three additional `AskUserQuestion` calls in this skill are sub-prompts inside the gates above — env-var value entry per variable inside `5.env-vars`, validation `Approved? Yes / No` follow-ups inside `4.pending-approval` and `6.pending-approval`. They share the parent gate's marker. The `6.0.final-consent` marker covers both the `DeployPackageAsync` and `pac pipeline deploy` paths — no separate ID for the CLI fallback.)
 
 ---
 
@@ -385,7 +385,7 @@ The previously-listed `deploy-pipeline:6.1.pac-fallback-consent` row was merged 
 |---|---|---|---|---|---|
 | `configure-env-variables:0.no-plan` | gate | intent | 0 | `check-alm-plan.js` `exists:false` — *"Run plan-alm? / Continue / Cancel"* | nothing |
 | `configure-env-variables:0.stale-plan` | gate | intent | 0 | `check-alm-plan.js` `stale:true` — *"Refresh / Continue / Cancel"* | nothing |
-| `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"* — the per-stage values matrix is built inside this same multi-question prompt, so a separate "confirm matrix" gate would be redundant. | nothing |
+| `configure-env-variables:2.selection` | gate | plan | 2 | Settings classified — *"Which to promote? Per-stage values per setting"*. Per-stage values matrix is built inside this same multi-question prompt. | nothing |
 | `configure-env-variables:6.1.invalid-secret-values` | gate | consent | 6.1 | Pre-write validation found Secret refs in invalid formats — hard-stop, *"Fix or abort"* | nothing |
 
 ---
@@ -416,8 +416,6 @@ The previously-listed `deploy-pipeline:6.1.pac-fallback-consent` row was merged 
 | `force-link-environment:2.host-url` | gate | plan | 2 | Host URL not resolved from `--host` arg / `last-host-check.json` / `last-pipeline.json` — *"Pick host (with paste-URL fallback)"* | nothing |
 | `force-link-environment:2.dev-env` | gate | plan | 2 | Dev env BAP GUID not resolved from `--dev-env` arg or `pac env who` confirmation — *"Pick / paste"* | nothing |
 | `force-link-environment:4.destructive` | gate | consent | 4 | Mandatory gate before `ManageEnvironmentStamp` — *"DESTRUCTIVE: confirm cross-host stamp move"* | nothing |
-
-The previously-listed `2.host-fallback` / `2.dev-fallback` not-a-gate rows were redundant — they described the free-text fallback option of the gate above, not a separate prompt.
 
 ---
 
@@ -607,22 +605,29 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.24a Security skills — runtime-loop pattern
+### 6.24a Security skills — runtime-loop pattern (now anchored)
 
-The four security skills introduced in PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`) use `AskUserQuestion` differently from the other skills: they don't have phase-numbered, statically-locatable prompt sites. Most calls happen inside a "recommend then ask" runtime loop that's described in prose (e.g., *"recommend the single most relevant action"* in `manage-firewall` §3 and `scan-site` §3). The marker convention treats these as follows:
+The four security skills introduced in PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`) use `AskUserQuestion` differently from the other skills: most calls happen inside a "recommend then ask" runtime loop that was originally described in prose without a literal `AskUserQuestion`:` call site.
 
-- **Meta-mention sections** (`### Option rules` in `manage-firewall` and `scan-site`) are tagged `<!-- not-a-gate -->` — they document HOW to construct prompts, they aren't prompt sites themselves.
-- **Concrete prompt sites** that exist as literal "`AskUserQuestion`:" blocks (e.g. `manage-headers` §3 per-finding loop, `security-review` §2.1 and §5.3) get full `<!-- gate -->` markers.
+v3 closed this coverage hole by surfacing the recommend-then-ask block as a real call site in the prose:
 
-Future hardening (out of scope for v3): the runtime-loop calls in `manage-firewall` and `scan-site` could be made statically locatable by moving the "recommend an action" block into a numbered subsection like `### 3.1 Recommend` with a literal AskUserQuestion code example. The PR #151 authors can revisit if the loop pattern proves hard to audit.
+- `manage-firewall:3.action-choice` (gate, plan) — `### Default approach`; routes to which destructive action runs.
+- `manage-firewall:3.execute-consent` (gate, consent) — `### Plan-validate-execute`; final consent before each WAF mutation.
+- `scan-site:3.action-choice` (gate, plan) — `### Default approach`; idle/running × has-report/no-report decision.
+- `manage-headers:3.per-finding` (gate, plan) — `### Default approach`; per-finding accept / customize / skip loop.
+- `security-review:2.1.goal` + `5.3.next-action` (gates, plan) — goal capture + post-report next-action.
+
+The `### Option rules` sections in `manage-firewall` and `scan-site` retain `<!-- not-a-gate -->` markers — they document HOW to construct prompts but aren't call sites themselves.
 
 ---
 
-### 6.25 `manage-firewall` (1 lint-caught meta-mention + dynamic runtime loop)
+### 6.25 `manage-firewall` (3 gate IDs)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `manage-firewall:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Documentation describing how to structure `AskUserQuestion` options in this skill — not a call site itself. The actual destructive firewall changes (enable/disable/add-rule/remove-rule) gate via the prose-described "apply only after user approval" rule in §3 Plan-validate-execute and §4 Apply the change. | — |
+| `manage-firewall:3.action-choice` | gate | plan | 3 (`### Default approach`) | Recommend an action based on firewall state; user accepts or picks differently. Loops back here after each Phase 4 apply if the user wants additional changes. | nothing |
+| `manage-firewall:3.execute-consent` | gate | consent | 3 (`### Plan-validate-execute`) | Final consent before any destructive WAF mutation (enable/disable, add/update/delete rule). Fires PER CHANGE. | nothing |
+| `manage-firewall:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. | — |
 
 ---
 
@@ -634,11 +639,12 @@ Future hardening (out of scope for v3): the runtime-loop calls in `manage-firewa
 
 ---
 
-### 6.27 `scan-site` (1 lint-caught meta-mention + dynamic runtime loop)
+### 6.27 `scan-site` (2 gate IDs)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `scan-site:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Documentation describing how to structure `AskUserQuestion` options. The actual prompt — *"use existing report / run a fresh scan"* — fires dynamically in §3 Default approach and triggers a long-running scan but no destructive site change. | — |
+| `scan-site:3.action-choice` | gate | plan | 3 (`### Default approach`) | Recommend an action based on scan state (running/idle/has-report). Starting a new scan triggers a multi-minute backend run; using an existing report is free. | nothing |
+| `scan-site:3.option-rules-meta` | not-a-gate | — | 3 (`### Option rules`) | Meta-documentation describing how to structure `AskUserQuestion` options. Not a call site. | — |
 
 ---
 
@@ -696,7 +702,8 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.
-- `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope).
+- `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope). **Cross-plugin TODO:** the `AskUserQuestion` calls in `shared/skills/report-issue/report-issue-workflow.md` are not caught by any per-plugin lint today. A future cross-plugin sweep should either (a) define a `shared:*` namespace in the catalog and add markers in the shared workflow, or (b) duplicate the workflow into each plugin so the per-plugin lint covers it.
+- v3 lint changes: removed warn-only branch; tightened `m <= promptLine` to strict `m <`; relaxed `CATALOG_GATE_ID_PATTERN` to case-insensitive on the skill-name segment; added two new rules — `CATALOG-row-must-have-marker` (reverse check — catalog rows of `kind: gate` must have a matching SKILL.md marker; prevents the orphan-row class of bug v3 closed by hand) and `GATE-prose-block-required` (every marker must be followed within 10 lines by a 🚦 sentinel; minimum-viable check against prose-block deletion). Field rename: `Blast radius if skipped:` → `Why we ask:` across all ~60 prose blocks plus §4.1 template.
 
 ---
 
@@ -708,3 +715,6 @@ These are honest unresolved questions — not necessary to answer before v2 land
 - **Should `pause` gates be allowed to auto-resume?** Currently the lint rule would flag any tooling that auto-responds. But if PP Pipelines exposes a polling endpoint that detects approval state, a deterministic auto-resume becomes possible. Worth a future rule extension.
 - **Telemetry on gate cancellation.** A gate that's cancelled 80% of the time is asking the wrong question. Out of scope for v2; worth instrumenting once §5 lint lands.
 - **Multi-prompt gates.** Some entries in §6 cover multiple `AskUserQuestion` calls under one marker (e.g., `setup-solution:5.5*` is one logical gate but renders three multiSelect prompts). The lint rule says one marker can cover multiple calls if the catalog row documents it. Worth a more precise rule once we see drift.
+- **Phase-number drift is silent.** Catalog rows reference SKILL.md phase numbers as plain strings (`7.6.4`, `3 (Q3 PP)`, `2.1.2`). If a skill is refactored to renumber phases (e.g. `7.6.4` → `7.7.1`), the catalog row's "Phase" column desyncs with no signal. **Convention:** any SKILL.md phase renumber MUST grep this catalog for the old phase number and update the row(s). Worth a future lint rule that asserts each catalog phase-reference is findable as a heading in the owning SKILL.md.
+- **Runtime-loop coverage hole (manage-firewall, scan-site).** §6.24a documents this: the destructive WAF mutations in `manage-firewall` §3 Plan-validate-execute and the scan-trigger choices in `scan-site` §3 Default approach happen inside a "recommend then ask" loop with no statically-locatable `AskUserQuestion`:` call site. The not-a-gate markers in those skills satisfy lint without anchoring the actual destructive prompts. Tracked as a known gap — restructuring the prose to surface real call sites is the path forward but was deferred from v3 to keep the PR scoped.
+- **Lint enforces only the 🚦 sentinel, not the 3 structured labels.** `GATE-prose-block-required` checks for 🚦 within 10 lines of a marker. It does NOT verify the recommended `> **Trigger:**` / `> **Why we ask:**` / `> **Cancel leaves:**` labels — 80+ legacy v2 markers use a one-line prose style. Drift on the labels remains possible. Tightening the rule to require the 3 labels would force a structural rewrite of every legacy marker — explicit deferral.

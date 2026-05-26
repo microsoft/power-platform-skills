@@ -80,7 +80,7 @@ Look for the `.powerpages-site` folder:
 > 🚦 **Gate (plan · setup-auth:1.3.deploy-first):** `.powerpages-site` missing — auth setup writes site settings inside that folder. Deploy first or stop.
 >
 > **Trigger:** Phase 1.3 detected no `.powerpages-site` folder.
-> **Blast radius if skipped:** Auto-deploy picks the wrong env; skipping leaves auth wiring broken.
+> **Why we ask:** Auto-deploy picks the wrong env; skipping leaves auth wiring broken.
 > **Cancel leaves:** Nothing — no auth files written yet.
 
 Use `AskUserQuestion`:
@@ -108,7 +108,7 @@ Read each file and compile a list of existing web roles (name, id, flags).
 > 🚦 **Gate (plan · setup-auth:1.4.create-webroles):** No web roles found — role-based authorization needs at least one role. Create roles first or skip and add later.
 >
 > **Trigger:** Phase 1.4 found no YAML files in `.powerpages-site/web-roles/`.
-> **Blast radius if skipped:** Auto-invoking `/create-webroles` runs another full skill; auto-skipping leaves RBAC checks against an empty role set.
+> **Why we ask:** Auto-invoking `/create-webroles` runs another full skill; auto-skipping leaves RBAC checks against an empty role set.
 > **Cancel leaves:** Nothing — no auth files written yet.
 
 **If no web roles exist**: Warn the user that web roles are needed for authorization. Ask via `AskUserQuestion` whether to create them first:
@@ -155,7 +155,7 @@ If auth files already exist, present them to the user and ask whether to overwri
 > 🚦 **Gate (plan · setup-auth:2.1.requirements):** Pick which auth features to build (login+logout / RBAC / both). Covers the conditional follow-up "which roles get access" sub-prompt in the same step.
 >
 > **Trigger:** Phase 2.1 entry.
-> **Blast radius if skipped:** Wrong feature set gets generated — e.g. building RBAC files when the user only wanted login.
+> **Why we ask:** Wrong feature set gets generated — e.g. building RBAC files when the user only wanted login.
 > **Cancel leaves:** Nothing — no auth files written yet.
 
 Use `AskUserQuestion` to determine the scope:
@@ -184,7 +184,7 @@ Present the implementation plan inline:
 > 🚦 **Gate (plan · setup-auth:2.2.plan-approval):** Final sign-off on the auth implementation plan before any file is written.
 >
 > **Trigger:** Phase 2.2 presented the full plan inline.
-> **Blast radius if skipped:** Wrong components generated; site settings written; ProfileRedirectEnabled flipped — fixable but adds churn.
+> **Why we ask:** Wrong components generated; site settings written; ProfileRedirectEnabled flipped — fixable but adds churn.
 > **Cancel leaves:** Nothing — no auth files written yet.
 
 Use `AskUserQuestion` to get approval:
@@ -551,7 +551,7 @@ Present a summary of everything created:
 > 🚦 **Gate (plan · setup-auth:8.4.deploy):** Final deploy prompt — auth doesn't work until deployed (site settings ship with the deploy).
 >
 > **Trigger:** All auth files created and verified.
-> **Blast radius if skipped:** Auto-deploy picks the wrong env.
+> **Why we ask:** Auto-deploy picks the wrong env.
 > **Cancel leaves:** Nothing — auth artifacts stay on disk; no deploy fired.
 
 Use `AskUserQuestion`:

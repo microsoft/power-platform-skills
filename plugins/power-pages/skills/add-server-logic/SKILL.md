@@ -108,7 +108,7 @@ Look for the `.powerpages-site` folder:
 > 🚦 **Gate (plan · add-server-logic:1.5.deploy-first):** `.powerpages-site` missing — server logic files live inside it. Deploy first or stop.
 >
 > **Trigger:** Phase 1.5 found no `.powerpages-site` directory.
-> **Blast radius if skipped:** Server logic `.js`/`.yml` files written to a non-existent path won't deploy.
+> **Why we ask:** Server logic `.js`/`.yml` files written to a non-existent path won't deploy.
 > **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
@@ -195,7 +195,7 @@ If custom actions are found (`total > 0`), present a summary to the user grouped
 > 🚦 **Gate (plan · add-server-logic:2.1.2.use-custom-actions):** Custom actions discovered — decide whether to wrap existing Dataverse Custom APIs/Process Actions or build server logic from scratch. Choice changes the Phase 5 implementation shape.
 >
 > **Trigger:** `list-custom-actions.js` returned at least one entry.
-> **Blast radius if skipped:** Auto-wrapping could attach the wrong action; auto-skipping duplicates logic that already exists in Dataverse.
+> **Why we ask:** Auto-wrapping could attach the wrong action; auto-skipping duplicates logic that already exists in Dataverse.
 > **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
@@ -271,7 +271,7 @@ If secrets were identified in Phase 2.3, ask the user now whether they want to u
 > 🚦 **Gate (plan · add-server-logic:2.3.1.keyvault):** Pick secret-storage mechanism (Key Vault vs plain env var). Choice changes the Phase 4 rendered plan and the Phase 7 implementation pipeline.
 >
 > **Trigger:** Phase 2.3 identified at least one secret value.
-> **Blast radius if skipped:** Plain env var creation can expose secrets in solution exports; auto-picking Key Vault forces additional Azure setup.
+> **Why we ask:** Plain env var creation can expose secrets in solution exports; auto-picking Key Vault forces additional Azure setup.
 > **Cancel leaves:** Nothing — no env var definitions written yet.
 
 Use `AskUserQuestion`:
@@ -400,7 +400,7 @@ Do not restate the per-server-logic breakdown, rationale, role assignments, or f
 > 🚦 **Gate (plan · add-server-logic:4.4.plan-approval):** Final sign-off on the rendered HTML plan before Phase 5 writes any `.serverlogic.yml` / `.js` files or Phase 7 creates env vars.
 >
 > **Trigger:** Phase 4.2 rendered the HTML plan; Phase 4.3 surfaced the CLI summary.
-> **Blast radius if skipped:** Server logic files committed under wrong names / wrong roles; env var definitions created against the wrong secret-storage mode.
+> **Why we ask:** Server logic files committed under wrong names / wrong roles; env var definitions created against the wrong secret-storage mode.
 > **Cancel leaves:** Nothing — no server logic files written yet.
 
 Use `AskUserQuestion`:
@@ -897,7 +897,7 @@ If **no Key Vaults are found**, ask the user how to proceed:
 > 🚦 **Gate (plan · add-server-logic:7.2a.no-vaults):** No Key Vaults found in the user's subscription — create one or fall back to plain env vars. Branches the secret-storage flow.
 >
 > **Trigger:** Phase 2.3.1 chose Key Vault but `list-azure-keyvaults.js` returned an empty list.
-> **Blast radius if skipped:** Auto-creating a Key Vault provisions Azure resources without explicit consent; auto-falling-back stores secrets as plain env vars after the user explicitly opted in to Key Vault.
+> **Why we ask:** Auto-creating a Key Vault provisions Azure resources without explicit consent; auto-falling-back stores secrets as plain env vars after the user explicitly opted in to Key Vault.
 > **Cancel leaves:** Nothing — no Azure or Dataverse writes yet.
 
 Use `AskUserQuestion`:
@@ -1093,7 +1093,7 @@ Server logic creates the backend — but without frontend code to call it, the e
 > 🚦 **Gate (plan · add-server-logic:9.1.frontend-scope):** Decide whether the skill also wires the server logic into the frontend UI or stops at the backend.
 >
 > **Trigger:** Phase 8 completed (server logic deployed-ready).
-> **Blast radius if skipped:** Auto-integrating mutates UI files the user wanted to handle themselves; auto-skipping leaves the endpoints unreachable from the app.
+> **Why we ask:** Auto-integrating mutates UI files the user wanted to handle themselves; auto-skipping leaves the endpoints unreachable from the app.
 > **Cancel leaves:** Nothing — server logic backend is already on disk; this prompt only decides frontend follow-through.
 
 Use `AskUserQuestion`:
@@ -1231,7 +1231,7 @@ Present a summary of everything that was done:
 > 🚦 **Gate (plan · add-server-logic:11.3.deploy):** Post-implementation deploy prompt — server logic endpoints aren't reachable until deployed.
 >
 > **Trigger:** All server logic artifacts written and committed.
-> **Blast radius if skipped:** Auto-deploy picks wrong env.
+> **Why we ask:** Auto-deploy picks wrong env.
 > **Cancel leaves:** Nothing — artifacts stay on disk; no deploy fired.
 
 Use `AskUserQuestion`:
@@ -1245,7 +1245,7 @@ Use `AskUserQuestion`:
 > 🚦 **Gate (plan · add-server-logic:11.3.test):** Post-deploy validation prompt — invokes `/test-site` to exercise the new endpoints live.
 >
 > **Trigger:** Deploy from the previous gate succeeded.
-> **Blast radius if skipped:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime.
+> **Why we ask:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime.
 > **Cancel leaves:** Nothing — deploy has already completed.
 
 **If "Yes, deploy now"**: Invoke the `/deploy-site` skill to deploy the site.

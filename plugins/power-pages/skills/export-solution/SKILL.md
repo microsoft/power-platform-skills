@@ -134,7 +134,7 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 > 🚦 **Gate (plan · export-solution:2.identify):** No `.solution-manifest.json` in project root — user must pick or paste a solution unique name before export proceeds. Fires only on the "not found" branch (step 3 below).
 >
 > **Trigger:** Phase 2 step 1 didn't find a manifest.
-> **Blast radius if skipped:** Auto-picking the wrong solution exports a managed zip that ships the wrong table/site/flow set to staging.
+> **Why we ask:** Auto-picking the wrong solution exports a managed zip that ships the wrong table/site/flow set to staging.
 > **Cancel leaves:** Nothing — no ExportSolutionAsync call yet.
 
 1. Look for `.solution-manifest.json` in project root (use `findProjectRoot` or `glob('**/.solution-manifest.json')`)
@@ -240,7 +240,7 @@ Use the answer to set `"Managed": true` or `"Managed": false` in the `ExportSolu
 > 🚦 **Gate (plan · export-solution:3.overwrite):** Output directory and overwrite-vs-new-name decision for the produced zip. If an existing zip is detected at the target path, the prompt offers Overwrite / pick new name / cancel.
 >
 > **Trigger:** Phase 3 after Managed/Unmanaged is picked.
-> **Blast radius if skipped:** Auto-overwriting replaces a previous export that may have been hand-tested already.
+> **Why we ask:** Auto-overwriting replaces a previous export that may have been hand-tested already.
 > **Cancel leaves:** Nothing — no zip written.
 
 Also ask via `AskUserQuestion`:

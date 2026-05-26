@@ -450,7 +450,7 @@ For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 v
 > 🚦 **Gate (plan · plan-alm:2.q4-host):** Host environment selection — branches on `HOST_RESOLUTION.status` and surfaces the right menu (use-detected / pick from list / NoHost host-type / Sandbox confirm / CannotRedirect block / manual paste). Drives `HOST_ENV_URL` and `WILL_PROVISION_*` flags for the rest of plan-alm and ensure-pipelines-host. Uses `AskUserQuestion` per branch.
 >
 > **Trigger:** Phase 2 Q4 entry; `HOST_RESOLUTION` populated in Phase 1 step 12.
-> **Blast radius if skipped:** Auto-picking a host can provision a new Custom Host (`WILL_PROVISION_CUSTOM`) consuming an Azure capacity quota the user didn't intend; or pick the wrong env, sending pipelines through a foreign host. The downstream ensure-pipelines-host skill TRUSTS this answer and skips its own 3.C menu.
+> **Why we ask:** Auto-picking a host can provision a new Custom Host (`WILL_PROVISION_CUSTOM`) consuming an Azure capacity quota the user didn't intend; or pick the wrong env, sending pipelines through a foreign host. The downstream ensure-pipelines-host skill TRUSTS this answer and skips its own 3.C menu.
 > **Cancel leaves:** Nothing — no provisioning fired yet.
 
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**

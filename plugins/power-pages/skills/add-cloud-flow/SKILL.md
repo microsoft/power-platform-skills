@@ -81,7 +81,7 @@ Look for the `.powerpages-site` folder in the project root.
 > 🚦 **Gate (plan · add-cloud-flow:1.3.deploy-first):** `.powerpages-site` missing — cloud flow YAML lives inside it. Deploy first or stop.
 >
 > **Trigger:** Phase 1.3 found no `.powerpages-site` directory.
-> **Blast radius if skipped:** Cloud flow YAML written to a non-existent path will never deploy.
+> **Why we ask:** Cloud flow YAML written to a non-existent path will never deploy.
 > **Cancel leaves:** Nothing — no YAML files written.
 
 Use `AskUserQuestion`:
@@ -203,7 +203,7 @@ Already registered (available for additional frontend integration):
 > 🚦 **Gate (plan · add-cloud-flow:3.1.select-flows):** Multi-select over discovered + already-registered flows. Drives the rest of Phases 4–7.
 >
 > **Trigger:** Phase 2 list-cloud-flows returned at least one flow.
-> **Blast radius if skipped:** Wrong flows get registered (new `.cloudflowconsumer.yml` files written) or wrong existing flows get re-wired into the frontend.
+> **Why we ask:** Wrong flows get registered (new `.cloudflowconsumer.yml` files written) or wrong existing flows get re-wired into the frontend.
 > **Cancel leaves:** Nothing — no YAML or client code written yet.
 
 Use `AskUserQuestion`:
@@ -365,7 +365,7 @@ Give a brief CLI summary: number of flows, scenarios, role count, any anonymous-
 > 🚦 **Gate (plan · add-cloud-flow:5.3.plan-approval):** Final sign-off on the rendered HTML plan before any web role / `.cloudflowconsumer.yml` / client code is written.
 >
 > **Trigger:** Phase 5.2 rendered the HTML plan.
-> **Blast radius if skipped:** Wrong web role assignments committed (especially Anonymous Users on auth-protected flows); orphaned YAML files in `.powerpages-site/cloud-flow-consumer/`.
+> **Why we ask:** Wrong web role assignments committed (especially Anonymous Users on auth-protected flows); orphaned YAML files in `.powerpages-site/cloud-flow-consumer/`.
 > **Cancel leaves:** Nothing — no YAML or frontend changes yet.
 
 Use `AskUserQuestion`:
@@ -613,7 +613,7 @@ Use `--skillName "AddCloudFlow"`.
 > 🚦 **Gate (plan · add-cloud-flow:8.4.deploy):** Post-implementation deploy prompt — flows don't trigger until deployed.
 >
 > **Trigger:** All flow YAML + client integration in place.
-> **Blast radius if skipped:** Auto-deploy picks wrong env.
+> **Why we ask:** Auto-deploy picks wrong env.
 > **Cancel leaves:** Nothing — artifacts stay on disk; no deploy fired.
 
 Use `AskUserQuestion`:
@@ -627,7 +627,7 @@ Use `AskUserQuestion`:
 > 🚦 **Gate (plan · add-cloud-flow:8.4.test):** Post-deploy validation prompt — invokes `/test-site` to confirm the flow trigger endpoint returns 202/200.
 >
 > **Trigger:** Deploy from the previous gate succeeded.
-> **Blast radius if skipped:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime and Playwright traffic.
+> **Why we ask:** Skipping is harmless (manual test still possible); auto-invoking `/test-site` adds runtime and Playwright traffic.
 > **Cancel leaves:** Nothing — deploy has already completed.
 
 **If "Yes"**: Invoke `/deploy-site`. After it succeeds, use `AskUserQuestion`:

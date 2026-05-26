@@ -121,7 +121,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 > 🚦 **Gate (consent · deploy-site:3.confirm-env):** Echo the current environment and require explicit confirmation before any upload. Covers the follow-up "pick a different env" sub-prompt in the same section — wrong-env deploys are the #1 destructive shared-state failure for this skill, so this gate must fire even when PAC CLI shows a recognizable env.
 >
 > **Trigger:** Phase 3 entry; environment resolved from PAC CLI.
-> **Blast radius if skipped:** Site uploaded to wrong tenant / wrong env — committed to a Dataverse instance the user did not intend; cleanup requires manual deletion or another deploy from a different env.
+> **Why we ask:** Site uploaded to wrong tenant / wrong env — committed to a Dataverse instance the user did not intend; cleanup requires manual deletion or another deploy from a different env.
 > **Cancel leaves:** Nothing — no upload fired.
 
 1. Present the current environment information to the user and ask them to confirm.
@@ -175,7 +175,7 @@ Determine the project root directory. The project root is the directory containi
 > 🚦 **Gate (plan · deploy-site:4.1.multi-project):** More than one `powerpages.config.json` candidate found — pick the right project to deploy.
 >
 > **Trigger:** Phase 4.1 glob returned multiple matches.
-> **Blast radius if skipped:** Wrong project uploaded — pollutes the target env with files from a different site.
+> **Why we ask:** Wrong project uploaded — pollutes the target env with files from a different site.
 > **Cancel leaves:** Nothing — no upload fired.
 
 If found in the current working directory or a subdirectory, use that directory as `PROJECT_ROOT`. If multiple are found, ask the user which one to deploy using `AskUserQuestion`.
@@ -191,7 +191,7 @@ If `.powerpages-site` already exists (i.e., this is not the first deployment), t
 > 🚦 **Gate (plan · deploy-site:4.2.audit-permissions):** Re-deployment detected — offer to run `/audit-permissions` to catch drift between code and table permissions before push.
 >
 > **Trigger:** `.powerpages-site` exists (not first deployment).
-> **Blast radius if skipped:** Stale permission YAML deploys, causing 403s for users until next audit run.
+> **Why we ask:** Stale permission YAML deploys, causing 403s for users until next audit run.
 > **Cancel leaves:** Nothing — audit is read-only; declining just proceeds to build + upload.
 
 Use `AskUserQuestion`:
@@ -286,7 +286,7 @@ Evaluate the JSON result:
 > 🚦 **Gate (plan · deploy-site:5.5.1.activate):** Site deployed but not yet activated — offer to invoke `/activate-site` to provision the subdomain.
 >
 > **Trigger:** Phase 5.5 detected `activated:false` on a fresh deploy.
-> **Blast radius if skipped:** Auto-activating writes the wrong subdomain (permanent for the site); auto-skipping leaves the site without a live URL.
+> **Why we ask:** Auto-activating writes the wrong subdomain (permanent for the site); auto-skipping leaves the site without a live URL.
 > **Cancel leaves:** Nothing — no activation API call fired.
 
 Ask the user if they want to activate the site using `AskUserQuestion`:
@@ -309,7 +309,7 @@ After confirming the site is activated (either it was already activated in step 
 > 🚦 **Gate (plan · deploy-site:5.6.restart-cache):** Restart the deployed site to flush its runtime cache. Brief production downtime (a few seconds) — explicit user consent required even though the action is recoverable.
 >
 > **Trigger:** Site confirmed activated (either pre-existing or just activated in 5.5.1).
-> **Blast radius if skipped:** Production users see stale content for several minutes until cache TTL expires.
+> **Why we ask:** Production users see stale content for several minutes until cache TTL expires.
 > **Cancel leaves:** Nothing — the deploy itself already succeeded; cache will refresh on its own.
 
 Use `AskUserQuestion` to confirm before proceeding:
@@ -355,7 +355,7 @@ Tell the user:
 > 🚦 **Gate (consent · deploy-site:6.2.unblock-js):** Reactive `blockedattachments` modification — destructive shared-state change (tenant-wide env setting). Same shape as `deploy-pipeline:7.6.2.blocked-attachments`.
 >
 > **Trigger:** Upload failed with the blocked-`.js` error.
-> **Blast radius if skipped:** Auto-unblocking modifies a tenant security setting without explicit consent — visible across the entire environment, not just this site.
+> **Why we ask:** Auto-unblocking modifies a tenant security setting without explicit consent — visible across the entire environment, not just this site.
 > **Cancel leaves:** `attachment-block-modified` is only possible if the user approved and then a downstream step partial-completed. Pure Cancel here leaves nothing — the original blockedattachments value is untouched.
 
 Use `AskUserQuestion`:
