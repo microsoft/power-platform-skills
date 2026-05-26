@@ -438,6 +438,12 @@ function findPromptLines(content) {
   return out;
 }
 
+// v3: hard-fail uniformly across every SKILL.md under plugins/power-pages/skills/.
+// Kept as a named constant so every finding-push site references the same
+// source of truth; flipping severity for a future rule class would touch a
+// single line here rather than rewriting every literal.
+const SKILL_SEVERITY = 'error';
+
 // Parse the catalog file (references/approval-gates.md) and extract all
 // backticked gate-id strings. Returns a Set, or null if the catalog isn't
 // present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
@@ -551,7 +557,7 @@ function collectFindings({ pluginRoot }) {
       if (touches && !hasManifestRead(content)) {
         findings.push({
           rule: 'SKILL-must-read-manifest',
-          severity: 'error',
+          severity: SKILL_SEVERITY,
           file,
           message:
             'Skill creates Dataverse records but does not reference `.solution-manifest.json`. ' +
@@ -568,7 +574,7 @@ function collectFindings({ pluginRoot }) {
         if (!knownPpcTypes.has(typeValue)) {
           findings.push({
             rule: 'DISCOVER-coverage',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Skill references powerpagecomponenttype=${typeValue} but that value is not in ` +
@@ -590,7 +596,7 @@ function collectFindings({ pluginRoot }) {
       for (const u of unmatched) {
         findings.push({
           rule: 'GATE-must-have-marker',
-          severity: 'error',
+          severity: SKILL_SEVERITY,
           file,
           message:
             `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
@@ -608,7 +614,7 @@ function collectFindings({ pluginRoot }) {
         if (!callsHelper) {
           findings.push({
             rule: 'GATE-intent-must-call-helper',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Skill declares ${intentMarkers.length} \`category=intent\` gate(s) ` +
@@ -666,7 +672,7 @@ function collectFindings({ pluginRoot }) {
         if (!hasSentinel) {
           findings.push({
             rule: 'GATE-prose-block-required',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Gate \`${gm.gateId}\` (line ${gm.lineNum}) is missing the 🚦 ` +
@@ -688,7 +694,7 @@ function collectFindings({ pluginRoot }) {
         if (KEBAB_CASE_PATTERN.test(v)) continue;
         findings.push({
           rule: 'GATE-cancel-leaves-known-vocab',
-          severity: 'error',
+          severity: SKILL_SEVERITY,
           file,
           message:
             `Gate \`${gm.gateId}\` has \`cancel-leaves=${v}\` which is neither a known vocabulary value ` +
@@ -705,7 +711,7 @@ function collectFindings({ pluginRoot }) {
         if (!catalogGateIds.has(gm.gateId)) {
           findings.push({
             rule: 'GATE-must-be-in-catalog',
-            severity: 'error',
+            severity: SKILL_SEVERITY,
             file,
             message:
               `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
@@ -731,7 +737,7 @@ function collectFindings({ pluginRoot }) {
       .join(', ');
     findings.push({
       rule: 'GATE-id-must-be-unique',
-      severity: 'error',
+      severity: SKILL_SEVERITY,
       file: occurrences[0].file,
       message:
         `Gate id \`${gateId}\` is declared in ${occurrences.length} places: ${locs}. ` +
@@ -753,7 +759,7 @@ function collectFindings({ pluginRoot }) {
       if (markerIdSet.has(gateId)) continue;
       findings.push({
         rule: 'CATALOG-row-must-have-marker',
-        severity: 'error',
+        severity: SKILL_SEVERITY,
         file: catalogFile,
         message:
           `Catalog row \`${gateId}\` (kind: gate) has no matching ` +
@@ -774,7 +780,7 @@ function collectFindings({ pluginRoot }) {
 
     findings.push({
       rule: 'SCRIPT-must-use-resolver',
-      severity: 'error',
+      severity: SKILL_SEVERITY,
       file,
       message:
         'Script creates Dataverse records (AddSolutionComponent / publisher / solution / env var definition) ' +
