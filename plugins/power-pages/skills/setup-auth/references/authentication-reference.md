@@ -3256,10 +3256,15 @@ This is the best endpoint for keepalive because:
 
 A `/user-profile` SPA page where signed-in users edit their own contact record via the Power Pages Web API. Created only when the maker opts in via the Phase 2.1 `INCLUDE_PROFILE_PAGE` question. Provider-agnostic — works the same for local + all external providers because it operates on the contact record after sign-in (not on IdP-specific session state).
 
+The page is intentionally **simple by default**:
+- An **Account Details** section at the top shows the user's **full name** (firstname + lastname) and **email** as read-only — sourced from `useAuth()` so no extra Web API roundtrip is needed.
+- An **edit form** below lets the user update only: firstname, lastname, mobile phone, and the five address fields. **Email is not editable** (avoids cross-provider claim-mapping headaches), and **password reset is not exposed here** (it stays under `/forgot-password` for local accounts).
+- Makers can extend the form post-generation if they need additional contact columns; the skill ships with this minimal field set.
+
 ### Server-side requirements (set by the skill in Phase 8.1)
 
 - `Webapi/contact/enabled = true`
-- `Webapi/contact/fields = contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (all lowercase Dataverse LogicalNames; mixed casing causes 403)
+- `Webapi/contact/fields = contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (9 entries, all lowercase Dataverse LogicalNames; mixed casing causes 403). `emailaddress1` is intentionally omitted because email is read-only in the UI; `middlename` is omitted to keep the form simple.
 - Table permission `My Profile - Edit Own Contact`: `entitylogicalname: contact`, `scope: 756150004` (Self), `read: true`, `write: true`, associated with the Authenticated Users web role
 
 Self scope ensures a user can read and update ONLY their own contact record. Even a crafted `PATCH /_api/contacts({someone-elses-id})` request from DevTools returns 403.
@@ -3273,8 +3278,6 @@ export interface ProfileContact {
   contactid: string;
   firstname: string | null;
   lastname: string | null;
-  middlename: string | null;
-  emailaddress1: string | null;
   mobilephone: string | null;
   address1_line1: string | null;
   address1_city: string | null;
@@ -3286,7 +3289,7 @@ export interface ProfileContact {
 export type ProfileUpdate = Partial<Omit<ProfileContact, 'contactid'>>;
 
 const PROFILE_FIELDS = [
-  'contactid', 'firstname', 'lastname', 'middlename', 'emailaddress1',
+  'contactid', 'firstname', 'lastname',
   'mobilephone', 'address1_line1', 'address1_city', 'address1_stateorprovince',
   'address1_postalcode', 'address1_country',
 ].join(',');
@@ -3295,8 +3298,8 @@ export async function getMyProfile(contactId: string): Promise<ProfileContact> {
   if (isDevelopment) {
     return {
       contactid: contactId,
-      firstname: 'Dev', lastname: 'User', middlename: null,
-      emailaddress1: 'dev@contoso.com', mobilephone: null,
+      firstname: 'Dev', lastname: 'User',
+      mobilephone: null,
       address1_line1: null, address1_city: null,
       address1_stateorprovince: null, address1_postalcode: null, address1_country: null,
     };
@@ -3363,15 +3366,9 @@ import { useAuth } from '../hooks/useAuth'
 import {
   getMyProfile,
   updateMyProfile,
-  EXTERNAL_PROVIDERS,
   type ProfileContact,
 } from '../services/authService'
 
-const validateEmail = (v: string) => {
-  if (!v) return ''  // optional
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'Enter a valid email'
-  return ''
-}
 const validatePhone = (v: string) => {
   if (!v) return ''  // optional
   if (v.length < 6) return 'Enter a valid phone number'
@@ -3390,9 +3387,10 @@ export default function UserProfile() {
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Form state mirrors the profile values; empty string = clear column
+  // Form state mirrors the editable profile values; empty string = clear column.
+  // Note: email is NOT in this form — it's shown read-only in Account Details.
   const [form, setForm] = useState<Record<string, string>>({
-    firstname: '', lastname: '', middlename: '', emailaddress1: '',
+    firstname: '', lastname: '',
     mobilephone: '', address1_line1: '', address1_city: '',
     address1_stateorprovince: '', address1_postalcode: '', address1_country: '',
   })
@@ -3417,8 +3415,6 @@ export default function UserProfile() {
         setForm({
           firstname: p.firstname ?? '',
           lastname: p.lastname ?? '',
-          middlename: p.middlename ?? '',
-          emailaddress1: p.emailaddress1 ?? '',
           mobilephone: p.mobilephone ?? '',
           address1_line1: p.address1_line1 ?? '',
           address1_city: p.address1_city ?? '',
@@ -3436,8 +3432,7 @@ export default function UserProfile() {
 
   function validateField(name: string, value: string) {
     let error = ''
-    if (name === 'emailaddress1') error = validateEmail(value)
-    else if (name === 'mobilephone') error = validatePhone(value)
+    if (name === 'mobilephone') error = validatePhone(value)
     setErrors(prev => {
       if (error) return { ...prev, [name]: error }
       const next = { ...prev }; delete next[name]; return next
@@ -3461,14 +3456,12 @@ export default function UserProfile() {
     e.preventDefault()
     if (!profile) return
 
-    // Validate the two fields that have format checks
-    const emailErr = validateEmail(form.emailaddress1)
+    // Validate phone format (only field with a format check)
     const phoneErr = validatePhone(form.mobilephone)
     const errs: Record<string, string> = {}
-    if (emailErr) errs.emailaddress1 = emailErr
     if (phoneErr) errs.mobilephone = phoneErr
     setErrors(errs)
-    setTouched({ emailaddress1: true, mobilephone: true })
+    setTouched(prev => ({ ...prev, mobilephone: true }))
     if (Object.keys(errs).length > 0) return
 
     // Build payload: convert empty strings to null (clear column);
@@ -3503,7 +3496,13 @@ export default function UserProfile() {
   }
 
   const show = (f: string) => touched[f] ? errors[f] : undefined
-  const showEmailCaveat = EXTERNAL_PROVIDERS.length > 0
+
+  // Compose the read-only "full name" displayed in Account Details.
+  // Prefer form values (so it reflects unsaved edits live), fall back to
+  // profile-loaded values, then to a placeholder.
+  const accountFullName = [form.firstname, form.lastname]
+    .map(s => s.trim()).filter(Boolean).join(' ') || '—'
+  const accountEmail = user?.email || '—'
 
   if (isLoading) {
     return (
@@ -3533,24 +3532,31 @@ export default function UserProfile() {
         <h1 style={styles.title}>My Profile</h1>
         <p style={styles.subtitle}>Update your contact information. All fields are optional.</p>
 
+        {/* Read-only Account Details: just full name + email. No contactId, no roles. */}
+        <section aria-label="Account details" style={styles.accountDetails}>
+          <h2 style={styles.sectionHeading}>Account details</h2>
+          <dl style={styles.dl}>
+            <div style={styles.dlRow}>
+              <dt style={styles.dt}>Name</dt>
+              <dd style={styles.dd}>{accountFullName}</dd>
+            </div>
+            <div style={styles.dlRow}>
+              <dt style={styles.dt}>Email</dt>
+              <dd style={styles.dd}>{accountEmail}</dd>
+            </div>
+          </dl>
+        </section>
+
         {successMessage && <div style={styles.successMessage} role="status">{successMessage}</div>}
         {serverError && <div style={styles.serverError} role="alert">{serverError}</div>}
 
         <form onSubmit={handleSubmit} noValidate style={styles.form}>
+          <h2 style={styles.sectionHeading}>Edit details</h2>
           <div style={styles.grid}>
             <Field name="firstname" label="First name" value={form.firstname} onBlur={handleBlur} onChange={handleChange} error={show('firstname')} />
-            <Field name="middlename" label="Middle name" value={form.middlename} onBlur={handleBlur} onChange={handleChange} error={show('middlename')} />
             <Field name="lastname" label="Last name" value={form.lastname} onBlur={handleBlur} onChange={handleChange} error={show('lastname')} />
-            <Field name="emailaddress1" label="Email" type="email" value={form.emailaddress1} onBlur={handleBlur} onChange={handleChange} error={show('emailaddress1')} />
             <Field name="mobilephone" label="Mobile phone" type="tel" value={form.mobilephone} onBlur={handleBlur} onChange={handleChange} error={show('mobilephone')} />
           </div>
-
-          {showEmailCaveat && (
-            <p style={styles.caveat}>
-              If your site signs you in with an external provider that maps email from claims on every login,
-              edits to your email here may be overwritten on your next sign-in. Contact your admin to make this permanent.
-            </p>
-          )}
 
           <h2 style={styles.sectionHeading}>Address</h2>
           <div style={styles.grid}>
@@ -3594,6 +3600,11 @@ const styles: Record<string, React.CSSProperties> = {
   title: { fontSize: '1.5rem', fontWeight: 600, marginBottom: 8 },
   subtitle: { fontSize: '0.875rem', color: 'var(--color-text-muted)', marginBottom: 24 },
   sectionHeading: { fontSize: '1rem', fontWeight: 600, marginTop: 24, marginBottom: 12 },
+  accountDetails: { padding: '16px 20px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', marginBottom: 24 },
+  dl: { margin: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  dlRow: { display: 'flex', gap: 16, alignItems: 'baseline' },
+  dt: { fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--color-text-muted)', fontWeight: 600, minWidth: 60 },
+  dd: { margin: 0, fontSize: '0.875rem', color: 'var(--color-text)' },
   form: { display: 'flex', flexDirection: 'column' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 },
   field: { display: 'flex', flexDirection: 'column', gap: 6 },
@@ -3601,11 +3612,17 @@ const styles: Record<string, React.CSSProperties> = {
   input: { fontFamily: 'var(--font-body)', fontSize: '0.875rem', padding: '10px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)', outline: 'none' },
   inputError: { borderColor: '#DA1E28' },
   error: { fontSize: '0.75rem', color: '#DA1E28' },
-  caveat: { fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: 8, padding: '8px 12px', background: 'rgba(15,98,254,0.05)', borderLeft: '3px solid var(--color-primary)', borderRadius: 'var(--radius-sm)' },
   successMessage: { padding: '12px 16px', background: '#DEFBE6', border: '1px solid #24A148', borderRadius: 'var(--radius-sm)', color: '#0E6027', fontSize: '0.875rem', marginBottom: 20 },
   serverError: { padding: '12px 16px', background: '#FFF1F1', border: '1px solid #DA1E28', borderRadius: 'var(--radius-sm)', color: '#DA1E28', fontSize: '0.875rem', marginBottom: 20 },
 }
 ```
+
+> **Intentionally NOT included in this page** (the executor must NOT add these even if they seem like obvious enhancements):
+> - **No editable email field** — email is read-only in Account Details. Across providers, email is often re-derived from claims on every login, so an SPA edit would be silently reverted and confuse the user.
+> - **No middle-name field** — keeps the form simple. Makers can extend post-generation if needed.
+> - **No Change Password / Reset Password link** — password management stays under `/forgot-password` for local accounts; surfacing it on the profile page muddles the UX for external-provider users who don't have a password at all.
+> - **No Sign Out button** — sign-out lives in the header `AuthButton` dropdown; duplicating it here is redundant.
+> - **No display of `contactId`, web roles, claims, or other metadata in Account Details** — those are debugging affordances, not user-facing info. Just full name + email.
 
 ### Updated AuthButton with dropdown
 
@@ -3730,11 +3747,10 @@ An alternative is to optimistically update `Portal.User` directly in the SPA aft
 if (typeof window !== 'undefined' && window.Microsoft?.Dynamic365?.Portal?.User) {
   if (payload.firstname !== undefined) window.Microsoft.Dynamic365.Portal.User.firstName = payload.firstname ?? ''
   if (payload.lastname !== undefined) window.Microsoft.Dynamic365.Portal.User.lastName = payload.lastname ?? ''
-  if (payload.emailaddress1 !== undefined) window.Microsoft.Dynamic365.Portal.User.email = payload.emailaddress1 ?? ''
 }
 refresh()
 ```
-This makes `refresh()` actually update the header immediately. Document this as an optional enhancement — the skill ships without it for simplicity.
+This makes `refresh()` actually update the header immediately. Document this as an optional enhancement — the skill ships without it for simplicity. (Email isn't included because it isn't editable on the page.)
 
 ### Empty contactId edge case
 

@@ -677,7 +677,7 @@ Then ask about optional features:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Add a profile page that lets signed-in users edit their contact info (firstname, lastname, middlename, email, mobile phone, full address) via the Power Pages Web API? | Profile page | No (default) — no profile page; users can't edit their info from the SPA, Yes — create a /user-profile SPA page with edit form, accessible from the header user menu |
+| Add a profile page that lets signed-in users edit their contact info (name, mobile phone, address) via the Power Pages Web API? Email is shown read-only. | Profile page | No (default) — no profile page; users can't edit their info from the SPA, Yes — create a /user-profile SPA page with edit form, accessible from the header user menu |
 
 Store as `INCLUDE_PROFILE_PAGE` (boolean). Default `false`.
 
@@ -685,12 +685,17 @@ Store as `INCLUDE_PROFILE_PAGE` (boolean). Default `false`.
 
 When `true`, Phase 5.1.9 generates `src/pages/UserProfile.tsx` (file name mandatory), extends `authService.ts` with `getMyProfile` / `updateMyProfile` (function names mandatory), evolves the `AuthButton` from inline `[Avatar Name Sign Out]` to a dropdown menu with "My Profile" and "Sign Out", and adds the `/user-profile` route (path mandatory) to `App.tsx`. Phase 8.1 writes the Web API site settings (`Webapi/contact/enabled = true` and `Webapi/contact/fields` with the COMPLETE default field list documented in Phase 8.1 — not a subset) and a Self-scope table permission on `contact` for the Authenticated Users role. The dropdown shape becomes the new default for `AuthButton` regardless of `INCLUDE_PROFILE_PAGE` so the component is ready for future menu items.
 
-**Default field set** (the form MUST include ALL of these by default — do not reduce to just firstname/lastname):
+**Profile page design — intentionally simple:**
+
+The page has two sections:
+
+1. **Account Details** (read-only display at the top) — shows just the user's **full name** (firstname + lastname combined) and **email**. **DO NOT** display contactId, roles, sign-in method, provider name, last-login timestamp, or any other account metadata. Keep this section minimal.
+2. **Edit form** (below) — only these editable fields. Email is intentionally **NOT** editable (changing email via Web API conflicts with auth provider claim mapping behavior and is surprising for external-auth users).
+
+**Default EDITABLE field set** (the form MUST include exactly these 8 fields — do not add email, do not add middlename, do not add a Change Password link):
 
 - First name (`firstname`)
-- Middle name (`middlename`)
 - Last name (`lastname`)
-- Email (`emailaddress1`)
 - Mobile phone (`mobilephone`)
 - Address line 1 (`address1_line1`)
 - City (`address1_city`)
@@ -698,11 +703,19 @@ When `true`, Phase 5.1.9 generates `src/pages/UserProfile.tsx` (file name mandat
 - Postal code (`address1_postalcode`)
 - Country (`address1_country`)
 
-All fields are optional on submit. The Web API `fields` site setting MUST include `contactid` plus all 10 fields above (lowercase). Phase 8.1 specifies the exact value verbatim.
+All fields are optional on submit. **DO NOT** include:
+
+- ❌ `emailaddress1` as an editable field (read-only in Account Details only)
+- ❌ `middlename` (keep the form simple)
+- ❌ A "Change password" link or button (password reset is handled by the existing `/forgot-password` flow, not the profile page)
+- ❌ A "Sign out" button on the profile page (sign-out lives in the header AuthButton dropdown only)
+- ❌ Display of contactId, userRoles, or any account metadata beyond name + email
+
+The Web API `fields` site setting MUST include `contactid` plus the 8 editable fields above (9 total entries — lowercase). Phase 8.1 specifies the exact value verbatim.
 
 > **Prerequisite for `Yes`**: an "Authenticated Users" web role must exist (or any role with `authenticatedusersrole: true` flag). Phase 1.4 inventoried web roles — if none qualifies, warn the user that profile editing won't work until a role is assigned and offer to invoke `/create-webroles` first.
 
-> **Cross-provider compatibility**: the profile page works the same regardless of auth provider (local, Entra ID, Entra External ID, OIDC, social) because it operates on the contact record after sign-in — not on IdP-specific session state. The only provider-specific consideration is that the email field's value may be overwritten on next sign-in if `LoginClaimsMapping` includes `emailaddress1` (covered with an inline caveat note on the form).
+> **Cross-provider compatibility**: the profile page works the same regardless of auth provider (local, Entra ID, Entra External ID, OIDC, social) because it operates on the contact record after sign-in — not on IdP-specific session state. Email is read-only on the page, so there's no provider-specific caveat to surface (the IdP remains the source of truth for email).
 
 **If "Terms and Conditions" is selected**, first surface the GDPR prerequisite **before** collecting content — terms only function if the underlying solution is installed:
 
@@ -1682,29 +1695,46 @@ Add to `src/services/authService.ts` (keep all related auth/profile logic in one
 
 | Required name | Kind | Description |
 |---|---|---|
-| `ProfileContact` | exported interface | Typed contact shape with `contactid` + the 10 default fields (firstname, middlename, lastname, emailaddress1, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all typed `string \| null` |
+| `ProfileContact` | exported interface | Typed contact shape with `contactid` + the 8 editable fields (firstname, lastname, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all typed `string \| null`. **DO NOT include emailaddress1 or middlename** — email is displayed read-only from `useAuth().user.email` (no Web API roundtrip needed for it), and middlename is intentionally excluded from the simple form. |
 | `ProfileUpdate` | exported type alias | `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload |
-| `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,...,address1_country` (the `$select` value MUST include all 11 fields — see Phase 8.1's MANDATORY field list for the exact comma-separated string) with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object. |
+| `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (the `$select` value MUST exactly match the 9-entry list in Phase 8.1's `Webapi/contact/fields` site setting) with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object. |
 | `updateMyProfile` | exported async function | Signature: `(contactId: string, payload: ProfileUpdate): Promise<void>`. PATCHes `/_api/contacts({contactId})` with body containing only DEFINED fields (skip `undefined` so partial updates don't blank-out unaffected columns — but DO send `null` for fields the user explicitly cleared). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success. |
 
 Full reference code in `authentication-reference.md` "User Profile Page" section. **Copy that code as-is** — do not rename functions or change signatures.
 
 ##### 5.1.9.b Create UserProfile.tsx
 
-Create `src/pages/UserProfile.tsx` (filename mandatory, do NOT rename to `Profile.tsx`):
+Create `src/pages/UserProfile.tsx` (filename mandatory, do NOT rename to `Profile.tsx`).
 
-- Read `user` and `refresh` from `useAuth()`. If `!isAuthenticated` redirect to `/login?returnUrl=/user-profile`
+**Two sections — Account Details (read-only) at the top, then the edit form. Nothing else.**
+
+### Account Details section (read-only, at top)
+
+A simple display block showing exactly two pieces of info from `useAuth().user`:
+
+| Label | Value source |
+|---|---|
+| Full name | `user.firstName` + ' ' + `user.lastName` (combined; show "—" if both empty) |
+| Email | `user.email` |
+
+**DO NOT** display contactId, userRoles, sign-in provider, username, last-login date, or any other field. The Account Details section's entire purpose is to remind the user which account they're signed in as — name and email suffice.
+
+Rendering: a small card / heading "Account details" with two label-value rows. Use existing CSS variables. No edit affordance. No "edit email" button. No "edit account" link.
+
+### Page logic
+
+- Read `user`, `isAuthenticated`, `refresh` from `useAuth()`. If `!isAuthenticated`, redirect to `/login?returnUrl=/user-profile`.
 - If `user.contactId` is empty or missing, show "Profile unavailable for this account. Your admin needs to set up the `RegistrationClaimsMapping` site setting for your auth provider so contacts get created with a valid ID." (handles the Entra workforce broken-claims-mapping edge case documented earlier in this skill)
-- On mount, call `getMyProfile(user.contactId)` to fetch current values. Show loading state.
+- On mount, call `getMyProfile(user.contactId)` to fetch current values for the editable form. Show loading state.
 
-**MANDATORY default field set — the form MUST include all 10 fields below**. Do NOT scope down to just firstname/lastname. The maker can remove fields later if they want, but the skill ships with the full set.
+### MANDATORY editable field set (exactly 8 fields)
+
+The form MUST include exactly these 8 fields — no more, no less. Do NOT add email (it's read-only in Account Details). Do NOT add middlename. Do NOT add a "Change password" link. Do NOT add a "Sign out" button.
 
 | Form label | Form field `name` attr / contact column | Type | Required on submit? |
 |---|---|---|---|
 | First name | `firstname` | text | No (all optional) |
-| Middle name | `middlename` | text | No |
 | Last name | `lastname` | text | No |
-| Email | `emailaddress1` | email | No |
 | Mobile phone | `mobilephone` | tel | No |
 | Address line 1 | `address1_line1` | text | No |
 | City | `address1_city` | text | No |
@@ -1712,11 +1742,24 @@ Create `src/pages/UserProfile.tsx` (filename mandatory, do NOT rename to `Profil
 | Postal code | `address1_postalcode` | text | No |
 | Country | `address1_country` | text | No |
 
-All fields are optional. An empty string in the form is sent as `null` to the Web API (so users can clear values). The page layout groups Name fields (firstname/middlename/lastname), then Contact (email/mobile), then Address (all `address1_*` fields). Use a CSS grid with `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))` for responsive 1-2 column layout.
+All fields are optional. An empty string in the form is sent as `null` to the Web API (so users can clear values). The page layout groups Name fields (firstname/lastname), then Contact (mobile), then Address (all `address1_*` fields). Use a CSS grid with `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))` for responsive 1-2 column layout.
 
-- **Email field caveat note** — show only when `EXTERNAL_PROVIDERS.length > 0` (skill can detect this from the AUTH_PROVIDERS array): "If your site signs you in with an external provider that maps email from claims on every login, edits here may be overwritten on your next sign-in. Contact your admin to make this permanent."
+### Things NOT to include on the profile page
+
+The executor MUST NOT add any of these — they're either redundant with existing UI or out of scope:
+
+- ❌ "Change password" link or button — password reset goes through the existing `/forgot-password` flow (link is on the Login page)
+- ❌ "Sign out" button on the profile page — sign-out lives in the header AuthButton dropdown only
+- ❌ Editable email field — email is displayed read-only in the Account Details section above
+- ❌ Middle name field
+- ❌ ContactId, userRoles, sign-in method, provider name, last-login timestamp, or any other account metadata
+- ❌ Email caveat note (the note about LoginClaimsMapping overwriting email edits is no longer relevant since email isn't editable)
+- ❌ Account deletion or "Close account" button — out of scope
+
+### Logic details
+
 - Validate-on-blur using the existing pattern from `Login.tsx` / `Registration.tsx` (`touched` state, `validateField`, `show()` helper)
-- Field-level validation: email format if non-empty; mobile phone min 6 chars if non-empty. Other 8 fields have no format validation. All fields optional — empty strings allowed and sent as `null`.
+- Field-level validation: mobile phone min 6 chars if non-empty. Other 7 fields have no format validation. All fields optional — empty strings allowed and sent as `null`.
 - Submit calls `updateMyProfile(contactId, payload)`. On success: set `successMessage` state to "Profile updated.", call `refresh()` from `useAuth()` so header avatar + name re-render. On error: show server error inline.
 - Use existing styles convention (CSS variables, card layout, max-width ~580)
 - See `authentication-reference.md` "User Profile Page" section for the complete reference implementation
@@ -2375,13 +2418,13 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 When the maker opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
 
-> **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. The executor MUST NOT trim it to just `firstname,lastname`. All 11 fields must be present so the profile form can read AND write every default field:
+> **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. The executor MUST NOT trim it. All 9 entries must be present so the profile form can read AND write every editable field:
 >
 > ```
-> contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country
+> contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country
 > ```
 >
-> This must match exactly the field set listed in Phase 2.1 (10 form fields + `contactid` for record identification). Skipping any field causes the corresponding form input to silently fail with a 403 from the Web API.
+> This is `contactid` (for record identification) + the 8 editable fields listed in Phase 2.1 / Phase 5.1.9.b. **`emailaddress1` is NOT in this list** because email is displayed read-only in the Account Details section, sourced from `useAuth().user.email` — no Web API roundtrip needed for it. **`middlename` is NOT in this list** because it's intentionally excluded from the simple form. Skipping any entry from the list above causes the corresponding form input to silently fail with a 403 from the Web API.
 
 ```powershell
 # Enable Web API on the contact table
@@ -2392,18 +2435,18 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable Web API access for contact table (profile page)" \
   --type boolean
 
-# Allowed fields — USE THE EXACT VALUE BELOW (all 11 fields, all lowercase)
+# Allowed fields — USE THE EXACT VALUE BELOW (9 entries, all lowercase)
 # Case-sensitive: PascalCase or Title Case produces 403 even if the column exists
 node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Webapi/contact/fields" \
-  --value "contactid,firstname,lastname,middlename,emailaddress1,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country" \
+  --value "contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country" \
   --description "Fields allowed via Web API for profile page (read + write)"
 ```
 
 > **Field name format**: all entries in the `fields` value MUST be lowercase Dataverse LogicalNames. The Web API does case-sensitive literal matching — `FirstName` or `Firstname` will produce a 403 Forbidden response from the server even though the column exists. The list above is correct.
 >
-> **Customizing the field list LATER**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with all 11 OOB fields above — do not pre-trim "for simplicity".
+> **Customizing the field list LATER**: if the maker has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with exactly the 9 entries above — do not add or remove entries during scaffolding.
 
 #### 8.1.x Create Table Permission for Contact (When INCLUDE_PROFILE_PAGE = true)
 
