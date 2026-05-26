@@ -23,6 +23,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-user-prompt-telemetry.js\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }
