@@ -6,7 +6,7 @@
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
-> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces seven rules (`GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `CATALOG-row-must-have-marker`, `GATE-prose-block-required`) at error severity on every SKILL.md under `plugins/power-pages/skills/`.
+> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces seven gate-related rules at error severity on every SKILL.md under `plugins/power-pages/skills/`: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (the marker must be followed by a 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (every `kind: gate` catalog row must have a corresponding marker in some SKILL.md — the reverse of `GATE-must-be-in-catalog`).
 
 ---
 
@@ -685,7 +685,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 | 1 | Canonical term | **"Approval Gate"** | CI/CD heritage; already the most common word in our SKILL.md files; concrete. Drop "review gate" if used informally. |
 | 2 | Marker syntax | **HTML comment `<!-- gate: ID \| category=X \| cancel-leaves=Y -->` + human `> 🚦 Gate (...)` block** | Comment is the lint anchor; block is for humans. Robust to interleaved prose. |
 | 3 | Catalog location | **`plugins/power-pages/references/approval-gates.md`** (this file) + a one-line pointer in `PLUGIN_DEVELOPMENT_GUIDE.md` | Sits with other shared references; cross-skill scope is obvious from the path. |
-| 4 | Lint rollout strictness | **ALM: hard-fail. Non-ALM: warn-only until §8 catalog extends.** | ALM is fully catalogued; non-ALM is the follow-up. Hard-fail on ALM forces drift to be caught at PR time. |
+| 4 | Lint rollout strictness | **[v2 — superseded by §10.] ALM: hard-fail. Non-ALM: warn-only until §8 catalog extends.** v3 made enforcement hard-fail across every skill once the catalog was extended; the warn-only branch is gone. | ALM is fully catalogued; non-ALM is the follow-up. Hard-fail on ALM forces drift to be caught at PR time. |
 | 5 | Emoji vs plain text | **Keep `🚦` in the human block; lint anchors on the HTML comment regardless** | Emoji is for humans; tooling doesn't depend on it. |
 | 6 | Wildcard gate IDs (e.g. `diagnose-deployment:6.*`) | **Disallowed. Enumerate per pattern.** | Per-pattern markers enforce that each catalog-listed deployment-error pattern has matching prompt logic. |
 

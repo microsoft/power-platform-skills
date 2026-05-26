@@ -786,3 +786,186 @@ test('CANCEL_LEAVES_VOCAB export has the documented values', () => {
     assert.ok(CANCEL_LEAVES_VOCAB.has(v), `CANCEL_LEAVES_VOCAB missing: ${v}`);
   }
 });
+
+// Helper for the new CATALOG-row-must-have-marker tests — writes a §6-style
+// markdown table that matches CATALOG_GATE_ROW_PATTERN. Each entry: { id, kind }
+// where kind is 'gate' or 'not-a-gate'.
+function writeCatalogTable(root, rows) {
+  fs.mkdirSync(path.join(root, 'references'), { recursive: true });
+  const header =
+    '# Approval Gates Catalog (test fixture)\n\n' +
+    '## 6. Catalog\n\n' +
+    '### 6.1 fixture\n\n' +
+    '| ID | Kind | Category | Phase | Trigger | Cancel leaves |\n' +
+    '|---|---|---|---|---|---|\n';
+  const body = rows
+    .map((r) => `| \`${r.id}\` | ${r.kind} | plan | 1 | test | nothing |`)
+    .join('\n');
+  fs.writeFileSync(path.join(root, 'references', 'approval-gates.md'), header + body + '\n');
+}
+
+test('CATALOG-row-must-have-marker: fires when a catalog gate row has no SKILL.md marker', async (t) => {
+  const root = mkPluginRoot(t);
+  // Catalog has two gate rows, but only one SKILL.md marker exists.
+  writeCatalogTable(root, [
+    { id: 'plan-alm:1.foo', kind: 'gate' },
+    { id: 'plan-alm:1.orphan', kind: 'gate' },
+  ]);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:1.foo):** Description.
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  const orphans = findings.filter((f) => f.rule === 'CATALOG-row-must-have-marker');
+  assert.equal(orphans.length, 1, `expected 1 orphan finding, got ${JSON.stringify(orphans)}`);
+  assert.match(orphans[0].message, /plan-alm:1\.orphan/);
+});
+
+test('CATALOG-row-must-have-marker: passes when every gate row has a marker', async (t) => {
+  const root = mkPluginRoot(t);
+  writeCatalogTable(root, [
+    { id: 'plan-alm:1.foo', kind: 'gate' },
+    { id: 'plan-alm:1.bar', kind: 'gate' },
+  ]);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.foo | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:1.foo):** Description.
+Ask via \`AskUserQuestion\`:
+
+## Phase 2
+<!-- gate: plan-alm:1.bar | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:1.bar):** Description.
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'CATALOG-row-must-have-marker').length, 0);
+});
+
+test('CATALOG-row-must-have-marker: skips not-a-gate rows (no marker required)', async (t) => {
+  // Only `kind: gate` rows are checked. A `not-a-gate` row in the catalog has
+  // no corresponding ID-bearing marker (not-a-gate comments are free-text), so
+  // the reverse check must skip them.
+  const root = mkPluginRoot(t);
+  writeCatalogTable(root, [
+    { id: 'plan-alm:1.foo', kind: 'not-a-gate' },
+    { id: 'plan-alm:1.bar', kind: 'not-a-gate' },
+  ]);
+  writeSkill(root, 'plan-alm', '# plan-alm\n\nNo gates here.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'CATALOG-row-must-have-marker').length, 0);
+});
+
+test('CATALOG-row-must-have-marker: tolerates leading whitespace on table rows (GFM)', async (t) => {
+  // GFM allows up to 3 leading spaces before the leading `|`. The reverse-
+  // check regex must match those rows; otherwise nested catalog rows go
+  // invisible to orphan detection.
+  const root = mkPluginRoot(t);
+  fs.mkdirSync(path.join(root, 'references'), { recursive: true });
+  const content =
+    '# Approval Gates Catalog (test fixture)\n\n' +
+    '   | `plan-alm:1.indented` | gate | plan | 1 | test | nothing |\n';
+  fs.writeFileSync(path.join(root, 'references', 'approval-gates.md'), content);
+  writeSkill(root, 'plan-alm', '# plan-alm\n\nNo marker for the indented row.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  const orphans = findings.filter((f) => f.rule === 'CATALOG-row-must-have-marker');
+  assert.equal(orphans.length, 1, 'indented row should still be checked');
+  assert.match(orphans[0].message, /plan-alm:1\.indented/);
+});
+
+test('GATE-prose-block-required: fires when marker has no 🚦 within 10 lines', async (t) => {
+  const root = mkPluginRoot(t);
+  writeCatalog(root, ['plan-alm:1.bare']);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.bare | category=plan | cancel-leaves=nothing -->
+
+No prose block here, just text.
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-prose-block-required');
+  assert.ok(match, `expected GATE-prose-block-required to fire; got ${JSON.stringify(findings)}`);
+  assert.match(match.message, /plan-alm:1\.bare/);
+});
+
+test('GATE-prose-block-required: passes when 🚦 sentinel follows within window', async (t) => {
+  const root = mkPluginRoot(t);
+  writeCatalog(root, ['plan-alm:1.good']);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.good | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · plan-alm:1.good):** Description.
+>
+> **Trigger:** something.
+> **Why we ask:** to avoid X.
+> **Cancel leaves:** nothing.
+
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-prose-block-required').length, 0);
+});
+
+test('GATE-prose-block-required: ignores 🚦 inside a fenced code block', async (t) => {
+  // A literal 🚦 inside a ```bash``` example should NOT satisfy the rule —
+  // otherwise a contributor who deletes the real Gate prose but leaves an
+  // example 🚦 within the window passes silently. The rule's purpose is to
+  // catch prose-block drift, not match the symbol anywhere.
+  const root = mkPluginRoot(t);
+  writeCatalog(root, ['plan-alm:1.fenced']);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.fenced | category=plan | cancel-leaves=nothing -->
+
+\`\`\`bash
+echo "🚦 starting deploy"
+\`\`\`
+
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  const match = findings.find((f) => f.rule === 'GATE-prose-block-required');
+  assert.ok(match, '🚦 inside code fence should not satisfy the rule');
+});
+
+test('GATE-prose-block-required: tolerates 🚦 on the same line as the marker (single-line style)', async (t) => {
+  // The window is inclusive of the marker's own line, so a compact one-line
+  // marker + 🚦 should pass (legal Markdown).
+  const root = mkPluginRoot(t);
+  writeCatalog(root, ['plan-alm:1.oneliner']);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.oneliner | category=plan | cancel-leaves=nothing --> > 🚦 **Gate (plan · plan-alm:1.oneliner):** Compact.
+
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.filter((f) => f.rule === 'GATE-prose-block-required').length, 0);
+});

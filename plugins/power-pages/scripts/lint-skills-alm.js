@@ -73,8 +73,11 @@
 //              SKILL.md don't carry an ID to match against.
 //     Require: at least one `<!-- gate: <gate-id> ... -->` marker in some
 //              SKILL.md under plugins/power-pages/skills/.
-//     Waivable: yes — inline `<!-- alm-lint-ignore: CATALOG-row-must-have-marker -->`
-//               in the catalog row's section, or `.almlintignore` entry.
+//     Waivable: `.almlintignore` allowlist only — this rule operates on the
+//               catalog as a whole (not per SKILL.md), so inline
+//               `<!-- alm-lint-ignore: ... -->` comments are not honored.
+//               To suppress an orphan-row finding, add an allowlist entry like:
+//                   references/approval-gates.md CATALOG-row-must-have-marker <reason>
 //
 //   GATE-prose-block-required
 //     Trigger: any `<!-- gate: ID ... -->` marker.
@@ -88,8 +91,9 @@
 //
 // Usage:
 //   node scripts/lint-skills-alm.js [--plugin-root <path>]
-//   Exit 0 when no findings (or only warnings); exit 1 when at least one
-//   finding has severity 'error'. stderr lists errors; stdout lists warnings.
+//   Exit 0 only when there are zero findings. Exit 1 on any finding —
+//   v3 is hard-fail uniform, so every finding has severity 'error' and
+//   every output goes to stderr.
 //
 // The script is pure-Node, has no dependencies, and returns findings
 // programmatically so the tests can assert behavior without spawning processes.
@@ -434,17 +438,6 @@ function findPromptLines(content) {
   return out;
 }
 
-function skillNameFromFile(file) {
-  // Expect .../skills/<skill-name>/SKILL.md
-  const parts = file.split(/[\\/]/);
-  const idx = parts.lastIndexOf('skills');
-  if (idx < 0 || idx + 1 >= parts.length) return null;
-  return parts[idx + 1];
-}
-
-// v3: hard-fail uniformly across every SKILL.md under plugins/power-pages/skills/.
-const SKILL_SEVERITY = 'error';
-
 // Parse the catalog file (references/approval-gates.md) and extract all
 // backticked gate-id strings. Returns a Set, or null if the catalog isn't
 // present (downgrades GATE-must-be-in-catalog to no-op so the lint isn't
@@ -475,8 +468,13 @@ function loadCatalogGateIds(pluginRoot) {
 // Only rows tagged `gate` (not `not-a-gate`) need a matching marker — not-a-gate
 // markers in SKILL.md don't carry an ID (they're free-text reasons), so the
 // reverse check is meaningless for them.
+//
+// Leading whitespace tolerance: GFM accepts up to 3 spaces of indentation
+// before the leading `|`, so we allow `^\s{0,3}\|`. Without this, a future
+// markdown reformat that nests §6 tables under a parent list silently
+// disables orphan detection for the indented rows.
 const CATALOG_GATE_ROW_PATTERN =
-  /^\|\s*`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`\s*\|\s*gate\s*\|/gm;
+  /^\s{0,3}\|\s*`([A-Za-z][A-Za-z0-9-]*:[A-Za-z0-9._-]+)`\s*\|\s*gate\s*\|/gm;
 
 function loadCatalogGateRows(pluginRoot) {
   const catalogFile = path.join(pluginRoot, 'references', 'approval-gates.md');
@@ -592,7 +590,7 @@ function collectFindings({ pluginRoot }) {
       for (const u of unmatched) {
         findings.push({
           rule: 'GATE-must-have-marker',
-          severity: SKILL_SEVERITY,
+          severity: 'error',
           file,
           message:
             `Phase section "${u.heading}" contains an \`AskUserQuestion\` prompt (line ${u.lineNum}) ` +
@@ -624,20 +622,47 @@ function collectFindings({ pluginRoot }) {
     }
 
     // GATE-prose-block-required — every `<!-- gate: -->` must be followed
-    // within 10 lines by a line carrying the 🚦 sentinel. This is the minimum
-    // viable check against "future PR deletes the human-readable block" drift:
-    // it catches deletion + ID-line tampering without forcing a structural
-    // rewrite of legacy v2 single-line prose. The richer structured fields
-    // (`> **Trigger:**`, `> **Why we ask:**`, `> **Cancel leaves:**`) are
-    // recommended in §4.1 of references/approval-gates.md for new markers but
-    // not lint-enforced — keeping the rule tight enough that 80+ existing v2
-    // markers don't need to be rewritten in the same PR.
+    // within 10 lines (inclusive of the marker's own line, to support a
+    // single-line marker-plus-🚦 style if a future contributor chooses it)
+    // by a line carrying the 🚦 sentinel OUTSIDE any fenced code block.
+    // This is the minimum viable check against "future PR deletes the
+    // human-readable block" drift: it catches deletion + ID-line tampering
+    // without forcing a structural rewrite of legacy v2 single-line prose.
+    // The richer structured fields (`> **Trigger:**`, `> **Why we ask:**`,
+    // `> **Cancel leaves:**`) are recommended in §4.1 of references/approval-
+    // gates.md for new markers but not lint-enforced — keeping the rule
+    // tight enough that 80+ existing v2 markers don't need to be rewritten
+    // in the same PR.
+    //
+    // Code-fence awareness: a literal 🚦 inside a ```bash``` example or
+    // similar should NOT satisfy the rule, otherwise a contributor who
+    // deletes the real Gate prose block but leaves an example 🚦 within
+    // the window silently passes. We track fence state across the FULL
+    // file (not just the window) so the in/out determination is correct
+    // when the window opens mid-fence.
     if (!ignores.has('GATE-prose-block-required')) {
       const lines = content.split(/\r?\n/);
+      // Pre-compute: for each line, is it inside a fenced code block?
+      const inFence = new Array(lines.length).fill(false);
+      let inside = false;
+      for (let i = 0; i < lines.length; i++) {
+        // A fence-toggle line is one that starts with ``` (optionally followed
+        // by an info string). Bare ``` or ```lang both toggle, but only when
+        // appearing at column 0 (after trimming up to 3 spaces of indent per
+        // CommonMark fenced-code rules — we approximate with /^\s{0,3}```/).
+        if (/^\s{0,3}```/.test(lines[i])) inside = !inside;
+        inFence[i] = inside;
+      }
       for (const gm of gateMarkers) {
         const startIdx = gm.lineNum - 1; // 0-based
-        const windowLines = lines.slice(startIdx + 1, startIdx + 11);
-        const hasSentinel = windowLines.some((l) => l.includes('🚦'));
+        const endExclusive = Math.min(startIdx + 10, lines.length);
+        let hasSentinel = false;
+        for (let i = startIdx; i < endExclusive; i++) {
+          if (lines[i].includes('🚦') && !inFence[i]) {
+            hasSentinel = true;
+            break;
+          }
+        }
         if (!hasSentinel) {
           findings.push({
             rule: 'GATE-prose-block-required',
@@ -645,9 +670,10 @@ function collectFindings({ pluginRoot }) {
             file,
             message:
               `Gate \`${gm.gateId}\` (line ${gm.lineNum}) is missing the 🚦 ` +
-              `prose block within 10 lines. Every gate marker must be followed ` +
-              `by a \`> 🚦 **Gate (...)**\` line so humans see the same ` +
-              `context the lint sees.`,
+              `prose block within 10 lines (a line carrying the 🚦 sentinel ` +
+              `outside any fenced code block). Every gate marker must be ` +
+              `followed by a \`> 🚦 **Gate (...)**\` line so humans see ` +
+              `the same context the lint sees.`,
             hint: 'See references/approval-gates.md §4.1 for the marker + prose template.',
           });
         }
@@ -679,7 +705,7 @@ function collectFindings({ pluginRoot }) {
         if (!catalogGateIds.has(gm.gateId)) {
           findings.push({
             rule: 'GATE-must-be-in-catalog',
-            severity: SKILL_SEVERITY,
+            severity: 'error',
             file,
             message:
               `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
@@ -796,15 +822,23 @@ function main(argv) {
   // pre-v3 for non-ALM skills; once the catalog covered every skill the
   // branch became unreachable. Any future re-introduction of a 'warning'
   // severity should restore the stdout-vs-stderr split here.
-  for (const f of findings) process.stderr.write(formatFinding(f, pluginRoot));
-  process.stderr.write(
-    `\nalm-lint: ${findings.length} error(s) in ${pluginRoot}\n`
-  );
+  //
+  // Single concatenation + one write call avoids the Node-on-Windows
+  // truncation case where many small synchronous writes to a piped stderr
+  // (CI redirecting to a log file) can drop trailing data when process.exit
+  // fires before the OS has drained the pipe.
+  const out =
+    findings.map((f) => formatFinding(f, pluginRoot)).join('') +
+    `\nalm-lint: ${findings.length} error(s) in ${pluginRoot}\n`;
+  process.stderr.write(out);
   return 1;
 }
 
 if (require.main === module) {
-  process.exit(main(process.argv));
+  // Use exitCode instead of process.exit so the event loop drains stderr
+  // before the process terminates — important for CI runs that pipe stderr
+  // to a log file.
+  process.exitCode = main(process.argv);
 }
 
 module.exports = {
