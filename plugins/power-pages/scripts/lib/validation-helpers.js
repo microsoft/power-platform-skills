@@ -120,7 +120,7 @@ function getAuthToken(resourceUrl) {
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
+    const match = output.match(/(?:Org URL|Environment URL):\s*(https:\/\/[^\s]+)/i);
     return match ? match[1].replace(/\/+$/, '') : null;
   } catch {
     return null;

@@ -1,32 +1,39 @@
 #!/usr/bin/env node
 
 // Checks whether the current Power Pages environment is connected to a Git repository.
-// Usage: node check-git-connection.js [--envUrl <url>]
+// Usage: node check-git-connection.js [--envUrl <url>] [--solutionName <name>]
 //
 // Output (JSON to stdout):
 //   Connected:    { "connected": true, "solutionId": "<guid>", "solutionUniqueName": "<string>",
-//                   "repositoryUrl": "...", "branchName": "...", "status": "...", "lastSyncDate": "..." }
-//   Disconnected: { "connected": false }
+//                   "repositoryUrl": "...", "branchName": "...", "rootFolderPath": "...",
+//                   "branchSyncedCommitId": "...", "connections": [ ...all per-solution rows... ] }
+//   Disconnected: { "connected": false, "connections": [] }
 //   Error:        { "error": "..." }
 //
 // solutionUniqueName is the value to pass to `pac pages git commit/disconnect --solutionName`.
-// solutionId is kept for callers that need the GUID.
+// When --solutionName is supplied the result is narrowed to that solution; otherwise the
+// first per-solution connection is reported as the top-level fields while `connections`
+// always carries the full list.
 
-const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { getAuthToken, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { listGitConnections } = require('../../../scripts/lib/source-control');
 
 function parseArgs() {
   const args = process.argv.slice(2);
   let envUrl = null;
+  let solutionName = null;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) {
       envUrl = args[++i].replace(/\/+$/, '');
+    } else if (args[i] === '--solutionName' && args[i + 1]) {
+      solutionName = args[++i];
     }
   }
-  return { envUrl };
+  return { envUrl, solutionName };
 }
 
 async function main() {
-  let { envUrl } = parseArgs();
+  let { envUrl, solutionName } = parseArgs();
 
   if (!envUrl) {
     envUrl = getEnvironmentUrl();
@@ -42,75 +49,35 @@ async function main() {
     process.exit(1);
   }
 
-  const url = envUrl + '/api/data/v9.2/sourcecontrolconfigurations?$top=10';
-  const res = await makeRequest({
-    url,
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-    },
-    timeout: 30000,
-  });
-
-  if (res.error) {
-    console.log(JSON.stringify({ error: res.error }));
-    process.exit(1);
-  }
-
-  if (res.statusCode === 401) {
-    console.log(JSON.stringify({ error: 'Authentication failed (401). Run az login again.' }));
-    process.exit(1);
-  }
-
-  if (res.statusCode !== 200) {
-    console.log(JSON.stringify({ error: `Unexpected status ${res.statusCode}` }));
-    process.exit(1);
-  }
-
-  let data;
+  let connections;
   try {
-    data = JSON.parse(res.body);
-  } catch {
-    console.log(JSON.stringify({ error: 'Failed to parse response' }));
+    connections = await listGitConnections({ envUrl, token, solutionUniqueName: solutionName });
+  } catch (e) {
+    console.log(JSON.stringify({ error: e.message }));
     process.exit(1);
   }
 
-  const configs = data.value || [];
-  if (configs.length === 0) {
-    console.log(JSON.stringify({ connected: false }));
+  if (connections.length === 0) {
+    console.log(JSON.stringify({ connected: false, connections: [] }));
     return;
   }
 
-  const config = configs[0];
-  const solutionId = config._solutionid_value || null;
-
-  // Follow-up: resolve solution unique name. The virtual `sourcecontrolconfigurations`
-  // entity doesn't accept $expand on solutionid, so we issue a second targeted query.
-  let solutionUniqueName = null;
-  if (solutionId) {
-    const solRes = await makeRequest({
-      url: envUrl + `/api/data/v9.2/solutions(${solutionId})?$select=uniquename`,
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-      },
-      timeout: 30000,
-    });
-    if (solRes.statusCode === 200 && solRes.body) {
-      try { solutionUniqueName = JSON.parse(solRes.body).uniquename || null; } catch { /* leave null */ }
-    }
-  }
-
+  const primary = connections[0];
   console.log(JSON.stringify({
     connected: true,
-    solutionId,
-    solutionUniqueName,
-    repositoryUrl: config.repositoryurl || null,
-    branchName: config.branchname || null,
-    status: config.status || null,
-    lastSyncDate: config.modifiedon || null,
+    solutionId: primary.solutionId,
+    solutionUniqueName: primary.solutionUniqueName,
+    branchName: primary.branchName,
+    upstreamBranchName: primary.upstreamBranchName,
+    rootFolderPath: primary.rootFolderPath,
+    branchSyncedCommitId: primary.branchSyncedCommitId,
+    repositoryUrl: primary.repositoryUrl,
+    organizationName: primary.organizationName,
+    projectName: primary.projectName,
+    repositoryName: primary.repositoryName,
+    gitProvider: primary.gitProvider,
+    lastSyncDate: primary.lastSolutionModifiedOn,
+    connections,
   }));
 }
 

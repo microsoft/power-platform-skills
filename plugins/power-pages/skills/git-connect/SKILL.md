@@ -47,9 +47,76 @@ Guide the user through connecting a Power Pages solution to a Git repository (Az
 > - PAC CLI installed, authenticated to the target environment, and built with the `verbPAPortalGit` feature flag enabled (the skill probes this in Phase 1).
 > - Azure CLI logged in (`az login`).
 > - Managed Environments enabled on the target environment (required for Git integration).
-> - At least one Power Platform solution in the environment.
+> - **An existing Power Platform solution that contains your Power Pages site as a component.** `pac pages git connect` binds a *solution* (not a site directly) to a git branch, so the site components must already live in a solution. If they don't, run `/setup-solution` first — that skill creates the publisher + solution and adds the website (and its language / site-component children) as `solutioncomponents`. Any other path that gets the site into a solution (Maker portal UI, `pac solution add-solution-component`, importing a solution from another env) works equally well.
 
 **Initial request:** $ARGUMENTS
+
+---
+
+## Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` | Plan exists but is stale. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including git-connect) in the right order. Want me to run plan-alm now?"
+
+<!-- gate: git-connect:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-connect:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since. Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: git-connect:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-connect:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, proceed to Phase 1.
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Connecting a solution to a Git branch/folder is a permanent binding — once made, the solution's components are constrained to that branch's tracked path. If `plan-alm` would have recommended a multi-solution split, connecting first and splitting later requires `pac pages git disconnect` + reconnect for every component move. The gate ensures the planned solution shape is final before the binding is made, while still leaving an explicit bypass for users who genuinely want a standalone connect.
 
 ---
 
@@ -154,7 +221,7 @@ Parse the output to extract solution names, unique names, and versions.
 
 If `$ARGUMENTS` contains a solution name, try to match it from the list.
 
-Otherwise, use `AskUserQuestion` to present the available solutions (up to 4). If a Power Pages website solution is identifiable (contains website components), recommend it.
+Otherwise, use `AskUserQuestion` to present the available solutions (up to 4). Recommend any solution that already contains Power Pages site components.
 
 | Question | Header | Options |
 |----------|--------|---------|
@@ -162,7 +229,36 @@ Otherwise, use `AskUserQuestion` to present the available solutions (up to 4). I
 
 Record the selected solution's **unique name** for the ConnectToGit call.
 
-**Output**: Selected solution unique name
+#### 2.3 Verify the selected solution contains the site
+
+`pac pages git connect` binds the **solution** to a branch — if the chosen solution doesn't contain the user's Power Pages site components, the connect succeeds but every subsequent `commit` / `pull` is a no-op and silently misleads the user. Guard against this before mutating anything.
+
+Query `solutioncomponents` for any Power Pages component in the selected solution. `componenttype` codes for the `powerpagesite` root vary by environment (commonly `10427`, `10428`, or `10435`), so accept any of them:
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" GET \
+  "solutioncomponents?$filter=_solutionid_value eq '<selectedSolutionId>' and (componenttype eq 10427 or componenttype eq 10428 or componenttype eq 10435)&$top=1"
+```
+
+If the result is empty, **STOP** and surface this gate before the connect:
+
+<!-- gate: git-connect:2.solution-missing-site | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-connect:2.solution-missing-site):** The selected solution doesn't contain any Power Pages site components, so connecting it to Git would produce an empty source-control binding.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| The selected solution doesn't contain any Power Pages site components. What now? | Missing site | Run `/setup-solution` to add the site (Recommended), Pick a different solution, Continue anyway (advanced — I know what I'm doing), Cancel |
+
+- **Run `/setup-solution`** → invoke `/power-pages:setup-solution` to add the site to a solution; on completion, restart Phase 2 with the updated solution list.
+- **Pick a different solution** → return to step 2.2.
+- **Continue anyway** → set `EMPTY_SOLUTION_ACK = true` and proceed; record this in the completion summary so the user understands the binding is intentionally empty.
+- **Cancel** → exit cleanly.
+
+If the user picked the solution via `$ARGUMENTS` (non-interactive) and the check fails, prefer **Cancel** with a clear error message rather than silently proceeding — the user can re-run with a correct solution name.
+
+**Output**: Selected solution unique name (verified to contain Power Pages site components)
 
 ---
 
@@ -218,21 +314,25 @@ Present via `AskUserQuestion`:
 |----------|--------|---------|
 | Which branch? | Branch | `main` (Recommended), `<other branches...>`, Create a new branch |
 
-**If "Create a new branch"**: Ask for the branch name, then create it:
+**If "Create a new branch"**: Ask for the branch name and pick the upstream (typically `main`), then create it. The `gitbranches` virtual entity resolves the repo from the org/project/repo tuple — there's no `gitrepositoryid` navigation property:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "gitbranches" --body '{"name":"<branch-name>","gitrepositoryid":"<repoId>"}'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "<ENV_URL>" POST "gitbranches" --body '{"branchname":"<branch-name>","organizationname":"<selectedOrgName>","projectname":"<selectedProjectName>","repositoryname":"<selectedRepoName>","upstreambranchname":"<upstreamBranch>"}'
 ```
 
+Returns `204 No Content` on success. Verify by re-running the 3.4 GET — the new branch should appear in the list.
+
 #### 3.5 Set Folder Path
+
+The folder path is **required and cannot be `/`** — the server rejects `/` with `The folder name '/' is invalid. Please enter a new name.` PAC CLI also defaults `--folder` to `/` when omitted, so the skill must always pass an explicit value.
 
 Use `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| What folder path in the repo should the solution sync to? | Folder | Root (`/`) (Recommended), Custom path |
+| What folder path in the repo should the solution sync to? | Folder | `<solutionUniqueName>` (Recommended), Custom path |
 
-Default to `/` unless the user specifies otherwise.
+Default to the solution unique name (e.g. `WoodgroveBankSite`) unless the user specifies otherwise. Reject `/` and any value starting with `/` — re-prompt for a valid folder name.
 
 **Output**: Organization, project, repository, branch, and folder path selected
 
@@ -274,7 +374,7 @@ pac pages git connect `
 > - `--project` (string, required) — ADO project (use the same name as `--repository` for GitHub).
 > - `--repository` (string, required) — Repo name.
 > - `--branch` (string, required) — Branch name (e.g. "main").
-> - `--folder` (string, optional, default `/`) — Folder path inside the repo where the solution syncs. The CLI accepts a missing `--folder` and uses `/` (PAPortalGitConnectVerb.cs:98). Phase 3.5 still asks the user so the choice is explicit.
+> - `--folder` (string, required in practice) — Folder path inside the repo where the solution syncs. PAC's verb defaults to `/` if omitted, but the server rejects `/` with `The folder name '/' is invalid`. The skill always passes an explicit folder (default: the solution unique name) per Phase 3.5.
 > - `--gitProvider 0|1` — 0 = Azure DevOps (default), 1 = GitHub.
 > - `--environment` (string, optional) — Target env URL when not using the default profile.
 > - PAC CLI internally calls the `ConnectToGit` Dataverse action and waits for the initial sync; this can take up to 2 minutes. Use a Bash timeout of at least 180 seconds.
@@ -353,13 +453,14 @@ Git connection established!
 
 1. Phase 1.6: If already connected — keep or disconnect
 2. Phase 2.2: Select which solution to connect
-3. Phase 3.1–3.5: Select organization, project, repo, branch, folder (sequential)
-4. Phase 4.1: Confirm all connection parameters before executing
+3. Phase 2.3: If the chosen solution has no Power Pages site components — run `/setup-solution`, pick a different solution, continue anyway, or cancel
+4. Phase 3.1–3.5: Select organization, project, repo, branch, folder (sequential)
+5. Phase 4.1: Confirm all connection parameters before executing
 
 ### Prerequisites Reminder
 
 - **Managed Environments** must be enabled on the target environment. If `pac pages git connect` fails with a Managed Environments error, direct the user to: Power Platform Admin Center → Environments → Select environment → Enable Managed Environments.
-- The environment must have at least one unmanaged solution.
+- The environment must have at least one unmanaged solution **containing the Power Pages site components**. If only empty solutions exist, run `/setup-solution` first.
 
 ### Limitations (UI parity)
 

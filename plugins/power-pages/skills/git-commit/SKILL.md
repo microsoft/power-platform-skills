@@ -50,6 +50,73 @@ Commit pending changes from a Power Pages environment to the connected Git repos
 
 ---
 
+## Phase 0 — ALM plan gate
+
+> **`plan-alm` is the front door.** When the user expresses an ALM intent (*promote / ship / deploy / set up CI-CD / move to staging / push to prod*), the orchestrator (`/power-pages:plan-alm`) should run first. This Phase 0 enforces that and is meant to fail closed when there's no plan, not to be a one-time check the user can dismiss forever.
+
+**Skip rule.** If this skill was invoked *as part of an active `plan-alm` orchestration*, skip Phase 0 entirely and proceed to Phase 1. The gate helper exposes this via its `inExecution` block — pass through silently to Phase 1 when:
+
+```
+inExecution.status === "active"
+```
+
+When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"stale-heartbeat"`, `"no-plan"`), run the Phase 0 gate flow below. Branch on the remaining helper fields:
+
+**Step 1 — Run the gate helper.**
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+```
+
+The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, detail }, generatedAt, planStatus, ... }`.
+
+**Step 2 — Branch on the result.**
+
+| Result | Behavior |
+|---|---|
+| `deferred: true` | The user has explicitly deferred ALM for this project (`.alm-deferred` marker present). Pass through silently to Phase 1 — do not nag. |
+| `exists: false` | The user hasn't run `plan-alm` yet. See Step 3. |
+| `exists: true, stale: false` | Plan is current. Pass through silently to Phase 1. |
+| `exists: true, stale: true` | Plan exists but is stale. See Step 4. |
+
+**Step 3 — No plan.** Tell the user:
+
+> "No ALM plan exists for this project. `/power-pages:plan-alm` builds one — it detects the project state, asks about your promotion strategy (PP Pipelines vs Manual export/import), and orchestrates the right skills (including git-commit) in the right order. Want me to run plan-alm now?"
+
+<!-- gate: git-commit:0.no-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-commit:0.no-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `exists:false`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
+
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Step 4 — Stale plan.** Tell the user:
+
+> "ALM plan exists from `{generatedAt}` but the source solution has been modified since. Components may have changed. Re-running `plan-alm` will refresh the analysis and the rendered HTML."
+
+<!-- gate: git-commit:0.stale-plan | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-commit:0.stale-plan):** Fail-closed entry gate when `check-alm-plan.js` returns `stale:true`. Helper-script-backed.
+
+`AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Refresh the plan first? | ALM plan freshness | Refresh — re-run /power-pages:plan-alm (Recommended), Continue with the existing plan, Cancel |
+
+- **Refresh (Recommended)** → invoke `/power-pages:plan-alm`. After completion, proceed to Phase 1.
+- **Continue** → set `STALE_PLAN_ACK = true` and proceed to Phase 1.
+- **Cancel** → exit cleanly.
+
+**Why this gate exists.** Each commit pushes a snapshot to the connected upstream branch. If the planned solution split changed after the last commit (e.g., a component was moved to a different solution), committing without refreshing the plan can push components to the wrong branch, leak unintended components, or commit a half-baked split. The gate ensures the next commit reflects the current plan's intent.
+
+---
+
 ## Phase 1: Verify Prerequisites
 
 **Goal**: Ensure the environment is connected to Git and ready to commit

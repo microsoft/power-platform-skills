@@ -1,33 +1,38 @@
 #!/usr/bin/env node
 
 // Checks for available updates from Git that can be pulled into the environment.
-// Usage: node check-available-updates.js [--envUrl <url>]
+// Usage: node check-available-updates.js [--envUrl <url>] [--solutionName <name>]
 //
 // Output (JSON to stdout):
-//   { "connected": true, "solutionId": "<guid>", "solutionUniqueName": "<string>",
-//     "branchName": "...", "repositoryUrl": "...",
-//     "availableCount": N, "conflictCount": M, "available": [...], "conflicts": [...] }
-//   { "connected": false }
+//   { "connected": true, "solutionId": "...", "solutionUniqueName": "...",
+//     "branchName": "...", "repositoryUrl": "...", "rootFolderPath": "...",
+//     "availableCount": N, "conflictCount": M, "available": [...], "conflicts": [...],
+//     "connections": [...] }
+//   { "connected": false, "connections": [] }
 //   { "error": "..." }
 //
 // solutionUniqueName is the value to pass to `pac pages git pull --solutionName`.
 // On 401 we surface { "error": "..." } so callers don't misread auth failure as "not connected".
 
-const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { getAuthToken, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { listGitConnections, listSourceControlComponents, ACTION } = require('../../../scripts/lib/source-control');
 
 function parseArgs() {
   const args = process.argv.slice(2);
   let envUrl = null;
+  let solutionName = null;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) {
       envUrl = args[++i].replace(/\/+$/, '');
+    } else if (args[i] === '--solutionName' && args[i + 1]) {
+      solutionName = args[++i];
     }
   }
-  return { envUrl };
+  return { envUrl, solutionName };
 }
 
 async function main() {
-  let { envUrl } = parseArgs();
+  let { envUrl, solutionName } = parseArgs();
 
   if (!envUrl) {
     envUrl = getEnvironmentUrl();
@@ -43,104 +48,42 @@ async function main() {
     process.exit(1);
   }
 
-  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
-
-  // Check connection
-  const configRes = await makeRequest({
-    url: envUrl + '/api/data/v9.2/sourcecontrolconfigurations?$top=1',
-    method: 'GET',
-    headers,
-    timeout: 30000,
-  });
-
-  if (configRes.error) {
-    console.log(JSON.stringify({ error: configRes.error }));
-    process.exit(1);
-  }
-  if (configRes.statusCode === 401) {
-    console.log(JSON.stringify({ error: 'Authentication failed (401). Run az login again.' }));
-    process.exit(1);
-  }
-  if (configRes.statusCode !== 200) {
-    console.log(JSON.stringify({ error: `Unexpected status ${configRes.statusCode} from sourcecontrolconfigurations` }));
+  let connections;
+  try {
+    connections = await listGitConnections({ envUrl, token, solutionUniqueName: solutionName });
+  } catch (e) {
+    console.log(JSON.stringify({ error: e.message }));
     process.exit(1);
   }
 
-  let configData;
-  try { configData = JSON.parse(configRes.body); } catch { console.log(JSON.stringify({ error: 'Failed to parse sourcecontrolconfigurations response' })); process.exit(1); }
-
-  const configs = configData.value || [];
-  if (configs.length === 0) {
-    console.log(JSON.stringify({ connected: false }));
+  if (connections.length === 0) {
+    console.log(JSON.stringify({ connected: false, connections: [] }));
     return;
   }
 
-  const config = configs[0];
-
-  // Query available pull components (action eq 2)
-  const availRes = await makeRequest({
-    url: envUrl + '/api/data/v9.2/sourcecontrolcomponents?$filter=action eq 2',
-    method: 'GET',
-    headers,
-    timeout: 30000,
-  });
-
   let available = [];
-  if (availRes.statusCode === 200 && availRes.body) {
-    try {
-      const data = JSON.parse(availRes.body);
-      available = (data.value || []).map(c => ({
-        name: c.name || 'Unknown',
-        type: c.componenttype || 'Unknown',
-        action: 'Pull',
-      }));
-    } catch { /* ignore */ }
-  }
-
-  // Query conflicts (action eq 3)
-  const conflictRes = await makeRequest({
-    url: envUrl + '/api/data/v9.2/sourcecontrolcomponents?$filter=action eq 3',
-    method: 'GET',
-    headers,
-    timeout: 30000,
-  });
-
   let conflicts = [];
-  if (conflictRes.statusCode === 200 && conflictRes.body) {
-    try {
-      const data = JSON.parse(conflictRes.body);
-      conflicts = (data.value || []).map(c => ({
-        name: c.name || 'Unknown',
-        type: c.componenttype || 'Unknown',
-        action: 'Conflict',
-      }));
-    } catch { /* ignore */ }
+  try {
+    available = await listSourceControlComponents({ envUrl, token, action: ACTION.PULL });
+    conflicts = await listSourceControlComponents({ envUrl, token, action: ACTION.CONFLICT });
+  } catch (e) {
+    console.log(JSON.stringify({ error: e.message }));
+    process.exit(1);
   }
 
-  const solutionId = config._solutionid_value || null;
-  let solutionUniqueName = null;
-  if (solutionId) {
-    const solRes = await makeRequest({
-      url: envUrl + `/api/data/v9.2/solutions(${solutionId})?$select=uniquename`,
-      method: 'GET',
-      headers,
-      timeout: 30000,
-    });
-    if (solRes.statusCode === 200 && solRes.body) {
-      try { solutionUniqueName = JSON.parse(solRes.body).uniquename || null; } catch { /* leave null */ }
-    }
-  }
-
+  const primary = connections[0];
   console.log(JSON.stringify({
     connected: true,
-    solutionId,
-    solutionUniqueName,
-    branchName: config.branchname || null,
-    repositoryUrl: config.repositoryurl || null,
+    solutionId: primary.solutionId,
+    solutionUniqueName: primary.solutionUniqueName,
+    branchName: primary.branchName,
+    repositoryUrl: primary.repositoryUrl,
+    rootFolderPath: primary.rootFolderPath,
     availableCount: available.length,
     conflictCount: conflicts.length,
     available,
     conflicts,
+    connections,
   }));
 }
 
