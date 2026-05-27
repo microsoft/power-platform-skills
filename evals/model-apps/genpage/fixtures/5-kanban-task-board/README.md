@@ -1,8 +1,9 @@
 # Fixture 5-kanban-task-board — Real Claude capture
 
-**Status:** Real `/genpage` capture (2026-05-21). Layer 2 fully green; Layer 1
-has 5 known-failing assertions that are the same workflow-log compactness
-issues as the eval 2 capture — see "Known gaps" below.
+**Status:** Real `/genpage` capture (2026-05-21). Has known-failing
+assertions on Layer 1 (workflow-log compactness — pre-v2.2 spec) and
+on Layer 2 (Rule 11 queryTable `.rows` access — pre-Rule-11 docs ingestion).
+See "Known gaps" below.
 
 ## Source
 
@@ -25,12 +26,12 @@ The planner correctly:
 
 ## What this capture validates
 
-- **Layer 2 is fully clean** (17 pass / 0 fail / 5 skip) — every code-gen
-  rule passed: single file with `export default GeneratedComponent`,
-  `pageInput` destructured, `makeStyles` + tokens, unsized icons, all icons
-  in `verified-icons.txt`, `dataApi.updateRow` on drop, native HTML5 DnD
-  events only (no `react-dnd` / `@dnd-kit`), try/catch around async calls,
-  no `100vh` / `100vw` / `FluentProvider` / forbidden theme functions.
+- **Layer 2 nearly clean** — every code-gen rule passed except the
+  v2.2-added Rule 11 assertion (queryTable result must be accessed via
+  `.rows`). The captured code does `setTasks(result)` where `result` is
+  a `DataTable<T>`, not an array. Generated before Jason's queryTable
+  docs (commit `3dc1686`) were fully ingested by the agent, and Rule 11
+  wasn't a Layer 2 assertion until v2.2.
 - **Sample 11 (v2.2) integrates correctly** — the planner picked it as the
   reference; the generated `task-board.tsx` followed the kanban + DnD
   pattern faithfully.
@@ -59,11 +60,17 @@ operating under the **older spec** that did not require command-verbatim
 logging. A fresh `/genpage` run after the plugin reloads should produce a
 log that satisfies all five assertions.
 
+## Known gaps — Layer 2
+
+| Failing assertion | Why |
+|---|---|
+| Rule 11: queryTable result must be accessed via `.rows` | Captured code does `setTasks(result)` directly on the DataTable wrapper |
+
 ## How to re-capture (recommended)
 
-Layer 2 is already fully green — only Layer 1's command-verbatim log
-assertions are unmet because this run predates the v2.2 planner-spec
-tightening. To flip Layer 1 green:
+Re-capture under the v2.2 spec to flip both layers green in one go — the
+new planner spec records command-verbatim logs (Layer 1) and the agent
+will follow Rule 11 for queryTable (Layer 2). To re-capture:
 
 1. **Start a fresh `claude` session** so the plugin reloads with the new
    spec.

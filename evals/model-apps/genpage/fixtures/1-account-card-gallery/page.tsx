@@ -78,8 +78,9 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                     select: ['accountid', 'name', 'websiteurl', 'emailaddress1', 'telephone1'],
                     top: 100,
                 });
-                w[cacheKey] = result;
-                setAccounts(result);
+                // queryTable returns DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() } — access records via .rows
+                w[cacheKey] = result.rows;
+                setAccounts(result.rows);
             } catch (e) {
                 setError(e instanceof Error ? e.message : String(e));
             } finally {

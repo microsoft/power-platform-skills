@@ -66,6 +66,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                 return;
             }
             try {
+                // queryTable returns DataTable<T> with .rows — never iterate the result directly
                 const result = await dataApi.queryTable<CrCandidate>('cr_candidate', {
                     select: [
                         'cr_candidateid',
@@ -78,7 +79,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                     expand: { '_cr_jobrequisition_value': { select: ['cr_title'] } },
                     top: 200,
                 });
-                const mapped: DisplayRow[] = result.map((r: any) => ({
+                const mapped: DisplayRow[] = result.rows.map((r: any) => ({
                     id: r.cr_candidateid,
                     name: r.cr_name ?? '',
                     status: r['cr_status@OData.Community.Display.V1.FormattedValue'] ?? '',

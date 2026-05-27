@@ -287,6 +287,60 @@ test('PAGEREF: fail on multi-page with hard-coded GUIDs', () => {
   assert.equal(result.status, 'fail');
 });
 
+// ---------- queryTable result.rows ----------
+
+test('queryTable .rows: pass when result.rows accessed', () => {
+  const check = ASSERTIONS.get('For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)');
+  const src = `import { X } from "./RuntimeTypes";
+async function fn() {
+  const result = await dataApi.queryTable('account', { top: 100 });
+  setRecords(result.rows);
+}`;
+  const result = check({ files: [f('a.tsx', src)], eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('queryTable .rows: fail when result iterated directly', () => {
+  const check = ASSERTIONS.get('For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)');
+  const src = `import { X } from "./RuntimeTypes";
+async function fn() {
+  const result = await dataApi.queryTable('account', { top: 100 });
+  return result.map((r) => r.name);  // BUG — result is DataTable, not Array
+}`;
+  const result = check({ files: [f('a.tsx', src)], eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+test('queryTable .rows: skip on mock pages (no RuntimeTypes import)', () => {
+  const check = ASSERTIONS.get('For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)');
+  const result = check({ files: [f('a.tsx', `const data = [{ a: 1 }, { a: 2 }];`)], eval: evalStub() });
+  assert.equal(result.status, 'skip');
+});
+
+test('queryTable .rows: skip when Dataverse file does not use queryTable', () => {
+  const check = ASSERTIONS.get('For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)');
+  const src = `import { X } from "./RuntimeTypes";
+async function fn() {
+  await dataApi.createRow('account', {});
+}`;
+  const result = check({ files: [f('a.tsx', src)], eval: evalStub() });
+  assert.equal(result.status, 'skip');
+});
+
+test('queryTable .rows: comment-only "result.map" does not pass', () => {
+  // Comments are stripped before the regex looks for .rows, so a file with
+  // queryTable but only a commented-out result.rows reference fails.
+  const check = ASSERTIONS.get('For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)');
+  const src = `import { X } from "./RuntimeTypes";
+async function fn() {
+  const result = await dataApi.queryTable('account', {});
+  // hint: use result.rows
+  return result.length;  // wrong: this is the DataTable, not an array
+}`;
+  const result = check({ files: [f('a.tsx', src)], eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 // ---------- Phase 5 expectations ----------
 
 test('Phase 5 - charts: fail on Chart.js import', () => {

@@ -36,6 +36,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   several. SKILL.md Phase 6 now invokes
   `scripts/add-table-to-app.js` for every entity in `--data-sources` after
   each upload (idempotent — safe on both create and update flows).
+- **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
+  DataTable, not an array).** 7 files were iterating `result` directly
+  (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
+  producing `X.map is not a function` at runtime. Fixed in
+  `samples/11-kanban-with-dnd.tsx` and 6 fixture `.tsx` files.
+  New Layer 2 assertion catches this pattern going forward: any Dataverse
+  file calling `dataApi.queryTable` must access `.rows` somewhere.
 
 ### Tests
 - 210 passing across `scripts/tests/` + `evals/.../tests/`.

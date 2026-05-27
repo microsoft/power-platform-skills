@@ -147,8 +147,9 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                     select: ['activityid', 'subject', 'description', 'statuscode', 'prioritycode'],
                     top: 200,
                 });
-                w[cacheKey] = result;
-                setTasks(result);
+                // queryTable returns DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() } — access records via .rows
+                w[cacheKey] = result.rows;
+                setTasks(result.rows);
             } catch (e) {
                 setError(e instanceof Error ? e.message : String(e));
             } finally {

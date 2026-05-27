@@ -73,7 +73,8 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                     filter,
                     top: 100,
                 });
-                const mapped: Row[] = result.map((r: any) => ({
+                // queryTable returns DataTable<T> with .rows — never iterate the result directly
+                const mapped: Row[] = result.rows.map((r: any) => ({
                     id: r.activityid,
                     subject: r.subject ?? '',
                     start: r.scheduledstart ?? '',

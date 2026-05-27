@@ -36,7 +36,8 @@
     "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components` and configures column sizing (columnSizingOptions or resizableColumns)",
     "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
     "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions",
-    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs"
+    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs",
+    "For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)"
   ],
   "evals": [
     {

@@ -306,6 +306,24 @@ ASSERTIONS.set(
   }
 );
 
+ASSERTIONS.set(
+  'For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)',
+  ({ files }) => {
+    const dv = files.filter((f) => isDataverseFile(f.content));
+    if (dv.length === 0) return skip('no Dataverse files');
+    const queryFiles = dv.filter((f) => /\bdataApi\.queryTable\b/.test(f.content));
+    if (queryFiles.length === 0) return skip('no queryTable usage');
+    // Each file that calls queryTable must access .rows somewhere — that's
+    // the only safe way to get the records array out of DataTable<T>. Files
+    // that iterate `result` / `data` / etc. directly as if it were an array
+    // will fail at runtime with "X.map is not a function".
+    const offender = queryFiles.find((f) => !/\.rows\b/.test(stripComments(f.content)));
+    return offender
+      ? fail(`${offender.name}: dataApi.queryTable result must be accessed via .rows (it is a DataTable<T>, not an array)`)
+      : pass();
+  }
+);
+
 const PHASE5_EXPECTATIONS = new Map();
 
 PHASE5_EXPECTATIONS.set(

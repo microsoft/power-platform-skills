@@ -52,10 +52,13 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                 return;
             }
             try {
-                const [contacts, appointments] = await Promise.all([
+                // queryTable returns DataTable<T> with .rows — extract the arrays before iterating
+                const [contactsResult, appointmentsResult] = await Promise.all([
                     dataApi.queryTable('contact', { select: ['contactid'], top: 5000 }),
                     dataApi.queryTable('appointment', { select: ['activityid', 'statecode'], top: 5000 }),
                 ]);
+                const contacts = contactsResult.rows;
+                const appointments = appointmentsResult.rows;
                 const next: Metrics = {
                     totalCandidates: contacts.length,
                     scheduledInterviews: appointments.filter((a: any) => a.statecode === 0).length,

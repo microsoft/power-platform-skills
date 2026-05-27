@@ -64,7 +64,8 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                     select: ['contactid', 'fullname', 'emailaddress1', 'telephone1'],
                     top: 200,
                 });
-                const mapped: Row[] = result.map((r: any) => ({
+                // queryTable returns DataTable<T> with .rows — never iterate the result directly
+                const mapped: Row[] = result.rows.map((r: any) => ({
                     id: r.contactid,
                     name: r.fullname ?? '',
                     email: r.emailaddress1 ?? '',
