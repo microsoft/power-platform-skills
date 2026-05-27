@@ -43,6 +43,7 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_TELEMETRY: env.off ? "0" : "",
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
+      POWER_PLATFORM_SKILLS_CLOUD: env.cloud || "",
     },
   });
 }
@@ -272,4 +273,114 @@ test("dispatcher does NOT write events.jsonl when env opt-out is set (placeholde
     !fs.existsSync(path.join(tmp, "events.jsonl")),
     "env opt-out must skip local log"
   );
+});
+
+test("dispatcher uses regions[default_region] when no cache and no Artemis", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: { instrumentation_key: "ikeyusdefault32charsaaaaaaaaaaaaaa", collector_url: "https://example.invalid/OneCollector/1.0/" },
+        eu: { instrumentation_key: "ikeyeucached32charsaaaaaaaaaaaaaa", collector_url: "https://eu.invalid/OneCollector/1.0/" },
+      },
+    })
+  );
+  // No region-cache.json → cache miss → Artemis call fails on example.invalid → fall back to default_region (us).
+  const { status } = runDispatcher({
+    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info", orgId: "11111111-1111-1111-1111-111111111111" } },
+    env: {
+      configDir: tmp,
+      iKey: "",
+      collectorUrl: "",
+      fakeProbe: probePath,
+      ikeyJsonPath: ikeyPath,
+      cloud: "Public",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "probe should have been written using default region");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  // Use x-apikey (full iKey, not the split prefix) so the assertion is unambiguous.
+  assert.equal(probe.headers["x-apikey"], "ikeyusdefault32charsaaaaaaaaaaaaaa");
+});
+
+test("dispatcher uses cached region entry when cache hit", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: { instrumentation_key: "ikeyusdefault32charsaaaaaaaaaaaaaa", collector_url: "https://us.invalid/OneCollector/1.0/" },
+        eu: { instrumentation_key: "ikeyeucached32charsaaaaaaaaaaaaaa", collector_url: "https://eu.invalid/OneCollector/1.0/" },
+      },
+    })
+  );
+  // Seed cache with EU.
+  fs.writeFileSync(
+    path.join(tmp, "region-cache.json"),
+    JSON.stringify({
+      "11111111-1111-1111-1111-111111111111": {
+        region: "eu",
+        iKey: "ikeyeucached32charsaaaaaaaaaaaaaa",
+        collectorUrl: "https://eu.invalid/OneCollector/1.0/",
+        expiresAt: Date.now() + 60_000,
+      },
+    })
+  );
+  const { status } = runDispatcher({
+    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info", orgId: "11111111-1111-1111-1111-111111111111" } },
+    env: {
+      configDir: tmp,
+      iKey: "",
+      collectorUrl: "",
+      fakeProbe: probePath,
+      ikeyJsonPath: ikeyPath,
+      cloud: "Public",
+    },
+  });
+  assert.equal(status, 0);
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "ikeyeucached32charsaaaaaaaaaaaaaa");
+});
+
+test("dispatcher with no orgId in event uses default_region", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: { instrumentation_key: "ikeyusnoorg32charsaaaaaaaaaaaaaaaaa", collector_url: "https://us.invalid/OneCollector/1.0/" },
+      },
+    })
+  );
+  const { status } = runDispatcher({
+    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info" } },
+    env: {
+      configDir: tmp,
+      iKey: "",
+      collectorUrl: "",
+      fakeProbe: probePath,
+      ikeyJsonPath: ikeyPath,
+      cloud: "",
+    },
+  });
+  assert.equal(status, 0);
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "ikeyusnoorg32charsaaaaaaaaaaaaaaaaa");
 });
