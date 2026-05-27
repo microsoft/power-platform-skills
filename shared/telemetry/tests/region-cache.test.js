@@ -75,3 +75,21 @@ test("write swallows disk errors (target dir unwritable)", () => {
 test("TTL_MS is exported as 24 hours", () => {
   assert.equal(TTL_MS, 24 * 60 * 60 * 1000);
 });
+
+test("read returns null when orgId is falsy", () => {
+  const tmp = mkTmp();
+  write(orgIdA, entryUS, tmp);
+  assert.equal(read("", tmp), null);
+  assert.equal(read(null, tmp), null);
+  assert.equal(read(undefined, tmp), null);
+});
+
+test("write is a silent no-op when orgId or entry is falsy", () => {
+  const tmp = mkTmp();
+  const file = path.join(tmp, "region-cache.json");
+  assert.doesNotThrow(() => write("", entryUS, tmp));
+  assert.doesNotThrow(() => write(orgIdA, null, tmp));
+  assert.doesNotThrow(() => write(orgIdA, undefined, tmp));
+  // Cache file should not exist after no-op writes
+  assert.equal(fs.existsSync(file), false);
+});
