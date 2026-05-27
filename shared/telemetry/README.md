@@ -40,6 +40,34 @@ File paths, cwd, env vars (except the telemetry off-switch), site names, Dataver
 - **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch).
 - **Repo-side kill switch.** `ikey.json` carries a `disabled` flag. When `true`, the dispatcher exits before any network or local-log path runs. Ships `true` and flips `false` only after the tenant-side Kusto stream is provisioned.
 
+## Cluster config
+
+Each adopting plugin's `scripts/lib/telemetry/ikey.json` lists one or more
+regions and a `default_region`. Each region entry carries an
+`instrumentation_key` + `collector_url` pair for that cloud / geo.
+
+```jsonc
+{
+  "event_stream_name": "<plugin's Kusto stream name>",
+  "disabled": true,                          // ships true, flip in a separate PR
+  "default_region": "us",
+  "regions": {
+    "internal": { "instrumentation_key": "...", "collector_url": "..." },
+    "us":       { "instrumentation_key": "...", "collector_url": "..." },
+    "eu":       { "instrumentation_key": "...", "collector_url": "..." },
+    "gov":      { "instrumentation_key": "...", "collector_url": "..." },
+    "high":     { "instrumentation_key": "...", "collector_url": "..." },
+    "dod":      { "instrumentation_key": "...", "collector_url": "..." },
+    "mooncake": { "instrumentation_key": "...", "collector_url": "..." }
+  }
+}
+```
+
+The dispatcher resolves the right region at emission time by calling the
+Artemis service with the user's `orgId` + `Cloud:` (both read from
+`pac auth who` by the hook). Resolution result is cached on disk for 24h
+keyed by orgId.
+
 ## Syncing into a plugin
 
 ```bash
