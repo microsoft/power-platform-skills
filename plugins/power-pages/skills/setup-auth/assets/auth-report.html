@@ -17,11 +17,13 @@
   --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
   --radius:8px; --radius-sm:4px;
   --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
 
+/* Top bar */
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
@@ -29,16 +31,34 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
 .topbar-right{font-size:11px;color:var(--text-dim);font-family:var(--mono);}
 
-.content{max-width:1100px;margin:0 auto;padding:32px 40px 80px;}
+/* Layout: sidebar + content */
+.layout{display:flex;min-height:calc(100vh - 65px);}
+
+/* Sidebar */
+.sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;position:sticky;top:0;align-self:flex-start;}
+.sidebar-heading{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;padding:0 22px;margin-bottom:8px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;position:relative;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;width:18px;text-align:center;opacity:0.6;}
+.nav-btn.active .nav-icon{opacity:1;}
+.nav-badge{margin-left:auto;font-size:10px;font-family:var(--mono);padding:1px 7px;border-radius:8px;font-weight:700;color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);}
+.nav-btn.active .nav-badge{color:var(--accent);background:var(--accent-bg);border-color:var(--accent-border);}
+
+/* Content */
+.content{flex:1;padding:32px 40px 60px;max-width:1100px;min-width:0;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.2s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 
 h1{font-size:24px;font-weight:800;color:var(--text-bright);letter-spacing:-0.4px;margin-bottom:6px;}
 .page-sub{font-size:13px;color:var(--text-dim);margin-bottom:24px;}
-h2{font-size:18px;font-weight:700;color:var(--text-bright);margin-top:32px;margin-bottom:10px;letter-spacing:-0.2px;}
-h2::before{content:'';display:inline-block;width:3px;height:14px;background:var(--accent);margin-right:10px;vertical-align:middle;border-radius:2px;}
+h2{font-size:18px;font-weight:700;color:var(--text-bright);margin-bottom:6px;letter-spacing:-0.2px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:18px;}
 h3{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:8px;}
 p{margin-bottom:10px;}
 
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 4px;}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;box-shadow:var(--shadow-4);}
 .stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--accent);}
 .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
@@ -47,7 +67,7 @@ p{margin-bottom:10px;}
 .card.muted{background:var(--surface2);}
 .empty{color:var(--text-dim);font-style:italic;font-size:13px;}
 
-.kv{display:grid;grid-template-columns:160px 1fr;gap:6px 16px;font-size:13px;align-items:baseline;}
+.kv{display:grid;grid-template-columns:170px 1fr;gap:8px 16px;font-size:13px;align-items:baseline;}
 .kv .k{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;}
 .kv .v{color:var(--text);word-break:break-word;}
 .kv .v code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
@@ -71,7 +91,14 @@ td.col-fixed{width:38%;white-space:nowrap;}
 .next-steps li{margin-bottom:8px;line-height:1.6;}
 .next-steps code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
 
-.footer{margin-top:32px;text-align:center;font-size:11px;color:var(--text-dim);padding-top:16px;border-top:1px solid var(--border);}
+@media (max-width: 760px) {
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);position:static;display:flex;flex-wrap:wrap;padding:8px;gap:4px;}
+  .sidebar-heading{display:none;}
+  .nav-btn{width:auto;flex:1 1 auto;padding:8px 12px;border-left:none;border-bottom:2px solid transparent;}
+  .nav-btn.active{border-left-color:transparent;border-bottom-color:var(--accent);}
+  .stats-grid{grid-template-columns:repeat(2,1fr);}
+}
 </style>
 </head>
 <body>
@@ -86,35 +113,92 @@ td.col-fixed{width:38%;white-space:nowrap;}
   <div class="topbar-right" id="topbar-date"></div>
 </div>
 
-<div class="content">
-  <h1 id="hdr-site"></h1>
-  <div class="page-sub" id="hdr-sub"></div>
+<div class="layout">
+  <nav class="sidebar" role="navigation" aria-label="Report sections">
+    <div class="sidebar-heading">Sections</div>
+    <button type="button" class="nav-btn active" data-tab="overview">
+      <span class="nav-icon" aria-hidden="true">▣</span><span>Overview</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="providers">
+      <span class="nav-icon" aria-hidden="true">⌬</span><span>Providers</span>
+      <span class="nav-badge" id="badge-providers">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="local-auth">
+      <span class="nav-icon" aria-hidden="true">⛛</span><span>Local Auth</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="features">
+      <span class="nav-icon" aria-hidden="true">✦</span><span>Features</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="settings">
+      <span class="nav-icon" aria-hidden="true">⚙</span><span>Site Settings</span>
+      <span class="nav-badge" id="badge-settings">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="permissions">
+      <span class="nav-icon" aria-hidden="true">⌭</span><span>Permissions</span>
+      <span class="nav-badge" id="badge-permissions">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="files">
+      <span class="nav-icon" aria-hidden="true">⌹</span><span>Files</span>
+      <span class="nav-badge" id="badge-files">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="next-steps">
+      <span class="nav-icon" aria-hidden="true">→</span><span>Next Steps</span>
+    </button>
+  </nav>
 
-  <div class="stats-grid" id="stats"></div>
+  <main class="content">
+    <section class="section active" id="tab-overview">
+      <h1 id="hdr-site"></h1>
+      <div class="page-sub" id="hdr-sub"></div>
+      <div class="stats-grid" id="stats"></div>
+      <div id="overview-detail"></div>
+    </section>
 
-  <h2>Identity Providers</h2>
-  <div id="providers"></div>
+    <section class="section" id="tab-providers">
+      <h2>Identity Providers</h2>
+      <div class="section-desc">Each card shows the provider's identifier, claims mapping, and contact-linking behavior.</div>
+      <div id="providers"></div>
+    </section>
 
-  <h2>Local Authentication</h2>
-  <div id="local-auth"></div>
+    <section class="section" id="tab-local-auth">
+      <h2>Local Authentication</h2>
+      <div class="section-desc">Username/password sign-in configured directly on the site (no external IdP).</div>
+      <div id="local-auth"></div>
+    </section>
 
-  <h2>Optional Features</h2>
-  <div id="optional-features"></div>
+    <section class="section" id="tab-features">
+      <h2>Optional Features</h2>
+      <div class="section-desc">Feature flags chosen during setup: profile page, Terms & Conditions, federated logout, and session keep-alive.</div>
+      <div id="optional-features"></div>
+    </section>
 
-  <h2>Site Settings Created</h2>
-  <div id="site-settings"></div>
+    <section class="section" id="tab-settings">
+      <h2>Site Settings Created</h2>
+      <div class="section-desc">Every Power Pages site setting written by this run. Values whose name contains "Secret" are masked.</div>
+      <div id="site-settings"></div>
+    </section>
 
-  <h2>Table Permissions</h2>
-  <div id="table-permissions"></div>
+    <section class="section" id="tab-permissions">
+      <h2>Table Permissions</h2>
+      <div class="section-desc">Server-side Dataverse table permissions provisioned for SPA Web API access.</div>
+      <div id="table-permissions"></div>
+    </section>
 
-  <h2>Files Created or Updated</h2>
-  <div id="files"></div>
+    <section class="section" id="tab-files">
+      <h2>Files Created or Updated</h2>
+      <div class="section-desc">Every SPA / Power Pages site file the skill created or modified during this run.</div>
+      <div id="files"></div>
+    </section>
 
-  <h2>Next Steps</h2>
-  <div class="next-steps" id="next-steps"></div>
-
-  <div class="footer">Generated by the <code>setup-auth</code> skill · Power Pages plugin</div>
+    <section class="section" id="tab-next-steps">
+      <h2>Next Steps</h2>
+      <div class="section-desc">Follow these steps to finish wiring up the configured authentication on your deployed site.</div>
+      <div class="next-steps" id="next-steps"></div>
+    </section>
+  </main>
 </div>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 
 <script>
 // All user-controlled data goes through .textContent — never innerHTML with
@@ -164,7 +248,7 @@ function emptyCard(msg) {
   return el('div', { class: 'card muted' }, el('div', { class: 'empty', text: msg }));
 }
 
-// --- Header ---
+// --- Header / Overview ---
 document.getElementById('hdr-site').textContent = SITE_NAME || '(site)';
 document.getElementById('hdr-sub').textContent =
   'Configured ' + (PROVIDERS.length === 1 ? '1 identity provider' : PROVIDERS.length + ' identity providers')
@@ -185,6 +269,34 @@ for (const s of stats) {
   ));
 }
 
+// --- Sidebar badges ---
+document.getElementById('badge-providers').textContent = String(PROVIDERS.length);
+document.getElementById('badge-settings').textContent = String(SITE_SETTINGS.length);
+document.getElementById('badge-permissions').textContent = String(TABLE_PERMISSIONS.length);
+document.getElementById('badge-files').textContent = String(FILES.length);
+
+// --- Overview detail (highlights jump to other tabs) ---
+const overviewDetail = document.getElementById('overview-detail');
+const overviewCard = el('div', { class: 'card' });
+overviewCard.appendChild(el('h3', { text: 'Highlights' }));
+const ul = el('ul');
+ul.style.cssText = 'margin-left:18px;font-size:13px;color:var(--text);';
+function addHighlight(text) { ul.appendChild(el('li', { text: text })); }
+if (PROVIDERS.length) addHighlight(`${PROVIDERS.length} identity provider${PROVIDERS.length === 1 ? '' : 's'} configured.`);
+if (LOCAL_AUTH) addHighlight(`Local authentication enabled (login by ${LOCAL_AUTH.loginBy || 'username'}, registration: ${LOCAL_AUTH.registrationMode || 'unspecified'}).`);
+if (OPTIONAL_FEATURES) {
+  if (OPTIONAL_FEATURES.profilePage) addHighlight('Profile page (/user-profile) was scaffolded.');
+  if (OPTIONAL_FEATURES.termsAndConditions) {
+    addHighlight(OPTIONAL_FEATURES.termsEnforced
+      ? 'Terms & Conditions enabled — Privacy Extensions solution detected, enforcement will work.'
+      : 'Terms & Conditions scaffolded — Privacy Extensions solution NOT detected, enforcement will be silently ignored until the solution is installed.');
+  }
+  if (OPTIONAL_FEATURES.federatedLogout) addHighlight('Federated (RP-initiated) logout enabled — users will be signed out of the identity provider on sign-out.');
+}
+if (!ul.children.length) addHighlight('No optional features enabled. Identity provider scaffolding is the only output of this run.');
+overviewCard.appendChild(ul);
+overviewDetail.appendChild(overviewCard);
+
 // --- Providers ---
 const provEl = document.getElementById('providers');
 if (PROVIDERS.length === 0) {
@@ -197,7 +309,7 @@ if (PROVIDERS.length === 0) {
     const card = el('div', { class: 'card' });
     card.appendChild(el('h3', { text: p.displayName || p.name || '(provider)' }));
     if (tags.length) {
-      const tagRow = el('div', { class: 'tag-row' });
+      const tagRow = el('div');
       tagRow.style.marginBottom = '10px';
       for (const t of tags) tagRow.appendChild(t);
       card.appendChild(tagRow);
@@ -215,7 +327,7 @@ if (PROVIDERS.length === 0) {
       kv('Profile sync', p.profileSync),
       kv('Federated logout', p.federatedLogout),
     ].filter(Boolean);
-    for (const [k, v] of rows) grid.appendChild(k), grid.appendChild(v);
+    for (const [k, v] of rows) { grid.appendChild(k); grid.appendChild(v); }
     card.appendChild(grid);
     provEl.appendChild(card);
   }
@@ -234,7 +346,7 @@ if (!LOCAL_AUTH) {
     kv('Reset password', LOCAL_AUTH.resetPasswordEnabled ? 'Enabled' : 'Disabled'),
     kv('Email confirmation', LOCAL_AUTH.emailConfirmationEnabled ? 'Enabled' : 'Disabled'),
   ].filter(Boolean);
-  for (const [k, v] of rows) grid.appendChild(k), grid.appendChild(v);
+  for (const [k, v] of rows) { grid.appendChild(k); grid.appendChild(v); }
   card.appendChild(grid);
   localEl.appendChild(card);
 }
@@ -343,6 +455,31 @@ if (FILES.length === 0) {
 
 // --- Next steps (HTML, skill-authored) ---
 document.getElementById('next-steps').innerHTML = NEXT_STEPS_HTML || '<p class="empty">No follow-up actions recorded.</p>';
+
+// --- Tab switching ---
+const navButtons = document.querySelectorAll('.nav-btn');
+const sections = document.querySelectorAll('.section');
+
+function activateTab(tabId) {
+  for (const btn of navButtons) {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  }
+  for (const sec of sections) {
+    sec.classList.toggle('active', sec.id === 'tab-' + tabId);
+  }
+  // Update the URL hash so users can deep-link to a tab, but don't push a
+  // history entry (replaceState) so the back button stays useful.
+  if (history.replaceState) history.replaceState(null, '', '#' + tabId);
+}
+
+for (const btn of navButtons) {
+  btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+}
+
+// Honor deep-link hash on load (e.g., file://.../auth-setup-report.html#settings)
+const initialHash = (location.hash || '').replace(/^#/, '');
+const validTabs = new Set(['overview','providers','local-auth','features','settings','permissions','files','next-steps']);
+if (initialHash && validTabs.has(initialHash)) activateTab(initialHash);
 </script>
 </body>
 </html>
