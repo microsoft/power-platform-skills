@@ -127,3 +127,55 @@ test('does NOT quote ordinary values with no special characters or leading indic
   const yaml2 = getWrittenYaml(t, 'Test/PathLike', '/signin-EntraExternal');
   assert.match(yaml2, /^value: \/signin-EntraExternal$/m);
 });
+
+// --- Writer / loader round-trip ---
+//
+// The whole point of the C5 quoting is that a value's meaning survives a
+// round-trip through the YAML file. Without a symmetric unquote in the
+// loader (powerpages-config.js#parseYamlScalar), the writer's quotes would
+// be read back as literal characters, corrupting subsequent reads. Verify
+// that loadSiteSettings() returns the ORIGINAL input string.
+
+const { loadSiteSettings } = require('../lib/powerpages-config');
+
+function roundTrip(t, settingName, value) {
+  const projectRoot = createTempProject(t);
+  const result = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', settingName,
+    '--value', value,
+    '--description', 'round-trip test',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const siteSettingsDir = path.join(projectRoot, '.powerpages-site', 'site-settings');
+  const settings = loadSiteSettings(siteSettingsDir);
+  const found = settings.find(s => s.name === settingName);
+  assert.ok(found, `setting ${settingName} not found after write`);
+  return found;
+}
+
+test('round-trip preserves value with leading hyphen', (t) => {
+  const setting = roundTrip(t, 'Test/RT/Hyphen', '-foo');
+  assert.equal(setting.value, '-foo');
+});
+
+test('round-trip preserves value with embedded quotes', (t) => {
+  const setting = roundTrip(t, 'Test/RT/EmbeddedQuotes', 'He said "hi"');
+  assert.equal(setting.value, 'He said "hi"');
+});
+
+test('round-trip preserves YAML 1.2 reserved-bareword strings as strings (not coerced)', (t) => {
+  // The writer quotes these to defend against bareword coercion; the loader
+  // must unquote them back to the string. Without the C5 round-trip fix the
+  // loader would return either the boolean true/false/null OR the literal
+  // string with quote characters embedded.
+  assert.equal(roundTrip(t, 'Test/RT/StrTrue',  'true').value,  'true');
+  assert.equal(roundTrip(t, 'Test/RT/StrFalse', 'false').value, 'false');
+  assert.equal(roundTrip(t, 'Test/RT/StrNull',  'null').value,  'null');
+});
+
+test('round-trip preserves value containing a literal backslash', (t) => {
+  // \\ is the writer's escape for a literal backslash; the loader must unescape it.
+  const setting = roundTrip(t, 'Test/RT/Backslash', 'back\\slash');
+  assert.equal(setting.value, 'back\\slash');
+});
