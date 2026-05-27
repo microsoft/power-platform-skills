@@ -1325,9 +1325,14 @@ Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 | Phase | Task Subject | Active Form |
 |-------|-------------|-------------|
 | Phase 1 | Site Discovery & Pre-checks | Setting up for migration |
-| Phase 2 | Customization Remediation | Remediating customizations |
-| Phase 3 | Migration Execution | Executing migration |
+| Phase 2 | Configuration Setup | Setting up configuration (track-aware) |
+| Phase 3 | Migration Execution | Executing migration (track-aware) |
 | Phase 4 | Post-Migration Validation | Validating and completing migration |
+
+> **Track-aware naming:** Phase 2 and Phase 3 task labels above are umbrella names. The live execution report shows the track-specific phase title once step 1.7 sets the track:
+>
+> - **Track A** (mode = `configurationData` or `all`): Phase 2 renders as "Configuration Migration & Customization Remediation"; Phase 3 renders as "Activation".
+> - **Track B** (mode = `configurationDataReferences`): Phase 2 renders as "Setting Up Metadata"; Phase 3 renders as "Runtime Data Migration & Activation".
 
 ---
 
