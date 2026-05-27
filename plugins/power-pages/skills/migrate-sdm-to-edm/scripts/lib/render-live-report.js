@@ -13,7 +13,6 @@ const {
   SUB_STEP_STATUS,
   APPROVAL_KIND,
   PROMPT_STATUS,
-  TOTAL_SUB_STEPS,
 } = require('./migration-state-schema');
 
 function escapeHtml(s) {
@@ -70,9 +69,16 @@ function countCompleted(state) {
   return n;
 }
 
+// Total varies by track (A = 13, B = 16), so derive from the chosen track's
+// phase blueprint at render time rather than treating it as a constant.
+function totalSubSteps(state) {
+  return state.phases.reduce((n, p) => n + p.subSteps.length, 0);
+}
+
 function overallPercent(state) {
-  if (TOTAL_SUB_STEPS === 0) return 0;
-  return Math.round((countCompleted(state) / TOTAL_SUB_STEPS) * 100);
+  const total = totalSubSteps(state);
+  if (total === 0) return 0;
+  return Math.round((countCompleted(state) / total) * 100);
 }
 
 function statusPillFor(state) {
@@ -237,8 +243,9 @@ ${subStepsBlock}
 `;
 }
 
-// Approval-banner copy. Keyed by (phaseId, kind). Falls back to a generic body if
-// no specific copy is registered.
+// Approval-banner copy. Keyed by `<phaseId>:<kind>` or `<phaseId>:<kind>:<track>`.
+// Track-aware keys take precedence; the bare key is the fallback when no track
+// is set or no track-specific copy exists.
 const APPROVAL_COPY = {
   '1:phase-start': {
     heading: '👀 Approve to start Phase 1: Site Discovery & Pre-checks',
@@ -249,20 +256,38 @@ const APPROVAL_COPY = {
     approve: '› Yes, start Phase 1',
     cancel: '› Cancel — stop the skill',
   },
-  '2:phase-start': {
-    heading: '👀 Approve to start Phase 2: Customization Remediation',
+  '2:phase-start:A': {
+    heading: '👀 Approve to start Phase 2: Configuration Migration & Customization Remediation',
     body: [
-      'Phase 1 has gathered context and (with your earlier approval in step 1.6) installed the missing V2 EDM template package. No site source or data has been changed yet.',
-      'In <strong>Phase 2</strong>, the skill will: scan your site for customizations, <code>pac pages download</code>, auto-rewrite FetchXML / Liquid where safe, generate paste-ready prompts for plugin and DME work that must run in a fresh Claude session, then ask for your explicit approval before <code>pac pages upload</code>.',
+      'Phase 1 captured site context, dependencies, and the chosen mode (<code>configurationData</code> or <code>all</code>).',
+      'In <strong>Phase 2</strong>, the skill will: run <code>pac pages migrate-datamodel --mode &lt;mode&gt;</code> (which moves metadata into EDM tables and auto-generates a customization report), locate that report, and — if any <code>adx_*</code> customizations are flagged — download the site, run FetchXML/Liquid rewriters, generate augmented prompts (plugin + DME), and ask for your explicit approval before <code>pac pages upload</code>.',
     ],
-    approve: '› Yes, proceed with the plan above',
+    approve: '› Yes, proceed with Phase 2',
     cancel: '› Cancel — I want to review more first',
   },
-  '3:phase-start': {
-    heading: '👀 Approve to start Phase 3: Migration Execution',
+  '2:phase-start:B': {
+    heading: '👀 Approve to start Phase 2: Setting Up Metadata',
     body: [
-      'Phase 2 customization remediation is complete: auto-rewrites uploaded, plugin/DME prompts handed off, manual items knowingly addressed or deferred.',
-      '<strong>Phase 3</strong> triggers the actual data migration. <code>pac pages migrate-datamodel</code> creates a tracker record in Dataverse and moves data into EDM tables — this is the point of no return short of a full rollback in Phase 4.',
+      'Phase 1 captured site context, dependencies, and confirmed mode <code>configurationDataReferences</code> — which assumes configuration metadata is already in EDM (typically via ALM solution import).',
+      'In <strong>Phase 2</strong>, the skill will: list sites in the target environment to verify yours is present, and — if metadata is missing — offer three import paths (ALM skill / Solution Import / PAC CLI). No data is migrated until you confirm metadata is ready.',
+    ],
+    approve: '› Yes, proceed with Phase 2',
+    cancel: '› Cancel — I want to review more first',
+  },
+  '3:phase-start:A': {
+    heading: '👀 Approve to start Phase 3: Activation',
+    body: [
+      'Phase 2 has finished: metadata migrated, customization findings handled, source synced back to Dataverse.',
+      '<strong>Phase 3</strong> activates EDM: it runs <code>--updateDataModelVersion</code> to flip the site\'s data model to Enhanced, then prompts you to restart the site manually in Power Platform admin center. The site goes live on EDM after restart.',
+    ],
+    approve: '› Yes, start activation',
+    cancel: '› Cancel — stop before activation',
+  },
+  '3:phase-start:B': {
+    heading: '👀 Approve to start Phase 3: Runtime Data Migration & Activation',
+    body: [
+      'Phase 2 confirmed configuration metadata is present in the target environment.',
+      '<strong>Phase 3</strong> runs <code>pac pages migrate-datamodel --mode configurationDataReferences</code> to move transactional references, locates the auto-generated customization report, remediates customizations if any appear (with a stronger warning — Prod findings usually indicate an ALM gap), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
     ],
     approve: '› Yes, start the migration',
     cancel: '› Cancel — stop before migration',
@@ -271,7 +296,7 @@ const APPROVAL_COPY = {
     heading: '👀 Approve to start Phase 4: Post-Migration Validation',
     body: [
       'Migration execution is complete. The site is now on Enhanced Data Model.',
-      '<strong>Phase 4</strong> guides you through validation checks (page rendering, forms, web API, auth flows) and offers an optional rollback to SDM if issues are found.',
+      '<strong>Phase 4</strong> re-downloads the site as EDM, diffs against the SDM snapshot to confirm every record migrated, suggests <code>/test-site</code> for runtime smoke testing, and offers an optional rollback if validation surfaces problems.',
     ],
     approve: '› Yes, start validation',
     cancel: '› Cancel — I\'ll validate manually',
@@ -279,7 +304,7 @@ const APPROVAL_COPY = {
   '2:in-phase': {
     heading: '👀 Approve upload to continue Phase 2',
     body: [
-      'Step 2.2 has finished auto-rewriting FetchXML and Liquid where safe. Before <code>pac pages upload</code> writes changes back to Dataverse, please review the diff and rewritten files.',
+      'Auto-rewriters have finished modifying FetchXML and Liquid in your site source. Before <code>pac pages upload</code> writes changes back to Dataverse, please review the diff and rewritten files.',
       'See the augmented prompts section below for plugin and DME work that must run in fresh Claude sessions before Phase 3.',
     ],
     approve: '› Approve upload',
@@ -290,8 +315,11 @@ const APPROVAL_COPY = {
 function renderApprovalBanner(state) {
   const gate = state.approvalGate;
   if (!gate) return '';
-  const key = `${gate.phaseId}:${gate.kind}`;
-  const copy = APPROVAL_COPY[key] || {
+  // Try track-specific copy first, fall back to bare key.
+  const track = state.track;
+  const key = track ? `${gate.phaseId}:${gate.kind}:${track}` : null;
+  const fallbackKey = `${gate.phaseId}:${gate.kind}`;
+  const copy = (key && APPROVAL_COPY[key]) || APPROVAL_COPY[fallbackKey] || {
     heading: gate.title || `👀 Approval required`,
     body: [gate.body || 'Respond in your Claude Code chat to continue.'],
     approve: '› Yes, proceed',
@@ -469,7 +497,7 @@ ${CSS}
   <div class="progress-bar"><div class="progress-bar-fill" style="width: ${pct}%;"></div></div>
   <div class="summary-mini">
     <span class="stat">Overall: <strong>${pct}%</strong></span>
-    <span class="stat">Sub-steps complete: <strong>${completed} of ${TOTAL_SUB_STEPS}</strong></span>
+    <span class="stat">Sub-steps complete: <strong>${completed} of ${totalSubSteps(state)}</strong></span>
     <span class="stat">Elapsed: <strong>${escapeHtml(elapsed)}</strong></span>
     <span class="stat">Last updated: <strong>${escapeHtml(clock)}</strong></span>
   </div>

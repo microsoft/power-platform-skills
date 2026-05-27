@@ -214,14 +214,14 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
    Parse output to extract all available sites with:
    - WebSiteId
-   - Portal Id (may render as `Unknown` if the Power Platform active-websites API failed, or `N/A` if the site is inactive — treat both as "missing" for step 3.2)
+   - Portal Id (may render as `Unknown` if the Power Platform active-websites API failed, or `N/A` if the site is inactive — treat both as "missing" for the activation step in Phase 3, which prompts the user when Portal Id is needed)
    - Site Name (display name from Friendly Name, the part before " - ")
    - URL slug (from Friendly Name, the part after " - ")
    - Current ModelVersion (`Standard` or `Enhanced`)
 
    > **Note:** Template name is not included in `pac pages list` output. Template will be confirmed separately in step 4.
    >
-   > **PAC CLI version note:** The Portal Id column was added on 2026-02-24. If your installed PAC build predates that and the column is missing entirely, treat Portal Id as missing — step 3.2 will prompt the user before the data-model update.
+   > **PAC CLI version note:** The Portal Id column was added on 2026-02-24. If your installed PAC build predates that and the column is missing entirely, treat Portal Id as missing — the activation step in Phase 3 will prompt the user before the data-model update.
 
 2. **Locate Target Site**
 
@@ -283,7 +283,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
    - **Reverted**: Site was previously rolled back to SDM. Treat as fresh start. Proceed to step 1.5.
 
-   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip steps 1.5–3.1 and jump directly to **step 3.2 (Update Data Model Version)**.
+   - **Completed**: A prior migration finished but the data model version was not yet flipped to EDM (otherwise step 1.3 would have stopped earlier). Skip ahead to the activation step in Phase 3 (Track A 3.1 or Track B 3.4 — track is derived in step 1.7, so complete 1.7 first to know which).
 
    - **Failed**: A prior migration failed. Show the last step and error details (from chunk records in the verbose output), then ask:
 
@@ -305,7 +305,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
      |----------|--------|---------|
      | A migration is already running for this site. How to proceed? | In-Flight Migration | Wait and poll until complete, Reset and start over, Exit and check back later |
 
-     - **Wait**: Skip steps 1.5–3.1 pre-migration work and jump directly to **step 3.1 action 3 (status polling loop)**. After completion, continue to step 3.2.
+     - **Wait**: Skip the rest of Phase 1 and Phase 2 setup work; jump directly to the migration-status polling loop (Track A 2.1 step 2 or Track B 3.1 step 3 — depends on which mode the in-flight migration was started with; complete 1.7 first to determine track). After polling reports Completed, continue to the activation step (Track A 3.1 / Track B 3.4).
      - **Reset and start over**: Show the reset warning (see step 4), confirm, run reset, then proceed to step 1.5.
      - **Exit**: Halt the skill cleanly. User can re-invoke later — step 1.4 will re-detect the in-flight migration.
 
@@ -331,7 +331,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 **Output**: Migration history known; skill either short-circuits to the appropriate phase or proceeds normally with a clean tracker state
 
-> **→ Update report:** `--set-step 1.4 --status completed --output "Status: <STATUS> · <NOTES>"`. If the skill is short-circuiting to step 3.1 or 3.2 (in-flight or previously-completed migration), also `--set-phase 1 --status completed` and skip the Phase 2 approval gate — the user has effectively already approved this path by responding to the in-flight prompt.
+> **→ Update report:** `--set-step 1.4 --status completed --output "Status: <STATUS> · <NOTES>"`. If the skill is short-circuiting (in-flight or previously-completed migration), also `--set-phase 1 --status completed`, `--set-phase 2 --status completed` (Phase 2 setup work is skipped), and skip the Phase 2 approval gate — the user has effectively already approved this path by responding to the in-flight prompt.
 
 ---
 
@@ -451,7 +451,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 ### 1.7 Determine Environment Type and Migration Mode
 
-**Goal**: Capture environment type and select migration data mode
+**Goal**: Capture env type, select migration mode, and derive the **migration track** (Track A vs Track B) that controls the shape of Phase 2 and Phase 3.
 
 **Actions**:
 
@@ -459,76 +459,138 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Which type of environment is this? | Environment Type | Development (Dev), Test/UAT, Production (Prod) |
+   | Which type of environment is this? | Environment Type | Development (Dev), Test/UAT, Production (Prod), Single environment (no ALM) |
 
    Store the choice.
 
 2. **Recommend Migration Mode Based on Environment**
 
-   - **Dev**: Recommend `all` (migrate both configuration metadata and transactional data — full migration on Dev)
-   - **Test/UAT/Prod**: Recommend `configurationData` (configuration metadata only)
-
-   Environment type is captured for context; ALM integration is reserved for future versions of this skill.
+   | Env Type | Recommended Mode | Rationale |
+   |---|---|---|
+   | Dev | `configurationData` | Allows remediation pass before transactional refs migrate |
+   | Test / UAT | `configurationData` | Same reasoning as Dev |
+   | Prod | `configurationDataReferences` | Assumes config metadata is already in EDM via ALM solution import |
+   | Single env (no ALM) | `configurationData` | Same as Dev — no ALM upstream, but safer to allow remediation |
 
 3. **Confirm Migration Mode**
 
-   Show recommendation with explanation:
-
    | Question | Header | Options |
    |----------|--------|---------|
-   | Recommended migration mode for `<ENV_TYPE>`: `<MODE>`. Proceed? | Migration Mode | Yes, use recommended mode, No, let me choose a different mode |
+   | Recommended mode for `<ENV_TYPE>`: `<RECOMMENDED_MODE>`. Confirm or override? | Migration Mode | Use recommended (`<RECOMMENDED_MODE>`), Use `configurationData`, Use `configurationDataReferences`, Use `all` |
 
-   If "No", show all three modes with descriptions and allow selection:
-   - `configurationData`: Migrate the metadata for the website. More information: List of tables to store configuration data.
-   - `configurationDataReferences`: Migrate the transactional data for the website. More information: List of tables to store nonconfiguration data.
-   - `all`: Migrate both configuration metadata and transactional data.
+   Mode descriptions:
+   - `configurationData`: Migrate the metadata (web pages, snippets, settings, etc.) only. **Safer default** — auto-generates a customization report, allows you to remediate before migrating refs.
+   - `configurationDataReferences`: Migrate transactional data references only. Assumes config metadata is already in EDM (e.g., via ALM solution import).
+   - `all`: Migrate both metadata and refs in one shot. **Only safe if no `adx_*` customizations exist** — once refs migrate, customization fixes become much harder.
 
-   Store final selected mode.
+   If user picks an override that's risky for their env, show a warning:
+   - **`all` on any env**: "Only safe if you're sure no `adx_*` customizations exist in your site. Proceed?"
+   - **`configurationDataReferences` on Dev/Test/Single**: "Only safe if metadata is already in EDM (e.g., from a prior `configurationData` run or solution import). Proceed?"
 
-**Output**: Environment type captured, migration mode selected
+   Store final selected `<MODE>`.
+
+4. **Derive Migration Track**
+
+   | Final Mode | Track |
+   |---|---|
+   | `configurationData` | **A** |
+   | `all` | **A** |
+   | `configurationDataReferences` | **B** |
+
+   Persist track to state. Track A and Track B have **different Phase 2 and Phase 3 structures** — see the track-branched sections below.
+
+**Output**: Environment type captured, migration mode confirmed, track derived
 
 > **→ Update report (end of Phase 1):**
 >
 > ```
-> --set-site '{"environment":"<DEV|TEST|UAT|PROD>","migrationMode":"<MODE>"}'
-> --set-step 1.7 --status completed --output "Env: <ENV_TYPE> · mode=<MODE>"
+> --set-site '{"environment":"<DEV|TEST|UAT|PROD|SINGLE>","migrationMode":"<MODE>"}'
+> --set-step 1.7 --status completed --output "Env: <ENV_TYPE> · mode=<MODE> · Track <A|B>"
+> --set-track <A|B>
 > --set-phase 1 --status completed
 > --set-approval 2 phase-start
 > ```
+>
+> `--set-track` rebuilds the Phase 2 and Phase 3 cards in the live report from the chosen track's blueprint. Phase 1 sub-step status is preserved across the swap.
 >
 > Then proceed to ask the user to approve Phase 2 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 2 --status in-progress`.
 
 ---
 
-## Phase 2: Customization Remediation
+## Phase 2: Configuration Setup (track-branched)
 
-**Goal**: Identify customizations on the SDM site, apply auto-rewrites to source files where safe, surface per-finding guidance for manual fixes, get user approval, and upload the cleaned-up source back to Dataverse — all before any data migration runs.
+This phase has **two completely different shapes** depending on the migration track derived in step 1.7. Pick the matching section below; ignore the other one.
 
-**Output**: Customization report generated, FetchXML auto-rewrites applied and uploaded, Liquid suggestions surfaced, manual remediation reminders presented, final readiness gate confirmed.
+- [**Phase 2 — Track A**](#phase-2--track-a) — mode is `configurationData` or `all` (Dev / Test/UAT / Single env)
+- [**Phase 2 — Track B**](#phase-2--track-b) — mode is `configurationDataReferences` (Prod, ALM assumed)
 
 ---
 
-### 2.1 Generate Customization Report
+## Phase 2 — Track A
 
-**Goal**: Download and analyze current customizations on the SDM site
+**Applies when**: state.track === 'A' (mode = `configurationData` or `all`)
+
+**Goal**: Migrate configuration metadata to EDM tables. Newer PAC versions auto-generate a customization report as a side effect of the migrate command. If any `adx_*` customizations are flagged, remediate the site source (FetchXML / Liquid auto-rewrites + augmented prompts for plugins / DME) and upload back to Dataverse before activation.
+
+**Output**: Metadata migrated to EDM tables, customization report parsed, any flagged customizations remediated and uploaded, SDM source-snapshot captured for Phase 4 data diff, final readiness gate confirmed.
+
+---
+
+### 2.1 Migrate Metadata
+
+**Goal**: Run the PAC migrate command for the chosen mode. Auto-generates the customization report.
 
 **Actions**:
 
-1. **Run Customization Report Generation**
+1. **Execute Migration Command**
 
-   Use the `<OUTPUT_DIR>` resolved in step 1.2 (either `./migration-reports` if a working dir, or `../migration-reports` if cwd IS the site root).
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode <MODE>
+   ```
+
+   Where `<MODE>` is the value confirmed in step 1.7 (either `configurationData` or `all` for Track A).
+
+2. **Monitor & Poll**
+
+   Poll every 1 minute, up to 30 attempts (30 minutes total):
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   ```
+
+   - **Completed**: proceed to step 2.2.
+   - **In Progress**: surface "attempt N/30" message and `--set-activity "Polling migration status (attempt <N>/30)"`. Wait 1 minute and re-check.
+   - **Failed / 30-min timeout**: surface error, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
+
+**Output**: Metadata moved to EDM tables; site activation still SDM until step 3.1 flips it; customization CSV auto-emitted by PAC.
+
+> **→ Update report:** `--clear-activity` and `--set-step 2.1 --status completed --output "Metadata migration <COMPLETED|FAILED> · mode=<MODE>"`
+
+---
+
+### 2.2 Locate Customization Report
+
+**Goal**: Find the CSV PAC auto-generated in step 2.1; fall back to explicit generation if PAC didn't produce one (older builds).
+
+**Actions**:
+
+1. **Search for the auto-generated CSV**
+
+   Glob both `<OUTPUT_DIR>` and current working directory for `SiteCustomization*.csv`. Use the most recent file (highest auto-number) if multiple exist.
+
+2. **Fallback if not found**
 
    ```powershell
    pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReportPath "<OUTPUT_DIR>"
    ```
 
-   PAC creates the directory if it doesn't already exist and writes `<OUTPUT_DIR>/SiteCustomization.csv` (or `SiteCustomization<N>.csv` if re-run — auto-numbered).
+   Then re-glob.
 
-   > **Note on file location quirks:** On some PAC builds the CSV may land in the parent or current working directory instead of the path you passed. After running, **Glob for `SiteCustomization*.csv` in both `<OUTPUT_DIR>` and cwd** to find the actual file. Use the most recent one (highest auto-number) if multiple exist.
+   > **Note on file location quirks:** Some PAC builds drop the CSV in the parent dir or cwd rather than the path passed. Always glob both locations.
 
-2. **Parse Report**
+3. **Parse Report**
 
-   Read the CSV (use the path discovered above) and categorize findings:
+   Read the CSV and categorize findings:
    - Liquid contains adx references
    - Data Model Extension (custom columns on adx tables)
    - Plugins registered on adx entities
@@ -536,9 +598,9 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
    - Relationships between custom and adx tables
    - FetchXML with adx references
 
-   > **Important:** The CSV's `Location` column contains paths to PAC's internal scan temp folder (e.g., `\\?\C:\Users\...\Temp\<site-slug>\web-templates\X\Y.html`). **Do NOT** use those paths to locate or modify files. They're informational only — for actual rewrites use the path captured in step 1.2 (`<SITE_ROOT>`). The script's `normalizeLocationPath()` strips the temp prefix when rendering the HTML report.
+   > **Important:** The CSV's `Location` column contains paths to PAC's internal scan temp folder (e.g., `\\?\C:\Users\...\Temp\<site-slug>\web-templates\X\Y.html`). **Do NOT** use those paths to locate or modify files. They're informational only — for actual rewrites use the path captured in step 1.2 (`<SITE_ROOT>`).
 
-3. **Generate HTML Report**
+4. **Generate HTML Customization Report**
 
    ```bash
    node scripts/generate-migration-reports.js \
@@ -548,21 +610,21 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
      --output-dir "<OUTPUT_DIR>"
    ```
 
-   This creates `<OUTPUT_DIR>/customization-report.html` and `<OUTPUT_DIR>/skill-execution-report.html` alongside the CSV — single folder for all migration artifacts.
+   This creates `<OUTPUT_DIR>/customization-report.html` alongside the CSV.
 
-4. **Present Findings**
+5. **Present Findings**
 
    Show summary of customizations found (by category) or "No customizations found" if clean.
 
-**Output**: Customization report generated and analyzed
+**Output**: Customization report located/generated and parsed. Findings summary available.
 
-> **→ Update report:** `--set-step 2.1 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"`
+> **→ Update report:** `--set-step 2.2 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"`
 
 ---
 
-### 2.2 Remediate Customizations
+### 2.3 Remediate Customizations
 
-**Goal**: Apply fixes to the site source files for customizations that genuinely need rewriting, before executing migration
+**Goal**: Capture the SDM snapshot for Phase 4 data validation; if customization findings exist, apply auto-rewrites + augmented prompts and upload the cleaned source back to Dataverse.
 
 > **Important — most flagged Liquid is a false positive.** The customization report greps for any `adx_` substring in Liquid files, but Power Pages Liquid runtime handles legacy attribute names transparently. Patterns like `page.adx_copy`, `website.adx_partialurl`, `{% editable page 'adx_copy' %}`, and `snippets['adx_name']` use documented logical-name access and **don't need rewriting**. See per-category table below.
 
@@ -581,27 +643,19 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 | Relationships between custom and `adx_*` tables | **Manual only** | New relationship to `powerpagecomponent`-side; user-driven |
 | Custom plugins/workflows on `adx_*` tables | **Manual only** | Code refactor + re-registration — semantic, not mechanical |
 
-### 2. Set up the working directory
+### 2. Download SDM source & capture snapshot
 
-Auto-fix and semi-auto fix both require the site source files to be on disk:
+This always runs — even if there are zero customization findings — because Phase 4's data-diff validation requires an SDM baseline.
 
-- **If `website.yml` exists in the current working directory** (the user has the site downloaded): ask the user to confirm the working copy is committed/saved before any rewrites.
+```powershell
+pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+```
 
-  | Question | Header | Options |
-  |----------|--------|---------|
-  | Site source detected at `<CWD>`. Have you committed/saved your work? We'll modify source files. | Source Ready | Yes, proceed, No, let me commit first, Cancel |
+> **Important — nested folder quirk:** `pac pages download --path ./mysite` creates a slug-named child folder (e.g., `./mysite/site-1---site-k5s85/website.yml`). Capture the inner folder as `<SITE_ROOT>` via `Get-ChildItem .\mysite -Directory`. Subsequent rewrite and upload steps must use `<SITE_ROOT>` (the inner path), not `./mysite`.
+>
+> **`--modelVersion 1`** explicitly requests SDM data. The site's activation is still SDM at this point (step 3.1 hasn't flipped it yet), but the metadata has been duplicated into EDM tables by step 2.1, so being explicit avoids ambiguity.
 
-- **Otherwise**: download the site to cwd before fixing.
-
-  ```powershell
-  pac pages download --webSiteId "<WEBSITE_ID>" --path "./mysite"
-  ```
-
-  > **Important — nested folder quirk:** `pac pages download --path ./mysite` creates a slug-named child folder inside (e.g., `./mysite/site-1---site-k5s85/website.yml`). The actual site root with `website.yml` is one level deeper than `--path`. Update the resolved `<SITE_ROOT>` to point at that inner folder (use `Get-ChildItem .\mysite -Directory` to find it). Subsequent rewrite and upload steps must use `<SITE_ROOT>` (the inner path), not `./mysite`.
-
-### 2.5. Capture SDM snapshot (data-validation baseline)
-
-After the site is downloaded but **before** any rewrites or upload, snapshot the SDM site source. This baseline is what Phase 4 will diff the migrated EDM site against to verify every record made it through.
+Then snapshot:
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
@@ -610,13 +664,16 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" 
   --label sdm
 ```
 
-Output: `<OUTPUT_DIR>/sdm-snapshot.json` — a deterministic JSON catalog of every web page, snippet, web link, template, file, setting, role, and other site artifact discoverable from the downloaded YAML. Console prints a count summary per category.
+Output: `<OUTPUT_DIR>/sdm-snapshot.json` — Phase 4 will diff this against an EDM snapshot to confirm every record migrated.
 
-> **Important — snapshot BEFORE rewrites.** The FetchXML / Liquid auto-rewriters in step 3/4 modify the on-disk YAML. We want the baseline to reflect what's currently in Dataverse on SDM, so this step has to come before step 3.
->
-> **→ Update report:** `--set-site '{"siteRoot":"<SITE_ROOT>"}'` (now that the path is finalized) and capture the snapshot summary in the activity field for context.
+> **→ Update report:** `--set-site '{"siteRoot":"<SITE_ROOT>"}'`
 
-### 3. Run automated FetchXML rewrites
+### 3. Branch on findings
+
+- **Zero customization findings**: skip steps 4–8, jump to step 9 (readiness gate).
+- **One or more findings**: proceed with auto-rewriters below.
+
+### 4. Run automated FetchXML rewrites
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
@@ -635,9 +692,8 @@ Script behavior:
 - Renames entity to `powerpagecomponent` and injects `<condition attribute='powerpagecomponenttype' operator='eq' value='<N>'/>` based on the component type map
 - Writes `<file>.pre-edm.bak` sibling before modifying each file
 - Produces a unified diff in `<output-dir>/fetchxml-rewrites.diff`
-- Logs each rewrite in the execution report (`skill-execution-report.html`)
 
-### 4. Run semi-automated Liquid `entities['adx_*']` rewrites
+### 5. Run semi-automated Liquid `entities['adx_*']` rewrites
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
@@ -654,32 +710,40 @@ Script behavior:
 - Walks `.html` files for `entities['adx_*']` and `entities["adx_*"]` patterns
 - For each match, looks up the suggested dedicated Liquid object (e.g., `entities['adx_weblinkset']` → `weblinks`)
 - **Inserts a suggested rewrite as a Liquid comment next to the original** — does NOT overwrite the original line. User decides what to keep.
-- Logs all suggestions in the execution report
 
-### 5. Review and approve changes
+### 6. Generate augmented prompts for manual categories
 
-After steps 3 and 4, show the user:
+The customization report's plugin and DME findings get exported as paste-ready prompts for fresh Claude Code sessions (the skill never modifies customer-owned plugin source or Dataverse schema directly).
 
-- Path to the diff file (`fetchxml-rewrites.diff`)
-- Path to the Liquid suggestions report
-- Path to all `*.pre-edm.bak` files (so they can revert if needed)
+The script in step 4/5 also emits:
+- `<OUTPUT_DIR>/plugin-remediation-prompt.txt` (if plugin findings exist)
+- `<OUTPUT_DIR>/dme-remediation-prompt.txt` (if DME findings exist)
 
-> **→ Update report (before asking for upload approval):** the plugin/DME augmented prompts written by step 3 of section 7 (Manual remediation reminders) are also written here so the prompt cards in the live report reflect what's ready. Use:
+> **→ Update report (before asking for upload approval):**
 >
 > ```
-> --set-step 2.2 --status in-progress --output "Auto-rewrites complete · awaiting diff review"
+> --set-step 2.3 --status in-progress --output "Auto-rewrites complete · awaiting diff review"
 > --set-prompt plugin --status ready --path "<OUTPUT_DIR>/plugin-remediation-prompt.txt" --summary "<N> custom plugins on adx_* entities"
 > --set-prompt dme    --status ready --path "<OUTPUT_DIR>/dme-remediation-prompt.txt"    --summary "<N> custom columns across <T> adx_* tables"
 > --set-approval 2 in-phase
 > ```
 >
-> (If a category has zero findings, skip its `--set-prompt` call — the placeholder card remains.)
+> (Skip a category's `--set-prompt` if zero findings — placeholder card remains.)
 
-  | Question | Header | Options |
-  |----------|--------|---------|
-  | Review the rewrites in `<diff-file>`. Approve and upload to Dataverse? | Approve Rewrites | Yes, upload now, No, cancel, Let me edit further first |
+### 7. Review and approve changes
 
-### 6. Upload approved changes back to Dataverse
+Show the user:
+
+- Path to the diff file (`fetchxml-rewrites.diff`)
+- Path to the Liquid suggestions report
+- Path to all `*.pre-edm.bak` files (so they can revert if needed)
+- Paths to plugin / DME prompt files (for separate Claude sessions)
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Review the rewrites in `<diff-file>`. Approve and upload to Dataverse? | Approve Rewrites | Yes, upload now, No, cancel, Let me edit further first |
+
+### 8. Upload approved changes back to Dataverse
 
 If approved:
 
@@ -690,61 +754,31 @@ pac pages upload --path "<SITE_ROOT>" --modelVersion 1
 > **PAC CLI argument notes:**
 >
 > - `pac pages upload` does **not** accept `--webSiteId` — the site is inferred from `website.yml` inside `<SITE_ROOT>`. If you pass `--webSiteId`, PAC errors with "An unknown argument --webSiteId was passed."
-> - `--modelVersion 1` = SDM (the site is still SDM at this point, since step 3.2 hasn't flipped it yet). After step 3.2 the site is on EDM and subsequent uploads would use `--modelVersion 2`.
-> - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the wrapper `./mysite`). See the "nested folder quirk" note above.
-
-This pushes the rewritten source files back to the SDM site's Dataverse records, ready for step 3.1 migration.
+> - `--modelVersion 1` = SDM (the site's activation is still SDM at this point, since step 3.1 hasn't flipped it yet).
+> - `<SITE_ROOT>` must point at the directory containing `website.yml` (not the wrapper `./mysite`).
 
 > **→ Update report (after upload completes):** `--clear-approval`. The in-phase gate is now resolved.
 
-### 7. Manual remediation reminders (for non-automatable categories)
+### 9. Final readiness gate
 
-Two customization categories are NOT modified directly by this skill — instead the script generates **paste-ready augmented prompts** that the user takes to a fresh Claude Code session. This is intentional: customer-owned plugin source and Dataverse schema changes should be reviewed and approved before execution.
-
-**Plugins on `adx_*` tables** — augmented prompt at `<OUTPUT_DIR>/plugin-remediation-prompt.txt` (and embedded in `skill-execution-report.html`). The prompt:
-
-- Includes the verbatim plugin findings from the report (name, target entity, step name)
-- Categorizes each as Microsoft / Adxstudio / custom and includes the refactor pattern only for custom plugins
-- Instructs the receiving Claude session to locate plugin source, refactor to target `powerpagecomponent`, generate a diff for review, get user approval, and only then build
-- Explicit guardrails: no production push, no guessing at file locations, no rewriting `adx_*` attribute references
-
-To use: tell the user to open a new Claude Code session in their plugin source repo (`claude` command) and paste the contents of the prompt file as the first message.
-
-**Data Model Extensions** — augmented prompt at `<OUTPUT_DIR>/dme-remediation-prompt.txt`. The prompt:
-
-- Includes the per-table groupings from the customization report
-- Instructs the receiving Claude session to ask for a publisher prefix, build a Dataverse **solution package** containing new custom tables, columns, and lookups to `powerpagecomponent`
-- Documents the import + data-migration steps the user runs separately
-- Explicit guardrails: NO direct Dataverse API calls, user must approve schema before pack
-
-To use: tell the user to open a new Claude Code session in any working directory (`claude` command) and paste the contents of the prompt file as the first message. The session produces a reviewable `.zip` for `pac solution import`.
-
-**Custom-to-adx relationships** — currently bundled into the DME prompt. The receiving session can be asked to add the relationship to the same solution package.
-
-**Custom workflows** — no augmented prompt today (would need Dataverse queries to fetch per-workflow primary-entity info). For now, generic guidance shown in the execution report: refactor the workflow to target `powerpagecomponent` and re-register.
-
-Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#considerations-for-site-customization-when-migrating-sites-from-standard-to-enhanced-data-model>
-
-### 8. Final readiness check before migration
-
-After auto-rewrites are uploaded and manual recommendations have been presented, gate the transition to step 3.1 explicitly:
+After auto-rewrites are uploaded (or skipped due to zero findings) and any manual prompts have been handed off:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| All customization remediation complete? Auto-rewrites are uploaded; manual items (Data Model Extensions, plugins, workflows, relationships) have been addressed or knowingly deferred. | Migration Readiness | Yes — proceed to migration, Defer remaining manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
+| Configuration is migrated, customizations addressed (or knowingly deferred). Proceed to Phase 3 (Activation)? | Migration Readiness | Yes — proceed to activation, Defer manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
 
-- **Proceed to migration**: continue to step 3.1.
-- **Defer manual items**: capture the user's acknowledgment in the execution report (so post-migration audit shows what was deferred) and proceed to step 3.1. Skill records deferred items.
-- **Pause skill**: halt cleanly. User can re-invoke the skill later — step 1.4 will detect that no migration has started and pick up from step 1.5 with the (now-clean) site source.
+- **Proceed**: continue to Phase 3.
+- **Defer manual items**: log the user's acknowledgment in the execution report and proceed.
+- **Pause skill**: halt cleanly. User can re-invoke later.
 
-> **Why this gate exists:** Data Model Extension custom columns ideally land **before** migration so the data migrates cleanly into the new structure. Plugins and workflows can be fixed post-migration without data loss, but if deferred should be tracked. This gate makes the choice explicit rather than implicit.
+> **Why this gate exists:** Data Model Extension custom columns and custom plugins typically need to land before activation so EDM behaves correctly. This gate makes the choice explicit rather than implicit.
 
-**Output**: FetchXML auto-rewrites applied and uploaded; Liquid rewrites suggested and uploaded after user review; manual remediation tasks surfaced; user has explicitly confirmed migration readiness or acknowledged deferred items
+**Output**: SDM snapshot captured; FetchXML/Liquid auto-rewrites applied and uploaded (if findings); augmented prompts handed off; readiness gate confirmed.
 
-> **→ Update report (end of Phase 2):**
+> **→ Update report (end of Phase 2 Track A):**
 >
 > ```
-> --set-step 2.2 --status completed --output "Auto-rewrites uploaded · prompts handed off · readiness gate confirmed"
+> --set-step 2.3 --status completed --output "Snapshot captured · <auto-rewrites done|no remediation needed> · readiness confirmed"
 > --set-phase 2 --status completed
 > --set-approval 3 phase-start
 > ```
@@ -753,72 +787,152 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 
 ---
 
-## Phase 3: Migration Execution
+## Phase 2 — Track B
 
-**Goal**: Run the actual SDM→EDM migration with the selected mode, then flip the site's data model version from SDM to EDM.
+**Applies when**: state.track === 'B' (mode = `configurationDataReferences`)
 
-**Output**: Migration tracker reports `Completed`, data model version flipped to Enhanced, Portal Id captured for rollback use in Phase 4.
+**Goal**: Verify that configuration metadata is already present in the target environment (typically loaded via ALM solution import). If missing, offer the user three import paths (ALM skill / Solution Import / PAC CLI). No data is migrated yet — Phase 3 does the transactional migration.
+
+**Output**: Configuration metadata confirmed available in target environment, ready for Phase 3.
 
 ---
 
-### 3.1 Migrate Site Data Model
+### 2.1 Verify Site in Target Environment
 
-**Goal**: Execute the migration using PAC CLI with selected mode
+**Goal**: Confirm the site exists in the currently-authenticated environment by listing sites via PAC.
 
 **Actions**:
 
-1. **Execute Migration Command**
+1. **List sites in target env**
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode <SELECTED_MODE>
+   pac pages list -v
    ```
 
-   Where `<SELECTED_MODE>` is one of: `configurationData`, `configurationDataReferences`, `all`
+   Parse output and look for a row matching `<WEBSITE_ID>`.
 
-2. **Monitor Execution**
+2. **Branch on result**
 
-   - Display progress to user
-   - If template warning appears, inform user that V2 packages may be missing and migration may not complete
-
-3. **Check Status**
-
-   Poll every 1 minute, up to a maximum of 30 attempts (30 minutes total):
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
-   ```
-
-   Possible statuses:
-   - **Complete/Success**: Proceed to step 3.2.
-   - **In Progress**: Inform user "Migration is running (attempt `<N>`/30). This can take time for large data volumes (5K records per batch). Next check in 1 minute..." and wait before checking again.
-   - **Failed**: Stop polling. Show error and ask:
+   - **Site found**: ALM has likely brought the site (and its metadata) into the target env. Ask the user:
 
      | Question | Header | Options |
      |----------|--------|---------|
-     | Migration encountered an error. How to proceed? | Migration Error | Retry migration, Skip to rollback, Stop and troubleshoot |
+     | Site `<SITE_NAME>` (ID `<WEBSITE_ID>`) is present in this environment. Has the configuration metadata been imported (via ALM, solution import, or PAC CLI)? | Metadata Imported | Yes, metadata is imported, No, I still need to import it |
 
-   **If still In Progress after 30 minutes**: Stop polling. Run `--checkMigrationStatus --verbose` to get elapsed time (`createdOn`/`modifiedOn`) and current step, then ask:
+     - **Yes**: skip step 2.2, jump straight to 2.3.
+     - **No**: proceed to step 2.2.
 
-   > Migration started **`<X>` ago**, last activity **`<Y>` ago**. Current step: **`<currentStep>`**. Migration processes records in batches of 5K — large sites can take hours.
-   > Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model>
+   - **Site NOT found**: this is unexpected for a Prod env. Surface the issue:
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Migration still running after 30 minutes. How to proceed? | Long Migration | Poll for another 30 minutes, Reset and restart migration, Exit and check back later |
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | Site is not visible in the target environment via `pac pages list -v`. The site needs to be imported before this skill can proceed. How would you like to import? | Import Path | Use ALM skill (recommended), Solution Import (manual), PAC CLI import (manual), Cancel — investigate first |
 
-   - **Poll for another 30 minutes**: Restart the 30-attempt polling loop.
-   - **Reset and restart migration**: Show the reset warning (same as step 1.4 action 4 — reset only flips tracker status to Failed, does NOT undo migrated records), confirm, run `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration`, then re-run the migrate command in step 1 of this phase.
-   - **Exit and check back later**: Halt the skill. User can re-invoke later — step 1.4 will detect the in-flight migration and offer the same wait/reset choices.
+     Whatever the user picks routes into step 2.2.
 
-**Output**: Migration executed and completed successfully
+**Output**: Site presence confirmed; user has either verified metadata is imported (→ 2.3) or chosen an import path (→ 2.2).
 
-> **→ Update report (during the polling loop):** call `--set-activity "Polling migration status — attempt <N>/30 · current step <STEP>"` on each poll. On completion, `--clear-activity` and `--set-step 3.1 --status completed --output "Migration <COMPLETED|FAILED> · final step <STEP>"`.
+> **→ Update report:** `--set-step 2.1 --status completed --output "Site <found|not found> in target env · user response: <response>"`
 
 ---
 
-### 3.2 Update Data Model Version
+### 2.2 Import Metadata if Missing
 
-**Goal**: Activate EDM and deactivate SDM for the site
+**Goal**: Guide the user through one of three import paths so configuration metadata lands in the target env's EDM tables.
+
+**Actions**:
+
+Based on the user's choice in 2.1, run one of:
+
+**Option (a) — Use ALM skill**
+
+The team's ALM skill handles solution-based ALM workflows including metadata import. Look it up:
+
+```powershell
+# Find the ALM skill in installed plugins
+Get-ChildItem -Path "${env:CLAUDE_PLUGIN_ROOT}\..\..\plugins" -Recurse -Filter "SKILL.md" |
+  Where-Object { $_.FullName -match "alm" }
+```
+
+(Or use the Glob tool with pattern `plugins/**/skills/*alm*/SKILL.md`.)
+
+- **If found**: print a hand-off message to the user: "To import configuration metadata, please run **/<alm-skill-name>** in your current Claude Code session. Once it reports successful import, resume this skill by re-confirming Phase 2 readiness."
+- **If not found**: print "ALM skill not available in installed plugins. Falling through to manual options." and present (b) and (c) below.
+
+**Option (b) — Solution Import**
+
+Print instructions:
+
+> "Open Power Platform admin center → your target environment → Solutions → Import. Import the site's exported solution package (built from your Dev environment). Once import completes, return here."
+
+**Option (c) — PAC CLI Import**
+
+Print the command for the user to run:
+
+```powershell
+pac solution import --path "<PATH_TO_SOLUTION_ZIP>" --activate-plugins true --publish-changes true
+```
+
+> Instruct the user to provide the path to their site's exported solution package.
+
+After whichever option, loop back to **step 2.1** to re-verify the site is now present.
+
+**Output**: Configuration metadata imported via the chosen path; site now visible in the target environment.
+
+> **→ Update report:** `--set-step 2.2 --status completed --output "Imported via <ALM|Solution|PAC>"` (or `--status pending` and re-run 2.1 if the user needs another import attempt).
+
+---
+
+### 2.3 Confirm Metadata Ready
+
+**Goal**: Final user-facing gate before Phase 3 starts moving transactional data.
+
+**Actions**:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Configuration metadata is available in the target environment? Phase 3 will run `pac pages migrate-datamodel --mode configurationDataReferences` to migrate transactional references onto the metadata that's already in place. | Metadata Ready | Yes, proceed to Phase 3, No, pause — I need more time, Cancel — stop the skill |
+
+- **Yes**: proceed to Phase 3.
+- **No**: halt skill cleanly; user can re-invoke later.
+- **Cancel**: halt skill cleanly.
+
+**Output**: User has confirmed configuration metadata is ready; skill proceeds to Phase 3.
+
+> **→ Update report (end of Phase 2 Track B):**
+>
+> ```
+> --set-step 2.3 --status completed --output "Metadata ready · proceeding to Phase 3"
+> --set-phase 2 --status completed
+> --set-approval 3 phase-start
+> ```
+>
+> Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
+
+---
+
+## Phase 3: Migration Execution (track-branched)
+
+This phase has **two completely different shapes** depending on the migration track derived in step 1.7. Pick the matching section below; ignore the other one.
+
+- [**Phase 3 — Track A**](#phase-3--track-a) — track A (mode = `configurationData` or `all`). Metadata already migrated in Phase 2; this phase just activates EDM and prompts a restart.
+- [**Phase 3 — Track B**](#phase-3--track-b) — track B (mode = `configurationDataReferences`). This phase runs the actual transactional migration, handles any customizations the migrate command flags (rare in Prod, but possible if ALM had a gap), activates EDM, and prompts a restart.
+
+---
+
+## Phase 3 — Track A
+
+**Applies when**: state.track === 'A'
+
+**Goal**: Activate EDM (flip the site's data model version from SDM to EDM) and ask the user to restart the site. Metadata was already migrated in Phase 2; there's nothing else to move.
+
+**Output**: Site activated on EDM; user has restarted via Power Platform admin center.
+
+---
+
+### 3.1 Activate EDM (Update Data Model Version)
+
+**Goal**: Run `--updateDataModelVersion` to flip the site to EDM.
 
 **Actions**:
 
@@ -826,13 +940,10 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 
    Check the Portal Id state captured in step 1.3:
 
-   - **If marked "captured"** (a valid GUID from `pac pages list -v`): Use it directly. Proceed to step 2 — no user prompt needed.
-   - **If marked "needs prompt"** (`Unknown`, `N/A`, or column missing from older PAC build): Fall through to the manual lookup below.
+   - **If marked "captured"** (valid GUID from `pac pages list -v`): use directly.
+   - **If marked "needs prompt"** (`Unknown`/`N/A` or column missing in older PAC): construct the site URL and ask user to paste from `<SITE_URL>/_services/about`.
 
-   **Manual lookup** — construct the site URL from values collected earlier:
-
-   - URL slug: from step 1.3 (Friendly Name suffix after " - ")
-   - Cloud domain: from step 1.1 `pac auth who` cloud field
+   **Cloud-to-domain table** (for URL construction):
 
    | Cloud | Domain |
    |-------|--------|
@@ -842,19 +953,15 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
    | UsGovDod | `appsplatform.us` |
    | China | `powerappsportals.cn` |
 
-   Constructed URL: `https://<URL_SLUG>.<CLOUD_DOMAIN>`
-
-   > **If the site uses a custom domain**, the constructed URL may not work. Ask user to provide the site's base URL directly.
-
-   Guide user to open `<CONSTRUCTED_SITE_URL>/_services/about` — the page returns JSON containing a `portalId` field. Ask user to paste it:
+   Constructed URL: `https://<URL_SLUG>.<CLOUD_DOMAIN>`. If the site uses a custom domain, ask user to provide the base URL directly.
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | `pac pages list -v` did not return a usable Portal Id for this site. Open `<SITE_URL>/_services/about` and paste the `portalId` value from the JSON response | Portal ID | I'll paste the Portal ID |
+   | `pac pages list -v` did not return a usable Portal Id for this site. Open `<SITE_URL>/_services/about` and paste the `portalId` from the JSON response | Portal ID | I'll paste the Portal ID |
 
-   Validate the pasted value is a GUID. Store it — it will also be needed for rollback in Phase 4.
+   Validate the pasted value is a GUID. Store it — also needed for rollback in Phase 4.
 
-   > **Do not run the update command in step 2 until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
+   > **Do not run the update command until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
 
 2. **Execute Update Command**
 
@@ -866,13 +973,199 @@ After auto-rewrites are uploaded and manual recommendations have been presented,
 
    Inform user: "Data model updated. Site now uses Enhanced Data Model. SDM record has been deactivated."
 
-**Output**: Portal ID captured, site switched to EDM
+**Output**: Site flipped to EDM in Dataverse; activation done.
 
-> **→ Update report (end of Phase 3):**
+> **→ Update report:**
 >
 > ```
 > --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
-> --set-step 3.2 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-step 3.1 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> ```
+
+---
+
+### 3.2 Restart Site (manual)
+
+**Goal**: User must manually restart the site for the data model change to take effect at runtime. There is no PAC command for this.
+
+**Actions**:
+
+1. **Print restart instructions**
+
+   > "The data model has been flipped to EDM in Dataverse, but the running site is still serving from cached SDM state. You need to restart the site for the change to take effect at runtime.
+   >
+   > **How to restart:**
+   > 1. Open Power Platform admin center: <https://admin.powerplatform.microsoft.com>
+   > 2. Navigate to your environment → **Resources** → **Power Pages sites**
+   > 3. Find your site `<SITE_NAME>` and select it
+   > 4. Click **Restart** (or **Deactivate** then **Activate** if Restart isn't available)
+   > 5. Wait for the operation to complete (typically 1–3 minutes)"
+
+2. **Wait for user confirmation**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Have you restarted the site? | Restart Confirmation | Yes, the site has been restarted, Not yet — I'll do it now (skill will wait), Cancel — stop here |
+
+   - **Yes**: proceed to Phase 4.
+   - **Not yet**: surface the instructions again, ask again. Skill stays paused at this gate.
+   - **Cancel**: halt skill cleanly. The data model is already flipped — user can run `--revertToStandardDataModel` manually if needed.
+
+**Output**: User has confirmed the site is restarted on EDM.
+
+> **→ Update report (end of Phase 3 Track A):**
+>
+> ```
+> --set-step 3.2 --status completed --output "Site restarted by user · live on EDM"
+> --set-phase 3 --status completed
+> --set-approval 4 phase-start
+> ```
+>
+> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
+
+---
+
+## Phase 3 — Track B
+
+**Applies when**: state.track === 'B'
+
+**Goal**: Capture SDM snapshot for Phase 4 data-diff, run the transactional migration (`--mode configurationDataReferences`, which auto-emits a customization report), handle any customizations (with a stronger warning since they should have been remediated in Dev), activate EDM, and prompt a restart.
+
+**Output**: Transactional refs migrated, any customizations addressed, site activated on EDM, user has restarted.
+
+---
+
+### 3.1 Migrate Transactional References
+
+**Goal**: Capture SDM snapshot first (needed for Phase 4 diff), then run the migration command.
+
+**Actions**:
+
+1. **Capture SDM source snapshot**
+
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+   ```
+
+   > **Nested-folder quirk** still applies — actual site root with `website.yml` is one level deeper. Capture inner path as `<SITE_ROOT>`.
+
+   Then snapshot:
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label sdm
+   ```
+
+   Output: `<OUTPUT_DIR>/sdm-snapshot.json` — Phase 4 will diff this against an EDM snapshot post-migration.
+
+2. **Execute Migration Command**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
+   ```
+
+   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
+
+3. **Poll Status**
+
+   Same polling pattern as Track A 2.1:
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   ```
+
+   - **Completed**: proceed to 3.2.
+   - **In Progress**: `--set-activity "Polling migration status (attempt <N>/30)"`, wait 1 min, re-check.
+   - **Failed / 30-min timeout**: same retry/reset/exit branching as Track A 2.1.
+
+**Output**: Transactional references migrated; customization CSV auto-emitted by PAC.
+
+> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "Transactional refs migrated · status=<STATUS>"`
+
+---
+
+### 3.2 Locate Customization Report
+
+**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
+
+**Actions**:
+
+Same logic as Track A 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
+
+**Output**: Customization report located/generated and parsed.
+
+> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
+
+---
+
+### 3.3 Remediate Customizations
+
+**Goal**: If any customizations were flagged in 3.2, apply auto-rewrites + augmented prompts and upload — same flow as Track A 2.3, but with a **stronger warning** because customizations in a Prod target usually indicate an ALM gap.
+
+**Actions**:
+
+1. **Branch on findings**
+
+   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4. Skip the rest of this sub-step.
+   - **One or more findings**: surface the stronger warning below, then ask user how to proceed.
+
+2. **Surface ALM-gap warning**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Found `<N>` customization findings on this Prod env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
+
+   - **Remediate now**: proceed with steps 3–7 below (same as Track A 2.3 steps 4–8 but operating against the already-downloaded `<SITE_ROOT>`).
+   - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
+   - **Cancel**: halt cleanly.
+
+3. **Run FetchXML auto-rewriter** — same script as Track A 2.3 step 4.
+
+4. **Run Liquid semi-auto annotator** — same script as Track A 2.3 step 5.
+
+5. **Generate augmented prompts** — same as Track A 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
+
+6. **Review and approve** — same as Track A 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
+
+7. **Upload approved changes**:
+
+   ```powershell
+   pac pages upload --path "<SITE_ROOT>" --modelVersion 1
+   ```
+
+   (Same PAC argument notes as Track A 2.3 step 8.)
+
+   > **→ Update report (after upload):** `--clear-approval`.
+
+**Output**: Customizations remediated and uploaded (or zero findings, skipped).
+
+> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
+
+---
+
+### 3.4 Activate EDM (Update Data Model Version)
+
+Identical to Track A 3.1 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
+
+> **→ Update report:**
+>
+> ```
+> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
+> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> ```
+
+---
+
+### 3.5 Restart Site (manual)
+
+Identical to Track A 3.2 — print restart instructions, wait for user confirmation.
+
+> **→ Update report (end of Phase 3 Track B):**
+>
+> ```
+> --set-step 3.5 --status completed --output "Site restarted by user · live on EDM"
 > --set-phase 3 --status completed
 > --set-approval 4 phase-start
 > ```
@@ -982,11 +1275,11 @@ Print a hand-off message to the user (this is informational — the skill does *
 
 ### 7. Rollback (if user opted for it)
 
-Confirm the Portal ID collected in step 3.2 is still correct before proceeding:
+Confirm the Portal ID collected during activation (Track A step 3.1 or Track B step 3.4) is still correct before proceeding:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Confirm Portal ID for rollback: `<PORTAL_ID>` (from step 3.2). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+| Confirm Portal ID for rollback: `<PORTAL_ID>` (collected during activation). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
 
 If "No": Ask user to re-open `<SITE_URL>/_services/about` and provide the correct Portal ID.
 

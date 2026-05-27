@@ -35,6 +35,12 @@
  *   node update-state.js --output-dir <DIR> --set-activity "Polling migration status (attempt 3/30)"
  *   node update-state.js --output-dir <DIR> --clear-activity
  *
+ *   # set migration track (called at end of step 1.7 once env type + mode known)
+ *   # Track A = mode configurationData|all (Dev/Test/UAT/Single env)
+ *   # Track B = mode configurationDataReferences (Prod, ALM assumed)
+ *   node update-state.js --output-dir <DIR> --set-track A
+ *   node update-state.js --output-dir <DIR> --set-track B
+ *
  *   # re-render without state change (useful after manual edits)
  *   node update-state.js --output-dir <DIR> --render-only
  */
@@ -47,7 +53,9 @@ const {
   SUB_STEP_STATUS,
   APPROVAL_KIND,
   PROMPT_STATUS,
+  TRACK,
   buildInitialState,
+  rebuildPhasesForTrack,
 } = require('./lib/migration-state-schema');
 const { renderLiveReport } = require('./lib/render-live-report');
 
@@ -258,6 +266,23 @@ function cmdClearActivity(args) {
   console.log('✓ Activity cleared');
 }
 
+function cmdSetTrack(args) {
+  const outputDir = args['output-dir'];
+  const track = args['set-track'];
+  if (!outputDir) throw new Error('--set-track requires --output-dir');
+  if (!Object.values(TRACK).includes(track)) {
+    throw new Error(`--set-track requires one of: ${Object.values(TRACK).join(', ')}`);
+  }
+  const state = loadState(outputDir);
+  if (state.track === track) {
+    console.log(`✓ Track already set to ${track}; no change`);
+    return;
+  }
+  rebuildPhasesForTrack(state, track);
+  persist(state, outputDir);
+  console.log(`✓ Track set to ${track}; Phase 2 + Phase 3 rebuilt from blueprint`);
+}
+
 function cmdRenderOnly(args) {
   const outputDir = args['output-dir'];
   if (!outputDir) throw new Error('--render-only requires --output-dir');
@@ -278,6 +303,7 @@ function main() {
     if (args['set-prompt'] !== undefined) return cmdSetPrompt(args);
     if (args['set-activity'] !== undefined) return cmdSetActivity(args);
     if (args['clear-activity']) return cmdClearActivity(args);
+    if (args['set-track'] !== undefined) return cmdSetTrack(args);
     if (args['render-only']) return cmdRenderOnly(args);
     console.error('No command given. Run with --help-ish docs at top of update-state.js');
     process.exit(2);
