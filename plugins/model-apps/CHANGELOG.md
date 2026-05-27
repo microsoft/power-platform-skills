@@ -29,13 +29,6 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   local enum mapping, etc.) — no rule loosening.
 
 ### Fixed
-- **Tables referenced by uploaded pages now register as app components.**
-  `pac model genpage upload --data-sources` binds entities to the page but
-  doesn't add them to the appmodule, so the app designer's "Add a table"
-  picker showed "the app contains no tables" even when pages referenced
-  several. SKILL.md Phase 6 now invokes
-  `scripts/add-table-to-app.js` for every entity in `--data-sources` after
-  each upload (idempotent — safe on both create and update flows).
 - **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
   DataTable, not an array).** 7 files were iterating `result` directly
   (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,

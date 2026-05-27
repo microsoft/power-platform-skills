@@ -385,31 +385,6 @@ pac model genpage upload `
   --agent-message "Description of what was changed in this upload"
 ```
 
-#### Register data-source tables as app components (REQUIRED after every upload with --data-sources)
-
-`pac model genpage upload --data-sources` binds entities to the **page** but does
-**not** register them as components on the underlying **appmodule**. Without this
-step, the app designer shows "the app contains no tables" and makers can't reuse
-those tables when adding subsequent pages.
-
-For every entity in `--data-sources`, invoke:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/add-table-to-app.js" <envUrl> <app-id> <entity-logical-name>
-```
-
-The script is **idempotent** — re-running for an already-added table returns
-`action: "skipped"`. Run it on **both create and update uploads** (a later
-update may have added new data sources that weren't in the original).
-
-Log each invocation under the same `## Phase 6 — Deploy` workflow-log section:
-
-```markdown
-- node "${CLAUDE_PLUGIN_ROOT}/scripts/add-table-to-app.js" <envUrl> <app-id> account → { ok: true, action: "added", appComponentId: "<guid>", metadataId: "<guid>" }
-```
-
-Skip this step for mock-data pages (no `--data-sources`).
-
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
 Runs only when the plan has 2+ pages AND any built `.tsx` contains a `PAGEREF_`
