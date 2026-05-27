@@ -24,10 +24,14 @@ const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
 const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 
+// Anonymous telemetry is default-on. The single user-facing opt-out is the
+// POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
 function isUserOptedOut() {
   return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
 }
 
+// Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
+// so tests can point at a temp file with their own disabled / iKey state.
 function ikeyJsonPath() {
   return (
     process.env.POWER_PLATFORM_SKILLS_IKEY_JSON ||
@@ -39,16 +43,27 @@ function readIkeyConfig() {
   try {
     return JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
   } catch {
-    return {};
+    return {}; // ikey.json missing/unreadable → fail open.
   }
 }
 
+// Repo-side kill switch: when ikey.json contains "disabled": true, no events
+// are emitted regardless of opt-out or iKey state. Lets infrastructure PRs
+// land while tenant-side annotation + Kusto table are being provisioned.
 function isDisabledByConfig(cfg) {
   return cfg && cfg.disabled === true;
 }
 
+// Reserved meta fields that builders always write into event.data. They are
+// not user-facing telemetry columns, so they live outside FIELD_TYPES but
+// must survive sanitization.
 const RESERVED_META_FIELDS = new Set(["eventName", "eventType", "severity"]);
 
+// Defense-in-depth allowlist filter. The builders in events.js are the
+// intended entry point and already enforce FIELD_TYPES, but the dispatcher
+// receives JSON over stdin from a separate process and cannot assume that.
+// Re-run pick() against FIELD_TYPES here so any field that bypasses the
+// builders is dropped before it reaches the wire.
 function sanitizeData(data) {
   if (!data || typeof data !== "object") return {};
   const filtered = pick(data, Object.keys(FIELD_TYPES));
@@ -71,7 +86,7 @@ function buildEnvelope(event, resolvedIKey, eventStreamName) {
 function writeProbe(filePath, { headers, body }) {
   try {
     fs.writeFileSync(filePath, JSON.stringify({ headers, body }), "utf8");
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 function writeLocalLog(event) {
@@ -79,7 +94,7 @@ function writeLocalLog(event) {
     const { appendLocal } = require("./local-log");
     const configDir = CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
     appendLocal(event, { configDir });
-  } catch {}
+  } catch { /* fail closed */ }
 }
 
 // ---- Read config + apply kill switches ----
@@ -132,6 +147,8 @@ process.stdin.on("end", async () => {
     "Content-Length": Buffer.byteLength(body),
   };
 
+  // Test seam: if POWER_PLATFORM_SKILLS_FAKE_HTTPS is set, write the probe
+  // payload to that file and exit without calling the real network.
   if (FAKE_PROBE) {
     writeProbe(FAKE_PROBE, { headers, body });
     return exitSilently();
