@@ -45,6 +45,7 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
   const pluginVersion = opts.pluginVersion;
   const emitter = opts.emitter || defaultEmitter;
   const spawnOpts = opts.spawnOpts || {};
+  const cloud = opts.cloud || "";
   const correlationId = crypto.randomUUID();
   const startTs = Date.now();
 
@@ -64,7 +65,7 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
         scriptName,
         correlationId,
       }),
-      spawnOpts
+      { ...spawnOpts, cloud }
     );
   } catch {
     // fail closed
@@ -97,7 +98,7 @@ async function withTelemetry(scriptName, asyncFn, opts = {}) {
           errorClass,
           errorDescription,
         }),
-        spawnOpts
+        { ...spawnOpts, cloud }
       );
     } catch {
       // fail closed

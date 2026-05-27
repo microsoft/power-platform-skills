@@ -17,13 +17,15 @@ function readIkey(telemetryDir) {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(telemetryDir, "ikey.json"), "utf8")
     );
+    const defaultRegion = cfg.default_region || "us";
+    const defaultEntry = (cfg.regions && cfg.regions[defaultRegion]) || null;
     return {
-      ikey: cfg.instrumentationKey || "",
-      collectorUrl: cfg.collector_url || "",
       eventStreamName: cfg.event_stream_name || "",
+      defaultInstrumentationKey:
+        (defaultEntry && defaultEntry.instrumentation_key) || "",
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "" };
+    return { eventStreamName: "", defaultInstrumentationKey: "" };
   }
 }
 
@@ -48,7 +50,8 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   const skillName = detectSlashCommand(promptText, { pluginName, trackedSkills });
   if (!skillName) return { emitted: false, skillName: null };
 
-  const { ikey, collectorUrl, eventStreamName } = readIkey(telemetryDir);
+  const { eventStreamName, defaultInstrumentationKey } = readIkey(telemetryDir);
+  if (!defaultInstrumentationKey) return { emitted: false, skillName: null };
 
   const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
   let pacAuth = null;
@@ -93,8 +96,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   const emit = typeof _emit === "function" ? _emit : fireAndForget;
   try {
     emit(event, {
-      iKey: ikey,
-      collectorUrl,
+      cloud: (pacAuth && pacAuth.cloud) || "",
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
     });

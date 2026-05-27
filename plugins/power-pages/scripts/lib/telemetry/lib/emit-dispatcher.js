@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 "use strict";
 
-const https = require("node:https");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const https = require("node:https");
 const { FIELD_TYPES, pick } = require("./events");
+const { resolve: resolveRegion } = require("./region-resolver");
 
 function exitSilently() {
   process.exit(0);
 }
-
 process.on("uncaughtException", exitSilently);
 process.on("unhandledRejection", exitSilently);
 process.stdin.on("error", exitSilently);
 
 const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
 const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
-
-const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
-const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
+const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
+const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
+// Override env vars — TEST seams only. Production no longer sets these.
+const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
+const COLLECTOR_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 
 // Anonymous telemetry is default-on. The single user-facing opt-out is the
 // POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
@@ -37,17 +39,19 @@ function ikeyJsonPath() {
   );
 }
 
-// Repo-side kill switch: when ikey.json contains "disabled": true, no events
-// are emitted regardless of opt-out or iKey state. Lets the infrastructure
-// PRs land while the tenant-side annotation + Kusto table are still being
-// provisioned. Flip to false in a single PR when ready.
-function isDisabledByConfig() {
+function readIkeyConfig() {
   try {
-    const cfg = JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
-    return cfg.disabled === true;
+    return JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
   } catch {
-    return false; // ikey.json missing/unreadable → fail open.
+    return {}; // ikey.json missing/unreadable → fail open.
   }
+}
+
+// Repo-side kill switch: when ikey.json contains "disabled": true, no events
+// are emitted regardless of opt-out or iKey state. Lets infrastructure PRs
+// land while tenant-side annotation + Kusto table are being provisioned.
+function isDisabledByConfig(cfg) {
+  return cfg && cfg.disabled === true;
 }
 
 // Reserved meta fields that builders always write into event.data. They are
@@ -69,12 +73,12 @@ function sanitizeData(data) {
   return filtered;
 }
 
-function buildEnvelope(event) {
+function buildEnvelope(event, resolvedIKey, eventStreamName) {
   return {
     ver: "4.0",
-    name: event.name,
+    name: eventStreamName || event.name || "",
     time: new Date().toISOString(),
-    iKey: "o:" + IKEY.split("-")[0],
+    iKey: "o:" + String(resolvedIKey || "").split("-")[0],
     data: sanitizeData(event.data),
   };
 }
@@ -82,33 +86,27 @@ function buildEnvelope(event) {
 function writeProbe(filePath, { headers, body }) {
   try {
     fs.writeFileSync(filePath, JSON.stringify({ headers, body }), "utf8");
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
 }
 
 function writeLocalLog(event) {
   try {
     const { appendLocal } = require("./local-log");
-    const configDir =
-      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
+    const configDir = CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
     appendLocal(event, { configDir });
-  } catch {
-    // fail closed
-  }
+  } catch { /* fail closed */ }
 }
 
-// ---- Repo-side kill switch (applies before placeholder / network logic) ----
-if (isDisabledByConfig()) exitSilently();
-
-// ---- User env-var opt-out --------------------------------------------------
+// ---- Read config + apply kill switches ----
+const cfg = readIkeyConfig();
+if (isDisabledByConfig(cfg)) exitSilently();
 if (isUserOptedOut()) exitSilently();
 
-// ---- Read stdin ------------------------------------------------------------
+// ---- Read stdin ----
 let raw = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
-process.stdin.on("end", () => {
+process.stdin.on("end", async () => {
   let event;
   try {
     event = JSON.parse(raw);
@@ -116,19 +114,36 @@ process.stdin.on("end", () => {
     return exitSilently();
   }
 
+  // Override env vars take precedence (test seam). Production code path
+  // ignores these and resolves via the regions map.
+  let iKey = IKEY_OVERRIDE;
+  let collectorUrl = COLLECTOR_OVERRIDE;
+  if (!iKey || !collectorUrl) {
+    const resolved = await resolveRegion({
+      orgId: (event.data && event.data.orgId) || "",
+      cloud: CLOUD_ENV,
+      regionsMap: cfg.regions || {},
+      defaultRegion: cfg.default_region || "us",
+      configDir: CONFIG_DIR_ENV || undefined,
+    });
+    if (resolved) {
+      iKey = iKey || resolved.iKey || "";
+      collectorUrl = collectorUrl || resolved.collectorUrl || "";
+    }
+  }
+
   // Placeholder / unprovisioned mode → append to local dev log and exit.
-  const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;
+  const keyMissing = !iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl;
   if (keyMissing) {
     writeLocalLog(event);
     return exitSilently();
   }
 
-  // Real iKey → Common Schema envelope → HTTPS POST.
-  const envelope = buildEnvelope(event);
+  const envelope = buildEnvelope(event, iKey, cfg.event_stream_name);
   const body = JSON.stringify(envelope) + "\n";
   const headers = {
     "Content-Type": "application/x-json-stream; charset=utf-8",
-    "x-apikey": IKEY,
+    "x-apikey": iKey,
     "Content-Length": Buffer.byteLength(body),
   };
 
@@ -141,7 +156,7 @@ process.stdin.on("end", () => {
 
   let url;
   try {
-    url = new URL(COLLECTOR_URL);
+    url = new URL(collectorUrl);
   } catch {
     return exitSilently();
   }

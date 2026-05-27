@@ -10,6 +10,7 @@ function fireAndForget(event, opts = {}) {
   const collectorUrl = opts.collectorUrl || "";
   const configDir = opts.configDir || "";
   const fakeProbe = opts.fakeProbe || "";
+  const cloud = opts.cloud || "";
 
   try {
     const child = spawn(process.execPath, [DISPATCHER], {
@@ -28,6 +29,7 @@ function fireAndForget(event, opts = {}) {
         POWER_PLATFORM_SKILLS_COLLECTOR: collectorUrl,
         POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe,
+        POWER_PLATFORM_SKILLS_CLOUD: cloud,
         // User-side kill switch: forward so the dispatcher's TELEMETRY=0
         // check works when set in the parent's env.
         POWER_PLATFORM_SKILLS_TELEMETRY:
