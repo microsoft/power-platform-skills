@@ -529,6 +529,7 @@
         "Table permission YAML associates the Authenticated Users role UUID via adx_entitypermission_webrole array",
         "Does NOT use Contact scope (756150001) for the contact entity (script validates and rejects this)",
         "Sets the ProfileRedirectEnabled site setting to false",
+        "Generates an HTML setup report at <PROJECT_ROOT>/docs/auth-setup-report.html via render-auth-report.js, opens it in the browser, and tells the user the file path",
         "Prompts the user to deploy the updated site"
       ]
     },
@@ -546,6 +547,7 @@
         "When the script returns installed: false, tells the user clearly that Terms and Conditions will NOT be enforced by the server until msdynce_PortalPrivacyExtensions is installed (Authentication/Registration/TermsAgreementEnabled is silently ignored without it), then asks via AskUserQuestion whether to continue scaffolding anyway or skip Terms entirely (two options, not three)",
         "When the script exits non-zero (infrastructure failure: no env URL, expired Azure CLI token, missing Read permission on the solutions table, network error), tells the user we couldn't auto-detect the solution and falls back to the manual three-option question (Yes / Continue anyway / Cancel)",
         "Sets the ProfileRedirectEnabled site setting to false",
+        "Generates an HTML setup report at <PROJECT_ROOT>/docs/auth-setup-report.html via render-auth-report.js; OPTIONAL_FEATURES_DATA.termsEnforced reflects the detected solution state (true if installed, false otherwise)",
         "Prompts the user to deploy the updated site"
       ]
     }

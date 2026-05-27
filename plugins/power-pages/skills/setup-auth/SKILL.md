@@ -2756,6 +2756,88 @@ Present a summary of everything created:
 | Web API Site Settings | `Webapi/contact/enabled = true`, `Webapi/contact/fields = ...` — when `INCLUDE_PROFILE_PAGE = true` | Created (if applicable) |
 | Table Permission | `My Profile - Edit Own Contact` (contact, Self scope, read+write, Authenticated Users role) — when `INCLUDE_PROFILE_PAGE = true` | Created (if applicable) |
 
+#### 8.3.5 Generate HTML Setup Report
+
+After the summary, generate an HTML setup report at `<PROJECT_ROOT>/docs/auth-setup-report.html` that captures every decision and artifact from this run. The report is opened in the user's browser as a durable, shareable record they can review later.
+
+**Why**: This skill makes many composing decisions (provider choice, registration mode, profile mapping, contact linking, profile page, terms, federated logout, etc.). A side-by-side HTML report makes it easy for the maker to audit the full configuration in one place — much more scannable than the chat summary above. It also gives reviewers and teammates a single artifact to look at without re-running the skill.
+
+**1. Build the data payload.** Construct a JSON object with the following keys and write it to a temp file:
+
+```json
+{
+  "META_DATA": {
+    "siteName": "<SITE_NAME>",
+    "reportDate": "<YYYY-MM-DD>",
+    "framework": "<React|Vue|Angular|Astro>",
+    "nextStepsHtml": "<HTML string — the same provider-specific guidance from 8.5, formatted as an <ol>>"
+  },
+  "PROVIDERS_DATA": [
+    {
+      "type": "Entra ID | Entra External ID | OIDC | SAML2 | WS-Federation | Local | Social (Microsoft|Facebook|Google)",
+      "displayName": "<friendly name shown in the login UI>",
+      "name": "<ProviderName used in site setting keys>",
+      "identifier": "<providerIdentifier / authority URL / issuer URI>",
+      "authority": "<Authority site-setting value, if applicable>",
+      "clientId": "<ClientId site-setting value, if applicable>",
+      "redirectUri": "<Computed redirect URI, if applicable>",
+      "scopes": "<Scopes site-setting value, if applicable>",
+      "registrationClaimsMapping": "<RegistrationClaimsMapping value, if applicable>",
+      "loginClaimsMapping": "<LoginClaimsMapping value, or null when sync = First sign-in only>",
+      "contactLinking": "Link to existing contact by email | Create a new contact",
+      "profileSync": "First sign-in only | Both",
+      "federatedLogout": "Enabled | Disabled",
+      "isPrimary": true | false
+    }
+  ],
+  "LOCAL_AUTH_DATA": {
+    "loginBy": "Email | Username",
+    "registrationMode": "Open | Invitation-only | Both | Disabled",
+    "resetPasswordEnabled": true | false,
+    "emailConfirmationEnabled": true | false
+  },
+  "OPTIONAL_FEATURES_DATA": {
+    "profilePage": true | false,
+    "termsAndConditions": true | false,
+    "termsEnforced": true | false,
+    "federatedLogout": true | false,
+    "sessionKeepAlive": true | false
+  },
+  "SITE_SETTINGS_DATA": [
+    { "name": "Authentication/Registration/ProfileRedirectEnabled", "value": "false" }
+  ],
+  "TABLE_PERMISSIONS_DATA": [
+    { "name": "My Profile - Edit Own Contact", "table": "contact", "scope": "Self (756150004)", "read": true, "write": true, "create": false, "delete": false }
+  ],
+  "FILES_DATA": [
+    { "path": "src/services/authService.ts", "action": "Created | Updated", "notes": "<short description>" }
+  ]
+}
+```
+
+- Set `LOCAL_AUTH_DATA` to `null` if local auth was not configured.
+- Include ALL site settings the skill created in `SITE_SETTINGS_DATA` (Phase 8.1) — `ProfileRedirectEnabled`, every `Authentication/{Type}/{Name}/...` block, `Webapi/contact/*` when applicable, etc. Mask any settings whose name contains `Secret` (replace value with `***` — secrets must not appear in the report).
+- Include every YAML/code file the skill created or updated in `FILES_DATA`. Use action `"Created"` for new files, `"Updated"` for edits.
+- `nextStepsHtml` should mirror the guidance in section 8.5 below, formatted as an `<ol>...</ol>` with `<code>` tags around commands. Only include the steps relevant to the providers actually configured.
+
+**2. Render the report.** Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/render-auth-report.js" \
+  --output "<PROJECT_ROOT>/docs/auth-setup-report.html" \
+  --data "<path-to-temp-data.json>"
+```
+
+The renderer refuses to overwrite an existing file. If a previous report already exists at that path, append a date suffix: `auth-setup-report-2026-05-27.html`.
+
+**3. Open the report in the browser** (best-effort — never block the skill flow on this):
+
+- Windows: `start "" "<PROJECT_ROOT>/docs/auth-setup-report.html"`
+- macOS: `open "<PROJECT_ROOT>/docs/auth-setup-report.html"`
+- Linux: `xdg-open "<PROJECT_ROOT>/docs/auth-setup-report.html"`
+
+**4. Tell the user** the absolute path of the report file so they can open it manually if the browser launch failed. Phrasing example: *"I've written a full setup report to `<path>` and opened it in your browser. You can revisit this file any time to see every decision and artifact from this run."*
+
 #### 8.4 Ask to Deploy
 
 Use `AskUserQuestion`:
