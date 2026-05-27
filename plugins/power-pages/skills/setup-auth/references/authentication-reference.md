@@ -318,11 +318,26 @@ export interface AuthProviderConfig {
   loginByEmail?: boolean;
 }
 
-// DEFAULT: Microsoft Entra ID. Change this for other providers.
-const AUTH_PROVIDER: AuthProviderConfig = {
-  type: 'entra-id',
-  displayName: 'Sign In',
-};
+// --- Canonical: always declare AUTH_PROVIDERS as an array, even with one entry ---
+// This is the single source of truth for which providers the site offers. The
+// array shape is the canonical pattern (see the "Multiple Providers — Canonical
+// AUTH_PROVIDERS Array Pattern" section below) — single-provider sites use a
+// one-element array so they can grow without restructuring the code.
+// Replace the entries here with the providers configured in Power Pages.
+export const AUTH_PROVIDERS: AuthProviderConfig[] = [
+  {
+    type: 'entra-id',
+    displayName: 'Sign In',
+  },
+];
+
+// Derived alias used by the helper functions later in this file. For a single-
+// provider site this is just the only entry. For multi-provider sites it's the
+// local provider when present, otherwise the first external one — the helpers
+// that reference AUTH_PROVIDER were written for the single-provider walkthrough
+// and continue to work via this alias.
+const AUTH_PROVIDER: AuthProviderConfig =
+  AUTH_PROVIDERS.find(p => p.type === 'local') ?? AUTH_PROVIDERS[0];
 
 const isDevelopment =
   typeof window !== 'undefined' &&
@@ -876,9 +891,9 @@ export function getUserInitials(): string {
 
 ---
 
-## Provider-Specific AUTH_PROVIDER Configuration Examples
+## Provider-Specific Configuration Entries
 
-When creating the auth service, set the `AUTH_PROVIDER` constant based on the user's chosen provider:
+Each snippet below is a single **entry** that goes inside the `AUTH_PROVIDERS` array shown earlier in this file. For a single-provider site, the array has one entry; for a multi-provider site, list several entries (see "Multiple Providers — Canonical `AUTH_PROVIDERS` Array Pattern" further down). The legacy `const AUTH_PROVIDER = { ... }` form shown below is illustrative for readability — in the actual generated `authService.ts` it appears as an element of `AUTH_PROVIDERS`, not as a standalone constant.
 
 ### Microsoft Entra ID (Default)
 

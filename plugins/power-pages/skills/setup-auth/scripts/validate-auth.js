@@ -42,9 +42,14 @@ runValidation((cwd) => {
     if (!content.includes('/_layout/tokenhtml') && !content.includes('fetchAntiForgeryToken')) {
       errors.push('Auth service missing anti-forgery token handling');
     }
-    // Verify provider configuration exists (supports all provider types)
-    if (!content.includes('AUTH_PROVIDER') && !content.includes('AuthProviderConfig')) {
-      errors.push('Auth service missing provider configuration (AUTH_PROVIDER or AuthProviderConfig)');
+    // Verify provider configuration exists. The canonical pattern in
+    // authentication-reference.md is the AUTH_PROVIDERS array (even single-
+    // provider sites use a one-element array — see SKILL.md and the
+    // "Multiple Providers — Canonical AUTH_PROVIDERS Array Pattern" section
+    // of authentication-reference.md). AuthProviderConfig is the interface
+    // name and is also a valid marker (auth service must declare the type).
+    if (!content.includes('AUTH_PROVIDERS') && !content.includes('AuthProviderConfig')) {
+      errors.push('Auth service missing provider configuration — expected the AUTH_PROVIDERS array or AuthProviderConfig type. The canonical pattern is `export const AUTH_PROVIDERS: AuthProviderConfig[] = [...]` even when only one provider is configured.');
     }
   }
 
