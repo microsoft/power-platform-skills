@@ -54,6 +54,7 @@ function readPacAuth(opts = {}) {
   }
   const tenantId = pickLine(output, "Tenant Id");
   const orgId = pickLine(output, "Organization Id");
+  const cloud = pickLine(output, "Cloud");
   if (!tenantId && !orgId) {
     cache = null;
     return null;
@@ -61,6 +62,7 @@ function readPacAuth(opts = {}) {
   cache = {
     orgId: orgId || "",
     tenantId: tenantId || "",
+    cloud: cloud || "",
   };
   return cache;
 }
