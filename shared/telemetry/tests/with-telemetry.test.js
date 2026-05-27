@@ -221,3 +221,36 @@ test("durationMs is non-negative integer on success", async () => {
   assert.ok(Number.isInteger(rec.events[1].data.durationMs));
   assert.ok(rec.events[1].data.durationMs >= 0);
 });
+
+test("withTelemetry forwards opts.cloud into spawnOpts of the emitter", async () => {
+  let capturedSpawnOpts;
+  await withTelemetry(
+    "deploy-site",
+    async () => "ok",
+    {
+      emitter: (event, spawnOpts) => { capturedSpawnOpts = spawnOpts; },
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.3",
+      cloud: "Public",
+      _readAgentInfo: () => ({}),
+    }
+  );
+  assert.equal(capturedSpawnOpts.cloud, "Public");
+});
+
+test("withTelemetry forwards empty cloud when not provided", async () => {
+  let capturedSpawnOpts;
+  await withTelemetry(
+    "deploy-site",
+    async () => "ok",
+    {
+      emitter: (event, spawnOpts) => { capturedSpawnOpts = spawnOpts; },
+      envelopeName: ENVELOPE,
+      pluginName: "power-pages",
+      pluginVersion: "1.2.3",
+      _readAgentInfo: () => ({}),
+    }
+  );
+  assert.equal(capturedSpawnOpts.cloud, "");
+});
