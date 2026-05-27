@@ -50,10 +50,15 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
-      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
-      collector_url: "https://example.invalid/OneCollector/1.0/",
       event_stream_name: "PagesPluginEvent",
       disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
+      },
     })
   );
 

@@ -81,11 +81,21 @@ process.stdin.on('end', async () => {
           fs.readFileSync(path.join(TELEMETRY_DIR, 'ikey.json'), 'utf8')
         );
       } catch {
-        return { ikey: '', collector_url: '', event_stream_name: '' };
+        return {
+          event_stream_name: '',
+          disabled: false,
+          default_region: 'us',
+          regions: {},
+        };
       }
     })();
     if (ikeyCfg.disabled === true) process.exit(validatorStatus);
-    if (!ikeyCfg.instrumentationKey) process.exit(validatorStatus);
+    const defaultRegion = ikeyCfg.default_region || 'us';
+    const defaultEntry =
+      (ikeyCfg.regions && ikeyCfg.regions[defaultRegion]) || null;
+    if (!defaultEntry || !defaultEntry.instrumentation_key) {
+      process.exit(validatorStatus);
+    }
 
     const emitSpawn = require(path.join(TELEMETRY_DIR, 'lib', 'emit-spawn'));
     const eventsLib = require(path.join(TELEMETRY_DIR, 'lib', 'events'));
@@ -157,8 +167,7 @@ process.stdin.on('end', async () => {
         fields
       ),
       {
-        iKey: ikeyCfg.instrumentationKey || '',
-        collectorUrl: ikeyCfg.collector_url || '',
+        cloud: (pacAuth && pacAuth.cloud) || '',
         configDir,
         fakeProbe,
       }

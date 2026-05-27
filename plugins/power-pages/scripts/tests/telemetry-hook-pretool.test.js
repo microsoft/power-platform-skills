@@ -57,3 +57,28 @@ test("exits 0 when skill is tracked (placeholder iKey → no-op emit)", () => {
   });
   assert.equal(status, 0);
 });
+
+test("pretool hook exits 0 when ikey.json has regions but default_region entry has no key", () => {
+  const tmp = mkConfigDir();
+  const PLUGIN_ROOT = path.resolve(__dirname, "../..");
+  const ikeyPath = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry", "ikey.json");
+  const original = fs.readFileSync(ikeyPath, "utf8");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: { us: { collector_url: "https://x" } },
+    })
+  );
+  try {
+    const { status } = runHook({
+      input: JSON.stringify({ tool_input: { skill: "add-seo" } }),
+      configDir: tmp,
+    });
+    assert.equal(status, 0);
+  } finally {
+    fs.writeFileSync(ikeyPath, original);
+  }
+});

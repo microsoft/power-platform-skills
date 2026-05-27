@@ -8,14 +8,20 @@ const path = require("node:path");
 
 const { emitSkillStartedFromPrompt } = require("../lib/emit-from-prompt");
 
-function mkTelemetryDir({ ikey, collectorUrl, eventStreamName }) {
+function mkTelemetryDir({ instrumentationKey, collectorUrl, eventStreamName }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-efp-"));
   fs.writeFileSync(
     path.join(tmp, "ikey.json"),
     JSON.stringify({
-      ikey,
-      collector_url: collectorUrl,
       event_stream_name: eventStreamName,
+      disabled: false,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: instrumentationKey,
+          collector_url: collectorUrl,
+        },
+      },
     })
   );
   return tmp;
@@ -49,6 +55,33 @@ test("returns { emitted: false } when detection returns null", () => {
     promptText: "not a slash command",
     telemetryDir,
     captured,
+  });
+  assert.deepEqual(result, { emitted: false, skillName: null });
+  assert.equal(captured.event, undefined);
+});
+
+test("returns { emitted: false } when default region has no instrumentation_key", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-efp-nokey-"));
+  fs.writeFileSync(
+    path.join(tmp, "ikey.json"),
+    JSON.stringify({
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: { us: { collector_url: "https://x" } },
+    })
+  );
+  const captured = {};
+  const result = emitSkillStartedFromPrompt("/power-pages:add-seo", {
+    pluginName: "power-pages",
+    pluginVersion: "1.2.3",
+    trackedSkills: TRACKED,
+    telemetryDir: tmp,
+    _emit: (event, spawnOpts) => {
+      captured.event = event;
+      captured.spawnOpts = spawnOpts;
+    },
+    _readPacAuth: () => null,
   });
   assert.deepEqual(result, { emitted: false, skillName: null });
   assert.equal(captured.event, undefined);
@@ -186,6 +219,40 @@ test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and FAKE_HTTPS into spawn opts",
   assert.equal(captured.spawnOpts.fakeProbe, "/tmp/fake-probe.json");
 });
 
+test("forwards pacAuth.cloud into spawn opts", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: { cloud: "UsGov" },
+  });
+  assert.equal(captured.spawnOpts.cloud, "UsGov");
+  assert.equal(captured.spawnOpts.iKey, undefined);
+  assert.equal(captured.spawnOpts.collectorUrl, undefined);
+});
+
+test("spawn opts include empty cloud when pacAuth has no cloud", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  const captured = {};
+  callWithStub({
+    promptText: "/power-pages:add-seo",
+    telemetryDir,
+    captured,
+    pacAuth: null,
+  });
+  assert.equal(captured.spawnOpts.cloud, "");
+});
+
 test("does not throw when ikey.json is missing", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-efp-noikey-"));
   const captured = {};
@@ -202,6 +269,8 @@ test("does not throw when ikey.json is missing", () => {
       _readPacAuth: () => null,
     })
   );
+  // Missing ikey.json → defaultInstrumentationKey is empty → no emit.
+  assert.equal(captured.event, undefined);
 });
 
 test("does not throw when _emit throws", () => {

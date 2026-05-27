@@ -43,14 +43,20 @@ function readIkey() {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
     );
+    const defaultRegion = cfg.default_region || "us";
+    const defaultEntry = (cfg.regions && cfg.regions[defaultRegion]) || null;
     return {
-      ikey: cfg.instrumentationKey || "",
-      collectorUrl: cfg.collector_url || "",
       eventStreamName: cfg.event_stream_name || "",
       disabled: cfg.disabled === true,
+      defaultInstrumentationKey:
+        (defaultEntry && defaultEntry.instrumentation_key) || "",
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
+    return {
+      eventStreamName: "",
+      disabled: false,
+      defaultInstrumentationKey: "",
+    };
   }
 }
 
@@ -89,9 +95,9 @@ function readStdin() {
   // Fast-path kill switch / unconfigured: gate BEFORE the pac shell-outs
   // (`pac auth who` ~3s + `pac --version` ~2s) so disabled / opted-out
   // hook invocations cost effectively nothing.
-  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
+  const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey();
   if (disabled) process.exit(0);
-  if (!ikey) process.exit(0);
+  if (!defaultInstrumentationKey) process.exit(0);
 
   const { correlation_id } = correlationLib.write({ skillName });
 
@@ -134,7 +140,11 @@ function readStdin() {
   try {
     emitSpawn.fireAndForget(
       eventsLib.buildSkillStarted(eventStreamName, fields),
-      { iKey: ikey, collectorUrl, configDir, fakeProbe }
+      {
+        cloud: (pacAuth && pacAuth.cloud) || "",
+        configDir,
+        fakeProbe,
+      }
     );
   } catch {
     // fail closed
