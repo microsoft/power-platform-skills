@@ -101,3 +101,12 @@ test("fetchGeo uses the cloud-specific URL", async () => {
   });
   assert.match(capturedUrl, /\.partner\.microsoftonline\.cn/);
 });
+
+test("fetchGeo returns null when orgId is falsy (no HTTP call made)", async () => {
+  let called = false;
+  const fakeGet = () => { called = true; return Promise.resolve({ statusCode: 200, body: "{}" }); };
+  assert.equal(await fetchGeo("", "Public", { _httpsGet: fakeGet }), null);
+  assert.equal(await fetchGeo(null, "Public", { _httpsGet: fakeGet }), null);
+  assert.equal(await fetchGeo(undefined, "Public", { _httpsGet: fakeGet }), null);
+  assert.equal(called, false);
+});
