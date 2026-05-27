@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const helpers = require('../lib/validation-helpers');
-const { checkSolutionInstalled } = require('../lib/check-solution-installed');
+const { checkSolutionInstalled, sanitizeEnvUrl } = require('../lib/check-solution-installed');
 
 const ENV_URL = 'https://contoso.crm.dynamics.com';
 const TOKEN = 'fake-token';
@@ -138,4 +138,96 @@ test('throws when the response body is not valid JSON', async (t) => {
     () => checkSolutionInstalled({ envUrl: ENV_URL, token: TOKEN, solutionName: SOLUTION }),
     /Failed to parse Dataverse response as JSON/
   );
+});
+
+// --- sanitizeEnvUrl: defense against command injection via --envUrl ---
+//
+// The output of sanitizeEnvUrl is passed to helpers.getAuthToken, which
+// interpolates it into `az account get-access-token --resource "${url}"`
+// via execSync (a shell command). If we didn't sanitize, an attacker who
+// could pass a malicious --envUrl on the CLI could execute arbitrary
+// shell commands.
+
+test('sanitizeEnvUrl accepts a plain Dataverse URL and returns just the origin', () => {
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com'),
+    'https://contoso.crm.dynamics.com'
+  );
+});
+
+test('sanitizeEnvUrl strips path, query, and fragment from the URL', () => {
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com/api/data/v9.2/solutions?$top=1#hash'),
+    'https://contoso.crm.dynamics.com'
+  );
+});
+
+test('sanitizeEnvUrl preserves an explicit port', () => {
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com:8443/some/path'),
+    'https://contoso.crm.dynamics.com:8443'
+  );
+});
+
+test('sanitizeEnvUrl strips a trailing slash by normalizing to origin', () => {
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com/'),
+    'https://contoso.crm.dynamics.com'
+  );
+});
+
+test('sanitizeEnvUrl rejects shell-injection payloads embedded in the URL', () => {
+  // The whole point of using URL.origin is that these characters are stripped
+  // (in path/query/fragment) or rejected by URL parsing (in host).
+  // Verify a few representative payloads no longer make it through.
+
+  // Path-position payload: URL parses fine, but origin throws away the path.
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com/"; rm -rf ~; echo "'),
+    'https://contoso.crm.dynamics.com'
+  );
+
+  // Query-position payload: same story.
+  assert.equal(
+    sanitizeEnvUrl('https://contoso.crm.dynamics.com?x="; rm -rf ~; echo "'),
+    'https://contoso.crm.dynamics.com'
+  );
+
+  // Newline in the URL — WHATWG URL parsing strips ASCII tabs and newlines
+  // per spec, so a newline-laced URL gets normalized to a safe origin rather
+  // than carrying the newline downstream. This is the behavior we want — a
+  // newline in a shell command argument can be used to break out of a quoted
+  // string.
+  assert.equal(
+    sanitizeEnvUrl('https://contoso\ndynamics.com'),
+    'https://contosodynamics.com'
+  );
+  assert.doesNotMatch(sanitizeEnvUrl('https://contoso\tdynamics.com'), /\s/);
+});
+
+test('sanitizeEnvUrl rejects non-https protocols', () => {
+  assert.throws(() => sanitizeEnvUrl('http://contoso.crm.dynamics.com'),  /must use https/);
+  assert.throws(() => sanitizeEnvUrl('file:///etc/passwd'),               /must use https/);
+  assert.throws(() => sanitizeEnvUrl('javascript:alert(1)'),              /must use https/);
+});
+
+test('sanitizeEnvUrl rejects URLs containing userinfo (credentials)', () => {
+  assert.throws(
+    () => sanitizeEnvUrl('https://attacker:pwn@contoso.crm.dynamics.com'),
+    /must not contain userinfo/
+  );
+  assert.throws(
+    () => sanitizeEnvUrl('https://attacker@contoso.crm.dynamics.com'),
+    /must not contain userinfo/
+  );
+});
+
+test('sanitizeEnvUrl rejects garbage input', () => {
+  assert.throws(() => sanitizeEnvUrl(''),                    /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl('   '),                 /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl(null),                  /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl(undefined),             /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl(42),                    /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl('not a url'),           /not a valid URL/);
+  assert.throws(() => sanitizeEnvUrl('://broken'),           /not a valid URL/);
 });

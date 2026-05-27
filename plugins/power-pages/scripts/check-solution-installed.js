@@ -18,7 +18,7 @@
 // tested without spawning a subprocess or making real network calls.
 
 const { getAuthToken, getEnvironmentUrl } = require('./lib/validation-helpers');
-const { checkSolutionInstalled } = require('./lib/check-solution-installed');
+const { checkSolutionInstalled, sanitizeEnvUrl } = require('./lib/check-solution-installed');
 
 function parseArgs(argv) {
   const args = {};
@@ -37,9 +37,21 @@ async function main() {
     process.exit(1);
   }
 
-  const envUrl = args.envUrl || getEnvironmentUrl();
-  if (!envUrl) {
+  const rawEnvUrl = args.envUrl || getEnvironmentUrl();
+  if (!rawEnvUrl) {
     process.stderr.write('No environment URL provided and `pac env who` did not return one. Run `pac auth create` and `pac env select` first.\n');
+    process.exit(1);
+  }
+
+  // Sanitize before passing anywhere that interpolates the URL into a shell
+  // command (getAuthToken builds `az account get-access-token --resource
+  // "${envUrl}"`). sanitizeEnvUrl strips everything except scheme+host+port,
+  // so a `--envUrl 'x"; rm -rf ~; echo "'` can't escape the quotes.
+  let envUrl;
+  try {
+    envUrl = sanitizeEnvUrl(rawEnvUrl);
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 
