@@ -1,6 +1,6 @@
 ---
 name: configure-canvas-mcp
-version: 2.0.0
+version: 2.1.0
 description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
 author: Microsoft Corporation
 user-invocable: true
@@ -77,14 +77,24 @@ Call the `connect` MCP tool to connect the server to the user's coauthoring sess
 mcp__canvas-authoring__connect(
   environment_id: ENV_ID,
   app_id: APP_ID,
-  cluster_category: CLUSTER_CATEGORY
+  cluster_category: CLUSTER_CATEGORY,
+  // Optional — include only if the user has expressed a preference (see below):
+  auth_flow: "broker" | "browser",
+  login_hint: "user@contoso.com"
 )
 ```
 
+**Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation:
+
+- `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user.
+- `auth_flow`: Pass `"browser"` or `"broker"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Omit otherwise to use the default.
+
 If the call fails, report the error to the user and suggest checking that:
+
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
 3. .NET 10 SDK is correctly installed
+4. If sign-in failed, the user may need to specify `auth_flow` (`broker` vs. `browser`) or a `login_hint` (UPN/email) to authenticate as the correct account
 
 ### 4. Confirm
 
