@@ -951,6 +951,37 @@ Ask via \`AskUserQuestion\`:
   assert.ok(match, '🚦 inside code fence should not satisfy the rule');
 });
 
+test('GATE-prose-block-required: treats both fence delimiter lines as OUTSIDE the code block (regression — Copilot review)', async (t) => {
+  // Pre-fix, the toggle ran BEFORE recording inFence[i], which made the
+  // opening ``` line INSIDE and the closing ``` line OUTSIDE — asymmetric.
+  // Post-fix, both delimiter lines are classified OUTSIDE; only the
+  // content lines strictly between them are INSIDE. A 🚦 placed on the
+  // OPENING fence line itself (legal Markdown info string like ```🚦)
+  // should therefore satisfy the rule, not be falsely rejected as
+  // "inside the code block".
+  const root = mkPluginRoot(t);
+  writeCatalog(root, ['plan-alm:1.fence-line']);
+  writeSkill(
+    root,
+    'plan-alm',
+    `# plan-alm
+## Phase 1
+<!-- gate: plan-alm:1.fence-line | category=plan | cancel-leaves=nothing -->
+\`\`\`🚦 fence-info contains the sentinel
+not really inside per the rule
+\`\`\`
+
+Ask via \`AskUserQuestion\`:
+`
+  );
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(
+    findings.filter((f) => f.rule === 'GATE-prose-block-required').length,
+    0,
+    '🚦 on the opening fence delimiter line should satisfy the rule (delimiter lines are OUTSIDE the code block)'
+  );
+});
+
 test('GATE-prose-block-required: tolerates 🚦 on the same line as the marker (single-line style)', async (t) => {
   // The window is inclusive of the marker's own line, so a compact one-line
   // marker + 🚦 should pass (legal Markdown).

@@ -649,15 +649,27 @@ function collectFindings({ pluginRoot }) {
     if (!ignores.has('GATE-prose-block-required')) {
       const lines = content.split(/\r?\n/);
       // Pre-compute: for each line, is it inside a fenced code block?
+      // A fence-toggle line is one that starts with ``` (optionally followed
+      // by an info string). Bare ``` or ```lang both toggle, but only when
+      // appearing at column 0 (after trimming up to 3 spaces of indent per
+      // CommonMark fenced-code rules — approximated with /^\s{0,3}```/).
+      //
+      // The fence-delimiter LINE ITSELF (both opening and closing) is marked
+      // OUTSIDE — it's Markdown syntax, not code content. Only the content
+      // lines strictly between two delimiters are INSIDE. This makes both
+      // delimiters classified consistently with each other (a previous
+      // version flipped `inside` BEFORE recording, which left the opening
+      // fence INSIDE and the closing fence OUTSIDE — asymmetric).
       const inFence = new Array(lines.length).fill(false);
       let inside = false;
+      const FENCE_PATTERN = /^\s{0,3}```/;
       for (let i = 0; i < lines.length; i++) {
-        // A fence-toggle line is one that starts with ``` (optionally followed
-        // by an info string). Bare ``` or ```lang both toggle, but only when
-        // appearing at column 0 (after trimming up to 3 spaces of indent per
-        // CommonMark fenced-code rules — we approximate with /^\s{0,3}```/).
-        if (/^\s{0,3}```/.test(lines[i])) inside = !inside;
-        inFence[i] = inside;
+        if (FENCE_PATTERN.test(lines[i])) {
+          inFence[i] = false; // delimiter line itself: not inside
+          inside = !inside;
+        } else {
+          inFence[i] = inside;
+        }
       }
       for (const gm of gateMarkers) {
         const startIdx = gm.lineNum - 1; // 0-based
