@@ -1,6 +1,35 @@
 {
-  "instrumentationKey": "ffdb4c99ca3a4ad5b8e9ffb08bf7da0d-65357ff3-efcd-47fc-b2fd-ad95a52373f4-7402",
-  "collector_url": "https://self.pipe.aria.int.microsoft.com/OneCollector/1.0/",
-  "event_stream_name": "PowerPagesPluginEvent",
-  "disabled": true
+  "event_stream_name": "PagesPluginEvent",
+  "disabled": true,
+  "default_region": "us",
+  "regions": {
+    "internal": {
+      "instrumentation_key": "ffdb4c99ca3a4ad5b8e9ffb08bf7da0d-65357ff3-efcd-47fc-b2fd-ad95a52373f4-7402",
+      "collector_url": "https://self.pipe.aria.int.microsoft.com/OneCollector/1.0/"
+    },
+    "us": {
+      "instrumentation_key": "197418c5cb8c4426b201f9db2e87b914-87887378-2790-49b0-9295-51f43b6204b1-7172",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "197418c5cb8c4426b201f9db2e87b914-87887378-2790-49b0-9295-51f43b6204b1-7172",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "gov": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "high": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "dod": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://pf.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "mooncake": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://collector.azure.cn/OneCollector/1.0/"
+    }
+  }
 }
