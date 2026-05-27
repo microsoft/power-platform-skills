@@ -18,13 +18,15 @@ function readPluginVersion() {
 
 function loadTelemetryDeps() {
   try {
-    return {
-      withTelemetry: require(path.join(TELEMETRY_DIR, "lib", "with-telemetry"))
-        .withTelemetry,
-      ikeyCfg: JSON.parse(
-        fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
-      ),
-    };
+    const withTelemetry = require(path.join(TELEMETRY_DIR, "lib", "with-telemetry")).withTelemetry;
+    const ikeyCfg = JSON.parse(
+      fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
+    );
+    let pacAuth = null;
+    try {
+      pacAuth = require(path.join(TELEMETRY_DIR, "lib", "pac-auth")).readPacAuth();
+    } catch { pacAuth = null; }
+    return { withTelemetry, ikeyCfg, pacAuth };
   } catch {
     return null;
   }
@@ -40,9 +42,9 @@ async function runInstrumented(scriptName, asyncFn, _overrides = {}) {
     envelopeName: deps.ikeyCfg.event_stream_name || "",
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
+    cloud: (deps.pacAuth && deps.pacAuth.cloud) || "",
     spawnOpts: {
-      iKey: deps.ikeyCfg.instrumentationKey,
-      collectorUrl: deps.ikeyCfg.collector_url,
+      // iKey + collectorUrl no longer passed — dispatcher resolves region.
       configDir,
     },
   });

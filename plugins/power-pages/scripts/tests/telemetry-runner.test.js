@@ -28,16 +28,17 @@ test("runInstrumented forwards envelopeName from ikey.json event_stream_name", a
       return fn();
     },
     ikeyCfg: {
-      instrumentationKey: "key-value",
-      collector_url: "https://x",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
+      default_region: "us",
+      regions: { us: { instrumentation_key: "key-value", collector_url: "https://x" } },
     },
+    pacAuth: null,
   };
   await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
-  assert.equal(captured.envelopeName, "PowerPagesPluginEvent");
+  assert.equal(captured.envelopeName, "PagesPluginEvent");
 });
 
-test("runInstrumented reads iKey from instrumentationKey property (not legacy 'ikey')", async () => {
+test("runInstrumented no longer leaks iKey/collectorUrl via spawnOpts (dispatcher resolves region)", async () => {
   let captured;
   const fakeDeps = {
     withTelemetry: (scriptName, fn, opts) => {
@@ -45,12 +46,51 @@ test("runInstrumented reads iKey from instrumentationKey property (not legacy 'i
       return fn();
     },
     ikeyCfg: {
-      instrumentationKey: "the-real-key",
-      ikey: "DO-NOT-READ-THIS-LEGACY-FIELD",
-      collector_url: "https://x",
-      event_stream_name: "PowerPagesPluginEvent",
+      event_stream_name: "PagesPluginEvent",
+      default_region: "us",
+      regions: { us: { instrumentation_key: "k", collector_url: "https://x" } },
     },
+    pacAuth: null,
   };
   await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
-  assert.equal(captured.spawnOpts.iKey, "the-real-key");
+  assert.equal(captured.spawnOpts.iKey, undefined);
+  assert.equal(captured.spawnOpts.collectorUrl, undefined);
+});
+
+test("runInstrumented forwards cloud from PAC into withTelemetry opts", async () => {
+  let capturedOpts;
+  const fakeDeps = {
+    withTelemetry: (scriptName, fn, opts) => {
+      capturedOpts = opts;
+      return fn();
+    },
+    ikeyCfg: {
+      event_stream_name: "PagesPluginEvent",
+      default_region: "us",
+      regions: {
+        us: { instrumentation_key: "k", collector_url: "https://x" },
+      },
+    },
+    pacAuth: { orgId: "org", tenantId: "tnt", cloud: "Public" },
+  };
+  await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
+  assert.equal(capturedOpts.cloud, "Public");
+});
+
+test("runInstrumented forwards empty cloud when PAC auth is absent", async () => {
+  let capturedOpts;
+  const fakeDeps = {
+    withTelemetry: (scriptName, fn, opts) => {
+      capturedOpts = opts;
+      return fn();
+    },
+    ikeyCfg: {
+      event_stream_name: "PagesPluginEvent",
+      default_region: "us",
+      regions: { us: { instrumentation_key: "k", collector_url: "https://x" } },
+    },
+    pacAuth: null,
+  };
+  await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
+  assert.equal(capturedOpts.cloud, "");
 });
