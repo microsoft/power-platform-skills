@@ -66,3 +66,64 @@ test('create-site-setting rejects mixing environment-variable and value inputs',
   assert.equal(result.status, 1);
   assert.match(result.stderr, /cannot be combined with --value or --description/);
 });
+
+// --- YAML quoting edge cases ---
+//
+// The YAML writer must quote values that would change meaning when read back
+// by a YAML 1.2 parser. The body-of-value character-class regex catches most
+// cases, but a few values look harmless but still need quoting because they
+// rely on the LEADING character.
+
+function getWrittenYaml(t, settingName, value) {
+  const projectRoot = createTempProject(t);
+  const result = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', settingName,
+    '--value', value,
+    '--description', 'test',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  return fs.readFileSync(parsed.filePath, 'utf8');
+}
+
+test('quotes values starting with a hyphen (would be a YAML sequence indicator unquoted)', (t) => {
+  const yaml = getWrittenYaml(t, 'Test/HyphenLeading', '-foo');
+  assert.match(yaml, /^value: "-foo"$/m);
+});
+
+test('quotes values starting with a single quote (would open an unterminated quoted scalar)', (t) => {
+  const yaml = getWrittenYaml(t, 'Test/SQuoteLeading', "'foo");
+  assert.match(yaml, /^value: "'foo"$/m);
+});
+
+test('quotes values starting with a double quote (would open an unterminated quoted scalar)', (t) => {
+  const yaml = getWrittenYaml(t, 'Test/DQuoteLeading', '"foo');
+  // The leading literal " in the value gets backslash-escaped inside the JSON-style YAML quoted scalar
+  assert.match(yaml, /^value: "\\"foo"$/m);
+});
+
+test('quotes values starting with a tab character (not allowed by YAML 1.2 in plain scalars)', (t) => {
+  const yaml = getWrittenYaml(t, 'Test/TabLeading', '\tfoo');
+  assert.match(yaml, /^value: "\tfoo"$/m);
+});
+
+test('quotes YAML 1.2 bareword reserved values: true / false / null', (t) => {
+  // These are strings the caller passed as the --value, but YAML would read them
+  // back as boolean true/false/null. The site-setting code passes booleans
+  // through --type=boolean, so `--value true` (without --type=boolean) means
+  // the string "true". Without quoting, the YAML parser would re-coerce.
+  assert.match(getWrittenYaml(t, 'Test/StrTrue',  'true'),  /^value: "true"$/m);
+  assert.match(getWrittenYaml(t, 'Test/StrFalse', 'false'), /^value: "false"$/m);
+  assert.match(getWrittenYaml(t, 'Test/StrNull',  'null'),  /^value: "null"$/m);
+});
+
+test('does NOT quote ordinary values with no special characters or leading indicators', (t) => {
+  // Regression guard: the leading-character check must not over-quote plain
+  // values. A value like "Contoso Portal" or "/signin-EntraExternal" should
+  // emit as a bareword scalar.
+  const yaml1 = getWrittenYaml(t, 'Test/PlainText', 'Contoso Portal');
+  assert.match(yaml1, /^value: Contoso Portal$/m);
+  const yaml2 = getWrittenYaml(t, 'Test/PathLike', '/signin-EntraExternal');
+  assert.match(yaml2, /^value: \/signin-EntraExternal$/m);
+});
