@@ -7,7 +7,6 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot, UUID_REGEX } = require('../../../scripts/lib/validation-helpers');
-const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
 const ALLOWED_FUNCTIONS = ['get', 'post', 'put', 'patch', 'del'];
 const BROWSER_APIS = ['XMLHttpRequest', 'document\\.', 'window\\.', 'setTimeout', 'setInterval', 'navigator\\.', 'fetch'];
@@ -232,7 +231,7 @@ async function main() {
   });
 }
 
-runInstrumented('validate-add-server-logic', main).catch((err) => {
+main().catch((err) => {
   process.stderr.write(String((err && err.stack) || err) + '\n');
   process.exit(1);
 });
@@ -340,7 +339,7 @@ function findTopLevelFunctions(content) {
 }
 
 if (require.main === module) {
-  runInstrumented('validate-add-server-logic', main).catch((err) => {
+  main().catch((err) => {
     process.stderr.write(String((err && err.stack) || err) + '\n');
     process.exit(1);
   });

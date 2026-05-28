@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 const { validatePowerPagesSchema } = require('../../../scripts/lib/powerpages-schema-validator');
-const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
 async function main() {
   return runValidation((cwd) => {
@@ -59,7 +58,7 @@ async function main() {
   });
 }
 
-runInstrumented('validate-integrate-webapi', main).catch((err) => {
+main().catch((err) => {
   process.stderr.write(String((err && err.stack) || err) + '\n');
   process.exit(1);
 });
@@ -132,7 +131,7 @@ function findTypeFiles(projectRoot) {
 }
 
 if (require.main === module) {
-  runInstrumented('validate-integrate-webapi', main).catch((err) => {
+  main().catch((err) => {
     process.stderr.write(String((err && err.stack) || err) + '\n');
     process.exit(1);
   });

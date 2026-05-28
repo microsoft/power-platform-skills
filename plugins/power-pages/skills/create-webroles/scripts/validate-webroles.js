@@ -6,7 +6,6 @@
 const path = require('path');
 const { approve, block, runValidation, findPowerPagesSiteDir } = require('../../../scripts/lib/validation-helpers');
 const { validateWebRoles } = require('../../../scripts/lib/web-roles-validator');
-const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
 async function main() {
   return runValidation((cwd) => {
@@ -30,7 +29,7 @@ async function main() {
   });
 }
 
-runInstrumented('validate-create-webroles', main).catch((err) => {
+main().catch((err) => {
   process.stderr.write(String((err && err.stack) || err) + '\n');
   process.exit(1);
 });
