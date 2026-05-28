@@ -89,7 +89,7 @@ This plugin ships 1DS telemetry for skill-run and script-run signals. The shared
 - **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the design doc.
 - **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.
 
-See `docs/superpowers/specs/2026-05-04-1ds-telemetry-rebuild-design.md` for the full design.
+See `shared/telemetry/README.md` for the integration guide.
 
 ## Maintaining This File
 
