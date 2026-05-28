@@ -93,7 +93,13 @@ function main() {
     process.exit(2);
   }
 
-  const evalsData = loadEvals();
+  let evalsData;
+  try {
+    evalsData = loadEvals();
+  } catch (err) {
+    console.error(`error: failed to load evals.json: ${err.message}`);
+    process.exit(2);
+  }
   const evalById = new Map(evalsData.evals.map((e) => [e.id, e]));
 
   // Filter fixtures by eval id / tier if requested

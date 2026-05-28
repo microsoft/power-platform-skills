@@ -220,10 +220,11 @@ function parseTapSummary(stdout) {
 }
 
 function extractFailures(stdout) {
-  // Pull each "not ok N - <text>" line for quick triage.
+  // Pull only indented assertion failures ("    not ok N - <text>"), excluding
+  // the non-indented fixture-level result lines emitted by the TAP reporter.
   const lines = stdout.split('\n');
   return lines
-    .filter((l) => /^\s*not ok \d+ - /.test(l) && !/^not ok 1 -/.test(l))
+    .filter((l) => /^\s{4}not ok \d+ - /.test(l))
     .map((l) => l.trim());
 }
 

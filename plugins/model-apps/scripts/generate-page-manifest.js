@@ -4,9 +4,13 @@
 // Writes two files into a working dir to make it editor-friendly:
 //   package.json   — installable manifest with the deps from
 //                    scripts/lib/supported-dependencies.js (Ask 2)
-//   genpage.d.ts   — ambient declarations for window.Xrm, window cache
-//                    key pattern, and re-exports of GeneratedComponentProps
-//                    (Ask 3)
+//   genpage.d.ts   — ambient global declarations only: `window.Xrm` and
+//                    the bare `Xrm` identifier with the navigation/utility
+//                    surface used by generative pages, plus the
+//                    `__genpage_*` window cache-key index signature
+//                    (Ask 3). `GeneratedComponentProps` is exported by
+//                    RuntimeTypes.ts and is intentionally not re-declared
+//                    here.
 //
 // Run by the /genpage orchestrator in Phase 0.5 (after working-dir creation).
 // Idempotent by default — skips files that already exist. Pass --force to
@@ -138,6 +142,14 @@ declare global {
             entityName?: string;
             recordId?: string;
             data?: Record<string, unknown>;
+        }
+        | {
+            /** Cross-page navigation between generative pages — see rules.md PAGEREF_ placeholder. */
+            pageType: 'generative';
+            pageId: string;
+            entityName?: string;
+            recordId?: string;
+            data?: Record<string, unknown>;
         };
 
     interface XrmNavigationResult {
@@ -165,6 +177,12 @@ declare global {
     }
 
     /**
+     * Bare \`Xrm\` identifier (used by generated pages as \`Xrm.Navigation...\`
+     * without the \`window.\` prefix). Same shape as \`window.Xrm\`.
+     */
+    const Xrm: XrmShape;
+
+    /**
      * Per-page cache keys MUST follow the pattern \`__genpage_<entity>_<v>\`
      * (see references/data-caching.md). The string-key index signature lets
      * TypeScript accept dynamic cache reads/writes without \`(window as any)\`.
@@ -180,7 +198,13 @@ function writeIfAllowed(filePath, content, force) {
   if (fs.existsSync(filePath) && !force) {
     return { wrote: false, reason: 'exists (use --force to overwrite)' };
   }
-  fs.writeFileSync(filePath, content);
+  try {
+    fs.writeFileSync(filePath, content);
+  } catch (err) {
+    const e = new Error(`failed to write ${filePath}: ${err.message}`);
+    e.code = 'IO_ERROR';
+    throw e;
+  }
   return { wrote: true };
 }
 
@@ -196,25 +220,38 @@ function main() {
   const workingDir = path.resolve(args.positional[0]);
   const slug = args.positional[1];
 
-  if (!fs.existsSync(workingDir)) {
-    console.error(`error: working directory does not exist: ${workingDir}`);
+  try {
+    if (!fs.existsSync(workingDir)) {
+      console.error(`error: working directory does not exist: ${workingDir}`);
+      process.exit(2);
+    }
+    if (!fs.statSync(workingDir).isDirectory()) {
+      console.error(`error: not a directory: ${workingDir}`);
+      process.exit(2);
+    }
+  } catch (err) {
+    console.error(`error: failed to stat working directory: ${err.message}`);
     process.exit(2);
   }
-  if (!fs.statSync(workingDir).isDirectory()) {
-    console.error(`error: not a directory: ${workingDir}`);
-    process.exit(2);
-  }
+
   if (!/^[a-z][a-z0-9-]*$/.test(slug)) {
     console.error(`error: page-slug must be kebab-case (got: ${slug})`);
     process.exit(1);
   }
 
-  const pkg = buildPackageJson(slug, args.features);
-  const pkgPath = path.join(workingDir, 'package.json');
-  const pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force);
+  let pkgResult;
+  let dtsResult;
+  try {
+    const pkg = buildPackageJson(slug, args.features);
+    const pkgPath = path.join(workingDir, 'package.json');
+    pkgResult = writeIfAllowed(pkgPath, JSON.stringify(pkg, null, 2) + '\n', args.force);
 
-  const dtsPath = path.join(workingDir, 'genpage.d.ts');
-  const dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force);
+    const dtsPath = path.join(workingDir, 'genpage.d.ts');
+    dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(2);
+  }
 
   const summary = {
     workingDir,

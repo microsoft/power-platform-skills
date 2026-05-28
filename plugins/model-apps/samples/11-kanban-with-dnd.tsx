@@ -25,8 +25,9 @@ import { GeneratedComponentProps, Task } from './RuntimeTypes';
 //   - Status updates persist via dataApi.updateRow on drop
 //   - Native HTML5 events: onDragStart, onDragOver (with preventDefault),
 //     onDrop, onDragEnd
-//   - Three columns mapped to task statuscode values (Open=1, In Progress=2,
-//     Completed=5 — Dataverse defaults for the `task` entity)
+//   - Three columns mapped to task statuscode values (Not Started=2,
+//     In Progress=3, Completed=5 — Dataverse defaults for the `task` entity;
+//     see task_statuscode in RuntimeTypes)
 //   - Window cache (window.__genpage_tasks_v1) for the inline IIFE pattern
 //   - Realistic empty / loading / error states
 //   - Logical CSS properties (paddingInline, paddingBlock, marginInlineStart)
@@ -35,11 +36,11 @@ import { GeneratedComponentProps, Task } from './RuntimeTypes';
 
 // ---------- Constants ----------
 
-const STATUS_OPEN = 1 as const;
-const STATUS_IN_PROGRESS = 2 as const;
+const STATUS_NOT_STARTED = 2 as const;
+const STATUS_IN_PROGRESS = 3 as const;
 const STATUS_COMPLETED = 5 as const;
 
-type StatusValue = typeof STATUS_OPEN | typeof STATUS_IN_PROGRESS | typeof STATUS_COMPLETED;
+type StatusValue = typeof STATUS_NOT_STARTED | typeof STATUS_IN_PROGRESS | typeof STATUS_COMPLETED;
 
 interface Column {
     key: StatusValue;
@@ -49,7 +50,7 @@ interface Column {
 }
 
 const COLUMNS: Column[] = [
-    { key: STATUS_OPEN, label: 'To Do', icon: <ClipboardTaskRegular />, accent: 'brand' },
+    { key: STATUS_NOT_STARTED, label: 'To Do', icon: <ClipboardTaskRegular />, accent: 'brand' },
     { key: STATUS_IN_PROGRESS, label: 'In Progress', icon: <PlayRegular />, accent: 'warning' },
     { key: STATUS_COMPLETED, label: 'Done', icon: <CheckmarkCircleRegular />, accent: 'success' },
 ];

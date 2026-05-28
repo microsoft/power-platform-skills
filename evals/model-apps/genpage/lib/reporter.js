@@ -11,13 +11,15 @@
 //       not ok 2 - assertion text
 //         ---
 //         reason: '...'
-//         file: 'page.tsx'
 //         ...
 //       ok 3 - assertion text # SKIP not implemented
 //   ok 1 - fixture-1-account-gallery
 //   # Subtest: fixture-2-mock-dashboard
 //       ...
 //   1..N
+//
+// Failure diagnostics currently include only `reason:`. Additional fields
+// (e.g., `file:`) can be added by extending `assertion()` if needed.
 //
 // Aggregate result emitted at the end as `# tests N`, `# pass X`, etc.
 
