@@ -210,6 +210,7 @@ function normalizeLocationPath(loc) {
 function generateCustomizationSection(type, items) {
   const badgeMap = {
     'Liquid contains adx references': 'badge-liquid',
+    'FetchXML contains adx references': 'badge-fetchxml',
     'Custom workflow': 'badge-workflow',
     'Data Model Extension': 'badge-data-model',
     'Plugins registered on adx entities': 'badge-plugin'
@@ -220,11 +221,11 @@ function generateCustomizationSection(type, items) {
 
   let html = `
     <div class="customization-section">
-      <h2>
+      <div class="section-header">
         <span class="badge ${badge}">${typeLabel}</span>
-        ${type}
+        <h2>${type}</h2>
         <span class="customization-count">${items.length}</span>
-      </h2>
+      </div>
       <table class="customization-table">
         <thead>
           <tr>

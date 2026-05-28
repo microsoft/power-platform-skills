@@ -467,10 +467,10 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
    | Env Type | Recommended Mode | Rationale |
    |---|---|---|
-   | Dev | `configurationData` | Allows remediation pass before transactional refs migrate |
-   | Test / UAT | `configurationData` | Same reasoning as Dev |
-   | Prod | `configurationDataReferences` | Assumes config metadata is already in EDM via ALM solution import |
-   | Single env (no ALM) | `configurationData` | Same as Dev — no ALM upstream, but safer to allow remediation |
+   | Dev | `configurationData` | Migrate metadata here; allows a customization remediation pass before refs |
+   | Test / UAT | `configurationDataReferences` | Assumes config metadata came from Dev via ALM solution import |
+   | Prod | `configurationDataReferences` | Assumes config metadata came from Dev via ALM solution import |
+   | Single env (no ALM) | `configurationData` | Same as Dev — no upstream env to ALM from; we migrate metadata locally |
 
 3. **Confirm Migration Mode**
 
@@ -479,13 +479,13 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
    | Recommended mode for `<ENV_TYPE>`: `<RECOMMENDED_MODE>`. Confirm or override? | Migration Mode | Use recommended (`<RECOMMENDED_MODE>`), Use `configurationData`, Use `configurationDataReferences`, Use `all` |
 
    Mode descriptions:
-   - `configurationData`: Migrate the metadata (web pages, snippets, settings, etc.) only. **Safer default** — auto-generates a customization report, allows you to remediate before migrating refs.
-   - `configurationDataReferences`: Migrate transactional data references only. Assumes config metadata is already in EDM (e.g., via ALM solution import).
-   - `all`: Migrate both metadata and refs in one shot. **Only safe if no `adx_*` customizations exist** — once refs migrate, customization fixes become much harder.
+   - `configurationData`: Migrate metadata (web pages, snippets, settings, etc.) only. **Recommended default** — auto-generates a customization report, allows remediation before refs migrate in Phase 3.
+   - `configurationDataReferences`: Migrate transactional data references only. Assumes config metadata is already in EDM (typically via ALM solution import on Test/UAT/Prod).
+   - `all`: Migrate metadata AND refs in one shot. **Advanced override.** Only safe if no `adx_*` customizations exist. When chosen, Phase 3.1 (Migrate Transactional References) is skipped automatically because refs are already done in Phase 2.1 — but Phase 3.4 (Activate EDM) and Phase 3.5 (Restart Site) still run.
 
    If user picks an override that's risky for their env, show a warning:
-   - **`all` on any env**: "Only safe if you're sure no `adx_*` customizations exist in your site. Proceed?"
-   - **`configurationDataReferences` on Dev/Test/Single**: "Only safe if metadata is already in EDM (e.g., from a prior `configurationData` run or solution import). Proceed?"
+   - **`all` on any env**: "Recommended only when you know there are no `adx_*` customizations. Once refs migrate, customization fixes become much harder. Proceed?"
+   - **`configurationDataReferences` on Dev/Single env**: "Only safe if metadata is already in EDM (from a prior `configurationData` run or solution import). Proceed?"
 
    Store final selected `<MODE>`.
 
@@ -497,7 +497,7 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
    | `all` | **A** |
    | `configurationDataReferences` | **B** |
 
-   Persist track to state. Track A and Track B have **different Phase 2 and Phase 3 structures** — see the track-branched sections below.
+   Persist track to state. Track A and Track B have **different Phase 2 structures**; **Phase 3 is identical in both tracks** (5 sub-steps, with step 3.1 auto-skipped when mode = `all`).
 
 **Output**: Environment type captured, migration mode confirmed, track derived
 
@@ -911,26 +911,129 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ---
 
-## Phase 3: Migration Execution (track-branched)
+## Phase 3: Migration & Activation
 
-This phase has **two completely different shapes** depending on the migration track derived in step 1.7. Pick the matching section below; ignore the other one.
+**Applies to both tracks.** Phase 3 has the same 5-sub-step structure regardless of whether the user is on Track A or Track B. The only conditional is step 3.1, which is auto-skipped when mode = `all` (refs already migrated in Phase 2.1).
 
-- [**Phase 3 — Track A**](#phase-3--track-a) — track A (mode = `configurationData` or `all`). Metadata already migrated in Phase 2; this phase just activates EDM and prompts a restart.
-- [**Phase 3 — Track B**](#phase-3--track-b) — track B (mode = `configurationDataReferences`). This phase runs the actual transactional migration, handles any customizations the migrate command flags (rare in Prod, but possible if ALM had a gap), activates EDM, and prompts a restart.
+**Goal**: If not already done, migrate transactional references via `--mode configurationDataReferences`. Re-check the customization report (re-emitted by PAC). Remediate any new findings. Activate EDM via `--updateDataModelVersion`. Prompt the user to restart the site manually.
 
----
-
-## Phase 3 — Track A
-
-**Applies when**: state.track === 'A'
-
-**Goal**: Activate EDM (flip the site's data model version from SDM to EDM) and ask the user to restart the site. Metadata was already migrated in Phase 2; there's nothing else to move.
-
-**Output**: Site activated on EDM; user has restarted via Power Platform admin center.
+**Output**: Transactional refs migrated, customizations addressed, site activated on EDM, user has confirmed restart.
 
 ---
 
-### 3.1 Activate EDM (Update Data Model Version)
+### 3.1 Migrate Transactional References
+
+**Goal**: Run `pac pages migrate-datamodel --mode configurationDataReferences` to move transactional data references. Skip if mode was `all` in Phase 2.1.
+
+**Actions**:
+
+1. **Check whether to skip**
+
+   - If `state.mode === 'all'`: refs were already migrated in Phase 2.1. Mark this sub-step completed with output `"Skipped — refs already migrated in Phase 2.1 (mode=all)"` and proceed to step 3.2.
+   - Otherwise: proceed with the migration command below.
+
+2. **Capture SDM source snapshot** (Track B only — Track A already snapshotted in step 2.3)
+
+   For Track B, before running the migration, capture the SDM source so Phase 4 has a baseline to diff against:
+
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+   ```
+
+   > **Nested-folder quirk** applies — actual site root is one level deeper. Capture inner path as `<SITE_ROOT>`.
+
+   Then snapshot:
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label sdm
+   ```
+
+3. **Execute Migration Command**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
+   ```
+
+   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
+
+4. **Poll Status**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   ```
+
+   Same polling pattern as Phase 2.1 — Completed proceeds to 3.2; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
+
+**Output**: Transactional references migrated (or step skipped because mode=all).
+
+> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "<Refs migrated · status=<STATUS> | Skipped — already covered by mode=all in Phase 2.1>"`
+
+---
+
+### 3.2 Locate Customization Report
+
+**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
+
+**Actions**:
+
+Same logic as Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
+
+> **Track A note:** if step 3.1 was skipped (mode=all), this step re-reads the CSV from Phase 2.2 instead. Findings should be unchanged from then since no new migrate command ran.
+
+**Output**: Customization report located and parsed.
+
+> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
+
+---
+
+### 3.3 Remediate Customizations
+
+**Goal**: If any customizations are flagged in 3.2, apply auto-rewrites + augmented prompts and upload. For Track A this is normally a no-op (Phase 2.3 already cleaned things up). For Track B this is where remediation happens, with a stronger warning since findings on a Prod target usually indicate an ALM gap.
+
+**Actions**:
+
+1. **Branch on findings**
+
+   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4. Skip the rest of this sub-step.
+   - **Track A with findings**: usually means something changed between Phase 2 and Phase 3, or the auto-rewriter didn't fully resolve everything. Surface a warning, ask user how to proceed, then run auto-rewriters again.
+   - **Track B with findings**: surface the stronger ALM-gap warning below, ask user how to proceed.
+
+2. **Track B — Surface ALM-gap warning**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Found `<N>` customization findings on this Prod/Test/UAT env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
+
+   - **Remediate now**: proceed with the auto-rewriter steps below.
+   - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
+   - **Cancel**: halt cleanly.
+
+3. **Run FetchXML auto-rewriter** — same script as Phase 2.3 step 4.
+
+4. **Run Liquid semi-auto annotator** — same script as Phase 2.3 step 5.
+
+5. **Generate augmented prompts** — same as Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
+
+6. **Review and approve** — same as Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
+
+7. **Upload approved changes**:
+
+   ```powershell
+   pac pages upload --path "<SITE_ROOT>" --modelVersion 1
+   ```
+
+   > **→ Update report (after upload):** `--clear-approval`.
+
+**Output**: Customizations remediated and uploaded (or zero findings, skipped).
+
+> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
+
+---
+
+### 3.4 Activate EDM (Update Data Model Version)
 
 **Goal**: Run `--updateDataModelVersion` to flip the site to EDM.
 
@@ -979,12 +1082,12 @@ This phase has **two completely different shapes** depending on the migration tr
 >
 > ```
 > --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
-> --set-step 3.1 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
 ---
 
-### 3.2 Restart Site (manual)
+### 3.5 Restart Site (manual)
 
 **Goal**: User must manually restart the site for the data model change to take effect at runtime. There is no PAC command for this.
 
@@ -1013,156 +1116,7 @@ This phase has **two completely different shapes** depending on the migration tr
 
 **Output**: User has confirmed the site is restarted on EDM.
 
-> **→ Update report (end of Phase 3 Track A):**
->
-> ```
-> --set-step 3.2 --status completed --output "Site restarted by user · live on EDM"
-> --set-phase 3 --status completed
-> --set-approval 4 phase-start
-> ```
->
-> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
-
----
-
-## Phase 3 — Track B
-
-**Applies when**: state.track === 'B'
-
-**Goal**: Capture SDM snapshot for Phase 4 data-diff, run the transactional migration (`--mode configurationDataReferences`, which auto-emits a customization report), handle any customizations (with a stronger warning since they should have been remediated in Dev), activate EDM, and prompt a restart.
-
-**Output**: Transactional refs migrated, any customizations addressed, site activated on EDM, user has restarted.
-
----
-
-### 3.1 Migrate Transactional References
-
-**Goal**: Capture SDM snapshot first (needed for Phase 4 diff), then run the migration command.
-
-**Actions**:
-
-1. **Capture SDM source snapshot**
-
-   ```powershell
-   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
-   ```
-
-   > **Nested-folder quirk** still applies — actual site root with `website.yml` is one level deeper. Capture inner path as `<SITE_ROOT>`.
-
-   Then snapshot:
-
-   ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
-     --site-root "<SITE_ROOT>" `
-     --output-dir "<OUTPUT_DIR>" `
-     --label sdm
-   ```
-
-   Output: `<OUTPUT_DIR>/sdm-snapshot.json` — Phase 4 will diff this against an EDM snapshot post-migration.
-
-2. **Execute Migration Command**
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
-   ```
-
-   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
-
-3. **Poll Status**
-
-   Same polling pattern as Track A 2.1:
-
-   ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
-   ```
-
-   - **Completed**: proceed to 3.2.
-   - **In Progress**: `--set-activity "Polling migration status (attempt <N>/30)"`, wait 1 min, re-check.
-   - **Failed / 30-min timeout**: same retry/reset/exit branching as Track A 2.1.
-
-**Output**: Transactional references migrated; customization CSV auto-emitted by PAC.
-
-> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "Transactional refs migrated · status=<STATUS>"`
-
----
-
-### 3.2 Locate Customization Report
-
-**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
-
-**Actions**:
-
-Same logic as Track A 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
-
-**Output**: Customization report located/generated and parsed.
-
-> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
-
----
-
-### 3.3 Remediate Customizations
-
-**Goal**: If any customizations were flagged in 3.2, apply auto-rewrites + augmented prompts and upload — same flow as Track A 2.3, but with a **stronger warning** because customizations in a Prod target usually indicate an ALM gap.
-
-**Actions**:
-
-1. **Branch on findings**
-
-   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4. Skip the rest of this sub-step.
-   - **One or more findings**: surface the stronger warning below, then ask user how to proceed.
-
-2. **Surface ALM-gap warning**
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Found `<N>` customization findings on this Prod env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
-
-   - **Remediate now**: proceed with steps 3–7 below (same as Track A 2.3 steps 4–8 but operating against the already-downloaded `<SITE_ROOT>`).
-   - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
-   - **Cancel**: halt cleanly.
-
-3. **Run FetchXML auto-rewriter** — same script as Track A 2.3 step 4.
-
-4. **Run Liquid semi-auto annotator** — same script as Track A 2.3 step 5.
-
-5. **Generate augmented prompts** — same as Track A 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
-
-6. **Review and approve** — same as Track A 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
-
-7. **Upload approved changes**:
-
-   ```powershell
-   pac pages upload --path "<SITE_ROOT>" --modelVersion 1
-   ```
-
-   (Same PAC argument notes as Track A 2.3 step 8.)
-
-   > **→ Update report (after upload):** `--clear-approval`.
-
-**Output**: Customizations remediated and uploaded (or zero findings, skipped).
-
-> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
-
----
-
-### 3.4 Activate EDM (Update Data Model Version)
-
-Identical to Track A 3.1 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
-
-> **→ Update report:**
->
-> ```
-> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
-> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
-> ```
-
----
-
-### 3.5 Restart Site (manual)
-
-Identical to Track A 3.2 — print restart instructions, wait for user confirmation.
-
-> **→ Update report (end of Phase 3 Track B):**
+> **→ Update report (end of Phase 3):**
 >
 > ```
 > --set-step 3.5 --status completed --output "Site restarted by user · live on EDM"
@@ -1172,7 +1126,6 @@ Identical to Track A 3.2 — print restart instructions, wait for user confirmat
 >
 > Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
 
----
 
 ## Phase 4: Post-Migration Validation
 
@@ -1326,13 +1279,15 @@ Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 |-------|-------------|-------------|
 | Phase 1 | Site Discovery & Pre-checks | Setting up for migration |
 | Phase 2 | Configuration Setup | Setting up configuration (track-aware) |
-| Phase 3 | Migration Execution | Executing migration (track-aware) |
+| Phase 3 | Migration & Activation | Executing migration and activating EDM |
 | Phase 4 | Post-Migration Validation | Validating and completing migration |
 
-> **Track-aware naming:** Phase 2 and Phase 3 task labels above are umbrella names. The live execution report shows the track-specific phase title once step 1.7 sets the track:
+> **Track-aware naming for Phase 2:** Phase 2 has two different structures depending on the track derived in step 1.7. The live execution report shows the track-specific phase title:
 >
-> - **Track A** (mode = `configurationData` or `all`): Phase 2 renders as "Configuration Migration & Customization Remediation"; Phase 3 renders as "Activation".
-> - **Track B** (mode = `configurationDataReferences`): Phase 2 renders as "Setting Up Metadata"; Phase 3 renders as "Runtime Data Migration & Activation".
+> - **Track A** (mode = `configurationData` or `all`): Phase 2 renders as "Configuration Migration & Customization Remediation"
+> - **Track B** (mode = `configurationDataReferences`): Phase 2 renders as "Setting Up Metadata"
+>
+> **Phase 3 is identical in both tracks** — same 5 sub-steps, same title. The only conditional is step 3.1, which is auto-skipped when mode = `all` (refs already migrated in Phase 2.1).
 
 ---
 

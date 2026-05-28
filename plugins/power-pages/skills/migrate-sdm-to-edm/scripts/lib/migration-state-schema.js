@@ -91,15 +91,6 @@ const PHASE_2_TRACK_A = {
   ],
 };
 
-const PHASE_3_TRACK_A = {
-  id: 3,
-  title: 'Activation',
-  subSteps: [
-    { id: '3.1', label: 'Activate EDM (Update Data Model Version)' },
-    { id: '3.2', label: 'Restart Site' },
-  ],
-};
-
 const PHASE_2_TRACK_B = {
   id: 2,
   title: 'Setting Up Metadata',
@@ -110,9 +101,14 @@ const PHASE_2_TRACK_B = {
   ],
 };
 
-const PHASE_3_TRACK_B = {
+// Phase 3 is identical in both tracks (per the unified Phase 3 design): always
+// runs migrate refs → locate report → remediate (if findings) → activate → restart.
+// In Track A with mode=`all`, step 3.1 is a no-op (refs already migrated in 2.1) —
+// SKILL.md instructs the agent to mark it completed with output "Skipped — already
+// covered by mode=all in Phase 2.1".
+const PHASE_3_UNIFIED = {
   id: 3,
-  title: 'Runtime Data Migration & Activation',
+  title: 'Migration & Activation',
   subSteps: [
     { id: '3.1', label: 'Migrate Transactional References' },
     { id: '3.2', label: 'Locate Customization Report' },
@@ -123,8 +119,8 @@ const PHASE_3_TRACK_B = {
 };
 
 const PHASE_BLUEPRINTS_BY_TRACK = Object.freeze({
-  A: [PHASE_1, PHASE_2_TRACK_A, PHASE_3_TRACK_A, PHASE_4],
-  B: [PHASE_1, PHASE_2_TRACK_B, PHASE_3_TRACK_B, PHASE_4],
+  A: [PHASE_1, PHASE_2_TRACK_A, PHASE_3_UNIFIED, PHASE_4],
+  B: [PHASE_1, PHASE_2_TRACK_B, PHASE_3_UNIFIED, PHASE_4],
 });
 
 function makePhasesFromBlueprint(blueprints) {
