@@ -39,9 +39,10 @@ process.stdin.on('end', async () => {
   let validatorStatus = 0;
   let skillName = null;
   let validatorRan = false;
+  let input = null;
 
   try {
-    const input = JSON.parse(inputData);
+    input = JSON.parse(inputData);
     skillName = getTrackedSkillFromToolInput(input.tool_input);
     if (!skillName) {
       debug('[power-pages hook] No tracked skill detected — skipping validation\n');
