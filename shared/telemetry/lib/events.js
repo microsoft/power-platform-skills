@@ -33,9 +33,8 @@ const FIELD_TYPES = {
   aiAgentVersion: "string",
   // Common — caller-supplied dynamic JSON
   eventInfo: "object",
-  // Skill / script
+  // Skill
   skillName: "string",
-  scriptName: "string",
   // Completed-only
   outcome: "enum:success|failure",
   durationMs: "int",
@@ -60,7 +59,6 @@ const COMMON_FIELDS = [
 ];
 
 const SKILL_FIELDS = ["skillName"];
-const SCRIPT_FIELDS = ["scriptName"];
 const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescription"];
 
 function isPlainStructured(v) {
@@ -128,30 +126,9 @@ function buildSkillCompleted(envelopeName, input) {
   );
 }
 
-function buildScriptStarted(envelopeName, input) {
-  return buildEvent(
-    envelopeName,
-    "script_started",
-    pick(input, [...COMMON_FIELDS, ...SCRIPT_FIELDS]),
-    "Info"
-  );
-}
-
-function buildScriptCompleted(envelopeName, input) {
-  const severity = input && input.outcome === "failure" ? "Error" : "Info";
-  return buildEvent(
-    envelopeName,
-    "script_completed",
-    pick(input, [...COMMON_FIELDS, ...SCRIPT_FIELDS, ...COMPLETED_FIELDS]),
-    severity
-  );
-}
-
 module.exports = {
   buildSkillStarted,
   buildSkillCompleted,
-  buildScriptStarted,
-  buildScriptCompleted,
   FIELD_TYPES,
   pick,
 };
