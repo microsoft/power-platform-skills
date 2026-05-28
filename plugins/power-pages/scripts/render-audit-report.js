@@ -11,7 +11,6 @@
 
 const path = require('path');
 const { renderTemplate, parseArgs } = require('./lib/render-template');
-const { runInstrumented } = require('./lib/telemetry-runner');
 
 async function main() {
   const args = parseArgs(process.argv);
@@ -32,7 +31,7 @@ async function main() {
 }
 
 if (require.main === module) {
-  runInstrumented('render-audit-report', main).catch((err) => {
+  main().catch((err) => {
     process.stderr.write(String((err && err.stack) || err) + '\n');
     process.exit(1);
   });

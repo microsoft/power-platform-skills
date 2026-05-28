@@ -16,7 +16,6 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { findPath, getPacAuthInfo, getAuthToken, makeRequest, CLOUD_TO_API } = require('./lib/validation-helpers');
-const { runInstrumented } = require('./lib/telemetry-runner');
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj));
@@ -138,7 +137,7 @@ async function getWebsites(ppApiBaseUrl, token, environmentId) {
 }
 
 if (require.main === module) {
-  runInstrumented('check-activation-status', main).catch((err) => {
+  main().catch((err) => {
     process.stderr.write(String((err && err.stack) || err) + '\n');
     process.exit(1);
   });
