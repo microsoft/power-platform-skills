@@ -34,6 +34,13 @@ async function runInstrumented(scriptName, asyncFn, _overrides = {}) {
   const deps = _overrides.deps || loadTelemetryDeps();
   if (!deps) return await asyncFn();
 
+  // Fast-path kill switches: skip the entire withTelemetry path (PAC ~3s +
+  // `pac --version` ~2s + dispatcher spawn) so a disabled plugin or
+  // opted-out user pays zero telemetry cost.
+  if (deps.ikeyCfg.disabled === true) return await asyncFn();
+  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") return await asyncFn();
+  if (!deps.ikeyCfg.instrumentationKey) return await asyncFn();
+
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 
   return deps.withTelemetry(scriptName, asyncFn, {

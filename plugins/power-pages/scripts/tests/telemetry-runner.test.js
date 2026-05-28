@@ -54,3 +54,78 @@ test("runInstrumented reads iKey from instrumentationKey property (not legacy 'i
   await runInstrumented("my-script", async () => "ok", { deps: fakeDeps });
   assert.equal(captured.spawnOpts.iKey, "the-real-key");
 });
+
+test("disabled:true short-circuits BEFORE withTelemetry (no PAC, no spawn)", async () => {
+  let withTelemetryCalled = false;
+  const fakeDeps = {
+    withTelemetry: () => {
+      withTelemetryCalled = true;
+      return null;
+    },
+    ikeyCfg: {
+      instrumentationKey: "key-value",
+      collector_url: "https://x",
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: true,
+    },
+  };
+  const result = await runInstrumented(
+    "my-script",
+    async () => "raw-fn-return",
+    { deps: fakeDeps }
+  );
+  assert.equal(result, "raw-fn-return");
+  assert.equal(withTelemetryCalled, false);
+});
+
+test("POWER_PLATFORM_SKILLS_TELEMETRY=0 short-circuits BEFORE withTelemetry", async () => {
+  let withTelemetryCalled = false;
+  const fakeDeps = {
+    withTelemetry: () => {
+      withTelemetryCalled = true;
+      return null;
+    },
+    ikeyCfg: {
+      instrumentationKey: "key-value",
+      collector_url: "https://x",
+      event_stream_name: "PowerPagesPluginEvent",
+    },
+  };
+  const prev = process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
+  process.env.POWER_PLATFORM_SKILLS_TELEMETRY = "0";
+  let result;
+  try {
+    result = await runInstrumented(
+      "my-script",
+      async () => "raw-fn-return",
+      { deps: fakeDeps }
+    );
+  } finally {
+    if (prev === undefined) delete process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
+    else process.env.POWER_PLATFORM_SKILLS_TELEMETRY = prev;
+  }
+  assert.equal(result, "raw-fn-return");
+  assert.equal(withTelemetryCalled, false);
+});
+
+test("missing instrumentationKey short-circuits BEFORE withTelemetry", async () => {
+  let withTelemetryCalled = false;
+  const fakeDeps = {
+    withTelemetry: () => {
+      withTelemetryCalled = true;
+      return null;
+    },
+    ikeyCfg: {
+      instrumentationKey: "",
+      collector_url: "https://x",
+      event_stream_name: "PowerPagesPluginEvent",
+    },
+  };
+  const result = await runInstrumented(
+    "my-script",
+    async () => "raw-fn-return",
+    { deps: fakeDeps }
+  );
+  assert.equal(result, "raw-fn-return");
+  assert.equal(withTelemetryCalled, false);
+});

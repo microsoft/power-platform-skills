@@ -21,9 +21,10 @@ function readIkey(telemetryDir) {
       ikey: cfg.instrumentationKey || "",
       collectorUrl: cfg.collector_url || "",
       eventStreamName: cfg.event_stream_name || "",
+      disabled: cfg.disabled === true,
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "" };
+    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
   }
 }
 
@@ -48,7 +49,15 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   const skillName = detectSlashCommand(promptText, { pluginName, trackedSkills });
   if (!skillName) return { emitted: false, skillName: null };
 
-  const { ikey, collectorUrl, eventStreamName } = readIkey(telemetryDir);
+  // Fast-path kill switches: short-circuit BEFORE any PAC / agent-info
+  // shellouts (~3-5s combined) so a disabled plugin or opted-out user pays
+  // effectively no cost when a tracked slash command is detected.
+  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") {
+    return { emitted: false, skillName };
+  }
+  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey(telemetryDir);
+  if (disabled) return { emitted: false, skillName };
+  if (!ikey) return { emitted: false, skillName };
 
   const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
   let pacAuth = null;
