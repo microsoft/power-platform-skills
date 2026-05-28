@@ -1,7 +1,7 @@
 # Genpage Plan
 
 ## User Requirements
-Build a dark-themed sales dashboard page with a monthly revenue bar chart (Jan–Dec 2025), a top-5 customers table, and a KPI summary bar showing Total Revenue (YTD), Active Customers, Avg Deal Size, and Win Rate. All data is mock. Use teal/cyan accent colors on a dark background. The table should use Fluent UI DataGrid with region badges and status chips. The layout should be responsive, collapsing to a single column on narrow viewports and expanding to the full layout at 768px or wider.
+Create a dashboard page with mock data showing sales metrics — monthly revenue chart, top 5 customers table, and a KPI summary bar. Use a modern dark theme look.
 
 ## Working Directory
 D:/temp/sales-dashboard
@@ -10,8 +10,8 @@ D:/temp/sales-dashboard
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://tmsbapenv5ee52.crmtest.dynamics.com/
-- App: genux infra demo (cdf28a9d-bf3d-f111-bec7-000d3a36bc0a)
+- URL: https://aurorabapenv610b3.crmtest.dynamics.com/
+- App: DSTest-A-WithDataSources (35913103-4e59-f111-a821-000d3a37616d)
 - Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
@@ -19,7 +19,7 @@ D:/Projects/power-platform-skills/plugins/model-apps
 ## Pages
 | Page | File | Purpose | Entities |
 |------|------|---------|----------|
-| Sales Dashboard | sales-dashboard.tsx | Dark-themed dashboard with monthly revenue bar chart, top-5 customers table, and KPI summary bar | mock data |
+| Sales Dashboard | sales-dashboard.tsx | Dark-themed sales overview with KPI bar, monthly revenue chart, and top-5 customers table | mock data |
 
 ## Entity Creation Required
 No entity creation required — all entities already exist.
@@ -28,28 +28,34 @@ No entity creation required — all entities already exist.
 None
 
 ## Design Preferences
-- Styling: Dark background (#0d1117 page background, #161b22 card/tile surfaces), near-white text (#e6edf3), accent teal/cyan (#00bcd4) for chart bars, highlights, and interactive elements. Subtle border (#30363d) around card surfaces.
-- Features: KPI summary bar (4 metric tiles in a horizontal row, each with an icon, large numeric value, label, and trend arrow); monthly revenue bar chart rendered with inline SVG bars for 12 months (Jan–Dec 2025); top-5 customers Fluent UI DataGrid with sortable columns, formatted currency, region badge chips, and Active/Inactive status chips; responsive layout that stacks to single column below 768px.
-- Accessibility: WCAG AA contrast ratios on all text against dark backgrounds; keyboard-navigable DataGrid; aria-labels on SVG chart elements; focus-visible ring on interactive elements.
+- Styling: Modern dark theme. Base on Fluent UI v9 `webDarkTheme` with a deep neutral background (near-black `#0E1116`/`#14171C`), elevated card surfaces (`#1B1F25`), subtle 1px borders using `colorNeutralStroke2`, and a vibrant accent palette — primary accent teal/cyan (`#2EE6D6`), secondary accent magenta (`#FF4FA3`), and supporting amber (`#FFB547`) for warnings. High-contrast typography using `colorNeutralForeground1` for headings and `colorNeutralForeground3` for secondary labels. Card corners radius `tokens.borderRadiusLarge`, soft shadow `tokens.shadow16` for elevation.
+- Features: Single-page dashboard, no routing. KPI summary bar at the top (4 metric tiles with delta indicators), a full-width monthly revenue chart in the middle (12-month line/area chart with grid lines and tooltips), and a top-5 customers table at the bottom (rank, customer name, revenue YTD, deals closed, growth %). Optional time-range pill toggle (Last 6M / Last 12M / YTD) that filters the chart and KPIs. Hover states on all interactive elements, sparkline-style mini-chart on each KPI tile.
+- Accessibility: All KPI tiles, chart, and table rows must meet WCAG AA contrast in dark mode (accent colors above were chosen for ≥4.5:1 on `#14171C`). Chart series exposed via `aria-label` and a visually-hidden data table for screen readers. Keyboard-navigable time-range toggle (Tab + Arrow keys). Focus rings visible against dark background using `tokens.colorStrokeFocus2`.
 
 ## Relevant Samples
 | Page | Sample | Reason |
 |------|--------|--------|
-| Sales Dashboard | 8-dashboard-with-charts.tsx | Demonstrates dashboard layout with KPI tiles and chart rendering patterns on a dark theme |
+| Sales Dashboard | 8-dashboard-with-charts.tsx | Direct structural match — KPI tiles, chart composition, and tabular section on a single dashboard surface |
 
 ## Per-Page Specifications
 
 ### Sales Dashboard
 - **File:** sales-dashboard.tsx
-- **Purpose:** Dark-themed sales dashboard displaying KPI summary bar, monthly revenue bar chart, and top-5 customers table using mock data.
+- **Purpose:** Mock-data sales overview combining KPI tiles, a 12-month revenue chart, and a top-5 customers table on a dark-themed single page.
 - **Entities:** mock data
 - **Needs caching:** false
 - **Key Features:**
-  - KPI bar: 4 tiles in a horizontal row — Total Revenue YTD ($3.82M), Active Customers (248), Avg Deal Size ($87.5K), Win Rate (64%). Each tile shows an icon, formatted value, label, and a colored trend arrow (up/down) with a small percentage delta.
-  - Revenue bar chart: inline SVG bar chart for 12 months (Jan–Dec 2025). Bars are teal (#00bcd4), with dark gridlines, white axis labels, and a hover tooltip showing the exact month and value. Monthly values (USD): Jan $180K, Feb $210K, Mar $290K, Apr $340K, May $410K, Jun $380K, Jul $450K, Aug $510K, Sep $490K, Oct $570K, Nov $600K, Dec $620K.
-  - Top-5 customers table: Fluent UI DataGrid with columns: Customer Name, Total Revenue (formatted currency), Deal Count, Region (badge chip), Status (Active/Inactive chip). Rows are keyboard-navigable. Customers: Contoso Ltd ($820K, 14 deals, North America, Active), Fabrikam Inc ($740K, 11 deals, Europe, Active), Northwind Traders ($610K, 9 deals, Asia Pacific, Active), Adventure Works ($480K, 7 deals, North America, Inactive), Tailspin Toys ($370K, 6 deals, Europe, Active).
-  - Responsive: at viewport width < 768px, KPI tiles wrap to 2-column grid and chart/table stack vertically; at >= 768px the full side-by-side or stacked layout is shown.
-- **Components:** Fluent UI V9 — `Text`, `Card`, `Badge`, `DataGrid`, `DataGridHeader`, `DataGridHeaderCell`, `DataGridBody`, `DataGridRow`, `DataGridCell`, `TableColumnDefinition`, `createTableColumn`, `makeStyles`, `tokens`. Inline SVG for the bar chart (no external chart library).
-- **Layout:** Page uses a flex column container. Top section: 4 KPI tiles in a CSS grid (repeat(4, 1fr) collapsing to repeat(2, 1fr) below 768px). Middle section: the bar chart card spanning full width. Bottom section: the top-5 customers DataGrid card spanning full width. All cards use the #161b22 surface color with #30363d border and 12px border-radius.
-- **Data Binding:** All data is defined as inline TypeScript const arrays at the top of the component file — no Dataverse queries. A `kpiData` array of 4 objects, a `revenueData` array of 12 month objects, and a `customerData` array of 5 customer objects.
-- **Interactions:** SVG bar chart bars highlight on hover (opacity change) and show a floating tooltip (position: absolute, dark background, white text) with month name and formatted dollar value. DataGrid rows are selectable/focusable via keyboard. Trend arrows in KPI tiles are purely visual (no click behavior). No routing or navigation needed.
+  - KPI summary bar with 4 tiles: Total Revenue (MTD), New Deals Closed, Average Deal Size, Win Rate. Each tile shows the headline value, a delta vs. prior period (with up/down arrow and color cue), and a faint sparkline of the last 8 weeks.
+  - Monthly Revenue chart: 12-month line/area chart with smooth curve, gradient fill from accent teal to transparent, gridlines, and rich hover tooltip (month label + revenue + MoM change).
+  - Top 5 Customers table: columns Rank, Customer, Revenue YTD ($), Deals Closed, Growth %. Growth % rendered as a Badge (green for positive, red for negative). Subtle row hover.
+  - Time-range pill toggle (segmented control: 6M / 12M / YTD) that re-derives KPI deltas and chart slice from the same mock dataset (no fetch).
+  - Page header: "Sales Dashboard" title + caption "Last updated [today]" + a refresh icon button (decorative — re-randomizes mock data in state for demo flair).
+- **Components:** Fluent UI v9 — `FluentProvider` with `webDarkTheme`, `Card`, `CardHeader`, `Text`, `Title1`/`Title2`/`Subtitle1`/`Caption1`, `Badge`, `Button`, `ToggleButton` (or `TabList`), `Table` / `TableHeader` / `TableRow` / `TableCell`, `Skeleton` for initial loading shimmer, `Tooltip`, `Divider`. Custom inline SVG for the revenue chart and KPI sparklines (no third-party chart lib — keep bundle lean and theme-aware).
+- **Layout:** Responsive CSS grid. Outer page is a vertical flex with 24px gap, max-width 1440px, centered, 32px horizontal padding (16px on mobile). KPI bar is `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))` — 4-up on desktop, 2-up on tablet, stacked on mobile. Revenue chart card spans full width with aspect ratio ~16:6. Top customers table card spans full width below.
+- **Data Binding:** Pure mock — a `useMemo`-wrapped `mockSalesData` object containing: `kpis: { totalRevenueMtd, newDealsClosed, avgDealSize, winRate, deltas, sparklines }`, `monthlyRevenue: { month: string; revenue: number }[]` (12 entries), and `topCustomers: { rank, name, revenueYtd, dealsClosed, growthPct }[]` (5 entries). No `queryTable` / `retrieveRow` calls — page operates entirely offline.
+- **Interactions:**
+  - Time-range toggle: `useState` for `'6M' | '12M' | 'YTD'`; clicking re-slices `monthlyRevenue` and recomputes derived KPI deltas via a pure helper.
+  - Refresh button: re-runs a `generateMockSales(seed)` helper with a new seed and updates state — gives a satisfying re-randomize for demos.
+  - Chart hover: shows a vertical guideline and floating tooltip with month/value (SVG `<g>` event handlers).
+  - Table row hover: applies an elevated background using `tokens.colorNeutralBackground1Hover`.
+  - All interactive controls are keyboard-reachable; focus order follows visual order (header actions → toggle → chart → table).

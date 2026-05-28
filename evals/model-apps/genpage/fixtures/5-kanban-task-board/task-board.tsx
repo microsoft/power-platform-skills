@@ -1,79 +1,70 @@
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     makeStyles,
+    mergeClasses,
+    shorthands,
     tokens,
-    Text,
+    Card,
+    CardHeader,
     Body1,
     Caption1,
+    Text,
     Badge,
     Spinner,
     MessageBar,
     MessageBarBody,
-    Button,
-    Card,
-    CardHeader,
 } from '@fluentui/react-components';
 import {
     ClipboardTaskRegular,
     PlayRegular,
     CheckmarkCircleRegular,
-    CalendarLtrRegular,
 } from '@fluentui/react-icons';
 import type { GeneratedComponentProps, task } from './RuntimeTypes';
 
-// ── Module-level cache (survives module re-evaluation on navigation) ───────────
-// See rules: data-caching.md Pattern 1
-let _taskCache: task[] | null = (window as unknown as Record<string, task[] | null>).__ppTaskBoardCache ?? null;
+// ---- Status constants (verified against RuntimeTypes task_statuscode enum) ----
+// RuntimeTypes: "Not Started" = 2, "In Progress" = 3, "Completed" = 5
+const TO_DO = 2 as const;
+const IN_PROGRESS = 3 as const;
+const DONE = 5 as const;
+type StatusValue = typeof TO_DO | typeof IN_PROGRESS | typeof DONE;
 
-// ── Column definitions ─────────────────────────────────────────────────────────
-// statuscode values verified from RuntimeTypes.ts task_statuscode enum:
-//   Not Started=2, In Progress=3, Completed=5
-// statecode values from task_statecode enum: Open=0, Completed=1
-
-interface ColumnDef {
-    label: string;
-    /** Dataverse statuscode value for tasks in this column */
-    statuscode: number;
-    /** Dataverse statecode value to write on drop */
-    statecode: number;
-    icon: ReactNode;
-    badgeColor: 'brand' | 'warning' | 'success';
+// Dataverse enforces statecode alignment with statuscode
+function stateCodeFor(s: StatusValue): number {
+    return s === DONE ? 1 : 0; // 1 = Completed, 0 = Open
 }
 
+// ---- Priority display (RuntimeTypes: Low=0, Normal=1, High=2) ----
+const PRIORITY_LABEL: Record<number, string> = { 0: 'Low', 1: 'Normal', 2: 'High' };
+type BadgeColor = 'success' | 'brand' | 'warning';
+const PRIORITY_COLOR: Record<number, BadgeColor> = { 0: 'success', 1: 'brand', 2: 'warning' };
+
+// ---- Column configuration ----
+interface ColumnDef {
+    key: StatusValue;
+    label: string;
+    icon: React.ReactNode;
+    accent: BadgeColor;
+}
 const COLUMNS: ColumnDef[] = [
-    { label: 'To Do',       statuscode: 2, statecode: 0, icon: <ClipboardTaskRegular  />, badgeColor: 'brand'   },
-    { label: 'In Progress', statuscode: 3, statecode: 0, icon: <PlayRegular            />, badgeColor: 'warning' },
-    { label: 'Done',        statuscode: 5, statecode: 1, icon: <CheckmarkCircleRegular />, badgeColor: 'success' },
+    { key: TO_DO,       label: 'To Do',       icon: <ClipboardTaskRegular />, accent: 'brand'   },
+    { key: IN_PROGRESS, label: 'In Progress',  icon: <PlayRegular />,          accent: 'warning' },
+    { key: DONE,        label: 'Done',         icon: <CheckmarkCircleRegular />, accent: 'success' },
 ];
 
-// Columns whose tasks are included in the board
-const BOARD_STATUSCODES = new Set(COLUMNS.map(c => c.statuscode));
+// ---- Window cache (survives module re-evaluation on navigation) ----
+let _taskCache: task[] | null = (window as any).__ppTaskCache ?? null;
 
-// ── Priority helpers ───────────────────────────────────────────────────────────
-// task_prioritycode: Low=0, Normal=1, High=2 (from RuntimeTypes)
-
-interface PriorityConfig { label: string; color: 'subtle' | 'informative' | 'warning' }
-
-function getPriority(code: number | null | undefined): PriorityConfig {
-    switch (code) {
-        case 2: return { label: 'High',   color: 'warning'     };
-        case 1: return { label: 'Normal', color: 'informative' };
-        default: return { label: 'Low',   color: 'subtle'      };
-    }
+// ---- Due date formatting ----
+function formatDue(date: Date | null | undefined): { text: string; overdue: boolean } | null {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    const overdue = d < new Date();
+    const text = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return { text: overdue ? `${text} (overdue)` : text, overdue };
 }
 
-// ── Date helper ────────────────────────────────────────────────────────────────
-
-function formatDue(value: Date | string | null | undefined): string {
-    if (!value) return '';
-    const d = new Date(value as string);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-// ── Styles ─────────────────────────────────────────────────────────────────────
-
+// ---- Styles ----
 const useStyles = makeStyles({
     root: {
         display: 'flex',
@@ -83,19 +74,17 @@ const useStyles = makeStyles({
         paddingBlock: tokens.spacingVerticalL,
         gap: tokens.spacingVerticalM,
         boxSizing: 'border-box',
+        overflowY: 'hidden',
     },
-    header: {
+    pageHeader: {
         display: 'flex',
         alignItems: 'center',
         gap: tokens.spacingHorizontalS,
         flexShrink: 0,
     },
-    errorBar: {
-        flexShrink: 0,
-    },
     board: {
         display: 'grid',
-        gridTemplateColumns: 'repeat(3, minmax(240px, 1fr))',
+        gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
         gap: tokens.spacingHorizontalM,
         flex: 1,
         overflowX: 'auto',
@@ -105,17 +94,21 @@ const useStyles = makeStyles({
     column: {
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: tokens.colorNeutralBackground2,
-        borderRadius: tokens.borderRadiusMedium,
+        gap: tokens.spacingVerticalXS,
         paddingInline: tokens.spacingHorizontalS,
         paddingBlock: tokens.spacingVerticalS,
-        gap: tokens.spacingVerticalXS,
+        backgroundColor: tokens.colorNeutralBackground2,
+        borderRadius: tokens.borderRadiusMedium,
         minHeight: 0,
-        outline: 'none',
+        transitionProperty: 'background-color',
+        transitionDuration: tokens.durationNormal,
     },
-    columnDragOver: {
+    columnOver: {
         backgroundColor: tokens.colorBrandBackground2,
-        outline: `2px dashed ${tokens.colorBrandStroke1}`,
+        outlineWidth: '2px',
+        outlineStyle: 'dashed',
+        outlineColor: tokens.colorBrandStroke1,
+        outlineOffset: '-2px',
     },
     columnHeader: {
         display: 'flex',
@@ -129,155 +122,97 @@ const useStyles = makeStyles({
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: tokens.spacingVerticalS,
+        gap: tokens.spacingVerticalXS,
         minHeight: 0,
+        paddingBlockEnd: tokens.spacingVerticalXS,
+    },
+    card: {
+        cursor: 'grab',
+        transitionProperty: 'opacity',
+        transitionDuration: tokens.durationNormal,
+        ':active': { cursor: 'grabbing' },
+    },
+    cardDragging: { opacity: 0.45 },
+    cardBody: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: tokens.spacingVerticalXXS,
+        paddingInline: tokens.spacingHorizontalM,
         paddingBlockEnd: tokens.spacingVerticalS,
     },
+    cardMeta: {
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: tokens.spacingHorizontalXS,
+        flexWrap: 'wrap',
+    },
+    dueNormal: { color: tokens.colorNeutralForeground3 },
+    dueOverdue: { color: tokens.colorPaletteRedForeground1, fontWeight: tokens.fontWeightSemibold },
     emptyHint: {
         color: tokens.colorNeutralForeground3,
         fontStyle: 'italic',
         textAlign: 'center',
-        paddingBlock: tokens.spacingVerticalXL,
+        paddingBlock: tokens.spacingVerticalL,
     },
-    card: {
-        paddingInline: tokens.spacingHorizontalS,
-        paddingBlock: tokens.spacingVerticalXS,
-        cursor: 'grab',
-        flexShrink: 0,
-        ':focus-visible': {
-            outlineOffset: '2px',
-        },
-    },
-    cardDragging: {
-        opacity: 0.45,
-        cursor: 'grabbing',
-    },
-    cardMeta: {
+    dropError: { flexShrink: 0 },
+    spinnerWrap: {
         display: 'flex',
         alignItems: 'center',
-        gap: tokens.spacingHorizontalS,
-        flexWrap: 'wrap',
-        paddingBlockStart: tokens.spacingVerticalXS,
-    },
-    cardDue: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: tokens.spacingHorizontalXS,
-        color: tokens.colorNeutralForeground2,
-    },
-    kbMoveBar: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: tokens.spacingHorizontalXS,
-        paddingBlockStart: tokens.spacingVerticalXS,
-        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '200px',
     },
 });
 
-// ── TaskCard ───────────────────────────────────────────────────────────────────
+// ---- Task card sub-component ----
 
 interface TaskCardProps {
-    task: task;
-    isDragging: boolean;
-    isKbSelected: boolean;
-    currentCol: ColumnDef;
-    onDragStart: (e: React.DragEvent<HTMLDivElement>, taskId: string) => void;
+    item: task;
+    dragging: boolean;
+    onDragStart: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
     onDragEnd: () => void;
-    onKeyMove: (taskId: string, col: ColumnDef) => void;
-    onKbSelect: (taskId: string | null) => void;
 }
 
-const TaskCard = (props: TaskCardProps) => {
-    const { task, isDragging, isKbSelected, currentCol, onDragStart, onDragEnd, onKeyMove, onKbSelect } = props;
+const TaskCard = ({ item, dragging, onDragStart, onDragEnd }: TaskCardProps) => {
     const styles = useStyles();
-    const priority = getPriority(task.prioritycode as number);
-    const due = formatDue(task.scheduledend);
-
-    const cardClass = `${styles.card} ${isDragging ? styles.cardDragging : ''}`;
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-        if (e.key === 'Escape') {
-            onKbSelect(null);
-            return;
-        }
-        if ((e.key === ' ' || e.key === 'Enter') && !isKbSelected) {
-            e.preventDefault();
-            onKbSelect(task.activityid);
-        }
-    };
+    const priority = item.prioritycode as unknown as number;
+    const label = PRIORITY_LABEL[priority] ?? 'Normal';
+    const color: BadgeColor = PRIORITY_COLOR[priority] ?? 'brand';
+    const due = formatDue(item.scheduledend);
 
     return (
         <Card
-            className={cardClass}
+            className={mergeClasses(styles.card, dragging && styles.cardDragging)}
             draggable
-            tabIndex={0}
-            role="article"
-            aria-label={`${task.subject}, ${priority.label} priority${due ? `, due ${due}` : ''}`}
-            aria-grabbed={isDragging}
-            onDragStart={(e: React.DragEvent<HTMLDivElement>) => onDragStart(e, task.activityid)}
+            onDragStart={(e) => onDragStart(e, item.activityid)}
             onDragEnd={onDragEnd}
-            onKeyDown={handleKeyDown}
+            aria-grabbed={dragging}
+            aria-label={`Task: ${item.subject}`}
         >
-            <CardHeader
-                header={
-                    <Body1 weight="semibold" style={{ wordBreak: 'break-word' }}>
-                        {task.subject || '(No title)'}
-                    </Body1>
-                }
-            />
-            <div className={styles.cardMeta}>
-                <Badge appearance="tint" color={priority.color} shape="rounded" size="small">
-                    {priority.label}
-                </Badge>
-                {due && (
-                    <Caption1 className={styles.cardDue}>
-                        <CalendarLtrRegular fontSize={12} />
-                        {due}
-                    </Caption1>
-                )}
-            </div>
-            {isKbSelected && (
-                <div
-                    className={styles.kbMoveBar}
-                    role="toolbar"
-                    aria-label="Move task to column"
-                >
-                    <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Move to:</Caption1>
-                    {COLUMNS.filter(c => c.statuscode !== currentCol.statuscode).map(col => (
-                        <Button
-                            key={col.statuscode}
-                            size="small"
-                            appearance="outline"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onKeyMove(task.activityid, col);
-                                onKbSelect(null);
-                            }}
-                        >
-                            {col.label}
-                        </Button>
-                    ))}
-                    <Button
-                        size="small"
-                        appearance="subtle"
-                        onClick={(e) => { e.stopPropagation(); onKbSelect(null); }}
-                    >
-                        Cancel
-                    </Button>
+            <CardHeader header={<Body1 weight="semibold">{item.subject}</Body1>} />
+            <div className={styles.cardBody}>
+                <div className={styles.cardMeta}>
+                    <Badge appearance="tint" color={color} size="small">
+                        {label}
+                    </Badge>
+                    {due && (
+                        <Caption1 className={due.overdue ? styles.dueOverdue : styles.dueNormal}>
+                            {due.text}
+                        </Caption1>
+                    )}
                 </div>
-            )}
+            </div>
         </Card>
     );
 };
 
-// ── GeneratedComponent ─────────────────────────────────────────────────────────
+// ---- Main component ----
 
 const GeneratedComponent = (props: GeneratedComponentProps) => {
     const { dataApi, pageInput } = props;
     void pageInput;
     const styles = useStyles();
 
-    // Batched data state — single setState per async operation (Rule 14)
     const [{ tasks, loading, error }, setData] = useState<{
         tasks: task[];
         loading: boolean;
@@ -288,27 +223,22 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         error: null,
     });
 
-    // UI states (synchronous — separate useState is fine)
+    // Drag/hover state is intentionally separate — these are pure UI, not data state
     const [draggingId, setDraggingId] = useState<string | null>(null);
-    const [hoverColumn, setHoverColumn] = useState<number | null>(null);
-    const [moveError, setMoveError] = useState<string | null>(null);
-    const [kbSelected, setKbSelected] = useState<string | null>(null);
-
-    // ── Data fetch ──────────────────────────────────────────────────────────
+    const [hoverCol, setHoverCol] = useState<StatusValue | null>(null);
+    const [dropError, setDropError] = useState<string | null>(null);
 
     useEffect(() => {
-        const w = window as unknown as Record<string, task[] | null>;
-        if (_taskCache !== null) return; // cache hit — no spinner
+        if (!dataApi || _taskCache !== null) return;
         (async () => {
             try {
                 const result = await dataApi.queryTable('task', {
                     select: ['activityid', 'subject', 'statuscode', 'prioritycode', 'scheduledend'],
-                    filter: 'statuscode eq 2 or statuscode eq 3 or statuscode eq 5',
-                    orderBy: 'subject asc',
-                    top: 200,
+                    orderBy: 'createdon asc',
+                    pageSize: 200,
                 });
-                _taskCache = result as unknown as task[];
-                w.__ppTaskBoardCache = _taskCache;
+                _taskCache = result.rows as unknown as task[];
+                (window as any).__ppTaskCache = _taskCache;
                 setData({ tasks: _taskCache, loading: false, error: null });
             } catch (err) {
                 setData({
@@ -320,48 +250,6 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         })();
     }, [dataApi]);
 
-    // Auto-dismiss move errors after 5 s
-    useEffect(() => {
-        if (!moveError) return;
-        const t = setTimeout(() => setMoveError(null), 5000);
-        return () => clearTimeout(t);
-    }, [moveError]);
-
-    // ── Move handler (shared by DnD and keyboard) ───────────────────────────
-
-    const moveTask = async (taskId: string, col: ColumnDef) => {
-        const current = tasks.find(t => t.activityid === taskId);
-        if (!current || (current.statuscode as unknown as number) === col.statuscode) return;
-
-        const w = window as unknown as Record<string, task[] | null>;
-        const nextTasks: task[] = tasks.map(t =>
-            t.activityid === taskId
-                ? { ...t, statuscode: col.statuscode as unknown as task['statuscode'], statecode: col.statecode as unknown as task['statecode'] }
-                : t
-        );
-        const prevTasks = tasks;
-
-        // Optimistic update
-        setData({ tasks: nextTasks, loading: false, error: null });
-        _taskCache = nextTasks;
-        w.__ppTaskBoardCache = nextTasks;
-
-        try {
-            await dataApi.updateRow('task', taskId, {
-                statecode: col.statecode as any,
-                statuscode: col.statuscode as any,
-            });
-        } catch (err) {
-            // Rollback
-            setData({ tasks: prevTasks, loading: false, error: null });
-            _taskCache = prevTasks;
-            w.__ppTaskBoardCache = prevTasks;
-            setMoveError(err instanceof Error ? err.message : 'Failed to update task.');
-        }
-    };
-
-    // ── Drag handlers ───────────────────────────────────────────────────────
-
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, taskId: string) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', taskId);
@@ -370,30 +258,65 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
 
     const handleDragEnd = () => {
         setDraggingId(null);
-        setHoverColumn(null);
+        setHoverCol(null);
     };
 
-    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, statuscode: number) => {
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, colKey: StatusValue) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        if (hoverColumn !== statuscode) setHoverColumn(statuscode);
+        if (hoverCol !== colKey) setHoverCol(colKey);
     };
 
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        if (e.currentTarget === e.target) setHoverColumn(null);
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setHoverCol(null);
+        }
     };
 
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>, col: ColumnDef) => {
+    const handleDrop = async (e: React.DragEvent<HTMLDivElement>, targetStatus: StatusValue) => {
         e.preventDefault();
         const taskId = e.dataTransfer.getData('text/plain');
-        setHoverColumn(null);
-        if (taskId) moveTask(taskId, col);
+        setHoverCol(null);
+        setDropError(null);
+        if (!taskId) return;
+
+        const current = tasks.find((t) => t.activityid === taskId);
+        if (!current) return;
+        if ((current.statuscode as unknown as number) === targetStatus) return;
+
+        // Optimistic update
+        const nextTasks = tasks.map((t) =>
+            t.activityid === taskId
+                ? { ...t, statuscode: targetStatus as unknown as typeof t.statuscode }
+                : t,
+        );
+        const prevTasks = tasks;
+        _taskCache = nextTasks;
+        (window as any).__ppTaskCache = nextTasks;
+        setData({ tasks: nextTasks, loading: false, error: null });
+
+        try {
+            await dataApi.updateRow('task', taskId, {
+                statuscode: targetStatus as unknown as typeof current.statuscode,
+                statecode: stateCodeFor(targetStatus) as unknown as typeof current.statecode,
+            });
+        } catch (err) {
+            // Rollback on failure
+            _taskCache = prevTasks;
+            (window as any).__ppTaskCache = prevTasks;
+            setData({ tasks: prevTasks, loading: false, error: null });
+            setDropError(
+                err instanceof Error ? err.message : 'Failed to update task. Changes reverted.',
+            );
+        }
     };
 
-    // ── Render ──────────────────────────────────────────────────────────────
-
     if (loading) {
-        return <Spinner label="Loading tasks…" />;
+        return (
+            <div className={styles.spinnerWrap}>
+                <Spinner label="Loading tasks..." />
+            </div>
+        );
     }
 
     if (error) {
@@ -404,80 +327,70 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         );
     }
 
-    const totalVisible = tasks.filter(t => BOARD_STATUSCODES.has(t.statuscode as unknown as number)).length;
-
     return (
         <div className={styles.root}>
-            <header className={styles.header}>
+            <div className={styles.pageHeader}>
                 <ClipboardTaskRegular aria-hidden="true" />
-                <Text as="h1" size={500} weight="semibold">
-                    Task board
-                </Text>
-                <Badge appearance="tint" color="brand">{totalVisible}</Badge>
-            </header>
+                <Text size={500} weight="semibold">Task board</Text>
+                <Badge appearance="filled" color="brand">{tasks.length}</Badge>
+            </div>
 
-            {moveError && (
-                <MessageBar intent="error" className={styles.errorBar}>
-                    <MessageBarBody>{moveError}</MessageBarBody>
+            {dropError && (
+                <MessageBar intent="error" className={styles.dropError}>
+                    <MessageBarBody>{dropError}</MessageBarBody>
                 </MessageBar>
             )}
 
-            <main
+            <div
                 className={styles.board}
-                aria-label="Kanban board"
+                role="application"
+                aria-label="Task management board"
             >
                 {COLUMNS.map((col) => {
-                    const items = tasks.filter(t => (t.statuscode as unknown as number) === col.statuscode);
-                    const isDragTarget = hoverColumn === col.statuscode;
-                    const colClass = `${styles.column} ${isDragTarget ? styles.columnDragOver : ''}`;
+                    const items = tasks.filter(
+                        (t) => (t.statuscode as unknown as number) === col.key,
+                    );
+                    const isOver = hoverCol === col.key;
 
                     return (
-                        <section
-                            key={col.statuscode}
-                            className={colClass}
-                            aria-label={`${col.label}, ${items.length} task${items.length !== 1 ? 's' : ''}`}
-                            onDragOver={(e) => handleDragOver(e, col.statuscode)}
+                        <div
+                            key={col.key}
+                            className={mergeClasses(styles.column, isOver && styles.columnOver)}
+                            onDragOver={(e) => handleDragOver(e, col.key)}
                             onDragLeave={handleDragLeave}
-                            onDrop={(e) => handleDrop(e, col)}
+                            onDrop={(e) => handleDrop(e, col.key)}
+                            aria-label={`${col.label} column, ${items.length} task${items.length !== 1 ? 's' : ''}`}
+                            aria-dropeffect="move"
                         >
                             <div className={styles.columnHeader}>
-                                <span aria-hidden="true">{col.icon}</span>
+                                {col.icon}
                                 <Body1 weight="semibold">{col.label}</Body1>
-                                <Badge appearance="filled" color={col.badgeColor} shape="circular">
+                                <Badge appearance="filled" color={col.accent} size="small">
                                     {items.length}
                                 </Badge>
                             </div>
 
-                            <div
-                                className={styles.columnBody}
-                                role="list"
-                                aria-label={`${col.label} tasks`}
-                            >
+                            <div className={styles.columnBody}>
                                 {items.length === 0 ? (
                                     <Caption1 className={styles.emptyHint}>
-                                        No tasks here
+                                        No tasks — drop one here
                                     </Caption1>
                                 ) : (
-                                    items.map(task => (
-                                        <div key={task.activityid} role="listitem">
-                                            <TaskCard
-                                                task={task}
-                                                isDragging={draggingId === task.activityid}
-                                                isKbSelected={kbSelected === task.activityid}
-                                                currentCol={col}
-                                                onDragStart={handleDragStart}
-                                                onDragEnd={handleDragEnd}
-                                                onKeyMove={moveTask}
-                                                onKbSelect={setKbSelected}
-                                            />
-                                        </div>
+                                    items.map((t) => (
+                                        <TaskCard
+                                            key={t.activityid}
+                                            item={t}
+                                            dragging={draggingId === t.activityid}
+                                            onDragStart={handleDragStart}
+                                            onDragEnd={handleDragEnd}
+                                        />
                                     ))
                                 )}
                             </div>
-                        </section>
+                        </div>
                     );
                 })}
-            </main>
+            </div>
         </div>
     );
 };

@@ -15,7 +15,7 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
   types, tiers, capture flow.
 - **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
-  captures; 2 of the real ones green under the tightened v2.2 spec).
+  captures; all green under the tightened v2.2 spec).
 - `scripts/capture-fixture.js` — copies `/genpage` working dirs into
   fixtures and runs both layers.
 - `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
@@ -38,7 +38,7 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
   file calling `dataApi.queryTable` must access `.rows` somewhere.
 
 ### Tests
-- 210 passing across `scripts/tests/` + `evals/.../tests/`.
+- 215 passing across `scripts/tests/` + `evals/.../tests/`.
 
 ## 2.1.0 — 2026-05-13
 
