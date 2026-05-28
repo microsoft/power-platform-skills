@@ -10,7 +10,7 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous skill-run and script-run telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook or script that emitted the event returns before the POST happens.
+Anonymous skill-run telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s when enabled)
@@ -34,7 +34,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 - `pluginName`, `pluginVersion` — read from the plugin's `.claude-plugin/plugin.json`
 - `sessionId` — random UUID generated once per Node process; not persisted
-- `correlationId` — joins `skill_started` ↔ `skill_completed` and `script_started` ↔ `script_completed`
+- `correlationId` — joins `skill_started` ↔ `skill_completed`
 - `osName`, `osVersion` — `process.platform` and OS release string
 - `nodeVersion` — major version only, e.g. `v22`
 
@@ -46,7 +46,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **Per-event:**
 
-- `skillName` (skill events) or `scriptName` (script events)
+- `skillName` (on every event)
 - `outcome` (`success` | `failure`), `durationMs` (int), `errorClass` (Error constructor name only), `errorDescription` (`err.code` only — short non-PII metadata like `ENOENT`; `err.message` is never emitted) — on completed events
 - `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload.
 
@@ -60,9 +60,9 @@ File paths, cwd, env vars (except the telemetry kill switch), site names, Datave
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
 - **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch).
-- **Repo-side kill switch.** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks, `emit-from-prompt`, `telemetry-runner` — short-circuits BEFORE any PAC shellout or process spawn. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
+- **Repo-side kill switch.** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
-The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks, `emit-from-prompt.js`, and the script-level `telemetry-runner.js`. A disabled plugin emits zero side effects.
+The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects.
 
 ---
 
@@ -73,11 +73,10 @@ shared/telemetry/
 ├─ ikey.json                 # template config (placeholder values)
 ├─ sync-to-plugin.js         # copies lib/ + ikey.json into a plugin
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted/Completed + buildScriptStarted/Completed
+│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted/Completed
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
-│  ├─ with-telemetry.js      # script wrapper — emits script_started / script_completed around an async fn
 │  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId
 │  ├─ agent-info.js          # detects AI agent host + reads `pac --version`
 │  ├─ correlation.js         # writes/reads correlation IDs to disk (joins started ↔ completed across hook invocations)
@@ -129,25 +128,7 @@ In `plugins/<your-plugin>/hooks/hooks.json`, register the three hook scripts tha
 
 These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list. Adapt the imports to your plugin's layout.
 
-### 4. (Optional) Wrap scripts with `runInstrumented`
-
-For per-script `script_started` / `script_completed` events, create `plugins/<your-plugin>/scripts/lib/telemetry-runner.js` (use Power Pages' as a template) and wrap your script's main async function:
-
-```js
-const { runInstrumented } = require("./lib/telemetry-runner");
-
-(async () => {
-  const exitCode = await runInstrumented("my-script", async () => {
-    // your script body
-    return 0;
-  });
-  process.exit(exitCode || 0);
-})();
-```
-
-`runInstrumented` honors the same kill switches as the hooks — `disabled: true` and `POWER_PLATFORM_SKILLS_TELEMETRY=0` short-circuit BEFORE any PAC shellout, so a disabled plugin pays zero telemetry cost.
-
-### 5. Verify locally
+### 4. Verify locally
 
 Run the synced test suite:
 
@@ -190,7 +171,6 @@ Every module exposes injectable test seams via `opts._xxx` properties so tests r
 - `pac-auth.js` — `opts._exec` swaps `execFileSync`
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
-- `with-telemetry.js` — `opts.emitter`, `opts._readAgentInfo`
 - `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file
 - `correlation.js` / `session.js` — `opts.configDir` redirects state to a temp directory
 
