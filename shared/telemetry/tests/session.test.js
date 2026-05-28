@@ -54,3 +54,52 @@ test("getSessionId is stable across multiple processes when same override is use
   assert.equal(a.stdout, "primed-id-999");
   assert.equal(b.stdout, "primed-id-999");
 });
+
+const { resolveHostSessionId } = require(sessionPath);
+
+test("resolveHostSessionId returns payload.session_id when present (Claude Code shape)", () => {
+  assert.equal(
+    resolveHostSessionId({ session_id: "claude-snake-case-id" }),
+    "claude-snake-case-id"
+  );
+});
+
+test("resolveHostSessionId returns payload.sessionId when only camelCase is present", () => {
+  assert.equal(
+    resolveHostSessionId({ sessionId: "camel-case-id" }),
+    "camel-case-id"
+  );
+});
+
+test("resolveHostSessionId prefers session_id over sessionId when both present", () => {
+  assert.equal(
+    resolveHostSessionId({ session_id: "snake-wins", sessionId: "camel-loses" }),
+    "snake-wins"
+  );
+});
+
+test("resolveHostSessionId returns empty string for null payload", () => {
+  assert.equal(resolveHostSessionId(null), "");
+});
+
+test("resolveHostSessionId returns empty string for undefined payload", () => {
+  assert.equal(resolveHostSessionId(undefined), "");
+});
+
+test("resolveHostSessionId returns empty string for non-object payload", () => {
+  assert.equal(resolveHostSessionId("not an object"), "");
+  assert.equal(resolveHostSessionId(42), "");
+  assert.equal(resolveHostSessionId(true), "");
+});
+
+test("resolveHostSessionId returns empty string for object without known fields", () => {
+  assert.equal(resolveHostSessionId({ foo: "bar", other: "value" }), "");
+});
+
+test("resolveHostSessionId returns empty string for empty-string field values", () => {
+  assert.equal(resolveHostSessionId({ session_id: "", sessionId: "" }), "");
+});
+
+test("resolveHostSessionId returns empty string for non-string field values", () => {
+  assert.equal(resolveHostSessionId({ session_id: 123, sessionId: { x: 1 } }), "");
+});

@@ -19,9 +19,25 @@ function getSessionId(override) {
   return cached;
 }
 
+// Multi-host session-id resolver. Both Claude Code and GitHub Copilot CLI
+// surface their session id through the hook stdin payload. Field-name
+// convention may vary by host; check known variants in precedence order.
+// Returns "" when no usable id is present so the caller's subsequent
+// getSessionId("") falls back to a per-process UUID.
+function resolveHostSessionId(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.session_id === "string" && payload.session_id) {
+    return payload.session_id;
+  }
+  if (typeof payload.sessionId === "string" && payload.sessionId) {
+    return payload.sessionId;
+  }
+  return "";
+}
+
 // Test seam.
 function _resetCache() {
   cached = undefined;
 }
 
-module.exports = { getSessionId, _resetCache };
+module.exports = { getSessionId, resolveHostSessionId, _resetCache };
