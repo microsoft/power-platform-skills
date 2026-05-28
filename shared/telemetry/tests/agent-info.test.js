@@ -52,6 +52,49 @@ test("readAiAgent honours explicit AI_AGENT_NAME / AI_AGENT_VERSION", () => {
   assert.deepEqual(result, { aiAgentName: "Custom Agent", aiAgentVersion: "3.1.4" });
 });
 
+test("readAiAgent backfills aiAgentVersion from CLAUDECODE when only AI_AGENT_NAME is set", () => {
+  withClaudeCodeFixture(({ execPath }) => {
+    const result = agentInfo.readAiAgent({
+      AI_AGENT_NAME: "Claude Code",
+      // No AI_AGENT_VERSION
+      CLAUDECODE: "1",
+      CLAUDE_CODE_EXECPATH: execPath,
+    });
+    assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "2.0.0" });
+  });
+});
+
+test("readAiAgent backfills aiAgentVersion from COPILOT_CLI when only AI_AGENT_NAME is set", () => {
+  const result = agentInfo.readAiAgent({
+    AI_AGENT_NAME: "Copilot CLI",
+    // No AI_AGENT_VERSION
+    COPILOT_CLI: "1",
+    COPILOT_CLI_BINARY_VERSION: "1.2.3",
+  });
+  assert.deepEqual(result, { aiAgentName: "Copilot CLI", aiAgentVersion: "1.2.3" });
+});
+
+test("readAiAgent returns explicit AI_AGENT_VERSION even when CLAUDECODE detect could also resolve", () => {
+  // Explicit version wins over backfill
+  withClaudeCodeFixture(({ execPath }) => {
+    const result = agentInfo.readAiAgent({
+      AI_AGENT_NAME: "Claude Code",
+      AI_AGENT_VERSION: "99.99.99-explicit",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_EXECPATH: execPath,
+    });
+    assert.equal(result.aiAgentVersion, "99.99.99-explicit");
+  });
+});
+
+test("readAiAgent returns empty version when AI_AGENT_NAME set but no detector matches", () => {
+  const result = agentInfo.readAiAgent({
+    AI_AGENT_NAME: "Mystery Agent",
+    // No CLAUDECODE, no COPILOT_CLI
+  });
+  assert.deepEqual(result, { aiAgentName: "Mystery Agent", aiAgentVersion: "" });
+});
+
 test("readAiAgent: explicit AI_AGENT_NAME wins over CLAUDECODE", () => {
   const result = agentInfo.readAiAgent({
     CLAUDECODE: "1",

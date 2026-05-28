@@ -41,31 +41,47 @@ function _resetCache() {
   pacCliVersionCache = undefined;
 }
 
+// Reads the Claude Code CLI version from its installed package.json. The
+// hook subprocess inherits CLAUDE_CODE_EXECPATH from Claude Code; jumping
+// one directory above the executable's bin/ lands on the npm package root.
+function readClaudeCodeVersion(env) {
+  const execPath = env.CLAUDE_CODE_EXECPATH;
+  if (!execPath) return "";
+  try {
+    const pkgPath = path.join(path.dirname(execPath), "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    if (pkg && typeof pkg.version === "string") return pkg.version;
+  } catch {
+    // pkg unreadable; fall through to empty
+  }
+  return "";
+}
+
 // Detects the AI agent host. Prefers explicit env vars; falls back to
 // built-in detection for Claude Code (CLAUDECODE=1) and GitHub Copilot
-// CLI (COPILOT_CLI=1).
+// CLI (COPILOT_CLI=1). When AI_AGENT_NAME is set explicitly but
+// AI_AGENT_VERSION is empty, backfill the version from whichever
+// built-in detector matches — avoids emitting an empty aiAgentVersion
+// just because the settings file only carried half the pair.
 function readAiAgent(env = process.env) {
   const explicitName = env.AI_AGENT_NAME;
   const explicitVersion = env.AI_AGENT_VERSION;
   if (explicitName) {
-    return {
-      aiAgentName: explicitName,
-      aiAgentVersion: explicitVersion || "",
-    };
-  }
-  if (env.CLAUDECODE === "1") {
-    let version = "";
-    const execPath = env.CLAUDE_CODE_EXECPATH;
-    if (execPath) {
-      try {
-        const pkgPath = path.join(path.dirname(execPath), "..", "package.json");
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-        if (pkg && typeof pkg.version === "string") version = pkg.version;
-      } catch {
-        // pkg unreadable; leave version empty
+    let version = explicitVersion || "";
+    if (!version) {
+      if (env.CLAUDECODE === "1") {
+        version = readClaudeCodeVersion(env);
+      } else if (env.COPILOT_CLI === "1") {
+        version = env.COPILOT_CLI_BINARY_VERSION || "";
       }
     }
-    return { aiAgentName: "Claude Code", aiAgentVersion: version };
+    return { aiAgentName: explicitName, aiAgentVersion: version };
+  }
+  if (env.CLAUDECODE === "1") {
+    return {
+      aiAgentName: "Claude Code",
+      aiAgentVersion: readClaudeCodeVersion(env),
+    };
   }
   if (env.COPILOT_CLI === "1") {
     return {
