@@ -134,7 +134,7 @@ process.stdin.on('end', async () => {
     const fields = {
       pluginName: 'power-pages',
       pluginVersion,
-      sessionId: sessionLib.getSessionId(input && input.session_id),
+      sessionId: sessionLib.getSessionId(sessionLib.resolveHostSessionId(input)),
       correlationId: corr.correlation_id,
       osName: osFriendlyName(process.platform),
       osVersion: os.release(),

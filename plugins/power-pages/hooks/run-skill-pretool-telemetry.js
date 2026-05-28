@@ -118,7 +118,7 @@ function readStdin() {
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
-    sessionId: sessionLib.getSessionId(parsed && parsed.session_id),
+    sessionId: sessionLib.getSessionId(sessionLib.resolveHostSessionId(parsed)),
     correlationId: correlation_id,
     osName: osFriendlyName(process.platform),
     osVersion: os.release(),
