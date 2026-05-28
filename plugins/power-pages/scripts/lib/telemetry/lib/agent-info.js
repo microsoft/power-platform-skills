@@ -9,6 +9,11 @@ let pacCliVersionCache;
 // Reads the PAC CLI version once per process via `pac --version`. Best-effort
 // and fail-closed: missing executable, timeout, or unparseable output all
 // resolve to "".
+//
+// PAC 2.x prints the version banner ("Version: X.Y.Z+...") to stdout as part
+// of its preamble but then treats `--version` as an unknown command and
+// exits with status 1. execFileSync throws on non-zero exit, attaching the
+// captured stdout to err.stdout — so we parse that fallback path too.
 function readPacCliVersion(opts = {}) {
   if (pacCliVersionCache !== undefined) return pacCliVersionCache;
   if (opts._exec === false) {
@@ -16,17 +21,18 @@ function readPacCliVersion(opts = {}) {
     return "";
   }
   const exec = typeof opts._exec === "function" ? opts._exec : execFileSync;
+  let stdout = "";
   try {
-    const out = exec("pac", ["--version"], {
+    stdout = exec("pac", ["--version"], {
       encoding: "utf8",
-      timeout: 2000,
-      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 8000,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    const match = String(out || "").match(/(\d+\.\d+\.\d+(?:\.\d+)?)/);
-    pacCliVersionCache = match ? match[1] : "";
-  } catch {
-    pacCliVersionCache = "";
+  } catch (err) {
+    stdout = (err && err.stdout) ? String(err.stdout) : "";
   }
+  const match = String(stdout || "").match(/Version:\s*(\d+\.\d+\.\d+(?:\.\d+)?)/);
+  pacCliVersionCache = match ? match[1] : "";
   return pacCliVersionCache;
 }
 

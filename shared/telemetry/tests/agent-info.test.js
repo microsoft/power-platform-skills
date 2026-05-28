@@ -141,3 +141,32 @@ test("readPacCliVersion respects _exec=false short-circuit", () => {
   const result = agentInfo.readPacCliVersion({ _exec: false });
   assert.equal(result, "");
 });
+
+test("readPacCliVersion parses version from err.stdout when pac exits non-zero (PAC 2.x behavior)", () => {
+  // PAC 2.x prints the version banner to stdout but exits with status 1
+  // because it treats `--version` as an unknown command. execFileSync
+  // throws on non-zero exit; we must read err.stdout for the banner.
+  agentInfo._resetCache();
+  const result = agentInfo.readPacCliVersion({
+    _exec: () => {
+      const e = new Error("Command failed: pac --version");
+      e.status = 1;
+      e.stdout =
+        "Microsoft PowerPlatform CLI\n" +
+        "Version: 2.7.4+g06bb2eb (.NET Framework 4.8.9332.0)\n" +
+        "Online documentation: https://aka.ms/PowerPlatformCLI\n";
+      throw e;
+    },
+  });
+  assert.equal(result, "2.7.4");
+});
+
+test("readPacCliVersion prefers PAC version line over .NET Framework version", () => {
+  agentInfo._resetCache();
+  const result = agentInfo.readPacCliVersion({
+    _exec: () =>
+      "Microsoft PowerPlatform CLI\n" +
+      "Version: 2.7.4+g06bb2eb (.NET Framework 4.8.9332.0)\n",
+  });
+  assert.equal(result, "2.7.4");
+});
