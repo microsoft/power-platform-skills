@@ -41,6 +41,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     pluginVersion,
     trackedSkills,
     telemetryDir,
+    sessionId, // primed from Claude Code's hook payload (parsed.session_id)
     _emit, // test seam; defaults to fireAndForget
     _readPacAuth, // test seam; defaults to lib/pac-auth
     _readAgentInfo, // test seam; defaults to lib/agent-info
@@ -84,7 +85,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   const fields = {
     pluginName,
     pluginVersion: pluginVersion || "unknown",
-    sessionId: getSessionId(),
+    sessionId: getSessionId(sessionId),
     correlationId: crypto.randomUUID(),
     osName: osFriendlyName(process.platform),
     osVersion: os.release(),

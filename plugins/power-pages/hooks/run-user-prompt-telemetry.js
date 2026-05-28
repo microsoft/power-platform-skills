@@ -68,6 +68,7 @@ function readStdin() {
       pluginVersion: readPluginVersion(),
       trackedSkills: hookUtils.TRACKED_SKILLS,
       telemetryDir: TELEMETRY_DIR,
+      sessionId: parsed.session_id,
     });
   } catch {
     // fail closed — telemetry never blocks the user's prompt
