@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
-// Validates that authentication and authorization code was created for a Power Pages code site.
-// Runs as a Stop hook to verify the setup-auth skill produced output.
+// Validates that authentication and authorization code was created for a
+// Power Pages code site. Runs as a PostToolUse:Skill hook (configured in
+// hooks/hooks.json) after the `Skill` tool fires for /power-pages:setup-auth.
+//
+// Because PostToolUse fires when the Skill tool LOADS (instructions are read
+// into context) rather than when the skill has FINISHED its work, this
+// validator gates on a finishing marker: the auth setup report HTML written
+// by the skill's final Phase 8.3.5. Until that report exists, the skill is
+// considered in-progress and validation silent-approves. This follows the
+// marker-file recommendation in plugins/power-pages/PLUGIN_DEVELOPMENT_GUIDE.md.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +24,12 @@ runValidation((cwd) => {
   const typeDeclarationsExist = findTypeDeclarations(projectRoot);
 
   if (!authServiceExists && !typeDeclarationsExist) return approve();
+
+  // Marker gate: silent-approve until the skill writes its finishing report.
+  // Without this gate, re-running setup-auth on a project that has stale auth
+  // files from a previous attempt would block the new run before it could
+  // overwrite them.
+  if (!hasFinishingMarker(projectRoot)) return approve();
 
   const errors = [];
 
@@ -76,6 +90,22 @@ runValidation((cwd) => {
 
   approve();
 });
+
+function hasFinishingMarker(projectRoot) {
+  // The skill writes `docs/auth-setup-report.html` at the end of Phase 8.3.5.
+  // If the user already had a previous report there, the renderer date-suffixes
+  // the new one (auth-setup-report-2026-05-27.html). Treat any matching file
+  // in docs/ as evidence that the skill has completed at least one run.
+  const docsDir = path.join(projectRoot, 'docs');
+  if (!fs.existsSync(docsDir)) return false;
+  try {
+    return fs.readdirSync(docsDir).some((name) =>
+      /^auth-setup-report.*\.html$/.test(name)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function findAuthService(projectRoot) {
   const candidates = [
