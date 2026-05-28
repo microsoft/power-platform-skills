@@ -93,8 +93,13 @@ All three events share `sessionId = Claude Code's session_id`. Events 2 and 3 sh
 
 #### `shared/telemetry/lib/session.js`
 - Keep `getSessionId(override)` as-is (already supports the override pattern from the preceding fix).
-- **Add** `extractSessionIdFromPayload(payload)` helper that returns the first non-empty string match across multiple known field names: `payload.session_id` (Claude Code convention, snake_case), `payload.sessionId` (camelCase fallback for hosts that use that), then `""`. Exported so each hook can call `getSessionId(extractSessionIdFromPayload(parsed))` in one line.
-- Rationale: the actual field name Copilot CLI uses in its hook payload is not authoritatively confirmed in this repo today. The multi-name extractor lets the library work for both hosts without future code changes if Copilot's payload uses either convention. If a future host uses a third name, add it to the helper without touching the hooks.
+- **Add** `resolveHostSessionId(payload, env = process.env)` helper that returns the first non-empty string match across known host conventions, in precedence order:
+  1. `payload.session_id` — Claude Code's hook stdin payload (snake_case)
+  2. `payload.sessionId` — camelCase fallback for any host that uses it
+  3. `env.COPILOT_SESSION_ID` — GitHub Copilot CLI exposes its session ID via this env var, NOT through the hook payload
+  4. `""` — no host session available; the caller's subsequent `getSessionId("")` will fall back to a per-process UUID
+- Exported so each hook can call `getSessionId(resolveHostSessionId(parsed))` in one line. The hook doesn't need to know which host it's running under; the resolver picks the right source.
+- Rationale: Claude Code and Copilot CLI surface session IDs through different channels (stdin payload vs env var). Putting the multi-channel logic in one helper keeps each hook a single line and lets a third host be added later without touching hook code — just extend the resolver.
 
 #### `shared/telemetry/lib/emit-from-prompt.js`
 - No code changes. Continues to emit `skill_started` on slash-command detection. Honors `cfg.disabled === true`, `POWER_PLATFORM_SKILLS_TELEMETRY=0`, and missing `instrumentationKey` as fast-path gates (from the preceding fix).
@@ -117,13 +122,13 @@ All three events share `sessionId = Claude Code's session_id`. Events 2 and 3 sh
 - Each loses the `runInstrumented` wrapper the same way as validators.
 
 #### `plugins/power-pages/hooks/run-skill-pretool-telemetry.js`
-- Replace `sessionLib.getSessionId(parsed && parsed.session_id)` with `sessionLib.getSessionId(sessionLib.extractSessionIdFromPayload(parsed))`.
+- Replace `sessionLib.getSessionId(parsed && parsed.session_id)` with `sessionLib.getSessionId(sessionLib.resolveHostSessionId(parsed))`.
 
 #### `plugins/power-pages/hooks/run-skill-posttool-validation.js`
-- Replace `sessionLib.getSessionId(input && input.session_id)` with `sessionLib.getSessionId(sessionLib.extractSessionIdFromPayload(input))`.
+- Replace `sessionLib.getSessionId(input && input.session_id)` with `sessionLib.getSessionId(sessionLib.resolveHostSessionId(input))`.
 
 #### `plugins/power-pages/hooks/run-user-prompt-telemetry.js`
-- Replace `sessionId: parsed.session_id` in the opts passed to `emitSkillStartedFromPrompt` with `sessionId: sessionLib.extractSessionIdFromPayload(parsed)` (the hook imports `sessionLib` for this).
+- Replace `sessionId: parsed.session_id` in the opts passed to `emitSkillStartedFromPrompt` with `sessionId: sessionLib.resolveHostSessionId(parsed)` (the hook imports `sessionLib` for this).
 
 #### `plugins/power-pages/hooks/hooks.json`
 - No code changes. All three hooks stay registered.
@@ -159,7 +164,7 @@ The sync deletes `with-telemetry.js` from the plugin's synced `lib/` copy (the s
 | `name` (envelope) | from `cfg.event_stream_name` | from `cfg.event_stream_name` | from `cfg.event_stream_name` |
 | `eventName` | `skill_started` | `skill_started` | `skill_completed` |
 | `eventType` / `severity` | `Trace` / `Info` | `Trace` / `Info` | `Trace` / `Info` or `Error` |
-| `sessionId` | from host's payload field (Claude Code: `session_id`; Copilot CLI: same or camelCase via `extractSessionIdFromPayload`) | same | same |
+| `sessionId` | from host session via `resolveHostSessionId(parsed)` — Claude Code: `parsed.session_id`; Copilot CLI: `process.env.COPILOT_SESSION_ID` | same | same |
 | `correlationId` | own UUID | UUID written to disk | UUID read from disk (= Event 2's) |
 | `skillName` | parsed from `/power-pages:<name>` | parsed from `tool_input` | parsed from `tool_input` |
 | `pluginName` / `pluginVersion` / `os*` / `nodeVersion` | populated | populated | populated |
@@ -193,7 +198,7 @@ PostToolUse fires
 | PreToolUse fires but validator step kills posttool (Claude Code crashes mid-execution) | correlation file remains; cleared by next pretool's TTL sweep after 1h | no event 3 for that run; no leak |
 | Two concurrent invocations of same skill name | second pretool's write clobbers first's file; both posttools read the second's UUID | first skill_started orphans (no matching skill_completed); second skill_completed mapped to either start. Documented; not structurally fixed. |
 | Correlation file unreadable / malformed | `read()` returns `null`; posttool falls back to generating its own UUID + using its own `startTs` | event 3 emits with orphaned correlationId and inflated duration (since startTs is hook entry, not skill entry). Logged via `errorClass`/`errorDescription` if posttool's catch triggers. |
-| Host agent (Claude Code / Copilot CLI) does not send a recognized session-id field in the hook payload | `extractSessionIdFromPayload` returns `""`; `getSessionId("")` falls back to the cached value or a fresh UUID per process | sessionId no longer joins across events for that host. Noted as a host-agent dependency; mitigated by adding the host's actual field name to `extractSessionIdFromPayload` once known. |
+| Neither hook payload nor `COPILOT_SESSION_ID` env var carries a usable session id | `resolveHostSessionId` returns `""`; `getSessionId("")` falls back to the cached value or a fresh UUID per process | sessionId no longer joins across events for that host. Mitigated by adding the host's actual channel (env var or payload field) to `resolveHostSessionId` once known. |
 
 ---
 
@@ -220,10 +225,11 @@ PostToolUse fires
   - **TTL sweep tolerates unrelated files**: pre-populate with `unrelated.json` and assert it survives.
   - **TTL sweep swallows readdir failures**: pass a non-existent `tmpDir`. Assert no throw. The subsequent `writeFileSync` inside `write()` will also fail and be swallowed per existing `correlation.js` semantics — no file is produced, no exception escapes.
 - `shared/telemetry/tests/session.test.js`:
-  - **`extractSessionIdFromPayload` returns `session_id` when present** (Claude Code shape).
-  - **`extractSessionIdFromPayload` returns `sessionId` when only camelCase is present** (Copilot fallback).
-  - **`extractSessionIdFromPayload` prefers `session_id` when both are present** (deterministic precedence).
-  - **`extractSessionIdFromPayload` returns `""` for null / undefined / non-object / object-without-known-fields** (safety).
+  - **`resolveHostSessionId` returns `payload.session_id` when present** (Claude Code shape).
+  - **`resolveHostSessionId` returns `payload.sessionId` when only camelCase is present** (camelCase host fallback).
+  - **`resolveHostSessionId` returns `env.COPILOT_SESSION_ID` when payload has no session id but env does** (Copilot CLI path).
+  - **`resolveHostSessionId` prefers payload over env when both are present** (deterministic precedence — explicit host-passed ID wins).
+  - **`resolveHostSessionId` returns `""` for null / undefined payload AND no env var** (safety fallback that lets `getSessionId` mint a UUID).
 
 ### Test count delta
 - Existing shared: 122 (after recent fixes) → roughly 110–115 after removing `with-telemetry.test.js` + `script_*` builder tests.
@@ -261,7 +267,7 @@ For external adopters of `shared/telemetry/` (currently only Power Pages; spec a
   - Validator runs successfully but the catch block around `correlationLib.read` returns `null`, causing a fresh UUID and breaking the join — but `skill_completed` should still emit; needs trace to confirm
 - **Unifying Event 1 and Event 2's eventName.** If observed practice ever shows both events firing for the same slash command and producing real double-counting, consider giving Event 1 a distinct eventName like `slash_command_detected`. Not warranted today.
 - **Concurrent-same-skill correlation race.** Documented in section 4; not structurally fixed. Revisit if cross-agent concurrent skill use becomes common.
-- **Confirming Copilot CLI's exact session-id payload field name.** This spec assumes `session_id` (snake_case) or `sessionId` (camelCase) covers it. When a real Copilot CLI run can be inspected, verify and, if a third field name is used, add it to `extractSessionIdFromPayload` — no other code changes required.
+- **Confirming Copilot CLI's exact session-id surface.** This spec encodes `COPILOT_SESSION_ID` as the Copilot env var name. When a real Copilot CLI run can be inspected, verify the env var name is exact (case included) and that it stays stable across Copilot CLI versions. If Copilot ever migrates to a payload field, add it to `resolveHostSessionId` — no other code changes required.
 
 ---
 
