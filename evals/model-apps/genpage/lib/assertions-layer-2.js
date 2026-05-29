@@ -117,6 +117,23 @@ ASSERTIONS.set(
 );
 
 ASSERTIONS.set(
+  'Generated .tsx nests `@media` queries inside `makeStyles` slots — no media query used as a top-level slot key',
+  ({ files }) => {
+    // A media query used as a top-level makeStyles key "reaches into" named
+    // slots — i.e. its object's first entry is `slotName: { ... }`. Griffel
+    // compiles that as an unused class (overrides never apply) and it fails
+    // type-checking. A correctly nested media query (inside a slot) only sets
+    // flat CSS property:value pairs, so it never matches `<ident>: {`.
+    // Heuristic regex, matching the rest of this file's grep-style checks.
+    const topLevelMedia = /@media[^{}]*\{\s*[A-Za-z_$][\w$]*\s*:\s*\{/;
+    const offender = violatingFile(files, (c) => topLevelMedia.test(stripComments(c)));
+    return offender
+      ? fail(`${offender.name}: @media used as a top-level makeStyles key — nest it inside the slot it modifies`)
+      : pass();
+  }
+);
+
+ASSERTIONS.set(
   'Generated .tsx does NOT use `100vh` or `100vw`',
   ({ files }) => {
     const offender = violatingFile(files, (c) => /\b100v[hw]\b/.test(stripComments(c)));

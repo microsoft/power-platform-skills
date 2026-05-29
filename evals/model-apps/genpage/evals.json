@@ -23,6 +23,7 @@
     "Generated .tsx destructures props including `pageInput` (e.g., `const { dataApi, pageInput } = props;`)",
     "Generated .tsx imports types from `./RuntimeTypes` (for Dataverse pages) or uses realistic inline mock data (for mock pages)",
     "Generated .tsx uses `makeStyles` with tokens for styling — no inline styles for static values",
+    "Generated .tsx nests `@media` queries inside `makeStyles` slots — no media query used as a top-level slot key",
     "Generated .tsx does NOT use `100vh` or `100vw`",
     "Generated .tsx does NOT import `createTheme`, `mergeThemes`, or `useTheme` (these do not exist in Fluent UI V9)",
     "Generated .tsx does NOT wrap content in a top-level `<FluentProvider>` (already provided at root)",

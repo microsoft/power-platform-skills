@@ -91,6 +91,23 @@ export default GeneratedComponent;
 - Root container is flex column; use flex properties to fill space
 - `boxSizing: border-box`; images: `max-width: 100%, height: auto`
 - NEVER use `100vh`/`100vw`
+- **Media queries go INSIDE the slot they modify** — never as a top-level
+  `makeStyles` key. Griffel compiles each top-level key as an independent
+  class, so a top-level `'@media (...)'` slot generates an unused class
+  (its overrides never apply) and also fails type-checking. Nest the query
+  in each slot and override only that slot's properties:
+```typescript
+const useStyles = makeStyles({
+  // CORRECT: @media nested inside the slot
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    '@media (max-width: 768px)': { gridTemplateColumns: '1fr' },
+  },
+  // WRONG: @media as a top-level key reaching into other slots
+  // '@media (max-width: 768px)': { grid: { gridTemplateColumns: '1fr' } },
+});
+```
 
 ### Page Layout
 - Page-level functions (nav, search, filters) in header opposite title
@@ -571,4 +588,28 @@ const useStyles = makeStyles({
 });
 const styles = useStyles();
 <div className={styles.container}>
+```
+
+### 4. Media Queries as Top-Level makeStyles Keys
+Each top-level `makeStyles` key is compiled to an independent class. A media
+query placed at the top level becomes a class literally named
+`@media (...)`, whose nested slot overrides are never applied to any element
+— the responsive behavior silently does nothing, and it fails type-checking
+(`'<prop>' does not exist in type 'string[]'` when a slot name collides with a
+CSS shorthand). Nest the query inside each slot instead.
+```typescript
+// Error: media query as a top-level key, reaching into other slots
+const useStyles = makeStyles({
+  grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" },
+  "@media (max-width: 768px)": { grid: { gridTemplateColumns: "1fr" } }
+});
+
+// Fix: nest the media query inside the slot it modifies
+const useStyles = makeStyles({
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    "@media (max-width: 768px)": { gridTemplateColumns: "1fr" }
+  }
+});
 ```
