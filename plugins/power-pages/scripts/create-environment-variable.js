@@ -4,17 +4,26 @@
 // Uses Dataverse OData API with Azure CLI authentication.
 //
 // Usage:
-//   node create-environment-variable.js <envUrl> --schemaName <name> --displayName <name> --value <value> [--type <string|secret>]
+//   node create-environment-variable.js <envUrl> --schemaName <name> --displayName <name> --value <value>
+//                                                [--type <string|secret>]
+//                                                [--solutionUniqueName <name>]
 //
 // Arguments:
-//   envUrl         Dataverse environment URL (e.g., https://org123.crm.dynamics.com)
-//   --schemaName   Schema name for the env var (e.g., cr5b4_ApiSecret)
-//   --displayName  Human-readable display name
-//   --value        The value (plain text for string type, Key Vault secret URI for secret type)
-//   --type         "string" (default) or "secret" (Key Vault-backed)
+//   envUrl                    Dataverse environment URL (e.g., https://org123.crm.dynamics.com)
+//   --schemaName              Schema name for the env var (e.g., cr5b4_ApiSecret)
+//   --displayName             Human-readable display name
+//   --value                   The value (plain text for string type, Key Vault secret URI for secret type)
+//   --type                    "string" (default) or "secret" (Key Vault-backed)
+//   --solutionUniqueName      Optional. When provided (or when .solution-manifest.json is present),
+//                             the created definition is also added to that solution via
+//                             AddSolutionComponent so it does not become an orphan in the
+//                             `Default` solution. See AGENTS.md → ALM-aware-by-default principle.
 //
 // Output (JSON to stdout):
-//   { "definitionId": "<guid>", "valueId": "<guid>", "schemaName": "<name>" }
+//   {
+//     "definitionId": "<guid>", "valueId": "<guid>", "schemaName": "<name>",
+//     "addedToSolution": { "uniqueName": "...", "source": "arg" | "manifest" } | null
+//   }
 //
 // Exit codes:
 //   0 - Success
@@ -22,6 +31,10 @@
 
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 const generateUuid = require('./generate-uuid');
+const {
+  resolveTargetSolution,
+  NoSolutionConfiguredError,
+} = require('./lib/resolve-target-solution');
 
 const cliArgs = process.argv.slice(2);
 
@@ -43,6 +56,7 @@ const schemaName = getArg('schemaName');
 const displayName = getArg('displayName');
 const value = getArg('value');
 const type = getArg('type') || 'string';
+const explicitSolutionUniqueName = getArg('solutionUniqueName');
 
 if (!envUrl || !schemaName || !displayName || value === null) {
   process.stderr.write(
@@ -124,7 +138,49 @@ async function main() {
     process.exit(1);
   }
 
-  process.stdout.write(JSON.stringify({ definitionId, valueId, schemaName }));
+  // ALM-aware-by-default (see AGENTS.md): if a target solution resolves, add the
+  // new definition via AddSolutionComponent so it lands in the user's solution
+  // instead of the `Default` orphan bucket.
+  let addedToSolution = null;
+  try {
+    const target = await resolveTargetSolution({
+      explicit: explicitSolutionUniqueName,
+      // projectRoot defaults to cwd, which works when this script is invoked
+      // from within a Power Pages project that has `.solution-manifest.json`.
+    });
+    const addRes = await apiPost(envUrl, token, 'AddSolutionComponent', {
+      ComponentId: definitionId,
+      ComponentType: 380,
+      SolutionUniqueName: target.solutionUniqueName,
+      AddRequiredComponents: false,
+      DoNotIncludeSubcomponents: true,
+    });
+    if (!addRes.ok) {
+      // Non-fatal: definition was created successfully. Surface the failure on
+      // stderr so skills that wrap this script can decide how to handle.
+      process.stderr.write(
+        `Warning: env var definition created, but adding to solution "${target.solutionUniqueName}" failed: ${addRes.message}\n`
+      );
+    } else {
+      addedToSolution = { uniqueName: target.solutionUniqueName, source: target.source };
+    }
+  } catch (err) {
+    if (err instanceof NoSolutionConfiguredError) {
+      // No manifest and no explicit arg: the ALM-aware rule says we should NOT
+      // silently leave the definition in Default. Print a clear reminder.
+      process.stderr.write(
+        `Warning: env var "${schemaName}" was created but no target solution was resolved. ` +
+          `It currently lives only in the Default solution. ` +
+          `Pass --solutionUniqueName or run /power-pages:setup-solution to capture it.\n`
+      );
+    } else {
+      process.stderr.write(
+        `Warning: env var "${schemaName}" was created; solution resolution failed: ${err.message}\n`
+      );
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ definitionId, valueId, schemaName, addedToSolution }));
 }
 
 main();

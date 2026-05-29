@@ -1,0 +1,29 @@
+name: power-pages-alm-lint
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/power-pages/**"
+
+jobs:
+    alm-lint:
+        name: alm-lint
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@v4
+
+            - name: setup-node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+
+            - name: run-alm-lint
+              # Fails the check when any SKILL.md, script, or new powerpagecomponenttype
+              # violates the ALM-aware-by-default rules documented in
+              # plugins/power-pages/AGENTS.md. See PLUGIN_DEVELOPMENT_GUIDE.md for the
+              # full checklist and the allowlist mechanism (.almlintignore / inline
+              # `alm-lint-ignore:` comments).
+              run: node plugins/power-pages/scripts/lint-skills-alm.js

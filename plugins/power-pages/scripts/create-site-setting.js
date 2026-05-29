@@ -85,9 +85,47 @@ try {
 
 // --- Helpers ---
 
+function needsQuoting(value) {
+  if (typeof value !== 'string') return false;
+
+  // Empty string and the bareword-reserved values that YAML 1.2 reads as
+  // booleans / null instead of as strings.
+  if (value === '' || value === 'true' || value === 'false' || value === 'null') return true;
+
+  // Leading/trailing whitespace (a leading tab would also be caught by the
+  // leading-char check below — keeping this for clarity).
+  if (value !== value.trim()) return true;
+
+  // YAML-special characters anywhere in the value. Without quoting, these can
+  // start comments (#), terminate scalars (:), open flow collections ([ { , ]),
+  // start anchors/aliases/tags/directives (& * ! %), or be reserved/unsupported
+  // (` @ < > = ?). Pipe and gt are block-scalar indicators.
+  if (/[:#{}[\],&*?|<>=!%@`]/.test(value)) return true;
+
+  // Leading characters that change parser semantics even when no other special
+  // character appears in the value. These cases were missed by the
+  // character-class check above:
+  //   "-foo"  → ambiguous: parsers may interpret a leading "-" as a block
+  //             sequence indicator or a numeric sign, depending on context.
+  //   "'foo"  → leading single quote opens a quoted scalar that never closes.
+  //   '"foo'  → leading double quote opens a quoted scalar that never closes.
+  //   "\tfoo" → leading tab is not allowed by YAML 1.2 in plain scalars.
+  // Quoting the entire value sidesteps every one of these.
+  const first = value.charAt(0);
+  if (first === '-' || first === "'" || first === '"' || first === '\t') return true;
+
+  return false;
+}
+
+function yamlValue(value) {
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  if (needsQuoting(value)) return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return String(value);
+}
+
 function writeYaml(fields) {
   const keys = Object.keys(fields).sort();
-  return keys.map(k => `${k}: ${fields[k]}`).join('\n') + '\n';
+  return keys.map(k => `${k}: ${yamlValue(fields[k])}`).join('\n') + '\n';
 }
 
 // --- Create site setting ---

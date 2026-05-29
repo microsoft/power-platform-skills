@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Clears the runtime cache of an activated Power Pages site by restarting it
-// via the Power Platform admin API.
+// via the Power Platform API.
 //
 // Usage:
 //   node clear-site-cache.js --projectRoot "<path>"
