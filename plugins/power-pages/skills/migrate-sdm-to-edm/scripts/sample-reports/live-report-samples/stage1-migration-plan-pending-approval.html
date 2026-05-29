@@ -137,18 +137,18 @@
   </div>
   <div class="topbar-right">
     <span>Track <strong>A</strong></span>
-    <span>Last updated <strong>23:21:45</strong></span>
+    <span>Last updated <strong>23:54:34</strong></span>
   </div>
 </div>
 
 <div class="page-header">
   <h1>Execution Report <span class="status-pill pending">⏸️ Awaiting Approval to start Phase 2</span></h1>
   <div class="subtitle">Phase 1 complete. Approve to begin Phase 2 (Configuration Migration &amp; Customization Remediation).</div>
-  <div class="progress-bar"><div class="progress-bar-fill" style="width: 44%;"></div></div>
+  <div class="progress-bar"><div class="progress-bar-fill" style="width: 50%;"></div></div>
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-num">44%</div><div class="stat-label">Overall</div></div>
-    <div class="stat-card"><div class="stat-num">7 / 16</div><div class="stat-label">Sub-steps</div></div>
-    <div class="stat-card"><div class="stat-num">0m 21s</div><div class="stat-label">Elapsed</div></div>
+    <div class="stat-card"><div class="stat-num">50%</div><div class="stat-label">Overall</div></div>
+    <div class="stat-card"><div class="stat-num">7 / 14</div><div class="stat-label">Sub-steps</div></div>
+    <div class="stat-card"><div class="stat-num">0m 01s</div><div class="stat-label">Elapsed</div></div>
     <div class="stat-card"><div class="stat-num">1 / 4</div><div class="stat-label">Phases done</div></div>
   </div>
 </div>
@@ -168,7 +168,7 @@
       <tr><td>Migration mode</td><td>configurationData</td></tr>
       <tr><td>Site root</td><td>./mysite/contoso-portal/</td></tr>
       <tr><td>Output directory</td><td class="known">.\migration-reports</td></tr>
-      <tr><td>Skill started</td><td class="known">2026-05-28 23:21:23</td></tr>
+      <tr><td>Skill started</td><td class="known">2026-05-29 23:54:33</td></tr>
     </table>
   </div>
 
@@ -186,42 +186,42 @@
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.1 Establish CLI Context</div>
-          <div class="sub-step-output">PAC CLI v1.47.1 · authenticated as admin@... · environment Ashmigration</div>
+          <div class="sub-step-output">PAC CLI v1.47.1 · environment Ashmigration</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.2 Identify Site Context</div>
-          <div class="sub-step-output">No website.yml in cwd · will download in step 2.3</div>
+          <div class="sub-step-output">No website.yml in cwd</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.3 Site Discovery and Validate Data Model</div>
-          <div class="sub-step-output">Site Contoso Portal found · ModelVersion=Standard · Starter Layout 1</div>
+          <div class="sub-step-output">Site Contoso Portal found · Standard · Starter Layout 1</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.4 Check Existing Migration Status</div>
-          <div class="sub-step-output">Status: NotStarted · proceeding fresh</div>
+          <div class="sub-step-output">Status: NotStarted</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.5 Validate Required Dependencies</div>
-          <div class="sub-step-output">CDSBasePortal 9.3.2603.238 · PowerPagesCore 1.1.2603.246 — both OK</div>
+          <div class="sub-step-output">CDSBasePortal 9.3.2603.238 · PowerPagesCore 1.1.2603.246</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">1.6 Validate Site Template and V2 Package</div>
-          <div class="sub-step-output">DefaultPortalTemplate_V2 verified · PowerPages_Core verified</div>
+          <div class="sub-step-output">DefaultPortalTemplate_V2 verified</div>
         </div>
       </div>
       <div class="sub-step">
@@ -270,7 +270,7 @@
       <div class="phase-status-icon status-pending">3</div>
       <div class="phase-title">
         <h3>Phase 3: Migration &amp; Activation</h3>
-        <div class="phase-meta">5 sub-steps</div>
+        <div class="phase-meta">3 sub-steps</div>
       </div>
       <div class="phase-status-label label-pending">Pending</div>
     </div>
@@ -284,25 +284,13 @@
       <div class="sub-step">
         <div class="sub-step-icon pending">○</div>
         <div class="sub-step-text">
-          <div class="sub-step-label pending">3.2 Locate Customization Report</div>
+          <div class="sub-step-label pending">3.2 Activate EDM (Update Data Model Version)</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon pending">○</div>
         <div class="sub-step-text">
-          <div class="sub-step-label pending">3.3 Remediate Customizations</div>
-        </div>
-      </div>
-      <div class="sub-step">
-        <div class="sub-step-icon pending">○</div>
-        <div class="sub-step-text">
-          <div class="sub-step-label pending">3.4 Activate EDM (Update Data Model Version)</div>
-        </div>
-      </div>
-      <div class="sub-step">
-        <div class="sub-step-icon pending">○</div>
-        <div class="sub-step-text">
-          <div class="sub-step-label pending">3.5 Restart Site</div>
+          <div class="sub-step-label pending">3.3 Restart Site</div>
         </div>
       </div>
     </div>
@@ -352,7 +340,7 @@
   </div>
 
   <div class="footer-note">
-    Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-05-28 23:21:45 · Refresh this page in your browser as the migration progresses
+    Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-05-29 23:54:34 · Refresh this page in your browser as the migration progresses
   </div>
 
 </div>

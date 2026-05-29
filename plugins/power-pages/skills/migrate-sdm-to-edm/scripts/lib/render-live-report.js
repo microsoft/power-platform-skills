@@ -277,17 +277,17 @@ const APPROVAL_COPY = {
   '3:phase-start:A': {
     heading: '👀 Approve to start Phase 3: Migration & Activation',
     body: [
-      'Phase 2 has finished: metadata migrated to EDM tables, customization findings handled, source synced back to Dataverse.',
-      '<strong>Phase 3</strong> runs <code>pac pages migrate-datamodel --mode configurationDataReferences</code> to migrate transactional references (skipped automatically if you chose <code>--mode all</code> in Phase 2), re-checks the auto-generated customization report for any new findings, activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
+      'Phase 2 has finished: metadata migrated to EDM tables, customizations remediated and uploaded.',
+      '<strong>Phase 3</strong> has 3 sub-steps: migrate transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activate EDM via <code>--updateDataModelVersion</code>, then prompt you to restart the site. Customization handling is already done — no re-check needed.',
     ],
     approve: '› Yes, start Phase 3',
     cancel: '› Cancel — stop before activation',
   },
   '3:phase-start:B': {
-    heading: '👀 Approve to start Phase 3: Migration & Activation',
+    heading: '👀 Approve to start Phase 3: Migration, Remediation & Activation',
     body: [
       'Phase 2 confirmed configuration metadata is present in the target environment.',
-      '<strong>Phase 3</strong> runs <code>pac pages migrate-datamodel --mode configurationDataReferences</code> to migrate transactional references, locates the auto-generated customization report, remediates customizations if any appear (with a stronger warning — Prod findings usually indicate an ALM gap), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
+      '<strong>Phase 3</strong> has 5 sub-steps: migrate transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-emits a customization report), locate that report, remediate any customizations that surface (with a stronger warning — Prod findings usually indicate an ALM gap), activate EDM via <code>--updateDataModelVersion</code>, then prompt you to restart the site.',
     ],
     approve: '› Yes, start Phase 3',
     cancel: '› Cancel — stop before migration',

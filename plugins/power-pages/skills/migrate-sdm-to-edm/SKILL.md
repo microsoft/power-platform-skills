@@ -65,6 +65,31 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 > **Best-effort:** if any `update-state.js` call fails (e.g., node missing), log a warning and continue — the live report is informational, never a blocker for migration work.
 
+### Pointing the user at the report
+
+After each major state change, **explicitly tell the user where the report is** so they can open it in a browser and verify before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
+
+```
+📄 Live execution report updated:
+   <ABSOLUTE_PATH_TO>\skill-execution-report.html
+
+Please open it in your browser to review the plan/results before approving the next phase.
+```
+
+Surface that callout at these **7 checkpoints**:
+
+| # | Checkpoint | Files to point at |
+|---|---|---|
+| 1 | After `--init` runs (end of step 1.2) | `skill-execution-report.html` (initialized state) |
+| 2 | End of Phase 1, before Phase 2 approval | `skill-execution-report.html` (shows full Phase 1 outcomes + plan for next phase) |
+| 3 | After step 2.2 (Track A) — customization CSV parsed | `customization-report.html` (findings catalog) |
+| 4 | Mid-step 2.3 (Track A) — after auto-rewrites, before upload approval | `fetchxml-rewrites.diff`, `liquid-suggestions.diff`, augmented prompt files |
+| 5 | End of Phase 2, before Phase 3 approval | `skill-execution-report.html` (shows Phase 2 outcomes) |
+| 6 | End of Phase 3, before Phase 4 approval | `skill-execution-report.html` (shows EDM activation status) |
+| 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `skill-execution-report.html` |
+
+The skill-level approval prompt that follows (via AskUserQuestion) is for the **user's substantive approval to proceed** — not Claude Code's standard command-execution permission prompt. Always print the file paths in chat first so the user knows where to look.
+
 ---
 
 ## Phase 1: Site Discovery & Pre-checks
@@ -195,6 +220,16 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 > ```
 >
 > If WebSiteId is not yet known, defer init to the end of step 1.3.
+>
+> **📄 Checkpoint 1 — Tell the user about the report.** After `--init` succeeds, print this in chat:
+>
+> ```
+> 📄 Live execution report initialized:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Open this in your browser to follow along as the migration progresses. The report
+> refreshes automatically after each sub-step.
+> ```
 
 ---
 
@@ -513,6 +548,16 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 >
 > `--set-track` rebuilds the Phase 2 and Phase 3 cards in the live report from the chosen track's blueprint. Phase 1 sub-step status is preserved across the swap.
 >
+> **📄 Checkpoint 2 — Tell the user about the report before asking for approval.** Print this in chat *before* the AskUserQuestion approval gate:
+>
+> ```
+> 📄 Phase 1 complete. Review the plan in your browser before approving Phase 2:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> The report now shows: site context, env type, migration mode, derived track, and
+> the Phase 2 sub-steps that will run if you approve.
+> ```
+>
 > Then proceed to ask the user to approve Phase 2 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 2 --status in-progress`.
 
 ---
@@ -619,6 +664,15 @@ This phase has **two completely different shapes** depending on the migration tr
 **Output**: Customization report located/generated and parsed. Findings summary available.
 
 > **→ Update report:** `--set-step 2.2 --status completed --output "CSV: <PATH> · <N> findings total · <BREAKDOWN_BY_CATEGORY>"`
+>
+> **📄 Checkpoint 3 — Tell the user about the customization report.** Print in chat:
+>
+> ```
+> 📄 Customization findings catalog:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\customization-report.html
+>
+> Open this in your browser to review the per-finding details before remediation starts.
+> ```
 
 ---
 
@@ -732,7 +786,22 @@ The script in step 4/5 also emits:
 
 ### 7. Review and approve changes
 
-Show the user:
+> **📄 Checkpoint 4 — Tell the user about the diff and prompts.** Print all relevant paths in chat before asking for upload approval:
+>
+> ```
+> 📄 Auto-rewrites complete. Review these files before approving the upload:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\fetchxml-rewrites.diff
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\liquid-suggestions.diff
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\plugin-remediation-prompt.txt   (if plugin findings)
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\dme-remediation-prompt.txt      (if DME findings)
+>
+> The live execution report also shows the diff summary:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Review the diff and the augmented prompts. When ready, I'll ask for your approval to upload.
+> ```
+
+Then show the user:
 
 - Path to the diff file (`fetchxml-rewrites.diff`)
 - Path to the Liquid suggestions report
@@ -781,6 +850,16 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 > --set-step 2.3 --status completed --output "Snapshot captured · <auto-rewrites done|no remediation needed> · readiness confirmed"
 > --set-phase 2 --status completed
 > --set-approval 3 phase-start
+> ```
+>
+> **📄 Checkpoint 5 — Tell the user about the report before asking for Phase 3 approval.** Print in chat:
+>
+> ```
+> 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> The report shows: customization findings handled, SDM snapshot captured, and the
+> Phase 3 sub-steps that will run if you approve.
 > ```
 >
 > Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
@@ -907,17 +986,36 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 > --set-approval 3 phase-start
 > ```
 >
+> **📄 Checkpoint 5 — Tell the user about the report before asking for Phase 3 approval.** Print in chat:
+>
+> ```
+> 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> The report shows: customization findings handled, SDM snapshot captured, and the
+> Phase 3 sub-steps that will run if you approve.
+> ```
+>
 > Then ask the user to approve Phase 3 via AskUserQuestion. On approval, `--clear-approval` and `--set-phase 3 --status in-progress`.
 
 ---
 
-## Phase 3: Migration & Activation
+## Phase 3: Migration & Activation (track-branched)
 
-**Applies to both tracks.** Phase 3 has the same 5-sub-step structure regardless of whether the user is on Track A or Track B. The only conditional is step 3.1, which is auto-skipped when mode = `all` (refs already migrated in Phase 2.1).
+Phase 3 has **two different shapes** depending on the migration track. Track A is shorter (3 sub-steps) because customization remediation already happened in Phase 2.3. Track B is longer (5 sub-steps) because customizations get scanned and remediated here (Phase 2 for Track B was just metadata verification).
 
-**Goal**: If not already done, migrate transactional references via `--mode configurationDataReferences`. Re-check the customization report (re-emitted by PAC). Remediate any new findings. Activate EDM via `--updateDataModelVersion`. Prompt the user to restart the site manually.
+- [**Phase 3 — Track A**](#phase-3--track-a) — track A (mode = `configurationData` or `all`). 3 sub-steps: migrate refs → activate → restart.
+- [**Phase 3 — Track B**](#phase-3--track-b) — track B (mode = `configurationDataReferences`). 5 sub-steps: migrate refs → locate customization report → remediate → activate → restart.
 
-**Output**: Transactional refs migrated, customizations addressed, site activated on EDM, user has confirmed restart.
+---
+
+## Phase 3 — Track A
+
+**Applies when**: state.track === 'A' (mode = `configurationData` or `all`)
+
+**Goal**: Migrate transactional references (skipped if mode=all already covered them), activate EDM, prompt user to restart. Customization handling is **not in this phase** — Phase 2.3 already cleaned things up.
+
+**Output**: Transactional refs migrated (or skip if mode=all), site activated on EDM, user has confirmed restart.
 
 ---
 
@@ -973,67 +1071,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ---
 
-### 3.2 Locate Customization Report
-
-**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
-
-**Actions**:
-
-Same logic as Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
-
-> **Track A note:** if step 3.1 was skipped (mode=all), this step re-reads the CSV from Phase 2.2 instead. Findings should be unchanged from then since no new migrate command ran.
-
-**Output**: Customization report located and parsed.
-
-> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
-
----
-
-### 3.3 Remediate Customizations
-
-**Goal**: If any customizations are flagged in 3.2, apply auto-rewrites + augmented prompts and upload. For Track A this is normally a no-op (Phase 2.3 already cleaned things up). For Track B this is where remediation happens, with a stronger warning since findings on a Prod target usually indicate an ALM gap.
-
-**Actions**:
-
-1. **Branch on findings**
-
-   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4. Skip the rest of this sub-step.
-   - **Track A with findings**: usually means something changed between Phase 2 and Phase 3, or the auto-rewriter didn't fully resolve everything. Surface a warning, ask user how to proceed, then run auto-rewriters again.
-   - **Track B with findings**: surface the stronger ALM-gap warning below, ask user how to proceed.
-
-2. **Track B — Surface ALM-gap warning**
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Found `<N>` customization findings on this Prod/Test/UAT env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
-
-   - **Remediate now**: proceed with the auto-rewriter steps below.
-   - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
-   - **Cancel**: halt cleanly.
-
-3. **Run FetchXML auto-rewriter** — same script as Phase 2.3 step 4.
-
-4. **Run Liquid semi-auto annotator** — same script as Phase 2.3 step 5.
-
-5. **Generate augmented prompts** — same as Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
-
-6. **Review and approve** — same as Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
-
-7. **Upload approved changes**:
-
-   ```powershell
-   pac pages upload --path "<SITE_ROOT>" --modelVersion 1
-   ```
-
-   > **→ Update report (after upload):** `--clear-approval`.
-
-**Output**: Customizations remediated and uploaded (or zero findings, skipped).
-
-> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
-
----
-
-### 3.4 Activate EDM (Update Data Model Version)
+### 3.2 Activate EDM (Update Data Model Version)
 
 **Goal**: Run `--updateDataModelVersion` to flip the site to EDM.
 
@@ -1082,12 +1120,12 @@ Same logic as Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cw
 >
 > ```
 > --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
-> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> --set-step 3.2 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
 ---
 
-### 3.5 Restart Site (manual)
+### 3.3 Restart Site (manual)
 
 **Goal**: User must manually restart the site for the data model change to take effect at runtime. There is no PAC command for this.
 
@@ -1116,12 +1154,173 @@ Same logic as Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cw
 
 **Output**: User has confirmed the site is restarted on EDM.
 
-> **→ Update report (end of Phase 3):**
+> **→ Update report (end of Phase 3 Track A):**
+>
+> ```
+> --set-step 3.3 --status completed --output "Site restarted by user · live on EDM"
+> --set-phase 3 --status completed
+> --set-approval 4 phase-start
+> ```
+>
+> **📄 Checkpoint 6 — Tell the user about the report before asking for Phase 4 approval.** Print in chat:
+>
+> ```
+> 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
+> baseline to verify every record migrated.
+> ```
+>
+> Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
+
+---
+
+## Phase 3 — Track B
+
+**Applies when**: state.track === 'B' (mode = `configurationDataReferences`)
+
+**Goal**: Capture SDM snapshot (needed for Phase 4 diff), migrate transactional references, locate and remediate the auto-emitted customization report (findings here usually indicate an ALM gap), activate EDM, prompt user to restart.
+
+**Output**: Transactional refs migrated, customizations handled, site activated on EDM, user has confirmed restart.
+
+---
+
+### 3.1 Migrate Transactional References
+
+**Goal**: Capture the SDM snapshot first (required for Phase 4 data diff), then run the migration command. Newer PAC auto-emits a customization report as a side effect.
+
+**Actions**:
+
+1. **Capture SDM snapshot** (Track B specific — Track A captures in 2.3)
+
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "./mysite"
+   ```
+
+   > **Nested-folder quirk** applies — actual site root is one level deeper. Capture inner path as `<SITE_ROOT>`.
+
+   Then snapshot:
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label sdm
+   ```
+
+2. **Execute Migration Command**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences
+   ```
+
+   Newer PAC versions auto-emit `SiteCustomization*.csv` into `<OUTPUT_DIR>` or cwd.
+
+3. **Poll Status**
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   ```
+
+   Same polling pattern as Phase 2 Track A 2.1 — Completed proceeds; In Progress sets `--set-activity` and re-checks; Failed / 30-min timeout offers retry / reset / exit.
+
+**Output**: SDM snapshot captured, transactional references migrated, customization CSV auto-emitted.
+
+> **→ Update report:** `--clear-activity` and `--set-step 3.1 --status completed --output "Refs migrated · status=<STATUS>"`
+
+---
+
+### 3.2 Locate Customization Report
+
+**Goal**: Find the CSV PAC auto-generated in step 3.1; fall back to explicit generation if missing.
+
+**Actions**:
+
+Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DIR>` + cwd; if missing, run explicit `--siteCustomizationReportPath`; parse and summarize findings.
+
+**Output**: Customization report located and parsed.
+
+> **→ Update report:** `--set-step 3.2 --status completed --output "CSV: <PATH> · <N> findings total"`
+
+---
+
+### 3.3 Remediate Customizations
+
+**Goal**: If customizations are flagged, apply auto-rewrites + augmented prompts and upload. Findings on Prod/Test/UAT usually indicate an ALM gap, so the warning is stronger than Track A's.
+
+**Actions**:
+
+1. **Branch on findings**
+
+   - **Zero findings**: log "no customizations to remediate" and proceed to step 3.4.
+   - **Has findings**: surface ALM-gap warning, ask user how to proceed.
+
+2. **Surface ALM-gap warning**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Found `<N>` customization findings on this Prod/Test/UAT env. Customizations should have been remediated in Dev and shipped via solution import — finding them here indicates an ALM gap. How do you want to proceed? | Prod Customizations | Remediate now (auto-rewrite + augmented prompts + upload), Pause skill — I'll fix at source in Dev and re-import the solution, Cancel — stop the skill |
+
+   - **Remediate now**: proceed with the auto-rewriter steps below.
+   - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
+   - **Cancel**: halt cleanly.
+
+3. **Run FetchXML auto-rewriter** — same script as Track A Phase 2.3 step 4.
+
+4. **Run Liquid semi-auto annotator** — same script as Track A Phase 2.3 step 5.
+
+5. **Generate augmented prompts** — same as Track A Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
+
+6. **Review and approve** — same as Track A Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
+
+7. **Upload approved changes**:
+
+   ```powershell
+   pac pages upload --path "<SITE_ROOT>" --modelVersion 1
+   ```
+
+   > **→ Update report (after upload):** `--clear-approval`.
+
+**Output**: Customizations remediated and uploaded (or zero findings, skipped).
+
+> **→ Update report:** `--set-step 3.3 --status completed --output "<Auto-rewrites uploaded | No customizations to remediate>"`
+
+---
+
+### 3.4 Activate EDM (Update Data Model Version)
+
+Identical to Track A's step 3.2 — retrieve Portal ID, run `--updateDataModelVersion`, confirm switch.
+
+> **→ Update report:**
+>
+> ```
+> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
+> --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
+> ```
+
+---
+
+### 3.5 Restart Site (manual)
+
+Identical to Track A's step 3.3 — print restart instructions, wait for user confirmation via AskUserQuestion.
+
+> **→ Update report (end of Phase 3 Track B):**
 >
 > ```
 > --set-step 3.5 --status completed --output "Site restarted by user · live on EDM"
 > --set-phase 3 --status completed
 > --set-approval 4 phase-start
+> ```
+>
+> **📄 Checkpoint 6 — Tell the user about the report before asking for Phase 4 approval.** Print in chat:
+>
+> ```
+> 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
+> baseline to verify every record migrated.
 > ```
 >
 > Then ask the user to approve Phase 4. On approval, `--clear-approval` and `--set-phase 4 --status in-progress`.
@@ -1182,6 +1381,19 @@ Classify the result:
 - **fail** — at least one SDM record is missing from EDM, or an unexpected new record appeared in EDM, or counts differ
 
 ### 4. Surface the diff and let the user decide
+
+> **📄 Checkpoint 7 — Tell the user about the diff result.** Print in chat:
+>
+> ```
+> 📄 Data diff complete. Review the result before deciding:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\migration-data-diff.json
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Status: <PASS | WARN | FAIL>
+>    <N> records missing in EDM
+>    <M> extra records in EDM
+>    <S> records with state changes
+> ```
 
 Show the user the diff table (read it from console output or the JSON file) and ask:
 
@@ -1282,12 +1494,16 @@ Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 | Phase 3 | Migration & Activation | Executing migration and activating EDM |
 | Phase 4 | Post-Migration Validation | Validating and completing migration |
 
-> **Track-aware naming for Phase 2:** Phase 2 has two different structures depending on the track derived in step 1.7. The live execution report shows the track-specific phase title:
+> **Track-aware naming for Phase 2 and Phase 3:** Both phases have different structures depending on the track derived in step 1.7. The live execution report shows the track-specific phase title and sub-step list:
 >
-> - **Track A** (mode = `configurationData` or `all`): Phase 2 renders as "Configuration Migration & Customization Remediation"
-> - **Track B** (mode = `configurationDataReferences`): Phase 2 renders as "Setting Up Metadata"
+> - **Track A** (mode = `configurationData` or `all`):
+>   - Phase 2 renders as "Configuration Migration & Customization Remediation" (3 sub-steps)
+>   - Phase 3 renders as "Migration & Activation" (**3 sub-steps**: Migrate Refs → Activate EDM → Restart)
+> - **Track B** (mode = `configurationDataReferences`):
+>   - Phase 2 renders as "Setting Up Metadata" (3 sub-steps)
+>   - Phase 3 renders as "Migration, Remediation & Activation" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
 >
-> **Phase 3 is identical in both tracks** — same 5 sub-steps, same title. The only conditional is step 3.1, which is auto-skipped when mode = `all` (refs already migrated in Phase 2.1).
+> **Track A total = 14 sub-steps. Track B total = 16 sub-steps.** The `--set-track A|B` command at end of 1.7 rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
 
 ---
 
