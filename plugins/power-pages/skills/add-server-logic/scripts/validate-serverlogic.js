@@ -11,10 +11,9 @@ const { approve, block, runValidation, findProjectRoot, UUID_REGEX } = require('
 const ALLOWED_FUNCTIONS = ['get', 'post', 'put', 'patch', 'del'];
 const BROWSER_APIS = ['XMLHttpRequest', 'document\\.', 'window\\.', 'setTimeout', 'setInterval', 'navigator\\.', 'fetch'];
 
-async function main() {
-  return runValidation((cwd) => {
-    const projectRoot = findProjectRoot(cwd);
-    if (!projectRoot) return approve(); // Not a Power Pages project, skip
+runValidation((cwd) => {
+  const projectRoot = findProjectRoot(cwd);
+  if (!projectRoot) return approve(); // Not a Power Pages project, skip
 
   // Server logic files live inside .powerpages-site/server-logic/
   const serverLogicDir = path.join(projectRoot, '.powerpages-site', 'server-logic');
@@ -223,17 +222,11 @@ async function main() {
     }
   }
 
-    if (errors.length > 0) {
-      block('Server Logic validation failed:\n- ' + errors.join('\n- '));
-    }
+  if (errors.length > 0) {
+    block('Server Logic validation failed:\n- ' + errors.join('\n- '));
+  }
 
-    approve();
-  });
-}
-
-main().catch((err) => {
-  process.stderr.write(String((err && err.stack) || err) + '\n');
-  process.exit(1);
+  approve();
 });
 
 function findServerLogicDirs(dir) {
@@ -337,12 +330,3 @@ function findTopLevelFunctions(content) {
   }
   return names;
 }
-
-if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(String((err && err.stack) || err) + '\n');
-    process.exit(1);
-  });
-}
-
-module.exports = { main };

@@ -14,10 +14,9 @@ const {
   UUID_REGEX,
 } = require('../../../scripts/lib/validation-helpers');
 
-async function main() {
-  return runValidation((cwd) => {
-    const projectRoot = findProjectRoot(cwd);
-    if (!projectRoot) return approve();
+runValidation((cwd) => {
+  const projectRoot = findProjectRoot(cwd);
+  if (!projectRoot) return approve();
 
   const cloudFlowDir = path.join(projectRoot, '.powerpages-site', 'cloud-flow-consumer');
   if (!fs.existsSync(cloudFlowDir)) return approve();
@@ -116,15 +115,9 @@ async function main() {
     }
   }
 
-    if (errors.length > 0) {
-      block('Cloud flow consumer validation failed:\n- ' + errors.join('\n- '));
-    }
+  if (errors.length > 0) {
+    block('Cloud flow consumer validation failed:\n- ' + errors.join('\n- '));
+  }
 
-    approve();
-  });
-}
-
-main().catch((err) => {
-  process.stderr.write(String((err && err.stack) || err) + '\n');
-  process.exit(1);
+  approve();
 });

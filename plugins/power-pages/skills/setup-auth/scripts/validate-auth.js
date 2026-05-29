@@ -15,10 +15,9 @@ const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
-async function main() {
-  return runValidation((cwd) => {
-    const projectRoot = findProjectRoot(cwd);
-    if (!projectRoot) return approve(); // Not a Power Pages project, skip
+runValidation((cwd) => {
+  const projectRoot = findProjectRoot(cwd);
+  if (!projectRoot) return approve(); // Not a Power Pages project, skip
 
   // Check if any auth files exist — if none, this wasn't an auth session
   const authServiceExists = findAuthService(projectRoot);
@@ -85,13 +84,12 @@ async function main() {
     errors.push('Missing auth UI component (AuthButton or equivalent)');
   }
 
-    if (errors.length > 0) {
-      block('Authentication setup validation failed:\n- ' + errors.join('\n- '));
-    }
+  if (errors.length > 0) {
+    block('Authentication setup validation failed:\n- ' + errors.join('\n- '));
+  }
 
-    approve();
-  });
-}
+  approve();
+});
 
 function hasFinishingMarker(projectRoot) {
   // The skill writes `docs/auth-setup-report.html` at the end of Phase 8.3.5.
@@ -171,12 +169,3 @@ function findAuthComponent(projectRoot) {
 
   return null;
 }
-
-if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(String((err && err.stack) || err) + '\n');
-    process.exit(1);
-  });
-}
-
-module.exports = { main };

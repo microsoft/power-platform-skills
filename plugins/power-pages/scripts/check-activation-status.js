@@ -22,68 +22,68 @@ function output(obj) {
   process.exit(0);
 }
 
-async function main() {
-  // --- Parse --projectRoot argument ---
-  const args = process.argv.slice(2);
-  const rootIdx = args.indexOf('--projectRoot');
-  const projectRoot = rootIdx !== -1 ? args[rootIdx + 1] : process.cwd();
+// --- Parse --projectRoot argument ---
+const args = process.argv.slice(2);
+const rootIdx = args.indexOf('--projectRoot');
+const projectRoot = rootIdx !== -1 ? args[rootIdx + 1] : process.cwd();
 
-  // --- Read siteName from powerpages.config.json ---
-  const configPath = findPath(projectRoot, 'powerpages.config.json');
-  if (!configPath) {
-    output({ error: 'powerpages.config.json not found' });
-  }
+// --- Read siteName from powerpages.config.json ---
+const configPath = findPath(projectRoot, 'powerpages.config.json');
+if (!configPath) {
+  output({ error: 'powerpages.config.json not found' });
+}
 
-  let siteName;
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    siteName = config.siteName;
-  } catch {
-    output({ error: 'Failed to parse powerpages.config.json' });
-  }
-  if (!siteName) {
-    output({ error: 'siteName not found in powerpages.config.json' });
-  }
+let siteName;
+try {
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  siteName = config.siteName;
+} catch {
+  output({ error: 'Failed to parse powerpages.config.json' });
+}
+if (!siteName) {
+  output({ error: 'siteName not found in powerpages.config.json' });
+}
 
-  // --- Get websiteRecordId from pac pages list ---
-  let websiteRecordId = null;
-  try {
-    const pacOutput = execSync('pac pages list', { encoding: 'utf8', timeout: 15000 });
-    // pac pages list outputs a table with columns. Find the row matching siteName.
-    // Column headers vary but Website Record ID is always a GUID column.
-    const lines = pacOutput.split(/\r?\n/).filter((l) => l.trim());
-    for (const line of lines) {
-      // Skip header/separator lines
-      if (line.includes('----') || line.toLowerCase().includes('website name')) continue;
-      // Check if this line contains our site name (case-insensitive)
-      if (line.toLowerCase().includes(siteName.toLowerCase())) {
-        // Extract GUID from the line
-        const guidMatch = line.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-        if (guidMatch) {
-          websiteRecordId = guidMatch[0];
-        }
-        break;
+// --- Get websiteRecordId from pac pages list ---
+let websiteRecordId = null;
+try {
+  const pacOutput = execSync('pac pages list', { encoding: 'utf8', timeout: 15000 });
+  // pac pages list outputs a table with columns. Find the row matching siteName.
+  // Column headers vary but Website Record ID is always a GUID column.
+  const lines = pacOutput.split(/\r?\n/).filter((l) => l.trim());
+  for (const line of lines) {
+    // Skip header/separator lines
+    if (line.includes('----') || line.toLowerCase().includes('website name')) continue;
+    // Check if this line contains our site name (case-insensitive)
+    if (line.toLowerCase().includes(siteName.toLowerCase())) {
+      // Extract GUID from the line
+      const guidMatch = line.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (guidMatch) {
+        websiteRecordId = guidMatch[0];
       }
+      break;
     }
-  } catch {
-    // pac pages list failed — continue without websiteRecordId
   }
+} catch {
+  // pac pages list failed — continue without websiteRecordId
+}
 
-  // --- Get PAC auth info ---
-  const pacInfo = getPacAuthInfo();
-  if (!pacInfo) {
-    output({ error: 'PAC CLI not authenticated' });
-  }
+// --- Get PAC auth info ---
+const pacInfo = getPacAuthInfo();
+if (!pacInfo) {
+  output({ error: 'PAC CLI not authenticated' });
+}
 
-  const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
+const ppApiBaseUrl = CLOUD_TO_API[pacInfo.cloud] || CLOUD_TO_API['Public'];
 
-  // --- Get Azure CLI token ---
-  const token = getAuthToken(ppApiBaseUrl);
-  if (!token) {
-    output({ error: 'Azure CLI token not available' });
-  }
+// --- Get Azure CLI token ---
+const token = getAuthToken(ppApiBaseUrl);
+if (!token) {
+  output({ error: 'Azure CLI token not available' });
+}
 
-  // --- Query websites API ---
+// --- Query websites API ---
+(async () => {
   const websites = await getWebsites(ppApiBaseUrl, token, pacInfo.environmentId);
   if (websites === null) {
     output({ error: 'Websites API call failed' });
@@ -114,7 +114,7 @@ async function main() {
       websiteRecordId,
     });
   }
-}
+})();
 
 async function getWebsites(ppApiBaseUrl, token, environmentId) {
   try {
@@ -135,12 +135,3 @@ async function getWebsites(ppApiBaseUrl, token, environmentId) {
     return null;
   }
 }
-
-if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(String((err && err.stack) || err) + '\n');
-    process.exit(1);
-  });
-}
-
-module.exports = { main };
