@@ -34,9 +34,57 @@ test("readAiAgent returns Claude Code + version when CLAUDECODE=1 and pkg.json e
   });
 });
 
-test("readAiAgent returns Claude Code with empty version when EXECPATH missing", () => {
+test("readAiAgent returns Claude Code with empty version when EXECPATH missing and no AI_AGENT", () => {
   const result = agentInfo.readAiAgent({ CLAUDECODE: "1" });
   assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "" });
+});
+
+test("readAiAgent falls back to AI_AGENT version on native installs (EXECPATH has no sibling package.json)", () => {
+  // Native installer: execpath points at a standalone binary with no
+  // ../package.json. The npm-layout read fails; AI_AGENT carries the version.
+  const result = agentInfo.readAiAgent({
+    CLAUDECODE: "1",
+    CLAUDE_CODE_EXECPATH: path.join(os.tmpdir(), "does-not-exist", "bin", "claude.exe"),
+    AI_AGENT: "claude-code_2-1-156_agent",
+  });
+  assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "2.1.156" });
+});
+
+test("readAiAgent falls back to AI_AGENT version when EXECPATH is unset", () => {
+  const result = agentInfo.readAiAgent({
+    CLAUDECODE: "1",
+    AI_AGENT: "claude-code_2-1-156_agent",
+  });
+  assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "2.1.156" });
+});
+
+test("readAiAgent: npm package.json version wins over AI_AGENT when both available", () => {
+  withClaudeCodeFixture(({ execPath }) => {
+    const result = agentInfo.readAiAgent({
+      CLAUDECODE: "1",
+      CLAUDE_CODE_EXECPATH: execPath, // package.json says 2.0.0
+      AI_AGENT: "claude-code_9-9-9_agent",
+    });
+    assert.equal(result.aiAgentVersion, "2.0.0");
+  });
+});
+
+test("readAiAgent: AI_AGENT with no parseable version yields empty version", () => {
+  const result = agentInfo.readAiAgent({
+    CLAUDECODE: "1",
+    AI_AGENT: "claude-code_agent", // no numeric version segment
+  });
+  assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "" });
+});
+
+test("readAiAgent: AI_AGENT fallback also backfills when only AI_AGENT_NAME is set", () => {
+  const result = agentInfo.readAiAgent({
+    AI_AGENT_NAME: "Claude Code",
+    // No AI_AGENT_VERSION, no resolvable EXECPATH
+    CLAUDECODE: "1",
+    AI_AGENT: "claude-code_2-1-156_agent",
+  });
+  assert.deepEqual(result, { aiAgentName: "Claude Code", aiAgentVersion: "2.1.156" });
 });
 
 test("readAiAgent returns empty when CLAUDECODE not set and no explicit env", () => {

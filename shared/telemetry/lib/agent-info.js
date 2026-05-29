@@ -41,20 +41,36 @@ function _resetCache() {
   pacCliVersionCache = undefined;
 }
 
-// Reads the Claude Code CLI version from its installed package.json. The
-// hook subprocess inherits CLAUDE_CODE_EXECPATH from Claude Code; jumping
-// one directory above the executable's bin/ lands on the npm package root.
+// Parses a dotted semver out of the AI_AGENT env var. Claude Code sets
+// AI_AGENT=claude-code_<maj>-<min>-<patch>_agent (e.g.
+// "claude-code_2-1-156_agent"); the version segment uses dashes, so we
+// normalize separators to dots. The "claude-code" name prefix carries no
+// digits, so the first numeric run is the version.
+function parseVersionFromAiAgent(aiAgent) {
+  if (typeof aiAgent !== "string") return "";
+  const match = aiAgent.match(/\d+(?:[._-]\d+)+/);
+  return match ? match[0].replace(/[._-]/g, ".") : "";
+}
+
+// Reads the Claude Code CLI version. Primary source is the installed
+// package.json: the hook subprocess inherits CLAUDE_CODE_EXECPATH from Claude
+// Code, and jumping one directory above the executable's bin/ lands on the npm
+// package root. That layout only exists for npm-global installs — the native
+// installer ships a standalone binary with no sibling package.json — so when
+// the read yields nothing, fall back to the version carried in AI_AGENT, which
+// Claude Code sets regardless of install method.
 function readClaudeCodeVersion(env) {
   const execPath = env.CLAUDE_CODE_EXECPATH;
-  if (!execPath) return "";
-  try {
-    const pkgPath = path.join(path.dirname(execPath), "..", "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-    if (pkg && typeof pkg.version === "string") return pkg.version;
-  } catch {
-    // pkg unreadable; fall through to empty
+  if (execPath) {
+    try {
+      const pkgPath = path.join(path.dirname(execPath), "..", "package.json");
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (pkg && typeof pkg.version === "string") return pkg.version;
+    } catch {
+      // pkg unreadable; fall through to the AI_AGENT fallback
+    }
   }
-  return "";
+  return parseVersionFromAiAgent(env.AI_AGENT);
 }
 
 // Detects the AI agent host. Prefers explicit env vars; falls back to
