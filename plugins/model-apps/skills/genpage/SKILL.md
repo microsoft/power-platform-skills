@@ -1,6 +1,6 @@
 ---
 name: genpage
-version: 2.1.0
+version: 2.2.0
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
