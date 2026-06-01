@@ -65,6 +65,10 @@ After init, each sub-step below ends with a **→ Update report** callout. Execu
 
 > **Best-effort:** if any `update-state.js` call fails (e.g., node missing), log a warning and continue — the live report is informational, never a blocker for migration work.
 
+> **Use the `Bash` tool for `update-state.js` calls, not `PowerShell`.** PowerShell parses `(...)` as subexpression syntax inside double-quoted strings, so JSON values containing parens — e.g., `"currentDataModel":"Standard (SDM)"` — error out with `'SDM' is not recognized as a name of a cmdlet`. The `Bash` tool runs through sh, which doesn't have this gotcha; single-quoted JSON works cleanly. The `update-state.js` script itself is pure Node and runs identically from either shell.
+>
+> If you must use PowerShell (e.g., automation requires it), avoid parens and em-dashes inside JSON values — use plain text like `"Standard SDM"` instead of `"Standard (SDM) — eligible for migration"`.
+
 ### Pointing the user at the report
 
 After each major state change, **explicitly tell the user where the report is** so they can open it in a browser and verify before approving the next phase. The user shouldn't have to guess where files live. Use this pattern in the chat:
@@ -272,20 +276,48 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 4. **Identify Site Template**
 
-   Template name is not available from `pac pages list`. If step 1.4 reads `adx_templatename` from the migration tracker (populated by a prior migration), use that; otherwise ask user:
+   Template name is not available from `pac pages list`. If step 1.4 reads `adx_templatename` from the migration tracker (populated by a prior migration), use that and skip this prompt.
+
+   Otherwise ask the user via a **2-question tree** (Claude Code's `AskUserQuestion` tool caps at 4 options per question, so the flat 16-template list errors out with `InputValidationError: too_big`). Ask the family first, then drill down based on the answer.
+
+   **Q1 — Template family:**
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | What template is this site based on? | Site Template | Starter layout 1, Starter layout 2, Starter layout 3, Starter layout 4, Starter layout 5, Application processing, Blank page, Program registration, Schedule and manage meetings, FAQ, Event registration, Community Portal (D365), Customer Self-Service Portal (D365), Employee Self-Service Portal (D365), Partner Portal (D365), Other/Unknown |
+   | What family is this site's template in? | Template Family | Starter Layout / Blank Page, Power Pages template (FAQ / Event / Application / etc.), D365 portal template, Other or Unknown |
 
-   Store the chosen template — it drives the V2 package check in step 1.6. If "Other/Unknown", proceed with caution; step 1.6 will skip the template-specific package check and rely on `PowerPages_Core` validation only.
+   **Q2a — if "Starter Layout / Blank Page":**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which Starter Layout or Blank template? | Starter | Starter layout 1, Starter layout 2 / 3, Starter layout 4 / 5, Blank page |
+
+   (If user picks "Starter layout 2 / 3" or "Starter layout 4 / 5", drill once more to the specific number with a 4-option follow-up. Or accept the pair and pick the conservative V2 package — the install probe in step 1.6 will fail if it's wrong and surface the actual name.)
+
+   **Q2b — if "Power Pages template (FAQ / Event / Application / etc.)":**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which Power Pages template? | Template | FAQ, Event registration, Application processing, Program registration / Schedule and manage meetings |
+
+   **Q2c — if "D365 portal template":**
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which D365 portal? | D365 Portal | Community, Customer Self-Service, Employee Self-Service, Partner |
+
+   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check and relies on `PowerPages_Core` validation only.
+
+   Store the final chosen template — it drives the V2 package check in step 1.6.
+
+   > **Why the chunking:** `AskUserQuestion` errors with `InputValidationError: questions.0.options: Too big: expected array to have <=4 items` when more than 4 options are passed. The tree shape keeps every individual question within the limit while still letting the user pick from the full 15 supported templates plus Other/Unknown.
 
 **Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
 
 > **→ Update report.** If the live report wasn't initialized at end of 1.2, do it now (`--init` plus batched `--set-step 1.1` / `1.2` completed). Then:
 >
 > ```
-> --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","currentDataModel":"Standard (SDM) — eligible for migration","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
+> --set-site '{"name":"<SITE_NAME>","slug":"<URL_SLUG>","portalId":"<PORTAL_ID_OR_NULL>","currentDataModel":"Standard SDM","template":"<TEMPLATE_NAME>","siteRoot":"<SITE_ROOT>"}'
 > --set-step 1.3 --status completed --output "Site <NAME> · ModelVersion=Standard · template <TEMPLATE>"
 > ```
 
@@ -300,17 +332,16 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 1. **Query Current Status**
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus --verbose
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
    ```
 
-   The `--verbose` flag returns the tracker summary (`createdOn`, `modifiedOn`, `migrationStatus`) plus a step history with per-step UTC timestamps and any chunk errors.
+   > **PAC CLI build note:** `pac pages migrate-datamodel --checkMigrationStatus` does **not** accept `--verbose` on PAC 1.47.1+ — it errors with `An unknown argument --verbose was passed.` On older builds the flag returned a tracker summary with `createdOn`, `modifiedOn`, step history, and chunk errors; on current builds you only get the basic status line. Run without `--verbose`; if you need elapsed-time / per-step details for a long-running migration, query the migration tracker record directly in Dataverse via PAC data tools.
 
 2. **Parse Status**
 
-   Extract:
+   Extract from the output:
    - **Status**: one of `NotStarted`, `Running`, `Completed`, `Failed`, `Reverted`, `Unknown`
-   - **createdOn** (migration first started) and **modifiedOn** (last update) for elapsed-time calculations
-   - **currentStep** and **stepHistory** from the step config block (granular progress)
+   - On older PAC builds where `--verbose` worked, also: **createdOn** / **modifiedOn** (for elapsed-time), **currentStep** / **stepHistory** (granular progress)
 
 3. **Branch Based on Status**
 
@@ -1149,7 +1180,7 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 > **→ Update report:**
 >
 > ```
-> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
+> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced EDM"}'
 > --set-step 3.2 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
@@ -1325,7 +1356,7 @@ Identical to Track A's step 3.2 — retrieve Portal ID, run `--updateDataModelVe
 > **→ Update report:**
 >
 > ```
-> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced (EDM)"}'
+> --set-site '{"portalId":"<PORTAL_ID>","currentDataModel":"Enhanced EDM"}'
 > --set-step 3.4 --status completed --output "Data model flipped to EDM · Portal Id <PORTAL_ID>"
 > ```
 
