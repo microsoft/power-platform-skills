@@ -77,7 +77,9 @@ const PHASE_4 = {
   id: 4,
   title: 'Post-Migration Validation',
   subSteps: [
-    { id: '4.1', label: 'Validation, Optional Rollback, and Final Summary' },
+    { id: '4.1', label: 'Data Diff Validation (SDM ↔ EDM)' },
+    { id: '4.2', label: 'Runtime Smoke Test Recommendation (/test-site)' },
+    { id: '4.3', label: 'Final Status, Optional Rollback, Summary' },
   ],
 };
 

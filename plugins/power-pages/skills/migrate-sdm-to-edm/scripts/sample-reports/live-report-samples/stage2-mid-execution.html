@@ -137,18 +137,18 @@
   </div>
   <div class="topbar-right">
     <span>Track <strong>A</strong></span>
-    <span>Last updated <strong>23:54:35</strong></span>
+    <span>Last updated <strong>15:10:57</strong></span>
   </div>
 </div>
 
 <div class="page-header">
   <h1>Execution Report <span class="status-pill in-progress">🔵 In Progress · Phase 2 of 4</span></h1>
   <div class="subtitle">Configuration Migration &amp; Customization Remediation in progress · Step 2.3 — review fetchxml-rewrites.diff before pac pages upload</div>
-  <div class="progress-bar"><div class="progress-bar-fill" style="width: 64%;"></div></div>
+  <div class="progress-bar"><div class="progress-bar-fill" style="width: 56%;"></div></div>
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-num">64%</div><div class="stat-label">Overall</div></div>
-    <div class="stat-card"><div class="stat-num">9 / 14</div><div class="stat-label">Sub-steps</div></div>
-    <div class="stat-card"><div class="stat-num">0m 01s</div><div class="stat-label">Elapsed</div></div>
+    <div class="stat-card"><div class="stat-num">56%</div><div class="stat-label">Overall</div></div>
+    <div class="stat-card"><div class="stat-num">9 / 16</div><div class="stat-label">Sub-steps</div></div>
+    <div class="stat-card"><div class="stat-num">0m 02s</div><div class="stat-label">Elapsed</div></div>
     <div class="stat-card"><div class="stat-num">1 / 4</div><div class="stat-label">Phases done</div></div>
   </div>
 </div>
@@ -162,13 +162,13 @@
       <tr><td>Website Id</td><td class="known">076bf556-9ae6-ee11-a203-6045bdf0328e</td></tr>
       <tr><td>Portal Id</td><td>07f35d71-c45a-4a05-9702-8f127559e48e</td></tr>
       <tr><td>URL slug</td><td>contoso-portal</td></tr>
-      <tr><td>Current data model</td><td>Standard (SDM) — eligible for migration</td></tr>
+      <tr><td>Current data model</td><td>Standard SDM</td></tr>
       <tr><td>Template</td><td>Starter Layout 1</td></tr>
       <tr><td>Environment</td><td>Development</td></tr>
       <tr><td>Migration mode</td><td>configurationData</td></tr>
       <tr><td>Site root</td><td>./mysite/contoso-portal/</td></tr>
       <tr><td>Output directory</td><td class="known">.\migration-reports</td></tr>
-      <tr><td>Skill started</td><td class="known">2026-05-29 23:54:33</td></tr>
+      <tr><td>Skill started</td><td class="known">2026-06-01 15:10:54</td></tr>
     </table>
   </div>
 
@@ -251,21 +251,21 @@
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">2.1 Migrate Metadata</div>
-          <div class="sub-step-output">Metadata migration COMPLETED · mode=configurationData · auto-emitted SiteCustomization.csv (16 findings)</div>
+          <div class="sub-step-output">Metadata migration COMPLETED · mode=configurationData</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon">✓</div>
         <div class="sub-step-text">
           <div class="sub-step-label">2.2 Locate Customization Report</div>
-          <div class="sub-step-output">CSV parsed: 16 Liquid findings (false positives — logical-name accessors). 0 FetchXML, 0 plugins, 0 DME.</div>
+          <div class="sub-step-output">CSV parsed: 16 findings (all logical-name accessors)</div>
         </div>
       </div>
       <div class="sub-step">
         <div class="sub-step-icon progress">●</div>
         <div class="sub-step-text">
           <div class="sub-step-label">2.3 Remediate Customizations</div>
-          <div class="sub-step-output">SDM snapshot captured (276 records). Auto-rewriters: 0 modifications. Awaiting user readiness gate.</div>
+          <div class="sub-step-output">SDM snapshot captured. Auto-rewriters: 0 modifications. Awaiting user readiness gate.</div>
         </div>
       </div>
     </div>
@@ -307,7 +307,7 @@
       <div class="phase-status-icon status-pending">4</div>
       <div class="phase-title">
         <h3>Phase 4: Post-Migration Validation</h3>
-        <div class="phase-meta">1 sub-step</div>
+        <div class="phase-meta">3 sub-steps</div>
       </div>
       <div class="phase-status-label label-pending">Pending</div>
     </div>
@@ -315,7 +315,19 @@
       <div class="sub-step">
         <div class="sub-step-icon pending">○</div>
         <div class="sub-step-text">
-          <div class="sub-step-label pending">4.1 Validation, Optional Rollback, and Final Summary</div>
+          <div class="sub-step-label pending">4.1 Data Diff Validation (SDM ↔ EDM)</div>
+        </div>
+      </div>
+      <div class="sub-step">
+        <div class="sub-step-icon pending">○</div>
+        <div class="sub-step-text">
+          <div class="sub-step-label pending">4.2 Runtime Smoke Test Recommendation (/test-site)</div>
+        </div>
+      </div>
+      <div class="sub-step">
+        <div class="sub-step-icon pending">○</div>
+        <div class="sub-step-text">
+          <div class="sub-step-label pending">4.3 Final Status, Optional Rollback, Summary</div>
         </div>
       </div>
     </div>
@@ -337,18 +349,18 @@
     <p>Generated by step 2.1. The skill does not modify customer-owned plugin source or Dataverse schema directly — paste these prompts into fresh Claude Code sessions to drive that work.</p>
     <div class="prompt-card ready">
       <h4>🔌 Plugin Remediation Prompt</h4>
-      <p>Detected <strong>4 custom plugins</strong> on adx_* entities.</p>
+      <p><strong>4 custom plugins</strong> on adx_* entities</p>
       <div class="links"><a href="./plugin-remediation-prompt.txt">📄 plugin-remediation-prompt.txt</a></div>
     </div>
     <div class="prompt-card ready">
       <h4>🗂️ Data Model Extension Remediation Prompt</h4>
-      <p>Detected <strong>28 custom columns across 7 adx_* tables</strong>.</p>
+      <p><strong>28 custom columns across 7 adx_* tables</strong></p>
       <div class="links"><a href="./dme-remediation-prompt.txt">📄 dme-remediation-prompt.txt</a></div>
     </div>
   </div>
 
   <div class="footer-note">
-    Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-05-29 23:54:35 · Refresh this page in your browser as the migration progresses
+    Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-06-01 15:10:57 · Refresh this page in your browser as the migration progresses
   </div>
 
 </div>

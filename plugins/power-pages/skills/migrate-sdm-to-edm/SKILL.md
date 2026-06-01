@@ -1409,161 +1409,202 @@ Identical to Track A's step 3.3 — print restart instructions, wait for user co
 
 ---
 
-### 4.1 Validation, Optional Rollback, and Final Summary
+### 4.1 Data Diff Validation (SDM ↔ EDM)
 
-**Goal**: Validate migrated site and summarize results
+**Goal**: Re-download the migrated site as EDM, snapshot it, diff against the SDM baseline captured in Phase 2, and surface the result for the user to decide whether to continue or rollback.
 
 **Actions**:
 
-This step has three parts: an **automated data diff** (mechanical check that every record migrated), an **optional runtime smoke test** (hand-off to `/test-site`), and an **optional rollback** if the user is unhappy.
+1. **Re-download the migrated site as EDM**
 
-### 1. Re-download the migrated site as EDM
+   ```powershell
+   pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
+   ```
 
-```powershell
-pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 2 --path "./mysite-edm"
-```
+   Site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture inner path as `<SITE_ROOT_EDM>` via `Get-ChildItem .\mysite-edm -Directory`.
 
-This produces a fresh local copy of the site as it exists on EDM. As with step 2.2, the actual site root lives one level deeper than `--path` (e.g., `./mysite-edm/<slug>/website.yml`). Capture that inner path as `<SITE_ROOT_EDM>` (use `Get-ChildItem .\mysite-edm -Directory`).
+2. **Snapshot the EDM site**
 
-### 2. Snapshot the EDM site
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+     --site-root "<SITE_ROOT_EDM>" `
+     --output-dir "<OUTPUT_DIR>" `
+     --label edm
+   ```
 
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
-  --site-root "<SITE_ROOT_EDM>" `
-  --output-dir "<OUTPUT_DIR>" `
-  --label edm
-```
+   Output: `<OUTPUT_DIR>/edm-snapshot.json`.
 
-Output: `<OUTPUT_DIR>/edm-snapshot.json` — same shape as `sdm-snapshot.json` captured in step 2.5.
+3. **Diff SDM vs EDM**
 
-### 3. Diff SDM vs EDM
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+     --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
+     --edm "<OUTPUT_DIR>/edm-snapshot.json" `
+     --output-dir "<OUTPUT_DIR>"
+   ```
 
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
-  --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
-  --edm "<OUTPUT_DIR>/edm-snapshot.json" `
-  --output-dir "<OUTPUT_DIR>"
-```
+   Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. Exit code: `0` for pass or warn, `1` for fail.
 
-Output: `<OUTPUT_DIR>/migration-data-diff.json` + console table grouped by category. Exit code is `1` if `overallStatus === 'fail'`, else `0` (pass or warn).
+   Per-category status:
+   - **pass** — same identity set, no differences
+   - **warn** — identity match but some records changed statecode/value, OR an SDM-only category (e.g., `tags`, `websiteBindings`) shows 0 records in EDM (expected — EDM YAML format doesn't surface those, records still in `powerpagecomponent`)
+   - **fail** — records actually missing/extra (excluding SDM-only categories)
 
-Classify the result:
+4. **Surface the diff and ask the user**
 
-- **pass** — every record in SDM matched an EDM record by identity; no count differences, no state changes
-- **warn** — identity match but some records changed statecode or value (e.g., a site setting value differs)
-- **fail** — at least one SDM record is missing from EDM, or an unexpected new record appeared in EDM, or counts differ
+   > **📄 Checkpoint 7 — Tell the user about the diff result.** Print in chat:
+   >
+   > ```
+   > 📄 Data diff complete. Review:
+   >    <OUTPUT_DIR>\migration-data-diff.json
+   >    <OUTPUT_DIR>\skill-execution-report.html
+   >
+   > Status: <PASS | WARN | FAIL>
+   >    <N> records missing in EDM
+   >    <M> extra records in EDM
+   >    <S> records with state changes
+   > ```
 
-### 4. Surface the diff and let the user decide
+   Then ask:
 
-> **📄 Checkpoint 7 — Tell the user about the diff result.** Print in chat:
->
-> ```
-> 📄 Data diff complete. Review the result before deciding:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\migration-data-diff.json
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
->
-> Status: <PASS | WARN | FAIL>
->    <N> records missing in EDM
->    <M> extra records in EDM
->    <S> records with state changes
-> ```
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Data diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed. How to proceed? | Diff Decision | Looks fine — continue to runtime smoke test, Concerning — proceed to rollback, Pause — I'll investigate manually |
 
-Show the user the diff table (read it from console output or the JSON file) and ask:
+   **If "Looks fine"**: proceed to step 4.2.
+   **If "Concerning"**: skip step 4.2 and jump to step 4.3 (rollback path).
+   **If "Pause"**: halt skill cleanly. User can re-invoke later.
 
-| Question | Header | Options |
-|----------|--------|---------|
-| Data diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed, `<V>` value-changed. Review `<OUTPUT_DIR>/migration-data-diff.json` for details. How to proceed? | Diff Decision | Looks fine — continue to runtime check, Concerning — rollback to SDM, Pause — I'll investigate manually |
+**Output**: SDM↔EDM data diff complete, user has decided whether to continue, rollback, or pause.
 
-**If "Looks fine"**: proceed to step 5 (runtime smoke hand-off).
+> **→ Update report (end of 4.1):** `--set-step 4.1 --status completed --output "Diff: <PASS|WARN|FAIL> · <N> missing · <M> extra · <S> state-changed · user chose: <choice>"`
 
-**If "Concerning"**: proceed to step 7 (rollback).
+---
 
-**If "Pause"**: halt the skill cleanly. The user can re-invoke later; their SDM source is still in `<SITE_ROOT>` and the EDM site is live.
+### 4.2 Runtime Smoke Test Recommendation (/test-site)
 
-### 5. Print runtime smoke test hand-off (informational only — NOT a question)
+**Goal**: Recommend that the user run `/test-site` against the live migrated site for a browser-based smoke check. This step is **explicitly a recommendation step** in the live report — it's visible as a discrete sub-step so the user understands the runtime check is a real, recommended part of Phase 4.
 
-> **Important: this is a printed message in chat, not an AskUserQuestion call.** Combining the `/test-site` hand-off with the final validation question caused confusion in a real test session — the user thought the skill was about to auto-invoke `/test-site`. Keep them separate: print the hand-off first as plain text, then ask the validation status question in step 6.
+> **Skip this sub-step if step 4.1 user chose "Concerning"** (heading to rollback) **or "Pause"**. The recommendation only makes sense when the data diff was acceptable.
 
-Print this message to the user verbatim (substitute the actual site URL captured in step 1.3 — do **not** try to construct a URL from cloud-domain patterns; just use the value PAC already returned in `pac pages list -v` output):
+**Actions**:
 
-```
-📄 Runtime smoke test — OPTIONAL, hand-off only.
+1. **Print the hand-off message** (informational text, not an AskUserQuestion):
 
-This skill does NOT run /test-site automatically. The migrated site is
-already live at:
-   <SITE_URL>
+   ```
+   📄 Runtime smoke test — recommended next step.
 
-If you want a browser-based smoke check after this skill finishes, open
-a separate Claude Code session and run:
-   /test-site <SITE_URL>
+   The migrated site is live at:
+      <SITE_URL>
 
-/test-site uses Playwright to crawl up to 25 pages, capture API calls,
-check console errors, and report pass/fail per page. It needs only the
-live URL — no re-download. The site is the same URL it always was;
-only the data model underneath has changed.
+   Open a SEPARATE Claude Code session and run:
+      /test-site <SITE_URL>
 
-This is independent of the data diff in step 4 — it's a runtime check,
-while the diff was a record-count check.
-```
+   /test-site uses Playwright to crawl up to 25 pages, capture API calls,
+   check console errors, and report pass/fail per page and per endpoint.
+   It needs only the live URL — no re-download required. The site URL
+   is unchanged from before migration; only the data model underneath
+   has changed.
 
-> **Why this isn't auto-invoked:** `/test-site` is interactive (asks the user to log in for auth-gated sites), and cross-skill invocation from inside this skill would be awkward and would prevent the user from picking their own browser session / login profile. Leaving it as a hand-off is intentional. If the team decides to change this design later, the change goes in a separate skill update.
+   What /test-site catches that the data diff cannot:
+   • Pages whose records all migrated but render empty because a
+     FetchXML rewrite has the wrong powerpagecomponenttype filter
+   • Table permissions that worked on SDM but block on EDM (401/403)
+   • Liquid runtime errors visible only in browser console
+   ```
 
-### 6. Get final validation status
+2. **Ask the user whether they've completed it** (this lets the live report's 4.2 sub-step actually track to a real user decision):
 
-Now (after the hand-off message above has been printed), ask the validation question:
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Have you run `/test-site` against the live site? (The data diff already passed; this is the recommended runtime check before marking the migration complete.) | Runtime Check | I've run it — all passed, I've run it — issues found, I'll skip and run it later, Skip entirely |
 
-| Question | Header | Options |
-|----------|--------|---------|
-| What's your final validation status for this migration? (The data diff in step 4 already ran; `/test-site` is optional and you can run it later in a separate session as described above.) | Final Status | Validated — all good, Validated — but rollback needed, Deferred — I'll validate later |
+   - **All passed**: log success, proceed to step 4.3.
+   - **Issues found**: log details (user describes), proceed to step 4.3 (user can still pick "Validated — but rollback needed" or "Deferred").
+   - **Skip and run later**: log "deferred runtime check," proceed to step 4.3.
+   - **Skip entirely**: log "user declined runtime check," proceed to step 4.3.
 
-**If "Validated — all good"**: proceed to step 8 (success summary).
-**If "Validated — but rollback needed"**: proceed to step 7 (rollback).
-**If "Deferred"**: skip to step 8 with a note that final validation was deferred.
+> **Why we don't auto-invoke `/test-site` from here:** the test-site skill is interactive (asks the user to log in for auth-gated sites). Invoking it programmatically from inside this skill would deny the user the chance to pick a browser session and login profile, and would block this skill on a long browser-driven run. The recommendation pattern keeps the workflows decoupled.
 
-### 7. Rollback (if user opted for it)
+**Output**: User has run, deferred, or declined `/test-site`. Result captured for step 4.3.
 
-Confirm the Portal ID collected during activation (Track A step 3.1 or Track B step 3.4) is still correct before proceeding:
+> **→ Update report (end of 4.2):** `--set-step 4.2 --status completed --output "Runtime check: <passed | issues found: <details> | deferred | declined>"`
 
-| Question | Header | Options |
-|----------|--------|---------|
-| Confirm Portal ID for rollback: `<PORTAL_ID>` (collected during activation). Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+---
 
-If "No": Ask user to re-open `<SITE_URL>/_services/about` and provide the correct Portal ID.
+### 4.3 Final Status, Optional Rollback, Summary
 
-```powershell
-pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
-```
+**Goal**: Capture the user's final validation status, perform rollback if requested, and print the success/rollback summary.
 
-Inform user: "Site reverted to SDM. EDM record deactivated, SDM record reactivated."
+**Actions**:
 
-### 8. Success Summary
+1. **Ask for final validation status**
 
-> **Migration Complete**
-> - Site: `<SITE_NAME>` (ID: `<WEBSITEID>`)
-> - Previous model: Standard (SDM)
-> - Current model: Enhanced (EDM) [or: Reverted to Standard (SDM)]
-> - Data diff: `<PASS|WARN|FAIL>` — `<summary>`
-> - Customizations requiring fixes: `<COUNT>` (or "None")
-> - Environment: `<ENV_TYPE>`
-> - Reports available in: `<OUTPUT_DIR>`
->   - `migration-data-diff.json` — full diff report
->   - `sdm-snapshot.json` / `edm-snapshot.json` — baselines
->   - `skill-execution-report.html` — live execution timeline
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Final validation status for this migration? | Final Status | Validated — all good, Rollback to SDM, Deferred — I'll validate later |
 
-### 9. Record Skill Usage
+   - **Validated — all good**: proceed to step 3 (success summary).
+   - **Rollback to SDM**: proceed to step 2 (rollback).
+   - **Deferred**: skip to step 3 with a note that final validation was deferred.
 
-Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+2. **Rollback (if user opted for it)**
 
-**Output**: Site validated via SDM↔EDM data diff, runtime hand-off offered, migration complete (or rolled back), reports generated
+   Confirm the Portal ID collected during activation (Track A step 3.2 or Track B step 3.4) is still correct:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Confirm Portal ID for rollback: `<PORTAL_ID>`. Is this correct? | Confirm Portal ID | Yes, proceed with rollback, No, let me re-enter it |
+
+   If "No": ask user to paste the correct Portal ID directly (don't try to construct the site URL — same reasoning as step 3.4 / 3.4-Track-B).
+
+   ```powershell
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --revertToStandardDataModel --portalId "<PORTAL_ID>"
+   ```
+
+   Inform user: "Site reverted to SDM. EDM record deactivated, SDM record reactivated."
+
+3. **Success Summary**
+
+   Print to chat:
+
+   ```
+   ✅ Migration Complete
+
+   Site:                <SITE_NAME> (ID: <WEBSITE_ID>)
+   Previous model:      Standard (SDM)
+   Current model:       Enhanced (EDM) | Reverted to Standard (SDM)
+   Data diff:           <PASS | WARN | FAIL> — <summary>
+   Runtime check:       <passed | issues found | deferred | declined>
+   Customizations:      <count> (or "None") — see customization-report.html
+   Environment:         <ENV_TYPE>
+   Track:               <A | B>
+
+   Reports in <OUTPUT_DIR>:
+     migration-state.json          — single source of truth for state
+     skill-execution-report.html   — live execution timeline (this run)
+     customization-report.html     — findings catalog (if any)
+     sdm-snapshot.json             — SDM baseline
+     edm-snapshot.json             — EDM result
+     migration-data-diff.json      — full diff report
+     plugin-remediation-prompt.txt — augmented prompt (if findings)
+     dme-remediation-prompt.txt    — augmented prompt (if findings)
+   ```
+
+4. **Record Skill Usage**
+
+   Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`.
+
+**Output**: Migration complete (or rolled back), final summary printed, skill usage recorded.
 
 > **→ Update report (end of Phase 4):**
 >
 > ```
-> --set-step 4.1 --status completed --output "<Validation passed · site live on EDM | Rolled back to SDM | Deferred>"
+> --set-step 4.3 --status completed --output "<Migration complete | Rolled back | Deferred>"
 > --set-phase 4 --status completed
 > ```
 >
-> No further approval gates after this — the live report header pill switches to "✅ Migration Complete" automatically.
+> No further approval gates. Live report header pill switches to "✅ Migration Complete".
 
 ---
 
@@ -1585,7 +1626,9 @@ Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-referenc
 >   - Phase 2 renders as "Setting Up Metadata" (3 sub-steps)
 >   - Phase 3 renders as "Migration, Remediation & Activation" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
 >
-> **Track A total = 14 sub-steps. Track B total = 16 sub-steps.** The `--set-track A|B` command at end of 1.7 rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
+> **Phase 4 has 3 sub-steps in both tracks**: Data Diff Validation → Runtime Smoke Test Recommendation (`/test-site`) → Final Status & Summary.
+>
+> **Track A total = 16 sub-steps. Track B total = 18 sub-steps.** The `--set-track A|B` command at end of 1.7 rebuilds Phase 2 and Phase 3 cards in the live report from the chosen blueprint.
 
 ---
 
