@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitFromPrompt, hookUtils;
+let emitFromPrompt, hookUtils, sessionLib;
 try {
   emitFromPrompt = require(path.join(
     TELEMETRY_DIR,
@@ -20,6 +20,7 @@ try {
     "lib",
     "powerpages-hook-utils"
   ));
+  sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
 } catch {
   process.exit(0);
 }
@@ -68,6 +69,7 @@ function readStdin() {
       pluginVersion: readPluginVersion(),
       trackedSkills: hookUtils.TRACKED_SKILLS,
       telemetryDir: TELEMETRY_DIR,
+      sessionId: sessionLib.resolveHostSessionId(parsed),
     });
   } catch {
     // fail closed — telemetry never blocks the user's prompt

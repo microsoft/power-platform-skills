@@ -33,9 +33,8 @@ const FIELD_TYPES = {
   aiAgentVersion: "string",
   // Common — caller-supplied dynamic JSON
   eventInfo: "object",
-  // Skill / script
+  // Skill
   skillName: "string",
-  scriptName: "string",
   // Completed-only
   outcome: "enum:success|failure",
   durationMs: "int",
@@ -60,16 +59,16 @@ const COMMON_FIELDS = [
 ];
 
 const SKILL_FIELDS = ["skillName"];
-const SCRIPT_FIELDS = ["scriptName"];
 const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescription"];
 
 function isPlainStructured(v) {
   if (v === null || typeof v !== "object") return false;
   if (Array.isArray(v)) return true;
-  if (v instanceof Date) return false;
-  if (v instanceof RegExp) return false;
-  if (v instanceof Map || v instanceof Set) return false;
-  return true;
+  // Only plain objects (prototype Object.prototype or null) pass through —
+  // class instances like Date, RegExp, Map, Set, and Error are rejected so
+  // the dynamic `eventInfo` field can't carry unexpected shapes.
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
 }
 
 function clampInt(v) {
@@ -128,30 +127,9 @@ function buildSkillCompleted(envelopeName, input) {
   );
 }
 
-function buildScriptStarted(envelopeName, input) {
-  return buildEvent(
-    envelopeName,
-    "script_started",
-    pick(input, [...COMMON_FIELDS, ...SCRIPT_FIELDS]),
-    "Info"
-  );
-}
-
-function buildScriptCompleted(envelopeName, input) {
-  const severity = input && input.outcome === "failure" ? "Error" : "Info";
-  return buildEvent(
-    envelopeName,
-    "script_completed",
-    pick(input, [...COMMON_FIELDS, ...SCRIPT_FIELDS, ...COMPLETED_FIELDS]),
-    severity
-  );
-}
-
 module.exports = {
   buildSkillStarted,
   buildSkillCompleted,
-  buildScriptStarted,
-  buildScriptCompleted,
   FIELD_TYPES,
   pick,
 };

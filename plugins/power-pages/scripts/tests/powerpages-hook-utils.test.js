@@ -1,11 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 
 const {
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
 } = require('../lib/powerpages-hook-utils');
+
+const SKILLS_DIR = path.join(__dirname, '..', '..', 'skills');
 
 test('detectTrackedSkill recognizes tracked skill references', () => {
   assert.equal(detectTrackedSkill('create-site'), 'create-site');
@@ -43,4 +47,58 @@ test('getValidatorScript returns validator paths only for command-backed skills'
   assert.match(getValidatorScript('add-server-logic'), /validate-serverlogic\.js$/);
   assert.equal(getValidatorScript('test-site'), null);
   assert.equal(getValidatorScript('missing-skill'), null);
+});
+
+test('getValidatorScript covers every ALM skill that previously declared a Stop hook', () => {
+  // These seven skills carried Stop hook frontmatter in their SKILL.md; the
+  // centralized PostToolUse hook in hooks/hooks.json now drives validation
+  // for them, so each must resolve to its validator script.
+  assert.match(getValidatorScript('setup-solution'), /validate-solution\.js$/);
+  assert.match(getValidatorScript('export-solution'), /validate-export\.js$/);
+  assert.match(getValidatorScript('import-solution'), /validate-import\.js$/);
+  assert.match(getValidatorScript('setup-pipeline'), /validate-pipeline\.js$/);
+  assert.match(getValidatorScript('deploy-pipeline'), /validate-deploy-pipeline\.js$/);
+  assert.match(getValidatorScript('configure-env-variables'), /validate-env-variables\.js$/);
+  assert.match(getValidatorScript('plan-alm'), /validate-plan-alm\.js$/);
+});
+
+test('detectTrackedSkill recognizes the newly registered ALM skills', () => {
+  assert.equal(detectTrackedSkill('/power-pages:setup-solution'), 'setup-solution');
+  assert.equal(detectTrackedSkill('/power-pages:export-solution'), 'export-solution');
+  assert.equal(detectTrackedSkill('/power-pages:import-solution'), 'import-solution');
+  assert.equal(detectTrackedSkill('/power-pages:setup-pipeline'), 'setup-pipeline');
+  assert.equal(detectTrackedSkill('/power-pages:deploy-pipeline'), 'deploy-pipeline');
+  assert.equal(detectTrackedSkill('/power-pages:configure-env-variables'), 'configure-env-variables');
+  assert.equal(detectTrackedSkill('/power-pages:plan-alm'), 'plan-alm');
+  assert.equal(detectTrackedSkill('/power-pages:force-link-environment'), 'force-link-environment');
+});
+
+test('force-link-environment is wired into TRACKED_SKILLS with its validator', () => {
+  assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
+});
+
+test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse only)', () => {
+  // Skill-specific Stop hooks are an anti-pattern documented in
+  // PLUGIN_DEVELOPMENT_GUIDE.md — they duplicate the centralized PostToolUse
+  // hook in hooks/hooks.json and fire too often. This guardrail catches any
+  // SKILL.md that re-introduces a `hooks:` block in frontmatter.
+  const offenders = [];
+  for (const entry of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillFile = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) continue;
+
+    const content = fs.readFileSync(skillFile, 'utf8');
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!match) continue;
+    const frontmatter = match[1];
+    if (/^hooks\s*:/m.test(frontmatter)) {
+      offenders.push(entry.name);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `These SKILL.md files declare hooks frontmatter — register the skill in TRACKED_SKILLS instead: ${offenders.join(', ')}`
+  );
 });

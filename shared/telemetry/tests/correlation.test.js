@@ -54,3 +54,51 @@ test("clear on missing file does not throw", () => {
   const tmp = mkTmp();
   corr.clear({ skillName: "never-written", tmpDir: tmp });
 });
+
+test("write unlinks ppskills-corr-*.json files older than 1 hour before writing", () => {
+  const tmp = mkTmp();
+  const oldFile = path.join(tmp, "ppskills-corr-stale.json");
+  fs.writeFileSync(oldFile, JSON.stringify({ correlation_id: "old", start_ts: 1 }));
+  const twoHoursAgo = Date.now() / 1000 - 7200;
+  fs.utimesSync(oldFile, twoHoursAgo, twoHoursAgo);
+
+  corr.write({ skillName: "fresh", tmpDir: tmp });
+
+  assert.equal(fs.existsSync(oldFile), false, "stale correlation file should be unlinked");
+  assert.equal(
+    fs.existsSync(path.join(tmp, "ppskills-corr-fresh.json")),
+    true,
+    "new correlation file should exist"
+  );
+});
+
+test("write preserves ppskills-corr-*.json files newer than 1 hour", () => {
+  const tmp = mkTmp();
+  const recentFile = path.join(tmp, "ppskills-corr-recent.json");
+  fs.writeFileSync(recentFile, JSON.stringify({ correlation_id: "recent", start_ts: 1 }));
+  const tenMinAgo = Date.now() / 1000 - 600;
+  fs.utimesSync(recentFile, tenMinAgo, tenMinAgo);
+
+  corr.write({ skillName: "another", tmpDir: tmp });
+
+  assert.equal(fs.existsSync(recentFile), true, "recent correlation file should survive");
+});
+
+test("write does not touch unrelated files in tmpDir", () => {
+  const tmp = mkTmp();
+  const unrelated = path.join(tmp, "unrelated.json");
+  fs.writeFileSync(unrelated, "{}");
+  const twoHoursAgo = Date.now() / 1000 - 7200;
+  fs.utimesSync(unrelated, twoHoursAgo, twoHoursAgo);
+
+  corr.write({ skillName: "x", tmpDir: tmp });
+
+  assert.equal(fs.existsSync(unrelated), true, "non-prefixed files should survive sweep");
+});
+
+test("write swallows readdir failures when tmpDir does not exist", () => {
+  const tmp = path.join(os.tmpdir(), "ppskills-nonexistent-" + Date.now());
+  assert.doesNotThrow(() => corr.write({ skillName: "x", tmpDir: tmp }));
+  // write also swallows writeFileSync failure per existing semantics; no file produced
+  assert.equal(fs.existsSync(path.join(tmp, "ppskills-corr-x.json")), false);
+});

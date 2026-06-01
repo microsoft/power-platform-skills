@@ -5,8 +5,6 @@ const assert = require("node:assert/strict");
 const {
   buildSkillStarted,
   buildSkillCompleted,
-  buildScriptStarted,
-  buildScriptCompleted,
 } = require("../lib/events");
 
 const ENVELOPE = "PowerPagesPluginEvent";
@@ -79,39 +77,6 @@ test("buildSkillStarted drops fields not in allowlist", () => {
   assert.equal(ev.data.error_message, undefined);
 });
 
-test("buildScriptStarted top-level shape", () => {
-  const ev = buildScriptStarted(ENVELOPE, {
-    ...common,
-    scriptName: "deploy-site",
-  });
-  assert.equal(ev.name, ENVELOPE);
-  assert.equal(ev.data.eventName, "script_started");
-  assert.equal(ev.data.scriptName, "deploy-site");
-});
-
-test("buildScriptCompleted clamps negative durationMs to 0", () => {
-  const ev = buildScriptCompleted(ENVELOPE, {
-    ...common,
-    scriptName: "deploy-site",
-    outcome: "failure",
-    durationMs: -5,
-    errorClass: "Error",
-  });
-  assert.equal(ev.data.durationMs, 0);
-  assert.equal(ev.data.severity, "Error");
-});
-
-test("buildScriptCompleted clamps non-finite durationMs to 0", () => {
-  const ev = buildScriptCompleted(ENVELOPE, {
-    ...common,
-    scriptName: "deploy-site",
-    outcome: "success",
-    durationMs: Number.NaN,
-    errorClass: "",
-  });
-  assert.equal(ev.data.durationMs, 0);
-});
-
 test("orgId/tenantId omitted when input is missing", () => {
   const ev = buildSkillStarted(ENVELOPE, { ...common, skillName: "add-seo" });
   assert.equal(ev.data.orgId, undefined);
@@ -179,18 +144,6 @@ test("buildSkillCompleted carries errorDescription", () => {
     errorDescription: "Cannot read properties of undefined (reading 'foo')",
   });
   assert.equal(ev.data.errorDescription, "Cannot read properties of undefined (reading 'foo')");
-});
-
-test("buildScriptCompleted carries errorDescription", () => {
-  const ev = buildScriptCompleted(ENVELOPE, {
-    ...common,
-    scriptName: "deploy-site",
-    outcome: "failure",
-    durationMs: 12,
-    errorClass: "Error",
-    errorDescription: "boom",
-  });
-  assert.equal(ev.data.errorDescription, "boom");
 });
 
 test("AI agent + PAC CLI version pass through when supplied", () => {
@@ -367,7 +320,7 @@ test("FIELD_TYPES is exported and covers every field used in builders", () => {
     "osName", "osVersion", "nodeVersion",
     "orgId", "tenantId", "pacCliVersion", "aiAgentName", "aiAgentVersion",
     "eventInfo",
-    "skillName", "scriptName",
+    "skillName",
     "outcome", "durationMs", "errorClass", "errorDescription",
   ];
   for (const f of usedFields) {

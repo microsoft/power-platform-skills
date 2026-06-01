@@ -82,6 +82,68 @@
         "Closes the browser session after all testing is complete",
         "Provides prioritized next steps focusing on resolving the API failures"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Test my Power Pages site at https://intranet.powerappsportals.com. It uses SAML2 authentication with our corporate ADFS server, so you'll need to let me log in first.",
+      "expected_output": "The agent uses the provided URL, launches a Playwright browser, resizes the viewport, and navigates to the homepage. It detects a redirect to the ADFS login page (a SAML2 identity provider on a different domain). It informs the user that the site redirected to a SAML2/ADFS login page and asks the user to complete authentication in the browser window. After the user logs in through the ADFS portal and is redirected back to the Power Pages site, the agent verifies the homepage loaded with authenticated content. It then crawls up to 25 pages, captures API requests, and generates a test report.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://intranet.powerappsportals.com directly",
+        "Resizes the browser viewport to an appropriate dimension",
+        "Navigates to the homepage and detects a redirect to a SAML2/ADFS identity provider login page",
+        "Recognizes the ADFS login page as a private site gate authentication redirect",
+        "Informs the user that the site requires SAML2/ADFS authentication and asks them to log in",
+        "Waits for the user to complete the ADFS login process before continuing",
+        "After authentication, verifies the homepage loads correctly with authenticated content",
+        "Captures browser console errors and network requests throughout testing",
+        "Crawls discoverable links up to a maximum of 25 pages in the authenticated context",
+        "Identifies /_api/ requests and analyzes their HTTP status codes",
+        "Generates a test report with per-page and per-API pass/fail results",
+        "Closes the browser session after testing is complete",
+        "Provides next steps or recommendations based on the test outcomes"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Test https://self-service.powerappsportals.com. This site uses local authentication with username/password login. I'll create a test account and log in.",
+      "expected_output": "The agent uses the provided URL, launches a Playwright browser, resizes the viewport, and navigates to the homepage. The homepage loads successfully as a public site. The agent detects site-level authentication indicators (a Sign in or Log in link in the navigation) and recognizes the site supports local authentication (login form with username/password fields rather than external provider redirect). It asks the user to log in through the browser's login form. After the user authenticates with their local credentials, the agent proceeds to crawl pages and test APIs, generating a comprehensive report.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://self-service.powerappsportals.com directly",
+        "Resizes the browser viewport before navigating to the site",
+        "Navigates to the homepage and verifies it loads without critical errors",
+        "Detects site-level authentication indicators such as Sign in or Log in links",
+        "Recognizes local authentication when the login page shows username/email and password fields instead of redirecting to an external identity provider",
+        "Asks the user to complete the local login through the browser window",
+        "After authentication, verifies the user is now logged in",
+        "Crawls discoverable links up to a maximum of 25 pages",
+        "Captures and analyzes /_api/ network requests",
+        "Generates a test report with per-page and per-API pass/fail results",
+        "Closes the browser session after testing is complete",
+        "Provides recommendations based on test findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Run tests on https://partner-hub.powerappsportals.com. The site uses OpenID Connect with Okta for authentication. Some pages are public and some require login.",
+      "expected_output": "The agent uses the provided URL, launches a Playwright browser, and navigates to the homepage. The homepage loads as a public site with a Sign in option visible. The agent detects site-level authentication and asks whether the user wants to log in or skip authenticated pages. If the user logs in through the Okta OIDC flow (redirect to Okta login page, then back to the site), the agent tests both public and authenticated pages. The report distinguishes between public and authenticated page results and notes any APIs returning 401/403 for unauthenticated vs authenticated contexts.",
+      "files": [],
+      "expectations": [
+        "Uses the user-provided URL https://partner-hub.powerappsportals.com directly",
+        "Resizes the browser viewport to an appropriate dimension",
+        "Navigates to the homepage and verifies it loads correctly as a public page",
+        "Detects site-level authentication indicators (Sign in link)",
+        "Asks user whether to log in or skip authenticated pages",
+        "If user logs in, recognizes the redirect to Okta as an OpenID Connect authentication flow",
+        "Waits for the user to complete the Okta login process",
+        "After authentication, verifies the user is logged in on the site",
+        "Crawls discoverable links up to a maximum of 25 pages",
+        "Captures and analyzes /_api/ network requests with status codes",
+        "Generates a test report distinguishing public and authenticated page results",
+        "Closes the browser session after testing is complete",
+        "Provides recommendations based on test findings"
+      ]
     }
   ]
 }

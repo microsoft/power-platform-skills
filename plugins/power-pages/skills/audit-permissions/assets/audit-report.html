@@ -175,7 +175,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         <p class="section-desc" id="findingsDesc"></p>
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div class="filter-bar" id="filterBar" style="margin-bottom:0;"></div>
-          <button class="filter-btn" id="expandAllBtn" onclick="toggleExpandAll()" style="white-space:nowrap;">Expand All</button>
+          <button class="filter-btn" id="expandAllBtn" style="white-space:nowrap;">Expand All</button>
         </div>
         <div id="findingsContainer" style="margin-top:16px;"></div>
       </div>
@@ -251,6 +251,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 // Severity config
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function escAttr(s) { return String(s || '').replace(/[^a-zA-Z0-9_.-]/g, ''); }
 const sevConfig = {
   critical: { color: 'var(--critical)', label: 'CRITICAL', icon: '\u2716' },
   warning:  { color: 'var(--warning)',  label: 'WARNING',  icon: '\u26A0' },
@@ -290,7 +292,7 @@ function renderFilterBar() {
   let html = '';
   Object.entries(labels).forEach(([key, label]) => {
     if (counts[key] === 0 && key !== 'all') return;
-    html += `<button class="filter-btn ${activeFilter === key ? 'active' : ''}" onclick="setFilter('${key}')">${label}<span class="filter-count">${counts[key]}</span></button>`;
+    html += '<button class="filter-btn ' + (activeFilter === key ? 'active' : '') + '" data-filter="' + escAttr(key) + '">' + esc(label) + '<span class="filter-count">' + counts[key] + '</span></button>';
   });
   c.innerHTML = html;
 }
@@ -305,28 +307,29 @@ function renderFindings() {
   const c = document.getElementById('findingsContainer');
   const filtered = activeFilter === 'all' ? FINDINGS : FINDINGS.filter(f => f.severity === activeFilter);
 
-  // Sort: critical first, then warning, info, pass
   const order = { critical: 0, warning: 1, info: 2, pass: 3 };
   const sorted = [...filtered].sort((a, b) => (order[a.severity] ?? 99) - (order[b.severity] ?? 99));
 
   let html = '';
   sorted.forEach(f => {
     const sev = sevConfig[f.severity] || sevConfig.info;
-    html += `<div class="finding-card" id="finding-${f.id}">
-      <div class="finding-header" onclick="document.getElementById('finding-${f.id}').classList.toggle('expanded')">
-        <span class="severity severity-${f.severity}">${sev.label}</span>
-        <span class="finding-title">${f.title}</span>
-        ${f.table ? `<span class="finding-table">${f.table}</span>` : ''}
-        <span class="finding-chevron">&#9654;</span>
-      </div>
-      <div class="finding-body">
-        ${f.permission ? `<div style="margin-top:10px;font-size:12px;"><span class="field-label">Permission:</span> <span style="font-weight:600;color:var(--text-bright)">${f.permission}</span></div>` : ''}
-        ${f.scope ? `<div style="margin-top:6px;font-size:12px;"><span class="field-label">Scope:</span> <span class="scope-tag scope-${scopeName(f.scope)}" style="font-size:10px;padding:1px 6px;min-width:auto;">${scopeName(f.scope)}</span></div>` : ''}
-        ${f.details ? `<div style="margin-top:10px;font-size:12px;color:var(--text);line-height:1.7;">${f.details}</div>` : ''}
-        ${f.reasoning ? `<div style="margin-top:10px;"><div class="field-label">Reasoning</div><div class="reasoning-block">${f.reasoning}</div></div>` : ''}
-        ${f.fix ? `<div style="margin-top:8px;"><div class="field-label">Suggested Fix</div><div class="fix-block"><strong>Fix:</strong> ${f.fix}</div></div>` : ''}
-      </div>
-    </div>`;
+    const fid = escAttr(f.id);
+    const fsev = escAttr(f.severity);
+    html += '<div class="finding-card" id="finding-' + fid + '">' +
+      '<div class="finding-header">' +
+        '<span class="severity severity-' + fsev + '">' + esc(sev.label) + '</span>' +
+        '<span class="finding-title">' + esc(f.title) + '</span>' +
+        (f.table ? '<span class="finding-table">' + esc(f.table) + '</span>' : '') +
+        '<span class="finding-chevron">&#9654;</span>' +
+      '</div>' +
+      '<div class="finding-body">' +
+        (f.permission ? '<div style="margin-top:10px;font-size:12px;"><span class="field-label">Permission:</span> <span style="font-weight:600;color:var(--text-bright)">' + esc(f.permission) + '</span></div>' : '') +
+        (f.scope ? '<div style="margin-top:6px;font-size:12px;"><span class="field-label">Scope:</span> <span class="scope-tag scope-' + escAttr(scopeName(f.scope)) + '" style="font-size:10px;padding:1px 6px;min-width:auto;">' + esc(scopeName(f.scope)) + '</span></div>' : '') +
+        (f.details ? '<div style="margin-top:10px;font-size:12px;color:var(--text);line-height:1.7;">' + esc(f.details) + '</div>' : '') +
+        (f.reasoning ? '<div style="margin-top:10px;"><div class="field-label">Reasoning</div><div class="reasoning-block">' + esc(f.reasoning) + '</div></div>' : '') +
+        (f.fix ? '<div style="margin-top:8px;"><div class="field-label">Suggested Fix</div><div class="fix-block"><strong>Fix:</strong> ' + esc(f.fix) + '</div></div>' : '') +
+      '</div>' +
+    '</div>';
   });
 
   if (sorted.length === 0) {
@@ -357,17 +360,27 @@ function renderInventory() {
   let html = '<table class="inv-table"><thead><tr><th>Permission Name</th><th>Table</th><th>Scope</th><th>Roles</th><th>Privileges</th></tr></thead><tbody>';
   INVENTORY.forEach(p => {
     const flags = { Read: p.read, Create: p.create, Write: p.write, Delete: p.delete, Append: p.append, AppendTo: p.appendto };
-    html += `<tr>
-      <td style="font-weight:600;color:var(--text-bright)">${p.name}</td>
-      <td><code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 5px;border-radius:3px;border:1px solid var(--accent-border);">${p.table}</code></td>
-      <td><span class="scope-tag scope-${scopeName(p.scope)}" style="font-size:9px;padding:1px 6px;min-width:auto;">${scopeName(p.scope)}</span></td>
-      <td style="font-size:12px;">${Array.isArray(p.roles) ? p.roles.join(', ') : p.roles}</td>
-      <td style="display:flex;gap:3px;flex-wrap:wrap;">${privs.map(pr => `<span class="priv ${flags[pr] ? 'priv-on' : 'priv-off'}">${pr[0]}${pr === 'AppendTo' ? 'T' : ''}</span>`).join('')}</td>
-    </tr>`;
+    html += '<tr>' +
+      '<td style="font-weight:600;color:var(--text-bright)">' + esc(p.name) + '</td>' +
+      '<td><code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 5px;border-radius:3px;border:1px solid var(--accent-border);">' + esc(p.table) + '</code></td>' +
+      '<td><span class="scope-tag scope-' + escAttr(scopeName(p.scope)) + '" style="font-size:9px;padding:1px 6px;min-width:auto;">' + esc(scopeName(p.scope)) + '</span></td>' +
+      '<td style="font-size:12px;">' + (Array.isArray(p.roles) ? esc(p.roles.join(', ')) : esc(p.roles)) + '</td>' +
+      '<td style="display:flex;gap:3px;flex-wrap:wrap;">' + privs.map(function(pr) { return '<span class="priv ' + (flags[pr] ? 'priv-on' : 'priv-off') + '">' + pr[0] + (pr === 'AppendTo' ? 'T' : '') + '</span>'; }).join('') + '</td>' +
+    '</tr>';
   });
   html += '</tbody></table>';
   c.innerHTML = html;
 }
+
+document.getElementById('expandAllBtn').addEventListener('click', toggleExpandAll);
+
+// Event delegation — no inline onclick handlers
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.filter-btn[data-filter]');
+  if (btn) { setFilter(btn.dataset.filter); return; }
+  var hdr = e.target.closest('.finding-header');
+  if (hdr) { hdr.closest('.finding-card').classList.toggle('expanded'); }
+});
 
 // Init
 renderFilterBar();

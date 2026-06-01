@@ -15,7 +15,11 @@ const { execFileSync } = require("node:child_process");
 // unparseable output all resolve to null. The result is cached per process so
 // repeated hook invocations only fork once.
 
-const TIMEOUT_MS = 3000;
+// Cold-start `pac auth who` on Windows is consistently ~3.5-4s (.NET runtime
+// startup + cached-token validation). 3s was too tight and produced silent
+// timeouts that surfaced as missing orgId/tenantId in every event. 8s gives
+// comfortable headroom while staying well under the hook's 30s budget.
+const TIMEOUT_MS = 8000;
 
 let cache;
 

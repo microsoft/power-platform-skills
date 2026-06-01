@@ -35,6 +35,38 @@ function runValidation(callback) {
 }
 
 /**
+ * Reads the .alm-deferred marker file if present in the project root.
+ * Users drop this marker when they explicitly defer ALM for a project /
+ * environment so skill-completion validators stop reporting "missing
+ * artifacts" — the artifacts aren't supposed to exist for this project.
+ *
+ * Recognized formats (any will do):
+ *   - Empty file (just the touch marker)
+ *   - Plain text — a one-line reason
+ *   - JSON — { deferredAt, deferredBy, reason, scope: "project"|"env:<name>" }
+ *
+ * Returns null when not found, or an object describing the deferral when
+ * present. Validators should call this before checking artifacts and
+ * silent-approve when it returns non-null.
+ *
+ * @param {string} projectRoot
+ * @returns {{ path: string, raw: string, info: object|null }|null}
+ */
+function readDeferralMarker(projectRoot) {
+  if (!projectRoot) return null;
+  const markerPath = path.join(projectRoot, '.alm-deferred');
+  if (!fs.existsSync(markerPath)) return null;
+  let raw = '';
+  try { raw = fs.readFileSync(markerPath, 'utf8'); } catch { /* keep raw='' */ }
+  let info = null;
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try { info = JSON.parse(trimmed); } catch { /* invalid JSON — treat as plain text */ }
+  }
+  return { path: markerPath, raw, info };
+}
+
+/**
  * Searches for a file or directory in `dir` and one level of subdirectories.
  * @param {string} dir - Starting directory
  * @param {string} target - Relative path to look for (e.g. 'powerpages.config.json')
@@ -94,13 +126,16 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /**
  * Gets an Azure CLI access token for the given resource URL.
- * `--allow-no-subscriptions` lets accounts without an Azure subscription mint AAD-scoped Dataverse/PP tokens.
+ * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
+ * subcommands reject it as an unrecognized argument), so it must not be passed
+ * here. Accounts without a subscription can still mint AAD-scoped tokens after
+ * signing in via `az login --allow-no-subscriptions`.
  * @returns {string|null} Access token, or null if unavailable
  */
 function getAuthToken(resourceUrl) {
   try {
     return execSync(
-      `az account get-access-token --resource "${resourceUrl}" --allow-no-subscriptions --query accessToken -o tsv`,
+      `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
       { encoding: 'utf8', timeout: 15000 }
     ).trim();
   } catch {
@@ -210,6 +245,7 @@ module.exports = {
   approve,
   block,
   runValidation,
+  readDeferralMarker,
   findPath,
   findProjectRoot,
   findPowerPagesSiteDir,

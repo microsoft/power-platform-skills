@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Authentication Setup Report</title>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
+  --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1025;
+  --warning:#ca5010; --warning-bg:#ca50100a; --warning-border:#ca501025;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b825;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+
+/* Top bar */
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.topbar-right{font-size:11px;color:var(--text-dim);font-family:var(--mono);}
+
+/* Layout: sidebar + content */
+.layout{display:flex;min-height:calc(100vh - 65px);}
+
+/* Sidebar */
+.sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;position:sticky;top:0;align-self:flex-start;}
+.sidebar-heading{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;padding:0 22px;margin-bottom:8px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;position:relative;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:15px;width:18px;text-align:center;opacity:0.6;}
+.nav-btn.active .nav-icon{opacity:1;}
+.nav-badge{margin-left:auto;font-size:10px;font-family:var(--mono);padding:1px 7px;border-radius:8px;font-weight:700;color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);}
+.nav-btn.active .nav-badge{color:var(--accent);background:var(--accent-bg);border-color:var(--accent-border);}
+
+/* Content */
+.content{flex:1;padding:32px 40px 60px;max-width:1100px;min-width:0;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.2s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+
+h1{font-size:24px;font-weight:800;color:var(--text-bright);letter-spacing:-0.4px;margin-bottom:6px;}
+.page-sub{font-size:13px;color:var(--text-dim);margin-bottom:24px;}
+h2{font-size:18px;font-weight:700;color:var(--text-bright);margin-bottom:6px;letter-spacing:-0.2px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:18px;}
+h3{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:8px;}
+p{margin-bottom:10px;}
+
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;box-shadow:var(--shadow-4);}
+.stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--accent);}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;}
+.card.muted{background:var(--surface2);}
+.empty{color:var(--text-dim);font-style:italic;font-size:13px;}
+
+.kv{display:grid;grid-template-columns:170px 1fr;gap:8px 16px;font-size:13px;align-items:baseline;}
+.kv .k{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;}
+.kv .v{color:var(--text);word-break:break-word;}
+.kv .v code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
+
+.tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;font-family:var(--mono);text-transform:uppercase;letter-spacing:0.5px;margin-right:6px;}
+.tag-accent{color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);}
+.tag-pass{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+.tag-warning{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
+.tag-purple{color:var(--purple);background:var(--purple-bg);border:1px solid var(--purple-border);}
+.tag-dim{color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);}
+
+table{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+th{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border);}
+td{padding:10px 14px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+td code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
+td.col-fixed{width:38%;white-space:nowrap;}
+
+.next-steps{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;}
+.next-steps ol{margin-left:18px;}
+.next-steps li{margin-bottom:8px;line-height:1.6;}
+.next-steps code{font-family:var(--mono);font-size:12px;background:var(--surface2);padding:1px 6px;border-radius:3px;border:1px solid var(--border);}
+
+@media (max-width: 760px) {
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);position:static;display:flex;flex-wrap:wrap;padding:8px;gap:4px;}
+  .sidebar-heading{display:none;}
+  .nav-btn{width:auto;flex:1 1 auto;padding:8px 12px;border-left:none;border-bottom:2px solid transparent;}
+  .nav-btn.active{border-left-color:transparent;border-bottom-color:var(--accent);}
+  .stats-grid{grid-template-columns:repeat(2,1fr);}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="./power-pages-icon.png" alt="" onerror="this.style.display='none'"/>
+    <div>
+      <div class="topbar-title">Authentication Setup Report</div>
+      <div class="topbar-sub">setup-auth · Power Pages</div>
+    </div>
+  </div>
+  <div class="topbar-right" id="topbar-date"></div>
+</div>
+
+<div class="layout">
+  <nav class="sidebar" role="navigation" aria-label="Report sections">
+    <div class="sidebar-heading">Sections</div>
+    <button type="button" class="nav-btn active" data-tab="overview">
+      <span class="nav-icon" aria-hidden="true">▣</span><span>Overview</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="providers">
+      <span class="nav-icon" aria-hidden="true">⌬</span><span>Providers</span>
+      <span class="nav-badge" id="badge-providers">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="local-auth">
+      <span class="nav-icon" aria-hidden="true">⛛</span><span>Local Auth</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="features">
+      <span class="nav-icon" aria-hidden="true">✦</span><span>Features</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="settings">
+      <span class="nav-icon" aria-hidden="true">⚙</span><span>Site Settings</span>
+      <span class="nav-badge" id="badge-settings">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="permissions">
+      <span class="nav-icon" aria-hidden="true">⌭</span><span>Permissions</span>
+      <span class="nav-badge" id="badge-permissions">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="files">
+      <span class="nav-icon" aria-hidden="true">⌹</span><span>Files</span>
+      <span class="nav-badge" id="badge-files">0</span>
+    </button>
+    <button type="button" class="nav-btn" data-tab="next-steps">
+      <span class="nav-icon" aria-hidden="true">→</span><span>Next Steps</span>
+    </button>
+  </nav>
+
+  <main class="content">
+    <section class="section active" id="tab-overview">
+      <h1 id="hdr-site"></h1>
+      <div class="page-sub" id="hdr-sub"></div>
+      <div class="stats-grid" id="stats"></div>
+      <div id="overview-detail"></div>
+    </section>
+
+    <section class="section" id="tab-providers">
+      <h2>Identity Providers</h2>
+      <div class="section-desc">Each card shows the provider's identifier, claims mapping, and contact-linking behavior.</div>
+      <div id="providers"></div>
+    </section>
+
+    <section class="section" id="tab-local-auth">
+      <h2>Local Authentication</h2>
+      <div class="section-desc">Username/password sign-in configured directly on the site (no external IdP).</div>
+      <div id="local-auth"></div>
+    </section>
+
+    <section class="section" id="tab-features">
+      <h2>Optional Features</h2>
+      <div class="section-desc">Feature flags chosen during setup: profile page, Terms & Conditions, federated logout, and session keep-alive.</div>
+      <div id="optional-features"></div>
+    </section>
+
+    <section class="section" id="tab-settings">
+      <h2>Site Settings Created</h2>
+      <div class="section-desc">Every Power Pages site setting written by this run. Values whose name contains "Secret" are masked.</div>
+      <div id="site-settings"></div>
+    </section>
+
+    <section class="section" id="tab-permissions">
+      <h2>Table Permissions</h2>
+      <div class="section-desc">Server-side Dataverse table permissions provisioned for SPA Web API access.</div>
+      <div id="table-permissions"></div>
+    </section>
+
+    <section class="section" id="tab-files">
+      <h2>Files Created or Updated</h2>
+      <div class="section-desc">Every SPA / Power Pages site file the skill created or modified during this run.</div>
+      <div id="files"></div>
+    </section>
+
+    <section class="section" id="tab-next-steps">
+      <h2>Next Steps</h2>
+      <div class="section-desc">Follow these steps to finish wiring up the configured authentication on your deployed site.</div>
+      <div class="next-steps" id="next-steps"></div>
+    </section>
+  </main>
+</div>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+
+<script>
+// All user-controlled data goes through .textContent — never innerHTML with
+// unsanitized values. META.nextStepsHtml is the one exception: it's authored by
+// the skill (not the user) and intentionally renders as HTML.
+
+const META = __META_DATA__;
+const PROVIDERS = __PROVIDERS_DATA__;
+const LOCAL_AUTH = __LOCAL_AUTH_DATA__;
+const OPTIONAL_FEATURES = __OPTIONAL_FEATURES_DATA__;
+const SITE_SETTINGS = __SITE_SETTINGS_DATA__;
+const TABLE_PERMISSIONS = __TABLE_PERMISSIONS_DATA__;
+const FILES = __FILES_DATA__;
+
+const SITE_NAME = META.siteName || '';
+const REPORT_DATE = META.reportDate || '';
+const FRAMEWORK = META.framework || '';
+const NEXT_STEPS_HTML = META.nextStepsHtml || '';
+
+document.title = 'Authentication Setup Report — ' + (SITE_NAME || 'Power Pages');
+document.getElementById('topbar-date').textContent = REPORT_DATE;
+
+function el(tag, props, ...children) {
+  const e = document.createElement(tag);
+  if (props) for (const k in props) {
+    if (k === 'class') e.className = props[k];
+    else if (k === 'text') e.textContent = props[k];
+    else e.setAttribute(k, props[k]);
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else e.appendChild(c);
+  }
+  return e;
+}
+
+function kv(label, value, isCode) {
+  if (value == null || value === '') return null;
+  const v = el('div', { class: 'v' });
+  if (isCode) v.appendChild(el('code', { text: String(value) }));
+  else v.textContent = String(value);
+  return [el('div', { class: 'k', text: label }), v];
+}
+
+function emptyCard(msg) {
+  return el('div', { class: 'card muted' }, el('div', { class: 'empty', text: msg }));
+}
+
+// --- Header / Overview ---
+document.getElementById('hdr-site').textContent = SITE_NAME || '(site)';
+document.getElementById('hdr-sub').textContent =
+  'Configured ' + (PROVIDERS.length === 1 ? '1 identity provider' : PROVIDERS.length + ' identity providers')
+  + (FRAMEWORK ? ' · ' + FRAMEWORK : '');
+
+// --- Stats grid ---
+const stats = [
+  { num: PROVIDERS.length, label: 'Providers' },
+  { num: SITE_SETTINGS.length, label: 'Site Settings' },
+  { num: TABLE_PERMISSIONS.length, label: 'Table Permissions' },
+  { num: FILES.length, label: 'Files' },
+];
+const statsEl = document.getElementById('stats');
+for (const s of stats) {
+  statsEl.appendChild(el('div', { class: 'stat-card' },
+    el('div', { class: 'stat-num', text: String(s.num) }),
+    el('div', { class: 'stat-label', text: s.label }),
+  ));
+}
+
+// --- Sidebar badges ---
+document.getElementById('badge-providers').textContent = String(PROVIDERS.length);
+document.getElementById('badge-settings').textContent = String(SITE_SETTINGS.length);
+document.getElementById('badge-permissions').textContent = String(TABLE_PERMISSIONS.length);
+document.getElementById('badge-files').textContent = String(FILES.length);
+
+// --- Overview detail (highlights jump to other tabs) ---
+const overviewDetail = document.getElementById('overview-detail');
+const overviewCard = el('div', { class: 'card' });
+overviewCard.appendChild(el('h3', { text: 'Highlights' }));
+const ul = el('ul');
+ul.style.cssText = 'margin-left:18px;font-size:13px;color:var(--text);';
+function addHighlight(text) { ul.appendChild(el('li', { text: text })); }
+if (PROVIDERS.length) addHighlight(`${PROVIDERS.length} identity provider${PROVIDERS.length === 1 ? '' : 's'} configured.`);
+if (LOCAL_AUTH) addHighlight(`Local authentication enabled (login by ${LOCAL_AUTH.loginBy || 'username'}, registration: ${LOCAL_AUTH.registrationMode || 'unspecified'}).`);
+if (OPTIONAL_FEATURES) {
+  if (OPTIONAL_FEATURES.profilePage) addHighlight('Profile page (/user-profile) was scaffolded.');
+  if (OPTIONAL_FEATURES.termsAndConditions) {
+    addHighlight(OPTIONAL_FEATURES.termsEnforced
+      ? 'Terms & Conditions enabled — Privacy Extensions solution detected, enforcement will work.'
+      : 'Terms & Conditions scaffolded — Privacy Extensions solution NOT detected, enforcement will be silently ignored until the solution is installed.');
+  }
+  if (OPTIONAL_FEATURES.federatedLogout) addHighlight('Federated (RP-initiated) logout enabled — users will be signed out of the identity provider on sign-out.');
+}
+if (!ul.children.length) addHighlight('No optional features enabled. Identity provider scaffolding is the only output of this run.');
+overviewCard.appendChild(ul);
+overviewDetail.appendChild(overviewCard);
+
+// --- Providers ---
+const provEl = document.getElementById('providers');
+if (PROVIDERS.length === 0) {
+  provEl.appendChild(emptyCard('No identity providers were configured.'));
+} else {
+  for (const p of PROVIDERS) {
+    const tags = [];
+    if (p.type) tags.push(el('span', { class: 'tag tag-accent', text: p.type }));
+    if (p.isPrimary) tags.push(el('span', { class: 'tag tag-purple', text: 'Primary' }));
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('h3', { text: p.displayName || p.name || '(provider)' }));
+    if (tags.length) {
+      const tagRow = el('div');
+      tagRow.style.marginBottom = '10px';
+      for (const t of tags) tagRow.appendChild(t);
+      card.appendChild(tagRow);
+    }
+    const grid = el('div', { class: 'kv' });
+    const rows = [
+      kv('Identifier', p.identifier, true),
+      kv('Authority', p.authority, true),
+      kv('Client ID', p.clientId, true),
+      kv('Redirect URI', p.redirectUri, true),
+      kv('Scopes', p.scopes),
+      kv('Registration mapping', p.registrationClaimsMapping, true),
+      kv('Login mapping', p.loginClaimsMapping, true),
+      kv('Contact linking', p.contactLinking),
+      kv('Profile sync', p.profileSync),
+      kv('Federated logout', p.federatedLogout),
+    ].filter(Boolean);
+    for (const [k, v] of rows) { grid.appendChild(k); grid.appendChild(v); }
+    card.appendChild(grid);
+    provEl.appendChild(card);
+  }
+}
+
+// --- Local auth ---
+const localEl = document.getElementById('local-auth');
+if (!LOCAL_AUTH) {
+  localEl.appendChild(emptyCard('Local authentication was not configured for this site.'));
+} else {
+  const card = el('div', { class: 'card' });
+  const grid = el('div', { class: 'kv' });
+  const rows = [
+    kv('Login by', LOCAL_AUTH.loginBy),
+    kv('Registration mode', LOCAL_AUTH.registrationMode),
+    kv('Reset password', LOCAL_AUTH.resetPasswordEnabled ? 'Enabled' : 'Disabled'),
+    kv('Email confirmation', LOCAL_AUTH.emailConfirmationEnabled ? 'Enabled' : 'Disabled'),
+  ].filter(Boolean);
+  for (const [k, v] of rows) { grid.appendChild(k); grid.appendChild(v); }
+  card.appendChild(grid);
+  localEl.appendChild(card);
+}
+
+// --- Optional features ---
+const featEl = document.getElementById('optional-features');
+if (!OPTIONAL_FEATURES || Object.keys(OPTIONAL_FEATURES).length === 0) {
+  featEl.appendChild(emptyCard('No optional features were enabled.'));
+} else {
+  const card = el('div', { class: 'card' });
+  const grid = el('div', { class: 'kv' });
+  const featureRows = [
+    ['Profile page', OPTIONAL_FEATURES.profilePage, '/user-profile SPA page with edit form'],
+    ['Terms & Conditions', OPTIONAL_FEATURES.termsAndConditions, OPTIONAL_FEATURES.termsEnforced ? 'Enabled — solution detected' : 'Scaffolded but NOT enforced (Privacy Extensions solution missing)'],
+    ['Federated logout', OPTIONAL_FEATURES.federatedLogout, 'Signs the user out of the identity provider as well'],
+    ['Session keep-alive', OPTIONAL_FEATURES.sessionKeepAlive, 'Pings the server periodically to extend the session'],
+  ];
+  for (const [label, enabled, note] of featureRows) {
+    if (enabled == null) continue;
+    grid.appendChild(el('div', { class: 'k', text: label }));
+    const v = el('div', { class: 'v' });
+    v.appendChild(el('span', {
+      class: 'tag ' + (enabled ? 'tag-pass' : 'tag-dim'),
+      text: enabled ? 'Enabled' : 'Disabled',
+    }));
+    if (enabled && note) v.appendChild(document.createTextNode(' ' + note));
+    grid.appendChild(v);
+  }
+  card.appendChild(grid);
+  featEl.appendChild(card);
+}
+
+// --- Site settings table ---
+const settingsEl = document.getElementById('site-settings');
+if (SITE_SETTINGS.length === 0) {
+  settingsEl.appendChild(emptyCard('No site settings were created.'));
+} else {
+  const t = el('table');
+  t.appendChild(el('thead', null, el('tr', null,
+    el('th', { text: 'Setting' }),
+    el('th', { text: 'Value' }),
+  )));
+  const tbody = el('tbody');
+  for (const s of SITE_SETTINGS) {
+    tbody.appendChild(el('tr', null,
+      el('td', { class: 'col-fixed' }, el('code', { text: s.name })),
+      el('td', null, s.value === '' ? el('span', { class: 'empty', text: '(empty)' }) : el('code', { text: String(s.value) })),
+    ));
+  }
+  t.appendChild(tbody);
+  settingsEl.appendChild(t);
+}
+
+// --- Table permissions table ---
+const permsEl = document.getElementById('table-permissions');
+if (TABLE_PERMISSIONS.length === 0) {
+  permsEl.appendChild(emptyCard('No table permissions were created.'));
+} else {
+  const t = el('table');
+  t.appendChild(el('thead', null, el('tr', null,
+    el('th', { text: 'Name' }),
+    el('th', { text: 'Table' }),
+    el('th', { text: 'Scope' }),
+    el('th', { text: 'Privileges' }),
+  )));
+  const tbody = el('tbody');
+  for (const p of TABLE_PERMISSIONS) {
+    const privs = ['read', 'write', 'create', 'delete', 'append', 'appendto']
+      .filter(k => p[k]).join(', ') || '(none)';
+    tbody.appendChild(el('tr', null,
+      el('td', { text: p.name || '' }),
+      el('td', null, el('code', { text: p.table || '' })),
+      el('td', { text: p.scope || '' }),
+      el('td', { text: privs }),
+    ));
+  }
+  t.appendChild(tbody);
+  permsEl.appendChild(t);
+}
+
+// --- Files table ---
+const filesEl = document.getElementById('files');
+if (FILES.length === 0) {
+  filesEl.appendChild(emptyCard('No SPA files were created or updated.'));
+} else {
+  const t = el('table');
+  t.appendChild(el('thead', null, el('tr', null,
+    el('th', { text: 'Path' }),
+    el('th', { text: 'Action' }),
+    el('th', { text: 'Notes' }),
+  )));
+  const tbody = el('tbody');
+  for (const f of FILES) {
+    const actionClass = f.action === 'Created' ? 'tag-pass'
+      : f.action === 'Updated' ? 'tag-accent'
+      : 'tag-dim';
+    tbody.appendChild(el('tr', null,
+      el('td', null, el('code', { text: f.path || '' })),
+      el('td', null, el('span', { class: 'tag ' + actionClass, text: f.action || '' })),
+      el('td', { text: f.notes || '' }),
+    ));
+  }
+  t.appendChild(tbody);
+  filesEl.appendChild(t);
+}
+
+// --- Next steps (HTML, skill-authored) ---
+document.getElementById('next-steps').innerHTML = NEXT_STEPS_HTML || '<p class="empty">No follow-up actions recorded.</p>';
+
+// --- Tab switching ---
+const navButtons = document.querySelectorAll('.nav-btn');
+const sections = document.querySelectorAll('.section');
+
+function activateTab(tabId) {
+  for (const btn of navButtons) {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  }
+  for (const sec of sections) {
+    sec.classList.toggle('active', sec.id === 'tab-' + tabId);
+  }
+  // Update the URL hash so users can deep-link to a tab, but don't push a
+  // history entry (replaceState) so the back button stays useful.
+  if (history.replaceState) history.replaceState(null, '', '#' + tabId);
+}
+
+for (const btn of navButtons) {
+  btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+}
+
+// Honor deep-link hash on load (e.g., file://.../auth-setup-report.html#settings)
+const initialHash = (location.hash || '').replace(/^#/, '');
+const validTabs = new Set(['overview','providers','local-auth','features','settings','permissions','files','next-steps']);
+if (initialHash && validTabs.has(initialHash)) activateTab(initialHash);
+</script>
+</body>
+</html>

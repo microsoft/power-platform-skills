@@ -23,7 +23,7 @@ function mkConfigDir(enabled = true) {
   return tmp;
 }
 
-function runHook({ prompt, configDir, fakeProbe }) {
+function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
   return spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ prompt }),
     encoding: "utf8",
@@ -31,22 +31,34 @@ function runHook({ prompt, configDir, fakeProbe }) {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
+      POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
     timeout: 10_000,
   });
 }
 
+// Synchronous sleep that parks the thread instead of busy-spinning the CPU.
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Poll for a file up to timeoutMs, sleeping between checks so the test runner
+// stays responsive. Returns whether the file exists at the end.
+function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(filePath) && Date.now() < deadline) {
+    sleep(25);
+  }
+  return fs.existsSync(filePath);
+}
+
 test("hook emits PagesPluginEvent with top-level fields for tracked slash command", () => {
   const configDir = mkConfigDir(true);
   const probePath = path.join(configDir, "probe.json");
-  const ikeyPath = path.join(
-    PLUGIN_ROOT,
-    "scripts",
-    "lib",
-    "telemetry",
-    "ikey.json"
-  );
-  const original = fs.readFileSync(ikeyPath, "utf8");
+  // Point the hook at a temp ikey.json via the override seam instead of
+  // mutating the checked-in scripts/lib/telemetry/ikey.json (which would race
+  // with other test files running in parallel).
+  const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
     ikeyPath,
     JSON.stringify({
@@ -62,38 +74,31 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
     })
   );
 
-  try {
-    const { status } = runHook({
-      prompt: "/power-pages:add-seo",
-      configDir,
-      fakeProbe: probePath,
-    });
-    assert.equal(status, 0);
-    const deadline = Date.now() + 5_000;
-    while (!fs.existsSync(probePath) && Date.now() < deadline) {
-      // busy-wait
-    }
-    assert.ok(fs.existsSync(probePath), "dispatcher should have written probe");
-    const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-    assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
-    const body = JSON.parse(probe.body);
-    assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
-    assert.equal(body.name, "PagesPluginEvent");
-    assert.equal(body.ver, "4.0");
-    assert.match(body.iKey, /^o:/);
-    assert.equal(body.data.eventName, "skill_started");
-    assert.equal(body.data.eventType, "Trace");
-    assert.equal(body.data.severity, "Info");
-    assert.equal(body.data.pluginName, "power-pages");
-    assert.equal(body.data.skillName, "add-seo");
-    assert.equal(typeof body.data.sessionId, "string");
-    assert.equal(typeof body.data.correlationId, "string");
-    assert.equal(typeof body.data.osName, "string");
-    assert.equal(typeof body.data.osVersion, "string");
-    assert.match(body.data.nodeVersion, /^v\d+$/);
-  } finally {
-    fs.writeFileSync(ikeyPath, original);
-  }
+  const { status } = runHook({
+    prompt: "/power-pages:add-seo",
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
+  const body = JSON.parse(probe.body);
+  assert.deepEqual(Object.keys(body).sort(), ["data", "iKey", "name", "time", "ver"]);
+  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.ver, "4.0");
+  assert.match(body.iKey, /^o:/);
+  assert.equal(body.data.eventName, "skill_started");
+  assert.equal(body.data.eventType, "Trace");
+  assert.equal(body.data.severity, "Info");
+  assert.equal(body.data.pluginName, "power-pages");
+  assert.equal(body.data.skillName, "add-seo");
+  assert.equal(typeof body.data.sessionId, "string");
+  assert.equal(typeof body.data.correlationId, "string");
+  assert.equal(typeof body.data.osName, "string");
+  assert.equal(typeof body.data.osVersion, "string");
+  assert.match(body.data.nodeVersion, /^v\d+$/);
 });
 
 test("hook exits 0 and emits nothing for an unrelated prompt", () => {
@@ -105,10 +110,9 @@ test("hook exits 0 and emits nothing for an unrelated prompt", () => {
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  const deadline = Date.now() + 500;
-  while (!fs.existsSync(probePath) && Date.now() < deadline) {
-    // spin
-  }
+  // Give any (wrongly) spawned dispatcher a chance to write before asserting
+  // that nothing was emitted.
+  sleep(500);
   assert.ok(!fs.existsSync(probePath), "unrelated prompt must not emit");
 });
 

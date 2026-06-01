@@ -8,12 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath, getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
-const { runInstrumented } = require(path.resolve(__dirname, '..', '..', '..', 'scripts', 'lib', 'telemetry-runner'));
 
-async function main() {
-  return runValidation(async (cwd) => {
-    const manifestPath = findPath(cwd, '.datamodel-manifest.json');
-    if (!manifestPath) approve(); // Not a data model session, skip
+runValidation(async (cwd) => {
+  const manifestPath = findPath(cwd, '.datamodel-manifest.json');
+  if (!manifestPath) approve(); // Not a data model session, skip
 
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   if (!manifest.tables || manifest.tables.length === 0) approve();
@@ -43,17 +41,11 @@ async function main() {
     }
   }
 
-    if (errors.length > 0) {
-      block('Dataverse data model validation failed:\n- ' + errors.join('\n- '));
-    }
+  if (errors.length > 0) {
+    block('Dataverse data model validation failed:\n- ' + errors.join('\n- '));
+  }
 
-    approve();
-  });
-}
-
-runInstrumented('validate-setup-datamodel', main).catch((err) => {
-  process.stderr.write(String((err && err.stack) || err) + '\n');
-  process.exit(1);
+  approve();
 });
 
 async function checkTableExists(envUrl, token, logicalName) {
@@ -89,12 +81,3 @@ async function getTableColumns(envUrl, token, logicalName) {
     return [];
   }
 }
-
-if (require.main === module) {
-  runInstrumented('validate-setup-datamodel', main).catch((err) => {
-    process.stderr.write(String((err && err.stack) || err) + '\n');
-    process.exit(1);
-  });
-}
-
-module.exports = { main };
