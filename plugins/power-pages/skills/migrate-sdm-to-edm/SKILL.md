@@ -452,15 +452,45 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    Search output for the V2 `UniqueName` from step 1.
 
    - **Found**: Proceed to step 3.
-   - **Not found**: Ask user:
+   - **Not found**: Continue to step 2a below to determine the best install method.
+
+2a. **Check if V2 package is in the Microsoft application catalog**
+
+   The fastest install path is `pac application install` — it pulls the solution from the Microsoft application catalog and installs it directly. But not every V2 template package is available in the catalog. Check first:
+
+   ```powershell
+   pac application list 2>&1 | Select-String -Pattern "<V2_UNIQUE_NAME>" -CaseSensitive:$false
+   ```
+
+   - **Match found in catalog**: ask user with `pac application install` as **recommended**:
 
      | Question | Header | Options |
      |----------|--------|---------|
-     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed. How to proceed? | V2 Package | Install via dummy EDM site (recommended), Skip and let migration warn, Cancel |
+     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed, but it's available in the Microsoft application catalog. How to proceed? | V2 Package | Install via `pac application install` (recommended), Install via dummy EDM site, Skip and let migration warn, Cancel |
 
-     - **Install via dummy EDM site**: Guide user to provision a new EDM site using the same template in this environment. Creating that site auto-installs the V2 solution. Once installed, the dummy site can be deleted.
+     - **Install via `pac application install`**:
+
+       ```powershell
+       pac application install --application-name "<V2_UNIQUE_NAME>"
+       ```
+
+       Wait for completion. After it returns, re-run `pac solution list --includeSystemSolutions` to confirm the package now appears (the install is async on some clouds).
+
+     - **Install via dummy EDM site**: Guide user to provision a new EDM site using the same template in this environment. Creating that site auto-installs the V2 solution. Once installed, the dummy site can be deleted. Slower but works even when the catalog method fails.
      - **Skip**: Continue to step 1.7; migration may warn or fail if the solution is genuinely needed.
      - **Cancel**: Halt the skill.
+
+   - **No match in catalog**: fall back to the dummy-site method (the catalog doesn't carry this V2 package, so `pac application install` won't work):
+
+     | Question | Header | Options |
+     |----------|--------|---------|
+     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed and not in the Microsoft application catalog. How to proceed? | V2 Package | Install via dummy EDM site (recommended), Skip and let migration warn, Cancel |
+
+     - **Install via dummy EDM site**: Same as above — provision a new EDM site with the template, V2 solution auto-installs, delete the dummy site afterward.
+     - **Skip**: Continue to step 1.7; migration may warn or fail if the solution is genuinely needed.
+     - **Cancel**: Halt the skill.
+
+   > **Note:** if `pac application list` itself errors out (older PAC builds, missing role), fall back to offering the dummy-site method directly without the catalog check.
 
 3. **Verify PowerPages_Core Application**
 
@@ -480,7 +510,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 **Output**: V2 template package verified/installed (or explicitly skipped); PowerPages_Core available
 
-> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state> · PowerPages_Core <state>"`. If V2 package was installed via `pac application install`, mention that explicitly so the user can audit.
+> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state> · PowerPages_Core <state>"`. If the V2 package was installed during this step, mention the method explicitly so the user can audit — e.g., `"installed via pac application install"` or `"installed via dummy EDM site"`.
 
 ---
 
