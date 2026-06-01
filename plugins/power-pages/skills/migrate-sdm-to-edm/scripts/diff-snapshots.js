@@ -81,6 +81,20 @@ const VALUE_FIELDS = {
   siteSettings: 'value',
 };
 
+// Categories that don't appear in `pac pages download --modelVersion 2` output.
+// Their records still exist as `powerpagecomponent` rows in Dataverse on EDM,
+// but the EDM YAML format doesn't surface them as standalone files. So a clean
+// SDM→EDM migration legitimately shows "SDM has N, EDM has 0" for these
+// categories — they should NOT be classified as `fail`. Surface as `warn`
+// instead so the user sees it without panicking.
+//
+// Identified empirically from real migration test sessions. Add to this list
+// as additional categories are confirmed to follow the same pattern.
+const SDM_ONLY_CATEGORIES = new Set([
+  'tags',
+  'websiteBindings',
+]);
+
 function makeKey(rec, fields) {
   return fields.map((f) => String(rec[f] ?? '')).join('|');
 }
@@ -134,8 +148,23 @@ function diffCategory(category, sdmInventory, edmInventory) {
 
   const sdmCount = sdmInventory.length;
   const edmCount = edmInventory.length;
+
+  // SDM-only categories: when EDM count is 0 but SDM had records, treat as
+  // `warn` (expected-difference) rather than `fail`. The records still exist
+  // as `powerpagecomponent` rows in Dataverse — they're just not surfaced by
+  // the EDM YAML download format. Real failures (count mismatches that aren't
+  // "everything missing") still classify as `fail`.
+  const isSdmOnlyDifference = (
+    SDM_ONLY_CATEGORIES.has(category) &&
+    edmCount === 0 &&
+    sdmCount > 0 &&
+    extraInEdm.length === 0
+  );
+
   let status = 'pass';
-  if (missingInEdm.length > 0 || extraInEdm.length > 0 || sdmCount !== edmCount) {
+  if (isSdmOnlyDifference) {
+    status = 'warn';
+  } else if (missingInEdm.length > 0 || extraInEdm.length > 0 || sdmCount !== edmCount) {
     status = 'fail';
   } else if (stateChanged.length > 0 || contentChanged.length > 0 || valueChanged.length > 0) {
     status = 'warn';
@@ -150,6 +179,7 @@ function diffCategory(category, sdmInventory, edmInventory) {
     stateChanged,
     contentChanged,
     valueChanged,
+    sdmOnlyCategory: SDM_ONLY_CATEGORIES.has(category),
   };
 }
 
@@ -232,8 +262,15 @@ function main() {
   for (const [cat, c] of Object.entries(diff.categories)) {
     if (c.sdmCount === 0 && c.edmCount === 0) continue;
     const notes = [];
-    if (c.missingInEdm.length) notes.push(`${c.missingInEdm.length} missing in EDM`);
-    if (c.extraInEdm.length) notes.push(`${c.extraInEdm.length} extra in EDM`);
+    // SDM-only categories: when the whole category is "missing", phrase it as
+    // an expected-format-difference instead of a failure.
+    const isSdmOnlyDifference = c.sdmOnlyCategory && c.edmCount === 0 && c.sdmCount > 0 && c.extraInEdm.length === 0;
+    if (isSdmOnlyDifference) {
+      notes.push(`SDM-only category (not in EDM YAML format; records still in Dataverse)`);
+    } else {
+      if (c.missingInEdm.length) notes.push(`${c.missingInEdm.length} missing in EDM`);
+      if (c.extraInEdm.length) notes.push(`${c.extraInEdm.length} extra in EDM`);
+    }
     if (c.stateChanged.length) notes.push(`${c.stateChanged.length} state changed`);
     if (c.contentChanged.length) notes.push(`${c.contentChanged.length} content changed`);
     if (c.valueChanged.length) notes.push(`${c.valueChanged.length} value changed`);
@@ -245,11 +282,14 @@ function main() {
   const s = diff.summary;
   console.log(`  Totals: SDM=${s.totalSdm}, EDM=${s.totalEdm}, missing=${s.totalMissing}, extra=${s.totalExtra}, stateChanged=${s.totalStateChanged}, valueChanged=${s.totalValueChanged}`);
 
-  // First-N example mismatches per category for quick eyeballing
+  // First-N example mismatches per category for quick eyeballing.
+  // Skip SDM-only categories — listing "every record is missing" isn't
+  // actionable when the whole category is an expected format difference.
   let printedExamples = false;
   for (const [cat, c] of Object.entries(diff.categories)) {
     const fields = KEY_FIELDS[cat] || ['name'];
-    if (c.missingInEdm.length > 0) {
+    const isSdmOnlyDifference = c.sdmOnlyCategory && c.edmCount === 0 && c.sdmCount > 0 && c.extraInEdm.length === 0;
+    if (c.missingInEdm.length > 0 && !isSdmOnlyDifference) {
       if (!printedExamples) { console.log(''); printedExamples = true; }
       console.log(`  Missing from EDM in '${cat}' (showing up to 5):`);
       for (const r of c.missingInEdm.slice(0, 5)) console.log(`    - ${describeRecord(r, fields)}`);

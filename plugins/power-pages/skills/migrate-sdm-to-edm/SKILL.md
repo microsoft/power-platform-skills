@@ -658,15 +658,31 @@ This phase has **two completely different shapes** depending on the migration tr
 
 2. **Monitor & Poll**
 
-   Poll every 1 minute, up to 30 attempts (30 minutes total):
+   Poll every 1 minute, up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent. Bash subshells can silently fail if `pac` isn't on the Bash `$PATH` (different PATH from PowerShell on many Windows installs), which makes the `until / sleep` pattern spin forever without ever detecting completion.
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   $webSiteId = "<WEBSITE_ID>"
+   for ($i = 1; $i -le 30; $i++) {
+     $statusOutput = pac pages migrate-datamodel --webSiteId $webSiteId --checkMigrationStatus 2>&1 | Out-String
+     if ($statusOutput -match "Completed")      { Write-Host "Status: Completed";  break }
+     if ($statusOutput -match "Failed")         { Write-Host "Status: Failed";     break }
+     if ($statusOutput -match "Reverted")       { Write-Host "Status: Reverted";   break }
+     Write-Host "Attempt $i/30 — still running, sleeping 60s..."
+     Start-Sleep -Seconds 60
+   }
    ```
 
-   - **Completed**: proceed to step 2.2.
-   - **In Progress**: surface "attempt N/30" message and `--set-activity "Polling migration status (attempt <N>/30)"`. Wait 1 minute and re-check.
-   - **Failed / 30-min timeout**: surface error, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
+   Between iterations, update the live report:
+
+   ```powershell
+   node update-state.js --output-dir "<OUTPUT_DIR>" --set-activity "Polling migration status (attempt <N>/30)"
+   ```
+
+   - **Completed**: clear activity, proceed to step 2.2.
+   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
+   - **Failed / Reverted**: surface error, ask user (retry / reset / exit).
+
+   > **Why this matters:** an earlier real-world test session ran the poll as a Bash `until [ "$(pac ... | grep -oE ...)" != "" ]` loop. `pac` wasn't on the Bash `$PATH` in that environment, so the subshell silently produced empty output, the until condition stayed false, and the loop printed "Still running..." for 12+ iterations after the migration had actually completed. The user had to type "check status" to force the agent to verify via PowerShell. Using PowerShell directly with a bounded `for` loop avoids both issues — PATH consistency and runaway iteration.
 
 **Output**: Metadata moved to EDM tables; site activation still SDM until step 3.1 flips it. Newer PAC builds auto-emit `SiteCustomization*.csv` here; **older builds do not** — step 2.2 will fall back to running the explicit `--siteCustomizationReportPath` command. Don't assume the CSV exists yet.
 
@@ -1142,26 +1158,22 @@ Phase 3 has **two different shapes** depending on the migration track. Track A i
 
    Check the Portal Id state captured in step 1.3:
 
-   - **If marked "captured"** (valid GUID from `pac pages list -v`): use directly.
-   - **If marked "needs prompt"** (`Unknown`/`N/A` or column missing in older PAC): construct the site URL and ask user to paste from `<SITE_URL>/_services/about`.
+   - **If marked "captured"** (valid GUID from `pac pages list -v`): use directly — proceed to step 2.
+   - **If marked "needs prompt"** (`Unknown`/`N/A`, column missing on older PAC builds, or the column was present but the value couldn't be parsed): ask the user to paste it directly. Don't try to construct a URL.
 
-   **Cloud-to-domain table** (for URL construction):
+   **Why no URL construction:** the previous design constructed `<URL_SLUG>.<CLOUD_DOMAIN>` from a Public/UsGov/UsGovHigh/UsGovDod/China lookup so the user could fetch `portalId` from `<URL>/_services/about`. In practice this is brittle — it doesn't cover Preprod/TIE cloud rings, custom-domain sites, or the cases where DNS isn't resolvable from the user's network. Far simpler to just ask the user; they have several ways to find it:
 
-   | Cloud | Domain |
-   |-------|--------|
-   | Public | `powerappsportals.com` |
-   | UsGov | `powerappsportals.us` |
-   | UsGovHigh | `high.powerappsportals.us` |
-   | UsGovDod | `appsplatform.us` |
-   | China | `powerappsportals.cn` |
+   - **Easiest:** open Power Platform admin center → Resources → Power Pages sites → `<SITE_NAME>` → check the Site details panel for "Portal Id".
+   - Or browse to the site URL (whatever it actually is) and append `/_services/about` — paste the `portalId` JSON value.
+   - Or query `pac data` against the `mspp_website` / `adx_website` table for the `mspp_portalid` field.
 
-   Constructed URL: `https://<URL_SLUG>.<CLOUD_DOMAIN>`. If the site uses a custom domain, ask user to provide the base URL directly.
+   Ask via AskUserQuestion:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | `pac pages list -v` did not return a usable Portal Id for this site. Open `<SITE_URL>/_services/about` and paste the `portalId` from the JSON response | Portal ID | I'll paste the Portal ID |
+   | Step 1.3 didn't capture a usable Portal Id from `pac pages list -v`. Please paste the Portal Id for `<SITE_NAME>`. You can find it in Power Platform admin center → Resources → Power Pages sites → <SITE_NAME> → Site details panel, OR by browsing to your site URL + `/_services/about`. | Portal ID | I'll paste the Portal ID |
 
-   Validate the pasted value is a GUID. Store it — also needed for rollback in Phase 4.
+   Validate the pasted value is a GUID (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`). Re-prompt if invalid. Store it — also needed for rollback in Phase 4.
 
    > **Do not run the update command until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
 
@@ -1468,32 +1480,41 @@ Show the user the diff table (read it from console output or the JSON file) and 
 
 **If "Pause"**: halt the skill cleanly. The user can re-invoke later; their SDM source is still in `<SITE_ROOT>` and the EDM site is live.
 
-### 5. Suggest runtime smoke test (hand-off to `/test-site`)
+### 5. Print runtime smoke test hand-off (informational only — NOT a question)
 
-Print a hand-off message to the user (this is informational — the skill does **not** invoke the test-site skill itself):
+> **Important: this is a printed message in chat, not an AskUserQuestion call.** Combining the `/test-site` hand-off with the final validation question caused confusion in a real test session — the user thought the skill was about to auto-invoke `/test-site`. Keep them separate: print the hand-off first as plain text, then ask the validation status question in step 6.
 
-> **Runtime smoke test (optional but recommended)**
->
-> Your migrated site is at `<SITE_URL>` (constructed from URL slug + cloud domain, or available in `pac pages list -v` output).
->
-> Open a separate Claude Code session and run:
->
-> ```
-> /test-site <SITE_URL>
-> ```
->
-> That skill opens a browser via Playwright, crawls up to 25 pages, captures API calls and console errors, and reports pass/fail per page and per endpoint. It's independent of data model — it just exercises the live site.
->
-> Common things `/test-site` catches that the data diff cannot:
-> - A page that has all its records intact but renders empty because a FetchXML rewrite has the wrong `powerpagecomponenttype` filter
-> - Table permissions that don't grant the same access on EDM as they did on SDM (401/403 on Web API calls)
-> - Liquid runtime errors visible in browser console but not in the data layer
+Print this message to the user verbatim (substitute the actual site URL captured in step 1.3 — do **not** try to construct a URL from cloud-domain patterns; just use the value PAC already returned in `pac pages list -v` output):
+
+```
+📄 Runtime smoke test — OPTIONAL, hand-off only.
+
+This skill does NOT run /test-site automatically. The migrated site is
+already live at:
+   <SITE_URL>
+
+If you want a browser-based smoke check after this skill finishes, open
+a separate Claude Code session and run:
+   /test-site <SITE_URL>
+
+/test-site uses Playwright to crawl up to 25 pages, capture API calls,
+check console errors, and report pass/fail per page. It needs only the
+live URL — no re-download. The site is the same URL it always was;
+only the data model underneath has changed.
+
+This is independent of the data diff in step 4 — it's a runtime check,
+while the diff was a record-count check.
+```
+
+> **Why this isn't auto-invoked:** `/test-site` is interactive (asks the user to log in for auth-gated sites), and cross-skill invocation from inside this skill would be awkward and would prevent the user from picking their own browser session / login profile. Leaving it as a hand-off is intentional. If the team decides to change this design later, the change goes in a separate skill update.
 
 ### 6. Get final validation status
 
+Now (after the hand-off message above has been printed), ask the validation question:
+
 | Question | Header | Options |
 |----------|--------|---------|
-| Migration is complete. Validation status? | Final Status | Validated — all good, Validated — but rollback needed, Deferred — I'll validate later |
+| What's your final validation status for this migration? (The data diff in step 4 already ran; `/test-site` is optional and you can run it later in a separate session as described above.) | Final Status | Validated — all good, Validated — but rollback needed, Deferred — I'll validate later |
 
 **If "Validated — all good"**: proceed to step 8 (success summary).
 **If "Validated — but rollback needed"**: proceed to step 7 (rollback).
