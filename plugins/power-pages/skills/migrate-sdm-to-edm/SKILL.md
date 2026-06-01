@@ -668,7 +668,7 @@ This phase has **two completely different shapes** depending on the migration tr
    - **In Progress**: surface "attempt N/30" message and `--set-activity "Polling migration status (attempt <N>/30)"`. Wait 1 minute and re-check.
    - **Failed / 30-min timeout**: surface error, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
 
-**Output**: Metadata moved to EDM tables; site activation still SDM until step 3.1 flips it; customization CSV auto-emitted by PAC.
+**Output**: Metadata moved to EDM tables; site activation still SDM until step 3.1 flips it. Newer PAC builds auto-emit `SiteCustomization*.csv` here; **older builds do not** — step 2.2 will fall back to running the explicit `--siteCustomizationReportPath` command. Don't assume the CSV exists yet.
 
 > **→ Update report:** `--clear-activity` and `--set-step 2.1 --status completed --output "Metadata migration <COMPLETED|FAILED> · mode=<MODE>"`
 
