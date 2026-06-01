@@ -64,10 +64,11 @@ const COMPLETED_FIELDS = ["outcome", "durationMs", "errorClass", "errorDescripti
 function isPlainStructured(v) {
   if (v === null || typeof v !== "object") return false;
   if (Array.isArray(v)) return true;
-  if (v instanceof Date) return false;
-  if (v instanceof RegExp) return false;
-  if (v instanceof Map || v instanceof Set) return false;
-  return true;
+  // Only plain objects (prototype Object.prototype or null) pass through —
+  // class instances like Date, RegExp, Map, Set, and Error are rejected so
+  // the dynamic `eventInfo` field can't carry unexpected shapes.
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
 }
 
 function clampInt(v) {

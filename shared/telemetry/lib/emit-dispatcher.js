@@ -148,6 +148,7 @@ process.stdin.on("end", () => {
   const req = https.request(
     {
       hostname: url.hostname,
+      port: url.port || undefined,
       path: url.pathname + (url.search || ""),
       method: "POST",
       headers,

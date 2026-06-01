@@ -68,6 +68,11 @@ process.stdin.on('end', async () => {
     validatorStatus = 0;
   }
 
+  // No tracked skill was resolved (malformed stdin, or an error before
+  // detection). There is no meaningful skill_completed event to emit — skip
+  // telemetry and preserve the existing exit code.
+  if (!skillName) process.exit(validatorStatus);
+
   // Telemetry emission: fail-closed, never changes exit code.
   try {
     // Fast-path opt-out / kill-switch: cheap checks BEFORE the pac
@@ -78,9 +83,14 @@ process.stdin.on('end', async () => {
     }
     const ikeyCfg = (() => {
       try {
-        return JSON.parse(
-          fs.readFileSync(path.join(TELEMETRY_DIR, 'ikey.json'), 'utf8')
-        );
+        // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an
+        // alternate ikey.json so tests don't mutate the checked-in config.
+        const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+        const ikeyPath =
+          override && override.trim()
+            ? override
+            : path.join(TELEMETRY_DIR, 'ikey.json');
+        return JSON.parse(fs.readFileSync(ikeyPath, 'utf8'));
       } catch {
         return { ikey: '', collector_url: '', event_stream_name: '' };
       }

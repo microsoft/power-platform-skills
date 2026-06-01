@@ -13,10 +13,15 @@ const { readPacAuth } = require("./pac-auth");
 const { readPacCliVersion, readAiAgent } = require("./agent-info");
 
 function readIkey(telemetryDir) {
+  // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
+  // ikey.json so tests don't have to mutate the checked-in config file.
+  const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  const ikeyPath =
+    override && override.trim()
+      ? override
+      : path.join(telemetryDir, "ikey.json");
   try {
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(telemetryDir, "ikey.json"), "utf8")
-    );
+    const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return {
       ikey: cfg.instrumentationKey || "",
       collectorUrl: cfg.collector_url || "",
