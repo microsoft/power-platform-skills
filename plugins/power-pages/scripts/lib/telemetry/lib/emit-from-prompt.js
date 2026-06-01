@@ -22,12 +22,18 @@ function readIkey(telemetryDir) {
       : path.join(telemetryDir, "ikey.json");
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
+    const defaultRegion = cfg.default_region || "us";
+    const defaultEntry = (cfg.regions && cfg.regions[defaultRegion]) || {};
     return {
       eventStreamName: cfg.event_stream_name || "",
       disabled: cfg.disabled === true,
+      // Gate-4 key: the dispatcher resolves the actual region at emit time,
+      // but we short-circuit here if the default region isn't even configured
+      // so a half-provisioned plugin pays no PAC / agent-info cost.
+      defaultInstrumentationKey: defaultEntry.instrumentation_key || "",
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
+    return { eventStreamName: "", disabled: false, defaultInstrumentationKey: "" };
   }
 }
 
@@ -59,9 +65,9 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") {
     return { emitted: false, skillName };
   }
-  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey(telemetryDir);
+  const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey(telemetryDir);
   if (disabled) return { emitted: false, skillName };
-  if (!ikey) return { emitted: false, skillName };
+  if (!defaultInstrumentationKey) return { emitted: false, skillName };
 
   const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
   let pacAuth = null;

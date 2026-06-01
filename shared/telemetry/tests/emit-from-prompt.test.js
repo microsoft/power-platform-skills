@@ -13,10 +13,15 @@ function mkTelemetryDir({ instrumentationKey, collectorUrl, eventStreamName, dis
   fs.writeFileSync(
     path.join(tmp, "ikey.json"),
     JSON.stringify({
-      instrumentationKey,
-      collector_url: collectorUrl,
       event_stream_name: eventStreamName,
       disabled: disabled === true,
+      default_region: "us",
+      regions: {
+        us: {
+          instrumentation_key: instrumentationKey,
+          collector_url: collectorUrl,
+        },
+      },
     })
   );
   return tmp;
@@ -78,7 +83,7 @@ test("returns { emitted: false } when default region has no instrumentation_key"
     },
     _readPacAuth: () => null,
   });
-  assert.deepEqual(result, { emitted: false, skillName: null });
+  assert.deepEqual(result, { emitted: false, skillName: "add-seo" });
   assert.equal(captured.event, undefined);
 });
 
