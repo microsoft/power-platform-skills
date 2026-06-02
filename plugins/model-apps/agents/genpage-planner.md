@@ -392,8 +392,9 @@ to decide whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
-layouts, 2-wizard-multi-step.tsx for wizards). Do NOT list reference docs as
-samples — only files under `samples/`.
+layouts, 2-wizard-multi-step.tsx for wizards, 12-dialog-form-overlay.tsx for any
+page with a modal/dialog — create/edit forms, confirm-delete, detail-in-a-dialog).
+Do NOT list reference docs as samples — only files under `samples/`.
 
 ### CRITICAL — Pre-write validation pass
 

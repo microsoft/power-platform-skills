@@ -19,6 +19,13 @@ real and synthetic fixtures. Builds on v2.1; no breaking changes.
 - `scripts/capture-fixture.js` — copies `/genpage` working dirs into
   fixtures and runs both layers.
 - `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
+- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
+  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
+  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
+  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
+  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
+  dialogs — so a modal can't escape the preview and cover the designer /
+  coding-agent panel.
 
 ### Changed
 - Spec tightening so workflow-logs are command-verbatim and `pageInput`

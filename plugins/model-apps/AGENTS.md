@@ -46,7 +46,7 @@ references/                    ← Shared reference docs
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
-samples/                       ← Example .tsx files (11 samples)
+samples/                       ← Example .tsx files (12 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
