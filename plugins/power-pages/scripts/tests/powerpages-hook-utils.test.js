@@ -77,6 +77,27 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
   assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
 });
 
+test('hooks.json matchers fire for both Claude Code (Skill) and Copilot CLI (skill) tool names', () => {
+  // Claude Code invokes skills via a tool named `Skill`; Copilot CLI uses a
+  // tool named `skill` (lowercase). Both surfaces apply the matcher as an
+  // anchored regex (`^(?:matcher)$`) against the tool name. The matcher must
+  // therefore match BOTH casings, otherwise the PreToolUse hook never fires in
+  // Copilot CLI and `skill_started` telemetry is silently lost.
+  const hooksPath = path.join(__dirname, '..', '..', 'hooks', 'hooks.json');
+  const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+
+  for (const event of ['PreToolUse', 'PostToolUse']) {
+    const entries = hooks.hooks[event];
+    assert.ok(Array.isArray(entries) && entries.length > 0, `${event} must declare at least one hook`);
+    for (const entry of entries) {
+      assert.ok(entry.matcher, `${event} hook must declare a matcher`);
+      const anchored = new RegExp(`^(?:${entry.matcher})$`);
+      assert.ok(anchored.test('Skill'), `${event} matcher "${entry.matcher}" must match Claude Code's "Skill" tool`);
+      assert.ok(anchored.test('skill'), `${event} matcher "${entry.matcher}" must match Copilot CLI's "skill" tool`);
+    }
+  }
+});
+
 test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse only)', () => {
   // Skill-specific Stop hooks are an anti-pattern documented in
   // PLUGIN_DEVELOPMENT_GUIDE.md — they duplicate the centralized PostToolUse
