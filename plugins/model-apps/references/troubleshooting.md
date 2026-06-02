@@ -79,20 +79,14 @@ backdrop covers the coding-agent panel on the left, and the user can't dismiss i
 interact with the agent. Often reported as "a modal keeps appearing regardless of my
 actions."
 
-**Cause:** the page used a Fluent `<Dialog>` with the default `modalType="modal"` and
-**no `mountNode`**. The preview shares the DOM with the designer (it is not a sandboxed
-iframe), so the dialog's portal mounts to the designer's `document.body` and its
-`position: fixed` backdrop + focus trap cover the entire tool. Using `100vh`/`100vw` or
-`position: fixed` overlays sized to the viewport, or nesting one `<Dialog>` inside
-another, makes it worse.
+**Cause:** a Fluent `<Dialog>` with the default `modalType="modal"` and **no
+`mountNode`**. The preview shares the DOM with the designer (it is not a sandboxed
+iframe), so the dialog's portal + `position: fixed` backdrop mount to the designer's
+`document.body` and cover the entire tool.
 
-**Fix (regenerate the page per `rules.md` → Special Patterns > Dialogs and Overlays):**
-- Add a `containerRef` + `mountNode` on the page root and pass `mountNode` to every
-  `DialogSurface` (and to `Popover`/`Menu`/`Tooltip`/`Combobox`/`Dropdown`).
-- Make the root a containing block: `position: relative; contain: layout`.
-- Default dialogs to `modalType="non-modal"`, or use an in-page panel.
-- Remove `100vh`/`100vw`; never use viewport-fixed overlays.
-- Never nest a `<Dialog>` inside another `<Dialog>` — use sibling dialogs switched by state.
+**Fix:** regenerate per `rules.md` → **Special Patterns > Dialogs and Overlays** (thread
+`mountNode` to every overlay, make the root a `contain: layout` containing block, default
+dialogs to `modalType="non-modal"`, no `100vh`/`100vw`, never nest `<Dialog>`s).
 
 ---
 
