@@ -4,15 +4,15 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
+const crypto = require("node:crypto");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, correlationLib, sessionLib, pacAuthLib, agentInfoLib;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
-  correlationLib = require(path.join(TELEMETRY_DIR, "lib", "correlation"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
@@ -93,7 +93,7 @@ function readStdin() {
   if (disabled) process.exit(0);
   if (!ikey) process.exit(0);
 
-  const { correlation_id } = correlationLib.write({ skillName });
+  const correlation_id = crypto.randomUUID();
 
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
   const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
