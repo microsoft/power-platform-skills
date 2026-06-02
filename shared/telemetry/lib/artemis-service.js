@@ -6,7 +6,10 @@ const TIMEOUT_MS = 5000;
 
 function normalizeCloud(cloud) {
   const c = String(cloud || "").toLowerCase();
-  if (c === "usgovgcc" || c === "gcc" || c === "gov") return "Gov";
+  // "usgov" is the token `pac auth who` actually emits for GCC (see
+  // validation-helpers.js CLOUD_TO_API). The other spellings are defensive
+  // aliases. Exact `===` matching means this can't shadow usgovhigh/usgovdod.
+  if (c === "usgov" || c === "usgovgcc" || c === "gcc" || c === "gov") return "Gov";
   if (c === "usgovhigh" || c === "high") return "High";
   if (c === "usgovdod" || c === "dod") return "Dod";
   if (c === "china" || c === "mooncake" || c === "chinacloud") return "Mooncake";

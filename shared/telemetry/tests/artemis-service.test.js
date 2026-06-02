@@ -17,6 +17,12 @@ test("urlFor builds the Gov template (single-char suffix, gov host)", () => {
   assert.match(u, /^https:\/\/c7809087d9b84a00a78aa4b901caa23\.f\.organization\.api\.gov\.powerplatform\.microsoft\.us\/gateway\/cluster\?api-version=1$/);
 });
 
+test("urlFor builds the Gov template for the real PAC token 'UsGov' (GCC)", () => {
+  const u = urlFor(orgId, "UsGov");
+  assert.match(u, /api\.gov\.powerplatform\.microsoft\.us/);
+  assert.doesNotMatch(u, /api\.powerplatform\.com\b/);
+});
+
 test("urlFor builds the High template", () => {
   const u = urlFor(orgId, "High");
   assert.match(u, /api\.high\.powerplatform\.microsoft\.us/);

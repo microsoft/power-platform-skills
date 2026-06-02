@@ -44,6 +44,10 @@ test("mapToRegion: Gov → gov (geo ignored)", () => {
   assert.equal(mapToRegion("Gov", "us", "us"), "gov");
 });
 
+test("mapToRegion: UsGov (real PAC GCC token) → gov (geo ignored)", () => {
+  assert.equal(mapToRegion("UsGov", "us", "us"), "gov");
+});
+
 test("mapToRegion: UsGovHigh → high (geo ignored)", () => {
   assert.equal(mapToRegion("UsGovHigh", "anything", "us"), "high");
 });
