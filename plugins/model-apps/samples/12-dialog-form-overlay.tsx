@@ -163,7 +163,7 @@ function ConfirmDeleteDialog({
                 <DialogBody>
                     <DialogTitle>Delete project</DialogTitle>
                     <DialogContent>
-                        <Text>Are you sure you want to delete “{projectName}”? This can’t be undone.</Text>
+                        <Text>Are you sure you want to delete "{projectName}"? This can't be undone.</Text>
                     </DialogContent>
                     <DialogActions>
                         <Button appearance="secondary" onClick={onClose}>Cancel</Button>
