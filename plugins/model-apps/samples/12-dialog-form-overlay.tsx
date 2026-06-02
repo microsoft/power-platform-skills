@@ -17,7 +17,7 @@
 //
 // Mock data only — no RuntimeTypes / dataApi — so the pattern stays the focus.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
     Button,
     Dialog,
@@ -175,15 +175,21 @@ function ConfirmDeleteDialog({
     );
 }
 
-const GeneratedComponent: React.FC = () => {
+// Mock page: no RuntimeTypes import (not generated for mock pages). Standard props
+// signature so the sample is copy/paste-safe for real /genpage output.
+type Props = { dataApi?: unknown; pageInput?: { id?: string } };
+
+const GeneratedComponent = (props: Props) => {
+    const { pageInput } = props; // always destructure pageInput, even when unused
+    void pageInput;
     const styles = useStyles();
 
-    // One containerRef + mountNode for the whole page; thread it to every overlay.
-    const containerRef = useRef<HTMLDivElement>(null);
+    // One mountNode for the whole page; thread it to every overlay. A callback ref
+    // captures the container the instant it mounts (before paint), so mountNode is set
+    // before any user-opened dialog renders — no window where the portal falls back
+    // to the designer's document.body.
     const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
-    useEffect(() => {
-        if (containerRef.current) setMountNode(containerRef.current);
-    }, []);
+    const setContainer = useCallback((node: HTMLDivElement | null) => setMountNode(node), []);
 
     const [projects, setProjects] = useState<Project[]>([
         { id: "1", name: "Website redesign", owner: "Avery" },
@@ -214,7 +220,7 @@ const GeneratedComponent: React.FC = () => {
     };
 
     return (
-        <div ref={containerRef} className={styles.root}>
+        <div ref={setContainer} className={styles.root}>
             <div className={styles.header}>
                 <Text as="h1" size={600} weight="semibold">Projects</Text>
                 <Button appearance="primary" icon={<AddRegular />} onClick={openCreate}>New project</Button>

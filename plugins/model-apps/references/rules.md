@@ -260,16 +260,18 @@ Three rules prevent it:
 
 ```typescript
 const GeneratedComponent = (props: GeneratedComponentProps) => {
-    const containerRef = useRef<HTMLDivElement>(null);
     const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
-    // mountNode confines every portalled overlay to this page's container
-    useEffect(() => { if (containerRef.current) setMountNode(containerRef.current); }, []);
+    // Callback ref captures the container the instant it mounts (before paint), so
+    // mountNode is set before any user-opened dialog renders — no window where the
+    // portal falls back to the designer's document.body. (Prefer this over a useEffect,
+    // whose first-paint gap leaves mountNode null if a dialog opens immediately.)
+    const setContainer = useCallback((node: HTMLDivElement | null) => setMountNode(node), []);
 
     const [open, setOpen] = useState(false);
 
     return (
         // contain: 'layout' makes this div the containing block for any fixed-position overlay
-        <div ref={containerRef} style={{ position: "relative", contain: "layout", height: "100%", overflow: "hidden" }}>
+        <div ref={setContainer} style={{ position: "relative", contain: "layout", height: "100%", overflow: "hidden" }}>
             {/* ...page content... */}
 
             {/* Sibling dialog at top level — NOT nested inside another Dialog */}
