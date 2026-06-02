@@ -34,7 +34,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 - `pluginName`, `pluginVersion` — read from the plugin's `.claude-plugin/plugin.json`
 - `sessionId` — random UUID generated once per Node process; not persisted
-- `correlationId` — a per-start unique ID generated inline at emit time (it no longer joins events; `skill_completed` is no longer emitted)
+- `correlationId` — a per-start unique ID generated inline at emit time
 - `osName`, `osVersion` — `process.platform` and OS release string
 - `nodeVersion` — major version only, e.g. `v22`
 
@@ -47,14 +47,13 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (on every event)
-- `outcome` (`success` | `failure`), `durationMs` (int), `errorClass` (Error constructor name only), `errorDescription` (`err.code` only) — **defined for `skill_completed`, which is no longer emitted.** The `buildSkillCompleted` builder and these fields remain in `lib/events.js` (dormant, not wired to any hook).
 - `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload.
 
 ## What is NEVER sent
 
 File paths, cwd, env vars (except the telemetry kill switch), site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
-`errorClass` is the `Error` constructor name only (e.g. `TypeError`). `errorDescription` is restricted to `err.code` (e.g. `ENOENT`, `ECONNREFUSED`) — the free-form `err.message` is never emitted because it can contain file paths, GUIDs, or other user context. The dispatcher also runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
+The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
 
 ## Privacy posture
 
@@ -73,7 +72,7 @@ shared/telemetry/
 ├─ ikey.json                 # template config (placeholder values)
 ├─ sync-to-plugin.js         # copies lib/ + ikey.json into a plugin
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted (+ buildSkillCompleted, retained but not wired)
+│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
@@ -122,7 +121,7 @@ Edit `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json`:
 In `plugins/<your-plugin>/hooks/hooks.json`, register the three hook scripts that ship with this library pattern. The Power Pages plugin's `hooks.json` is the reference example. Copy these three hook entry points into your `hooks/` directory:
 
 - `run-skill-pretool-telemetry.js` — emits `skill_started` on `PreToolUse(Skill)`
-- `run-skill-posttool-validation.js` — runs your validator on `PostToolUse(Skill)` (no telemetry emission)
+- `run-skill-posttool-validation.js` — runs your validator on `PostToolUse(Skill)`
 - `run-user-prompt-telemetry.js` — emits `skill_started` on `UserPromptSubmit` when the prompt is a tracked `/plugin:skill` slash command
 
 These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list. Adapt the imports to your plugin's layout.
