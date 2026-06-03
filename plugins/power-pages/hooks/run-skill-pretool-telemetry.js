@@ -39,10 +39,16 @@ function readPluginVersion() {
 }
 
 function readIkey() {
+  // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
+  // ikey.json so tests can flip disabled/iKey state without mutating the
+  // checked-in config file. Mirrors emit-dispatcher.js / emit-from-prompt.js.
+  const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  const ikeyPath =
+    override && override.trim()
+      ? override
+      : path.join(TELEMETRY_DIR, "ikey.json");
   try {
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
-    );
+    const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return {
       ikey: cfg.instrumentationKey || "",
       collectorUrl: cfg.collector_url || "",
@@ -50,7 +56,10 @@ function readIkey() {
       disabled: cfg.disabled === true,
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
+    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching
+    // emit-dispatcher.js's isDisabledByConfig() so the kill switch can't be
+    // bypassed by a missing/corrupt config.
+    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: true };
   }
 }
 

@@ -16,7 +16,7 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
 
-function runHook({ input, configDir, off }) {
+function runHook({ input, configDir, off, fakeProbe, ikeyPath }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
@@ -24,8 +24,24 @@ function runHook({ input, configDir, off }) {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       POWER_PLATFORM_SKILLS_TELEMETRY: off ? "0" : "",
+      POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
+      POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
+    timeout: 30_000,
   });
+}
+
+// Synchronous sleep that parks the thread instead of busy-spinning the CPU.
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(filePath) && Date.now() < deadline) {
+    sleep(25);
+  }
+  return fs.existsSync(filePath);
 }
 
 test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
@@ -56,4 +72,48 @@ test("exits 0 when skill is tracked (placeholder iKey → no-op emit)", () => {
     configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
+});
+
+test("emits skill_started for a tracked skill when pointed at an enabled ikey.json via the override seam", () => {
+  // Exercises the enabled emit path without mutating the checked-in ikey.json:
+  // the hook's readIkey() honors POWER_PLATFORM_SKILLS_IKEY_JSON.
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = path.join(configDir, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+    })
+  );
+
+  const { status } = runHook({
+    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  assert.equal(body.name, "PagesPluginEvent");
+  assert.equal(body.data.eventName, "skill_started");
+  assert.equal(body.data.skillName, "create-site");
+});
+
+test("fails closed (no emit) when override ikey.json path does not exist", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const { status } = runHook({
+    input: JSON.stringify({ tool_input: { skill: "create-site" } }),
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath: path.join(configDir, "does-not-exist.json"),
+  });
+  assert.equal(status, 0);
+  sleep(500);
+  assert.ok(!fs.existsSync(probePath), "missing config must fail closed (no emit)");
 });

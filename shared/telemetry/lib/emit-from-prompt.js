@@ -29,7 +29,11 @@ function readIkey(telemetryDir) {
       disabled: cfg.disabled === true,
     };
   } catch {
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: false };
+    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching
+    // emit-dispatcher.js's isDisabledByConfig(). We can't confirm emission is
+    // authorized, so suppress. (`ikey: ""` already blocks emission downstream;
+    // returning disabled: true keeps the kill-switch semantics honest too.)
+    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: true };
   }
 }
 
