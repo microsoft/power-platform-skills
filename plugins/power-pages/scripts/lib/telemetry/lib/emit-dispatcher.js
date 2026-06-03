@@ -46,7 +46,11 @@ function isDisabledByConfig() {
     const cfg = JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
     return cfg.disabled === true;
   } catch {
-    return false; // ikey.json missing/unreadable → fail open.
+    // ikey.json missing/unreadable → fail CLOSED (treat as disabled). The
+    // config is a kill switch; if we can't read it we cannot confirm emission
+    // is authorized, so we suppress rather than risk a POST / local log in an
+    // unexpected state.
+    return true;
   }
 }
 

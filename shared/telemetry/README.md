@@ -146,11 +146,7 @@ Then invoke one of your tracked skills with `disabled: true` and confirm via Cla
 node shared/telemetry/sync-to-plugin.js --target plugins/<plugin>
 ```
 
-The sync overwrites `ikey.json` with the placeholder template — restore your plugin's real config with:
-
-```bash
-git checkout plugins/<plugin>/scripts/lib/telemetry/ikey.json
-```
+The sync **preserves** an adopting plugin's `ikey.json` when it already carries a real (non-placeholder) `instrumentationKey` — re-running the sync refreshes only the library code, not your provisioned config. It seeds `ikey.json` from the placeholder template only when the target is missing or still on the placeholder. So you can re-sync freely without clobbering your plugin's key; the sync output reports `ikey.json preserved` vs `seeded`.
 
 If you change the wire-level shape (envelope, transport, allowlist), update every adopting plugin's synced copy in the same PR.
 
@@ -170,6 +166,6 @@ Every module exposes injectable test seams via `opts._xxx` properties so tests r
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
 - `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file
-- `session.js` — `opts.configDir` redirects state to a temp directory
+- `session.js` — `_resetCache()` clears the per-process session-id cache between tests; `getSessionId(override)` accepts an explicit id (no filesystem state to redirect)
 
 Follow this pattern for any new module.

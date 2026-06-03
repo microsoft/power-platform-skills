@@ -256,6 +256,29 @@ test("dispatcher honours the repo kill switch (ikey.json disabled:true)", () => 
   );
 });
 
+test("dispatcher fails closed when ikey.json is missing/unreadable", () => {
+  // The kill switch must suppress emission when its config can't be read —
+  // no HTTPS POST and no local log — even though a real iKey is in env.
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      ikeyJsonPath: path.join(tmp, "does-not-exist.json"),
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "missing config must skip POST");
+  assert.ok(
+    !fs.existsSync(path.join(tmp, "events.jsonl")),
+    "missing config must skip local log"
+  );
+});
+
 test("dispatcher does NOT write events.jsonl when env opt-out is set (placeholder iKey)", () => {
   const tmp = mkTmp();
   const { status } = runDispatcher({
