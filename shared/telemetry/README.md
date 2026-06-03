@@ -10,7 +10,7 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous skill-run telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
+Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s when enabled)
