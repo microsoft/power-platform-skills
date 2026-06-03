@@ -45,6 +45,43 @@ test("sync is idempotent", () => {
   assert.ok(fs.existsSync(p));
 });
 
+test("sync preserves a target ikey.json that carries a real (non-placeholder) key", () => {
+  const target = mkTargetPlugin();
+  const ikeyPath = path.join(target, "scripts", "lib", "telemetry", "ikey.json");
+
+  // First sync seeds the placeholder template.
+  spawnSync(process.execPath, [syncScript, "--target", target]);
+  assert.equal(
+    JSON.parse(fs.readFileSync(ikeyPath, "utf8")).instrumentationKey,
+    "PLACEHOLDER_REPLACE_BEFORE_SHIPPING"
+  );
+
+  // Provision a real key in the synced copy (what an adopting plugin commits).
+  const realCfg = {
+    instrumentationKey: "real-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    collector_url: "https://example.invalid/OneCollector/1.0/",
+    event_stream_name: "PowerPagesPluginEvent",
+    disabled: true,
+  };
+  fs.writeFileSync(ikeyPath, JSON.stringify(realCfg));
+
+  // Re-syncing must not clobber the real key with the placeholder.
+  const { status, stdout } = spawnSync(
+    process.execPath,
+    [syncScript, "--target", target],
+    { encoding: "utf8" }
+  );
+  assert.equal(status, 0);
+  assert.match(stdout, /ikey\.json preserved/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(ikeyPath, "utf8")), realCfg);
+  // Library files still get refreshed on the preserving sync.
+  assert.ok(
+    fs.existsSync(
+      path.join(target, "scripts", "lib", "telemetry", "lib", "emit-dispatcher.js")
+    )
+  );
+});
+
 test("sync exits non-zero on missing --target", () => {
   const { status } = spawnSync(process.execPath, [syncScript], { encoding: "utf8" });
   assert.notEqual(status, 0);

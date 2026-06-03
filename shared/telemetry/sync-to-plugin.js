@@ -31,12 +31,39 @@ function copyDir(from, to) {
   }
 }
 
+const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
+
+// The shared ikey.json ships the placeholder template; each adopting plugin's
+// synced copy carries that plugin's real (or real-but-disabled) iKey. Copying
+// it unconditionally would clobber the target's real key with the placeholder
+// on every re-sync. So preserve a target that has already been provisioned —
+// only seed ikey.json when the target is missing or still on the placeholder.
+function syncIkey(from, to) {
+  if (fs.existsSync(to)) {
+    try {
+      const targetCfg = JSON.parse(fs.readFileSync(to, "utf8"));
+      if (targetCfg.instrumentationKey && targetCfg.instrumentationKey !== PLACEHOLDER_IKEY) {
+        return "preserved";
+      }
+    } catch {
+      // Unreadable/garbage target → fall through and overwrite with the template.
+    }
+  }
+  copyFile(from, to);
+  return "seeded";
+}
+
 // Library + iKey config → <target>/scripts/lib/telemetry/
 const telemetryDst = path.join(target, "scripts", "lib", "telemetry");
 fs.mkdirSync(telemetryDst, { recursive: true });
 
 copyDir(path.join(source, "lib"), path.join(telemetryDst, "lib"));
-copyFile(path.join(source, "ikey.json"), path.join(telemetryDst, "ikey.json"));
+const ikeyOutcome = syncIkey(
+  path.join(source, "ikey.json"),
+  path.join(telemetryDst, "ikey.json")
+);
 
-process.stdout.write(`Synced shared/telemetry → ${telemetryDst}\n`);
+process.stdout.write(
+  `Synced shared/telemetry → ${telemetryDst} (ikey.json ${ikeyOutcome})\n`
+);
 process.exit(0);

@@ -10,17 +10,11 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
-function mkConfigDir(enabled = true) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
-  fs.writeFileSync(
-    path.join(tmp, "telemetry.json"),
-    JSON.stringify({
-      version: 1,
-      enabled,
-      recorded_at: new Date().toISOString(),
-    })
-  );
-  return tmp;
+// The live telemetry gates are POWER_PLATFORM_SKILLS_TELEMETRY=0 and the
+// `disabled` flag in ikey.json — no consent file is read. So this just needs
+// to hand back an isolated tmpdir for the probe / ikey override.
+function mkConfigDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
 }
 
 function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
@@ -33,7 +27,11 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
-    timeout: 10_000,
+    // The enabled path shells out to `pac auth who` + `pac --version`, each
+    // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
+    // a 10s spawn timeout sits right on the cold-start cost and flakes when pac
+    // is installed. Match the hook budget so the integration path is reliable.
+    timeout: 30_000,
   });
 }
 
@@ -53,7 +51,7 @@ function waitForFile(filePath, timeoutMs) {
 }
 
 test("hook emits PagesPluginEvent with top-level fields for tracked slash command", () => {
-  const configDir = mkConfigDir(true);
+  const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   // Point the hook at a temp ikey.json via the override seam instead of
   // mutating the checked-in scripts/lib/telemetry/ikey.json (which would race
@@ -97,7 +95,7 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
 });
 
 test("hook exits 0 and emits nothing for an unrelated prompt", () => {
-  const configDir = mkConfigDir(true);
+  const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const { status } = runHook({
     prompt: "just some user text",
@@ -112,7 +110,7 @@ test("hook exits 0 and emits nothing for an unrelated prompt", () => {
 });
 
 test("hook exits 0 on malformed stdin", () => {
-  const configDir = mkConfigDir(true);
+  const configDir = mkConfigDir();
   const { status } = spawnSync(process.execPath, [HOOK], {
     input: "not json",
     encoding: "utf8",
@@ -126,7 +124,7 @@ test("hook exits 0 on malformed stdin", () => {
 });
 
 test("hook exits 0 on empty stdin", () => {
-  const configDir = mkConfigDir(true);
+  const configDir = mkConfigDir();
   const { status } = spawnSync(process.execPath, [HOOK], {
     input: "",
     encoding: "utf8",
