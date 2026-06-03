@@ -205,6 +205,35 @@ test("does not throw when ikey.json is missing", () => {
   );
 });
 
+test("fails closed (no throw, no emit) when telemetryDir is missing and no override is set", () => {
+  // Guards against path.join(undefined, ...) throwing out of readIkey — the
+  // library must self-protect even if a caller forgets telemetryDir.
+  const prev = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  const captured = {};
+  let result;
+  try {
+    assert.doesNotThrow(() => {
+      result = emitSkillStartedFromPrompt("/power-pages:add-seo", {
+        pluginName: "power-pages",
+        pluginVersion: "1.2.3",
+        trackedSkills: TRACKED,
+        // telemetryDir intentionally omitted
+        _emit: (e, o) => {
+          captured.event = e;
+          captured.spawnOpts = o;
+        },
+        _readPacAuth: () => null,
+      });
+    });
+  } finally {
+    if (prev === undefined) delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    else process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = prev;
+  }
+  assert.deepEqual(result, { emitted: false, skillName: "add-seo" });
+  assert.equal(captured.event, undefined);
+});
+
 test("does not throw when _emit throws", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",

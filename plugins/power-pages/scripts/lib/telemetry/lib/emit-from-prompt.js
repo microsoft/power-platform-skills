@@ -13,14 +13,17 @@ const { readPacAuth } = require("./pac-auth");
 const { readPacCliVersion, readAiAgent } = require("./agent-info");
 
 function readIkey(telemetryDir) {
-  // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
-  // ikey.json so tests don't have to mutate the checked-in config file.
-  const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
-  const ikeyPath =
-    override && override.trim()
-      ? override
-      : path.join(telemetryDir, "ikey.json");
   try {
+    // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
+    // ikey.json so tests don't have to mutate the checked-in config file.
+    // Path resolution is inside the try so a missing/invalid telemetryDir
+    // (path.join throws on undefined) fails CLOSED rather than crashing the
+    // caller — keeps the function self-protecting per the fail-closed contract.
+    const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    const ikeyPath =
+      override && override.trim()
+        ? override
+        : path.join(telemetryDir, "ikey.json");
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return {
       ikey: cfg.instrumentationKey || "",
