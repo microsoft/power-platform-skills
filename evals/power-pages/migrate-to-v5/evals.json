@@ -1,0 +1,72 @@
+{
+  "skill_name": "migrate-to-v5",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Migrate my classic Power Pages site from Bootstrap 3 to Bootstrap 5. I'm already authenticated and the environment is correct. The downloaded site is in the ./v3site folder.",
+      "expected_output": "The skill verifies PAC CLI and that both pac pages bootstrap-migrate and pac pages upload are available, confirms the folder is a classic site (not a code site), snapshots the source with git, assesses Bootstrap-3 usage, runs pac pages bootstrap-migrate to produce v3siteV5, reviews logs.txt and groups auto-applied vs hierarchy/manual changes, applies the residual fixes with per-category consent, pre-flights the manifest, uploads with pac pages upload, verifies the Bootstrap 5 runtime flag actually flipped, and validates the site via /test-site.",
+      "files": [],
+      "expectations": [
+        "TaskCreate is used upfront to create a task list covering all 8 phases before starting work",
+        "PAC CLI is verified by running pac help",
+        "pac pages help is run to confirm both bootstrap-migrate and upload verbs are available before proceeding",
+        "The target is confirmed to be a classic site (presence of website.yml/sitesetting.yml) and not a code site (powerpages.config.json)",
+        "The source folder is snapshotted with git as a pre-migration restore point before any migration",
+        "Bootstrap-3 usage is inventoried and the user is told this is an assisted migration, not push-button",
+        "Explicit consent is requested before running the migration engine",
+        "pac pages bootstrap-migrate --path is run on the site folder and produces a sibling <folder>V5 directory",
+        "logs.txt is parsed/read and changes are grouped into no-change, auto-applied, and hierarchy (manual) categories",
+        "Residual hierarchy/CSS fixes are applied with per-category consent using the bootstrap-v5-manual-fixes reference",
+        "Before upload, the manifest is pre-flighted: website.yml has a valid adx_websiteid and sitesetting.yml contains Site/BootstrapV5Enabled true",
+        "A final consent gate is presented before the outward-facing upload",
+        "pac pages upload (not upload-code-site) is run against the <folder>V5 directory",
+        "The Bootstrap 5 runtime flag flip is explicitly verified after upload rather than trusting the upload exit code",
+        "The site is validated via /test-site and skill usage is recorded with --skillName MigrateToV5"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I want to upgrade an old Power Pages portal to Bootstrap 5 but I haven't downloaded it yet and I'm not signed in to PAC CLI.",
+      "expected_output": "The skill verifies PAC CLI is installed, detects the user is not authenticated, asks for the environment URL and runs pac auth create, confirms the target environment, lists websites and downloads the chosen one with pac pages download, snapshots it, then proceeds through assessment, the bootstrap-migrate engine, change review, residual fixes, upload, runtime-flag verification, and validation.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified by running pac help",
+        "pac auth who is run and the unauthenticated state is detected",
+        "AskUserQuestion is used to request the environment URL and pac auth create --environment is run",
+        "pac pages help confirms bootstrap-migrate and upload are available",
+        "pac pages list is run and AskUserQuestion is used to choose which website to migrate",
+        "pac pages download --path --webSiteId is run to fetch the classic site locally",
+        "The downloaded folder is snapshotted with git before migration",
+        "pac pages bootstrap-migrate is run and the <folder>V5 output is confirmed",
+        "The change report is reviewed and residual fixes are applied with per-category consent",
+        "pac pages upload is run on the V5 folder and the runtime flag flip is verified afterward",
+        "No automated rollback is attempted on failure; the source snapshot is the rollback path"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Run the Bootstrap 5 migration on my React Power Pages code site in the current directory.",
+      "expected_output": "The skill detects that the target is a code site (React/Vue/Angular/Astro) rather than a classic site and stops, explaining that Bootstrap 3 to 5 migration does not apply to code sites because they are never Bootstrap-3-based, without running the migration engine.",
+      "files": [],
+      "expectations": [
+        "The skill recognizes a code site by the presence of powerpages.config.json and a framework package.json",
+        "The skill stops and explains the migration does not apply to code sites because they are never Bootstrap-3-based",
+        "pac pages bootstrap-migrate is NOT run against the code site",
+        "No upload or flag-flip is attempted"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I ran the migration earlier and uploaded my v3siteV5 folder, but the live site still looks like Bootstrap 3. Help.",
+      "expected_output": "The skill recognizes this as a runtime-flag-flip failure that pac pages upload swallows silently. It pre-flights the manifest (sitesetting.yml must contain Site/BootstrapV5Enabled true and website.yml must have a valid adx_websiteid), re-uploads if needed, and verifies the Bootstrap 5 runtime flag is actually enabled, since the upload exit code does not prove the flag flipped.",
+      "files": [],
+      "expectations": [
+        "The skill explains that pac pages upload flips the Bootstrap 5 runtime flag automatically but swallows flip failures, so a successful upload does not prove the flag flipped",
+        "sitesetting.yml in the V5 folder is checked for Site/BootstrapV5Enabled set to true",
+        "website.yml in the V5 folder is checked for a valid adx_websiteid",
+        "The Bootstrap 5 runtime flag state is explicitly verified rather than assumed from the upload result",
+        "If the gating files were missing, the skill fixes them and re-uploads with pac pages upload"
+      ]
+    }
+  ]
+}
