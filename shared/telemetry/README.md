@@ -13,18 +13,31 @@ Zero npm dependencies. Node stdlib only.
 Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
 
 ```
-hook (~5ms when disabled, ~3-5s when enabled)
+hook (~5ms when disabled, ~3-5s otherwise — incl. the POWER_PLATFORM_SKILLS_TELEMETRY=0 opt-out)
   │
   └─ fireAndForget(event, opts)         ← shared/telemetry/lib/emit-spawn.js
        │
        └─ spawn(emit-dispatcher.js, detached)   ← runs in background
             ├─ read ikey.json
-            ├─ kill switch (cfg.disabled) → exit
-            ├─ env opt-out (TELEMETRY=0) → exit
+            ├─ kill switch (cfg.disabled) → exit   ← HARD OFF: no local log, no POST
             ├─ sanitizeData (FIELD_TYPES allowlist)
-            ├─ build CS4.0 envelope
+            ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
+            ├─ env opt-out (POWER_PLATFORM_SKILLS_TELEMETRY=0) → exit (mirror already written, no POST)
+            ├─ iKey missing/placeholder → exit (mirror already written, no POST)
+            ├─ build CS4.0 envelope (same time + sanitized data)
             └─ HTTPS POST to collector_url
 ```
+
+The local log is the on-disk **mirror** of what is (or would be) sent to Kusto:
+each line is `{time, name, data}` where `data` is the sanitized payload whose
+field names ARE the Kusto column names. It is written for **every** event that
+clears the repo `disabled` kill switch — irrespective of whether a real iKey is
+configured **and** irrespective of the `POWER_PLATFORM_SKILLS_TELEMETRY=0` env opt-out. Only the repo
+`disabled: true` kill switch produces zero side effects.
+
+`POWER_PLATFORM_SKILLS_TELEMETRY=0` suppresses **transmission**, not the local diagnostic mirror — so
+an opted-out run still writes `events.jsonl` (and pays the same event-building
+cost as an enabled run), it just never POSTs.
 
 ## What is sent
 
@@ -58,10 +71,10 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 ## Privacy posture
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
-- **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch).
-- **Repo-side kill switch.** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
+- **Opt out of transmission** via `POWER_PLATFORM_SKILLS_TELEMETRY=0`. This stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging.
+- **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
-The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects.
+The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The `POWER_PLATFORM_SKILLS_TELEMETRY=0` opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
 
 ---
 
@@ -81,7 +94,7 @@ shared/telemetry/
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)
-│  └─ local-log.js           # appends events to ~/.power-platform-skills/events.jsonl when no real iKey is configured
+│  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/events.jsonl (irrespective of iKey), with 10 MB rotation
 └─ tests/                    # node:test coverage for every module above
 ```
 

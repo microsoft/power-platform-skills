@@ -73,13 +73,16 @@ function sanitizeData(data) {
   return filtered;
 }
 
-function buildEnvelope(event) {
+// Build the CS4.0 envelope from a pre-sanitized payload + timestamp. Both are
+// computed once in the stdin handler and shared with the local mirror so the
+// on-disk record and the wire envelope carry byte-identical `data` and `time`.
+function buildEnvelope(name, time, sanitized) {
   return {
     ver: "4.0",
-    name: event.name,
-    time: new Date().toISOString(),
+    name,
+    time,
     iKey: "o:" + IKEY.split("-")[0],
-    data: sanitizeData(event.data),
+    data: sanitized,
   };
 }
 
@@ -102,11 +105,11 @@ function writeLocalLog(event) {
   }
 }
 
-// ---- Repo-side kill switch (applies before placeholder / network logic) ----
+// ---- Repo-side kill switch (applies before ANY side effect) ----------------
+// The `disabled` repo config is the one true hard-off: no local log, no POST.
+// The POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is NOT checked here — it suppresses transmission
+// only, and is applied below AFTER the local mirror is written.
 if (isDisabledByConfig()) exitSilently();
-
-// ---- User env-var opt-out --------------------------------------------------
-if (isUserOptedOut()) exitSilently();
 
 // ---- Read stdin ------------------------------------------------------------
 let raw = "";
@@ -120,15 +123,33 @@ process.stdin.on("end", () => {
     return exitSilently();
   }
 
-  // Placeholder / unprovisioned mode → append to local dev log and exit.
+  // Compute the sanitized payload + timestamp ONCE. The sanitized data is
+  // exactly what lands in Kusto (its field names ARE the Kusto column names);
+  // the local mirror and the wire envelope share it so they can never diverge.
+  const time = new Date().toISOString();
+  const sanitized = sanitizeData(event.data);
+  const localRecord = { time, name: event.name, data: sanitized };
+
+  // Mirror to the local log for EVERY event that clears the repo kill switch —
+  // irrespective of whether a real iKey is configured AND irrespective of the
+  // POWER_PLATFORM_SKILLS_TELEMETRY=0 transmission opt-out. The file stays on the user's machine; it
+  // is a local diagnostic mirror of what is (or would be) sent to Kusto, not
+  // transmitted telemetry. (A `disabled: true` repo config wrote nothing — it
+  // short-circuited before stdin was even read.)
+  writeLocalLog(localRecord);
+
+  // POWER_PLATFORM_SKILLS_TELEMETRY=0 opts out of TRANSMISSION only — the local mirror above is kept.
+  if (isUserOptedOut()) return exitSilently();
+
+  // Placeholder / unprovisioned mode → local mirror already written; no POST.
   const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;
   if (keyMissing) {
-    writeLocalLog(event);
     return exitSilently();
   }
 
-  // Real iKey → Common Schema envelope → HTTPS POST.
-  const envelope = buildEnvelope(event);
+  // Real iKey → Common Schema envelope (reuses the same time + sanitized data
+  // as the local mirror) → HTTPS POST.
+  const envelope = buildEnvelope(event.name, time, sanitized);
   const body = JSON.stringify(envelope) + "\n";
   const headers = {
     "Content-Type": "application/x-json-stream; charset=utf-8",

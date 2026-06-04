@@ -81,9 +81,6 @@ function readStdin() {
 }
 
 (async () => {
-  // Fast-path opt-out: skip stdin read and every other side effect.
-  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") process.exit(0);
-
   const raw = await readStdin();
   let parsed;
   try {
@@ -95,9 +92,12 @@ function readStdin() {
   const skillName = hookUtils.getTrackedSkillFromToolInput(parsed.tool_input);
   if (!skillName) process.exit(0);
 
-  // Fast-path kill switch / unconfigured: gate BEFORE the pac shell-outs
-  // (`pac auth who` ~3s + `pac --version` ~2s) so disabled / opted-out
-  // hook invocations cost effectively nothing.
+  // Repo-side hard-off / unconfigured: gate BEFORE the pac shell-outs
+  // (`pac auth who` ~3s + `pac --version` ~2s) so a disabled or unconfigured
+  // plugin costs effectively nothing. The POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is NOT a
+  // fast-path: the enriched event is still built and dispatched so the detached
+  // dispatcher can write the local diagnostic mirror; it applies the opt-out
+  // and skips the POST. (Opting out therefore costs the same as an enabled run.)
   const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
   if (disabled) process.exit(0);
   if (!ikey) process.exit(0);

@@ -288,7 +288,11 @@ test("disabled:true short-circuits BEFORE PAC / agent-info shellouts", () => {
   assert.equal(agentCalled, false, "agent-info must not be invoked when disabled");
 });
 
-test("POWER_PLATFORM_SKILLS_TELEMETRY=0 short-circuits BEFORE PAC / agent-info", () => {
+test("POWER_PLATFORM_SKILLS_TELEMETRY=0 still emits (for the local mirror); opt-out is enforced downstream", () => {
+  // The env opt-out suppresses TRANSMISSION, not the local diagnostic mirror.
+  // So emit-from-prompt no longer fast-paths on POWER_PLATFORM_SKILLS_TELEMETRY=0: it builds the
+  // enriched event and dispatches it so the detached dispatcher can write the
+  // local mirror, then the dispatcher applies the opt-out and skips the POST.
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",
     collectorUrl: "https://x",
@@ -318,9 +322,10 @@ test("POWER_PLATFORM_SKILLS_TELEMETRY=0 short-circuits BEFORE PAC / agent-info",
     if (prev === undefined) delete process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
     else process.env.POWER_PLATFORM_SKILLS_TELEMETRY = prev;
   }
-  assert.deepEqual(result, { emitted: false, skillName: "add-seo" });
-  assert.equal(captured.event, undefined);
-  assert.equal(pacCalled, false, "PAC must not be invoked when env opt-out is set");
+  assert.deepEqual(result, { emitted: true, skillName: "add-seo" });
+  assert.ok(captured.event, "event must still be dispatched so the dispatcher can local-log");
+  assert.equal(captured.event.data.skillName, "add-seo");
+  assert.equal(pacCalled, true, "enrichment runs so the local mirror is faithful");
 });
 
 test("missing instrumentationKey short-circuits BEFORE PAC / agent-info", () => {

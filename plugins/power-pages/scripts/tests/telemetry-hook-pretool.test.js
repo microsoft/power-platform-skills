@@ -52,13 +52,35 @@ test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
   assert.equal(status, 0);
 });
 
-test("exits 0 when env opt-out is set", () => {
+test("env opt-out still writes the local mirror but does NOT POST", () => {
+  // POWER_PLATFORM_SKILLS_TELEMETRY=0 suppresses transmission only. With an enabled ikey.json (via the
+  // override seam) + a fake-https probe + the opt-out set, the hook builds and
+  // dispatches the event; the dispatcher writes events.jsonl and skips the POST.
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = path.join(configDir, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "test-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+    })
+  );
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "create-site" } }),
-    configDir: mkConfigDir(),
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
     off: true,
   });
   assert.equal(status, 0);
+  assert.ok(
+    waitForFile(path.join(configDir, "events.jsonl"), 5_000),
+    "opt-out must still write the local mirror"
+  );
+  assert.ok(!fs.existsSync(probePath), "opt-out must skip the POST");
 });
 
 test("exits 0 when malformed stdin", () => {
