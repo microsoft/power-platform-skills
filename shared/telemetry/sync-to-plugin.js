@@ -22,22 +22,14 @@ function copyFile(from, to) {
   fs.copyFileSync(from, to);
 }
 
-function copyDir(from, to) {
-  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    const src = path.join(from, entry.name);
-    const dst = path.join(to, entry.name);
-    if (entry.isDirectory()) copyDir(src, dst);
-    else copyFile(src, dst);
-  }
-}
-
 const PLACEHOLDER_IKEY = "PLACEHOLDER_REPLACE_BEFORE_SHIPPING";
 
-// The shared ikey.json ships the placeholder template; each adopting plugin's
-// synced copy carries that plugin's real (or real-but-disabled) iKey. Copying
-// it unconditionally would clobber the target's real key with the placeholder
-// on every re-sync. So preserve a target that has already been provisioned —
-// only seed ikey.json when the target is missing or still on the placeholder.
+// The library CODE is NOT copied into the plugin — adopting plugins require it
+// directly from shared/telemetry/lib (single source of truth, no duplication).
+// This script only seeds the per-plugin ikey.json config for a NEW adopter and
+// preserves an already-provisioned config on re-run: the shared ikey.json ships
+// the placeholder template, so seed only when the target is missing or still on
+// the placeholder, never clobbering a target's real key.
 function syncIkey(from, to) {
   if (fs.existsSync(to)) {
     try {
@@ -53,17 +45,17 @@ function syncIkey(from, to) {
   return "seeded";
 }
 
-// Library + iKey config → <target>/scripts/lib/telemetry/
+// Per-plugin iKey config only → <target>/scripts/lib/telemetry/ikey.json.
+// No lib/ is copied; the plugin's hooks require shared/telemetry/lib directly.
 const telemetryDst = path.join(target, "scripts", "lib", "telemetry");
 fs.mkdirSync(telemetryDst, { recursive: true });
 
-copyDir(path.join(source, "lib"), path.join(telemetryDst, "lib"));
 const ikeyOutcome = syncIkey(
   path.join(source, "ikey.json"),
   path.join(telemetryDst, "ikey.json")
 );
 
 process.stdout.write(
-  `Synced shared/telemetry → ${telemetryDst} (ikey.json ${ikeyOutcome})\n`
+  `Seeded ${telemetryDst}/ikey.json (${ikeyOutcome}); library required directly from shared/telemetry/lib\n`
 );
 process.exit(0);

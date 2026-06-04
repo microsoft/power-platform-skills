@@ -20,7 +20,7 @@ function mkTargetPlugin() {
 
 const syncScript = path.resolve(__dirname, "../sync-to-plugin.js");
 
-test("sync copies lib/ and ikey.json into <plugin>/scripts/lib/telemetry/", () => {
+test("sync seeds ikey.json and does NOT copy the library (required from shared)", () => {
   const target = mkTargetPlugin();
   const { status, stderr } = spawnSync(
     process.execPath,
@@ -29,19 +29,18 @@ test("sync copies lib/ and ikey.json into <plugin>/scripts/lib/telemetry/", () =
   );
   assert.equal(status, 0, stderr);
   const synced = path.join(target, "scripts", "lib", "telemetry");
-  assert.ok(fs.existsSync(path.join(synced, "ikey.json")));
-  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-dispatcher.js")));
-  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-spawn.js")));
-  assert.ok(fs.existsSync(path.join(synced, "lib", "prompt-detector.js")));
-  assert.ok(fs.existsSync(path.join(synced, "lib", "emit-from-prompt.js")));
-  assert.ok(!fs.existsSync(path.join(synced, "package.json")), "no package.json should be synced");
+  assert.ok(fs.existsSync(path.join(synced, "ikey.json")), "ikey.json should be seeded");
+  assert.ok(
+    !fs.existsSync(path.join(synced, "lib")),
+    "lib must NOT be copied — the plugin requires it from shared/telemetry/lib"
+  );
 });
 
 test("sync is idempotent", () => {
   const target = mkTargetPlugin();
   spawnSync(process.execPath, [syncScript, "--target", target]);
   spawnSync(process.execPath, [syncScript, "--target", target]);
-  const p = path.join(target, "scripts", "lib", "telemetry", "lib", "emit-dispatcher.js");
+  const p = path.join(target, "scripts", "lib", "telemetry", "ikey.json");
   assert.ok(fs.existsSync(p));
 });
 
@@ -72,14 +71,8 @@ test("sync preserves a target ikey.json that carries a real (non-placeholder) ke
     { encoding: "utf8" }
   );
   assert.equal(status, 0);
-  assert.match(stdout, /ikey\.json preserved/);
+  assert.match(stdout, /ikey\.json \(preserved\)/);
   assert.deepEqual(JSON.parse(fs.readFileSync(ikeyPath, "utf8")), realCfg);
-  // Library files still get refreshed on the preserving sync.
-  assert.ok(
-    fs.existsSync(
-      path.join(target, "scripts", "lib", "telemetry", "lib", "emit-dispatcher.js")
-    )
-  );
 });
 
 test("sync exits non-zero on missing --target", () => {

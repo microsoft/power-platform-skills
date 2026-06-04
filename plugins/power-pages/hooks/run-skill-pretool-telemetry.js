@@ -7,15 +7,21 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
+// The plugin's telemetry dir holds only the per-plugin config (ikey.json). The
+// library CODE is not copied in — it is required directly from the repo's
+// shared/telemetry/lib (one source of truth, no duplication). This resolves at
+// runtime because the directory-source install keeps the whole repo on disk
+// (same model the report-issue skill relies on for its shared workflow).
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
+const SHARED_LIB = path.resolve(PLUGIN_ROOT, "..", "..", "shared", "telemetry", "lib");
 
 let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib;
 try {
-  emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
-  eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
-  sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
-  pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
-  agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
+  emitSpawn = require(path.join(SHARED_LIB, "emit-spawn"));
+  eventsLib = require(path.join(SHARED_LIB, "events"));
+  sessionLib = require(path.join(SHARED_LIB, "session"));
+  pacAuthLib = require(path.join(SHARED_LIB, "pac-auth"));
+  agentInfoLib = require(path.join(SHARED_LIB, "agent-info"));
 } catch {
   process.exit(0);
 }
@@ -143,7 +149,15 @@ function readStdin() {
   try {
     emitSpawn.fireAndForget(
       eventsLib.buildSkillStarted(eventStreamName, fields),
-      { iKey: ikey, collectorUrl, configDir, fakeProbe }
+      {
+        iKey: ikey,
+        collectorUrl,
+        configDir,
+        fakeProbe,
+        // Point the dispatcher at this plugin's real ikey.json (lib/ is shared,
+        // so its __dirname default would otherwise hit shared/'s placeholder).
+        ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
+      }
     );
   } catch {
     // fail closed

@@ -118,6 +118,9 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
       collectorUrl,
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
+      // Tell the dispatcher where this plugin's real ikey.json lives so its
+      // kill-switch doesn't fall back to shared/'s placeholder via __dirname.
+      ikeyJsonPath: telemetryDir ? path.join(telemetryDir, "ikey.json") : "",
     });
   } catch {
     // fail closed — telemetry never propagates errors

@@ -5,22 +5,23 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
+// TELEMETRY_DIR holds only the per-plugin config (ikey.json). The library CODE
+// is required directly from the repo's shared/telemetry/lib — single source of
+// truth, no per-plugin copy. Resolves at runtime because the directory-source
+// install keeps the whole repo on disk (same model report-issue relies on).
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
+const SHARED_LIB = path.resolve(PLUGIN_ROOT, "..", "..", "shared", "telemetry", "lib");
 
 let emitFromPrompt, hookUtils, sessionLib;
 try {
-  emitFromPrompt = require(path.join(
-    TELEMETRY_DIR,
-    "lib",
-    "emit-from-prompt"
-  ));
+  emitFromPrompt = require(path.join(SHARED_LIB, "emit-from-prompt"));
   hookUtils = require(path.join(
     PLUGIN_ROOT,
     "scripts",
     "lib",
     "powerpages-hook-utils"
   ));
-  sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
+  sessionLib = require(path.join(SHARED_LIB, "session"));
 } catch {
   process.exit(0);
 }
