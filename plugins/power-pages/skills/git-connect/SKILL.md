@@ -28,6 +28,8 @@ hooks:
           timeout: 30
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Connect Power Pages Environment to Git
 
 Guide the user through connecting a Power Pages solution to a Git repository (Azure DevOps or GitHub) for source control. The action wraps `pac pages git connect`; OData virtual entities are used only for browsing organizations, projects, repositories, and branches in the picker.

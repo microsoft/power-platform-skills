@@ -27,6 +27,8 @@ hooks:
           timeout: 30
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # hotfix-solution
 
 Queries Dataverse for Power Pages components modified in a user-specified time window, packages them into a timestamped hotfix solution, exports it, and imports it to a target environment. Designed for rapid incremental deployments — only ships what changed.

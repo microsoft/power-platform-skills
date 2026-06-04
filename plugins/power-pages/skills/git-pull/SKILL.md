@@ -27,6 +27,8 @@ hooks:
           timeout: 30
 ---
 
+> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 # Pull Changes from Git
 
 Pull the latest changes from the connected Git repository into a Power Pages environment. The action wraps `pac pages git pull`, which internally drives `RefreshChangesFromGit` then `PullChangesFromGit` against Dataverse. OData is used only for the helper that lists available components and conflicts.
