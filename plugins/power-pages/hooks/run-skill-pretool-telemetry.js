@@ -143,7 +143,15 @@ function readStdin() {
   try {
     emitSpawn.fireAndForget(
       eventsLib.buildSkillStarted(eventStreamName, fields),
-      { iKey: ikey, collectorUrl, configDir, fakeProbe }
+      {
+        iKey: ikey,
+        collectorUrl,
+        configDir,
+        fakeProbe,
+        // Point the dispatcher at this plugin's real ikey.json (lib/ is shared,
+        // so its __dirname default would otherwise hit shared/'s placeholder).
+        ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
+      }
     );
   } catch {
     // fail closed

@@ -75,6 +75,48 @@ test("dispatcher child receives the event and writes the probe", async () => {
   assert.equal(body.data.skillName, "hello");
 });
 
+test("opts.ikeyJsonPath points the dispatcher at the caller's ikey.json (no env override)", async () => {
+  // Regression guard: the dispatcher lives in shared/telemetry/lib, so its
+  // __dirname default resolves to shared/'s placeholder (disabled:true). When
+  // lib/ is shared via symlink or relative require, the spawner must forward
+  // the plugin's real ikey.json via opts.ikeyJsonPath. With NO env override
+  // set, an enabled ikey.json passed this way must still produce a probe.
+  const tmp = mkTmp();
+  const probe = path.join(tmp, "probe.json");
+  const ikeyJsonPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyJsonPath,
+    JSON.stringify({
+      instrumentationKey: "placeholder",
+      collector_url: "https://example.invalid/",
+      event_stream_name: "PowerPagesPluginEvent",
+      disabled: false,
+    })
+  );
+  const prevIkeyJson = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON; // ensure opts path is what's exercised
+  try {
+    fireAndForget(sampleEvent, {
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      configDir: tmp,
+      fakeProbe: probe,
+      ikeyJsonPath,
+    });
+  } finally {
+    if (prevIkeyJson === undefined) delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    else process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = prevIkeyJson;
+  }
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(probe)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(
+    fs.existsSync(probe),
+    "dispatcher should have read the enabled ikey.json passed via opts.ikeyJsonPath"
+  );
+});
+
 test("fireAndForget does not throw on empty-opts invocation", () => {
   fireAndForget({ name: "X", data: {} }, { iKey: "", collectorUrl: "" });
   // No assertion needed: test passes if no throw.
