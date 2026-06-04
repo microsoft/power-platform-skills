@@ -153,15 +153,15 @@ Skills are defined in `SKILL.md` files with YAML frontmatter (name, description,
 
 ### Hooks
 
-Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner consults the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js`, looks up the validator for the skill that just completed, and invokes it with the current cwd.
+Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner derives tracked skills directly from `skills/*/SKILL.md` via `scripts/lib/powerpages-hook-utils.js`, looks up an optional `skills/<skill>/scripts/validate*.js` validator for the skill that just completed, and invokes it with the current cwd.
 
 To wire a new skill into validation:
 
 1. Write the validator at `skills/<skill>/scripts/validate-<skill>.js` using the `runValidation((cwd) => { ... })` pattern from `scripts/lib/validation-helpers.js`.
-2. Register the skill in `TRACKED_SKILLS` (in `scripts/lib/powerpages-hook-utils.js`) with its `validatorScript` path.
-3. Add test coverage in `scripts/tests/powerpages-hook-utils.test.js` so an unregistered skill is caught in CI.
+2. No manual tracked-skill registration is needed. Any folder with `skills/<skill>/SKILL.md` is automatically tracked for telemetry and hook detection.
+3. Add or update test coverage in `scripts/tests/powerpages-hook-utils.test.js` if you introduce a new validator naming pattern.
 
-Skills currently registered with command-backed validators: `activate-site`, `add-cloud-flow`, `add-seo`, `add-server-logic`, `audit-permissions`, `configure-env-variables`, `create-site`, `create-webroles`, `deploy-pipeline`, `ensure-pipelines-host`, `export-solution`, `force-link-environment`, `import-solution`, `integrate-webapi`, `plan-alm`, `setup-auth`, `setup-datamodel`, `setup-pipeline`, `setup-solution`. `add-sample-data` and `test-site` are tracked without command validators (no artifacts to verify). `diagnose-deployment` is intentionally not tracked — it's read-only and produces no artifacts to verify.
+All skill folders are tracked. Skills without a `scripts/validate*.js` file are tracked for telemetry/detection but skip validation.
 
 **Anti-patterns** (see `PLUGIN_DEVELOPMENT_GUIDE.md` for the rationale): do not add `hooks: Stop:` blocks to individual SKILL.md frontmatter — they duplicate the centralized PostToolUse hook and fire too often. Do not use `type: prompt` Stop hooks for skill-completion checks — they create runaway forced-continuation loops.
 
@@ -342,7 +342,7 @@ This runs a lightweight check comparing the local plugin version against `origin
 
 - **Approval Gates** — Every load-bearing `AskUserQuestion` is an **Approval Gate**. Pause at minimum after gathering requirements, after presenting a plan, after implementation, and before deployment (Three-Point Approval Pattern). For ALM skills, every gate must (a) be catalogued in `references/approval-gates.md` §6 with a stable `gate-id`, and (b) be marked in SKILL.md with the explicit-pairing comment `<!-- gate: skill:phase | category=<intent|plan|progress|consent|final|pause> | cancel-leaves=<vocab> -->` followed by a human-readable `> 🚦 **Gate (...)**` block. New ALM skills must extend the catalog in the same PR that introduces the skill. Non-ALM skills should follow the same convention as the catalog is extended in a follow-up; lint runs warn-only on non-ALM skills until then. Do not coin alternative terms ("review gate", "approval checkpoint", "manual step" etc.) — the canonical term is **Approval Gate**.
 - **Deployment prompt** — Skills that modify site artifacts should end by asking "Ready to deploy?" and invoke `/deploy-site` if yes.
-- **Lifecycle hooks** — If a skill needs command validation or checklist enforcement, update `hooks/hooks.json` and `scripts/lib/powerpages-hook-utils.js`. Do not define hook registration in individual `SKILL.md` files.
+- **Lifecycle hooks** — Hook registration is centralized in `hooks/hooks.json`; `scripts/lib/powerpages-hook-utils.js` derives tracked skills from `skills/*/SKILL.md` and discovers optional `scripts/validate*.js` validators. Do not define hook registration in individual `SKILL.md` files.
 - **Graceful failure** — Track API call results, never auto-rollback, report failures clearly, continue with remaining items.
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.
 - **Git commits** — Commit after every significant milestone (each page/component, design foundations, phase completion).

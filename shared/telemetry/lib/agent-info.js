@@ -73,38 +73,141 @@ function readClaudeCodeVersion(env) {
   return parseVersionFromAiAgent(env.AI_AGENT);
 }
 
+function isTruthyEnv(value) {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false";
+}
+
+function firstEnv(env, keys) {
+  for (const key of keys) {
+    if (typeof env[key] === "string" && env[key]) return env[key];
+  }
+  return "";
+}
+
+function normalizeAgentName(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const AGENT_DETECTORS = [
+  {
+    name: "Claude Code",
+    aliases: ["claude", "claudecode"],
+    isPresent: (env) => isTruthyEnv(env.CLAUDECODE),
+    version: readClaudeCodeVersion,
+  },
+  {
+    name: "Copilot CLI",
+    aliases: ["copilot", "copilotcli", "githubcopilot", "githubcopilotcli"],
+    isPresent: (env) => isTruthyEnv(env.COPILOT_CLI),
+    version: (env) =>
+      firstEnv(env, ["COPILOT_CLI_BINARY_VERSION", "COPILOT_CLI_VERSION"]),
+  },
+  {
+    name: "Codex",
+    aliases: ["codex", "codexcli", "openaicodex"],
+    isPresent: (env) => isTruthyEnv(env.CODEX_CLI) || isTruthyEnv(env.CODEX),
+    version: (env) =>
+      firstEnv(env, [
+        "CODEX_CLI_BINARY_VERSION",
+        "CODEX_CLI_VERSION",
+        "CODEX_VERSION",
+      ]) || parseVersionFromAiAgent(env.AI_AGENT),
+  },
+  {
+    name: "OpenCode",
+    aliases: ["opencode", "opencodecli", "open_code"],
+    isPresent: (env) => isTruthyEnv(env.OPENCODE_CLI) || isTruthyEnv(env.OPENCODE),
+    version: (env) =>
+      firstEnv(env, [
+        "OPENCODE_CLI_BINARY_VERSION",
+        "OPENCODE_CLI_VERSION",
+        "OPENCODE_VERSION",
+      ]) || parseVersionFromAiAgent(env.AI_AGENT),
+  },
+  {
+    name: "Hermes",
+    aliases: ["hermes", "hermescli", "hermesagent"],
+    isPresent: (env) =>
+      isTruthyEnv(env.HERMES_CLI) ||
+      isTruthyEnv(env.HERMES) ||
+      isTruthyEnv(env.HERMES_AGENT),
+    version: (env) =>
+      firstEnv(env, [
+        "HERMES_CLI_BINARY_VERSION",
+        "HERMES_CLI_VERSION",
+        "HERMES_AGENT_VERSION",
+        "HERMES_VERSION",
+      ]) || parseVersionFromAiAgent(env.AI_AGENT),
+  },
+  {
+    name: "OpenClaw",
+    aliases: ["openclaw", "openclawcli"],
+    isPresent: (env) =>
+      isTruthyEnv(env.OPENCLAW_CLI) || isTruthyEnv(env.OPENCLAW),
+    version: (env) =>
+      firstEnv(env, [
+        "OPENCLAW_CLI_BINARY_VERSION",
+        "OPENCLAW_CLI_VERSION",
+        "OPENCLAW_VERSION",
+      ]) || parseVersionFromAiAgent(env.AI_AGENT),
+  },
+];
+
+function detectorForName(name) {
+  const normalized = normalizeAgentName(name);
+  return AGENT_DETECTORS.find((detector) =>
+    detector.aliases.some((alias) => normalizeAgentName(alias) === normalized)
+  );
+}
+
+function detectFromAiAgent(env) {
+  const aiAgent = env.AI_AGENT;
+  if (typeof aiAgent !== "string" || !aiAgent) return null;
+  const normalized = normalizeAgentName(aiAgent);
+  const detector = AGENT_DETECTORS.find((candidate) =>
+    candidate.aliases.some((alias) => normalized.includes(normalizeAgentName(alias)))
+  );
+  if (!detector) return null;
+  return {
+    aiAgentName: detector.name,
+    aiAgentVersion: detector.version(env) || parseVersionFromAiAgent(aiAgent),
+  };
+}
+
+function detectKnownAgent(env) {
+  for (const detector of AGENT_DETECTORS) {
+    if (detector.isPresent(env)) {
+      return {
+        aiAgentName: detector.name,
+        aiAgentVersion: detector.version(env) || "",
+      };
+    }
+  }
+  return detectFromAiAgent(env);
+}
+
 // Detects the AI agent host. Prefers explicit env vars; falls back to
-// built-in detection for Claude Code (CLAUDECODE=1) and GitHub Copilot
-// CLI (COPILOT_CLI=1). When AI_AGENT_NAME is set explicitly but
-// AI_AGENT_VERSION is empty, backfill the version from whichever
-// built-in detector matches — avoids emitting an empty aiAgentVersion
-// just because the settings file only carried half the pair.
+// built-in detection for known CLI hosts. When AI_AGENT_NAME is set explicitly
+// but AI_AGENT_VERSION is empty, backfill the version from whichever detector
+// matches — avoids emitting an empty aiAgentVersion just because the settings
+// file only carried half the pair.
 function readAiAgent(env = process.env) {
   const explicitName = env.AI_AGENT_NAME;
   const explicitVersion = env.AI_AGENT_VERSION;
   if (explicitName) {
     let version = explicitVersion || "";
     if (!version) {
-      if (env.CLAUDECODE === "1") {
-        version = readClaudeCodeVersion(env);
-      } else if (env.COPILOT_CLI === "1") {
-        version = env.COPILOT_CLI_BINARY_VERSION || "";
-      }
+      const explicitDetector = detectorForName(explicitName);
+      const detected = detectKnownAgent(env);
+      if (explicitDetector) version = explicitDetector.version(env) || "";
+      if (!version && detected) version = detected.aiAgentVersion || "";
     }
     return { aiAgentName: explicitName, aiAgentVersion: version };
   }
-  if (env.CLAUDECODE === "1") {
-    return {
-      aiAgentName: "Claude Code",
-      aiAgentVersion: readClaudeCodeVersion(env),
-    };
-  }
-  if (env.COPILOT_CLI === "1") {
-    return {
-      aiAgentName: "Copilot CLI",
-      aiAgentVersion: env.COPILOT_CLI_BINARY_VERSION || "",
-    };
-  }
+  const detected = detectKnownAgent(env);
+  if (detected) return detected;
   return { aiAgentName: "", aiAgentVersion: "" };
 }
 

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const {
+  TRACKED_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
@@ -15,7 +16,7 @@ test('detectTrackedSkill recognizes tracked skill references', () => {
   assert.equal(detectTrackedSkill('create-site'), 'create-site');
   assert.equal(detectTrackedSkill('/power-pages:setup-auth'), 'setup-auth');
   assert.equal(detectTrackedSkill('power-pages:add-seo'), 'add-seo');
-  assert.equal(detectTrackedSkill('/power-pages:deploy-site'), null);
+  assert.equal(detectTrackedSkill('/power-pages:deploy-site'), 'deploy-site');
 });
 
 test('detectTrackedSkill recognizes slash command aliases without plugin prefix', () => {
@@ -25,7 +26,7 @@ test('detectTrackedSkill recognizes slash command aliases without plugin prefix'
   assert.equal(detectTrackedSkill('/add-cloud-flow'), 'add-cloud-flow');
   assert.equal(detectTrackedSkill('/integrate-webapi'), 'integrate-webapi');
   assert.equal(detectTrackedSkill('/audit-permissions'), 'audit-permissions');
-  assert.equal(detectTrackedSkill('/deploy-site'), null);
+  assert.equal(detectTrackedSkill('/deploy-site'), 'deploy-site');
 });
 
 test('getTrackedSkillFromToolInput finds a tracked skill in common fields', () => {
@@ -39,13 +40,21 @@ test('getTrackedSkillFromToolInput finds a tracked skill in common fields', () =
     getTrackedSkillFromToolInput({ command: 'run /power-pages:integrate-webapi for this repo' }),
     'integrate-webapi'
   );
-  assert.equal(getTrackedSkillFromToolInput({ name: 'deploy-site' }), null);
+  assert.equal(getTrackedSkillFromToolInput({ name: 'deploy-site' }), 'deploy-site');
 });
 
-test('getValidatorScript returns validator paths only for command-backed skills', () => {
+test('getValidatorScript returns discovered validator paths when present', () => {
   assert.match(getValidatorScript('create-site'), /validate-site\.js$/);
   assert.match(getValidatorScript('add-server-logic'), /validate-serverlogic\.js$/);
+  assert.match(getValidatorScript('deploy-pipeline'), /validate-deploy-pipeline\.js$/);
+});
+
+test('getValidatorScript returns null for tracked skills without validators', () => {
+  assert.equal(detectTrackedSkill('deploy-site'), 'deploy-site');
+  assert.equal(detectTrackedSkill('diagnose-deployment'), 'diagnose-deployment');
   assert.equal(getValidatorScript('test-site'), null);
+  assert.equal(getValidatorScript('deploy-site'), null);
+  assert.equal(getValidatorScript('diagnose-deployment'), null);
   assert.equal(getValidatorScript('missing-skill'), null);
 });
 
@@ -75,6 +84,21 @@ test('detectTrackedSkill recognizes the newly registered ALM skills', () => {
 
 test('force-link-environment is wired into TRACKED_SKILLS with its validator', () => {
   assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
+});
+
+test('TRACKED_SKILLS is derived from every skill folder', () => {
+  const skillFolders = fs
+    .readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((skillName) => fs.existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md')))
+    .sort();
+
+  assert.deepEqual(Object.keys(TRACKED_SKILLS).sort(), skillFolders);
+  for (const skillName of skillFolders) {
+    assert.equal(detectTrackedSkill(`/power-pages:${skillName}`), skillName);
+    assert.equal(detectTrackedSkill(`/${skillName}`), skillName);
+  }
 });
 
 test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse only)', () => {
