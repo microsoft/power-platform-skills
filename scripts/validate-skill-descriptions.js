@@ -123,9 +123,23 @@ function parseDescription(frontmatter) {
     }
 
     const blockLines = [];
+    const parentIndent = countIndent(line);
+    const explicitIndentMatch = rawValue.match(/^[>|]([1-9])/);
+    let blockIndent = explicitIndentMatch
+      ? parentIndent + Number(explicitIndentMatch[1])
+      : null;
+
     for (let blockIndex = index + 1; blockIndex < lines.length; blockIndex += 1) {
       const blockLine = lines[blockIndex];
-      if (/^[^\s#][^:]*:\s*/.test(blockLine)) break;
+      if (blockLine.trim() !== '') {
+        const lineIndent = countIndent(blockLine);
+        if (blockIndent === null) {
+          if (lineIndent <= parentIndent) break;
+          blockIndent = lineIndent;
+        } else if (lineIndent < blockIndent) {
+          break;
+        }
+      }
       blockLines.push(blockLine);
     }
 
