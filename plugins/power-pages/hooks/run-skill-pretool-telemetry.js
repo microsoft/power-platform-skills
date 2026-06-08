@@ -94,10 +94,10 @@ function readStdin() {
 
   // Repo-side hard-off / unconfigured: gate BEFORE the pac shell-outs
   // (`pac auth who` ~3s + `pac --version` ~2s) so a disabled or unconfigured
-  // plugin costs effectively nothing. The POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is NOT a
-  // fast-path: the enriched event is still built and dispatched so the detached
-  // dispatcher can write the local diagnostic mirror; it applies the opt-out
-  // and skips the POST. (Opting out therefore costs the same as an enabled run.)
+  // plugin costs effectively nothing. The user opt-out is NOT a fast-path: the
+  // enriched event is still built and dispatched so the detached dispatcher can
+  // write the local diagnostic mirror; it reads the per-plugin config and skips
+  // the POST. (Opting out therefore costs the same as an enabled run.)
   const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
   if (disabled) process.exit(0);
   if (!ikey) process.exit(0);

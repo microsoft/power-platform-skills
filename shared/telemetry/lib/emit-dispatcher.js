@@ -111,7 +111,7 @@ function writeLocalLog(event) {
 
 // ---- Repo-side kill switch (applies before ANY side effect) ----------------
 // The `disabled` repo config is the one true hard-off: no local log, no POST.
-// The POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is NOT checked here — it suppresses transmission
+// The per-plugin user opt-out is NOT checked here — it suppresses transmission
 // only, and is applied below AFTER the local mirror is written.
 if (isDisabledByConfig()) exitSilently();
 
@@ -136,7 +136,7 @@ process.stdin.on("end", () => {
 
   // Mirror to the local log for EVERY event that clears the repo kill switch —
   // irrespective of whether a real iKey is configured AND irrespective of the
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 transmission opt-out. The file stays on the user's machine; it
+  // per-plugin transmission opt-out. The file stays on the user's machine; it
   // is a local diagnostic mirror of what is (or would be) sent to Kusto, not
   // transmitted telemetry. (A `disabled: true` repo config wrote nothing — it
   // short-circuited before stdin was even read.)
