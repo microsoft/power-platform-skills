@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 29 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -373,6 +373,17 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 - Attaches relevant file paths and environment info
 - Opens the issue in your browser for final review
 
+#### `/telemetry`
+
+> "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
+
+Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+
+- `/power-pages:telemetry status` — show the current setting
+- `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
+- `/power-pages:telemetry on` — resume sending telemetry
+- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+
 ## Agents
 
 The plugin includes 4 specialized agents that are spawned automatically by skills when needed:
@@ -475,6 +486,27 @@ node plugins/power-pages/scripts/validate-permissions-schema.js --projectRoot /p
 ```
 
 This Dataverse relationship check is intended for local validation only and should not be used in CI.
+
+## Telemetry & privacy
+
+This plugin sends **anonymous** usage telemetry by default to help Microsoft
+improve it. **No personal data is ever collected** — only things like skill name,
+plugin version, OS, and Node version. It never includes file paths, prompts, tool
+inputs, site names, URLs, credentials, usernames, or hostnames.
+
+**Turn it on or off (per-user, applies to every project):**
+
+```bash
+/power-pages:telemetry status   # show the current setting
+/power-pages:telemetry off      # stop sending telemetry
+/power-pages:telemetry on       # resume sending telemetry
+```
+
+When **off**, nothing leaves your machine. A local diagnostic copy of each event
+is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
+what would have been sent; delete it anytime. The setting is stored at
+`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
+so CI/headless environments can opt out by writing that file directly.
 
 ## License
 
