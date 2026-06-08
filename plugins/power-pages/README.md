@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 29 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 41 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -348,6 +348,82 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Queries recent Dataverse async operation failures
 - Pattern matches against `references/deployment-error-catalog.md`
 - Offers auto-fixes with explicit per-fix user confirmation
+
+### Inner Dev Loop (Dataverse Git integration)
+
+A 12-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: bind a Dataverse environment to an Azure DevOps repository, commit pending changes back to a branch, pull teammates' changes in, resolve conflicts, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
+
+#### `/plan-inner-loop`
+
+> "Where am I in the git loop?"
+
+Read-only orchestrator that detects current binding + pending changes + incoming updates + conflicts, classifies state (Disconnected / Clean / Dirty / Stale / Mixed / Conflicted / Broken), renders a visual `docs/inner-loop/inner-loop-plan.html` status page, and recommends the next skill. Front door of the inner loop.
+
+#### `/setup-git-integration`
+
+> "Connect my env to ADO"
+
+Binds the whole Dataverse environment to an ADO repo + branch + folder via the `ConnectToGit` action. Verifies Managed Env, system-admin role, ADO PAT scopes, and repo init before any mutation.
+
+#### `/connect-solution-to-git`
+
+> "Bind just my custom solution to git"
+
+Solution-scoped variant of `setup-git-integration` (`ConnectionType=0`). Warns about the shared-object restriction (a component cannot be in two Git-bound solutions concurrently).
+
+#### `/validate-pending-changes`
+
+> "Will my next commit work?"
+
+Pre-commit dry run — runs five validators (17 MB file-size cap, unsupported object types, large Canvas Apps, PCF binary duplication, dependency integrity), renders an HTML findings report, and surfaces blockers + warnings.
+
+#### `/commit-to-git`
+
+> "Push my changes to ADO"
+
+Calls `CommitToGit` against the bound branch with pre-flight validation, polls until the env's pending-changes count reaches zero, verifies the SHA in ADO, and offers to open a PR.
+
+#### `/sync-from-git`
+
+> "Pull from the branch"
+
+Two-step `RefreshChangesFromGit` + `PullChangesFromGit`. Detects conflicts and dispatches `/resolve-conflicts` automatically. Gates explicitly on the destructive `DeleteDeletedComponents: true` flag.
+
+#### `/resolve-conflicts`
+
+> "Fix the conflicts in my env"
+
+Walks per-conflict Keep-Existing / Accept-Incoming decisions; collapses to one bundled prompt when more than 3 conflicts exist. Renders a side-by-side HTML diff page.
+
+#### `/branch-switch`
+
+> "Switch my env to a different branch"
+
+Wraps `DisconnectFromGit` + `ConnectToGit` against a new branch. HARD-STOPS on a dirty workspace (Changes / Updates / Conflicts > 0) to prevent silent data loss across branches.
+
+#### `/revert-workspace`
+
+> "Throw away my pending changes"
+
+Calls `RevertGitWorkspace` to roll the env back to the last sync point. All in-flight edits are permanently lost — the consent gate is a typed-confirmation pattern (user must type `REVERT WORKSPACE`).
+
+#### `/revert-branch`
+
+> "Roll the branch back to a previous commit"
+
+Force-updates the bound ADO branch to an earlier SHA. Branch-wide and destructive — typed-confirmation gate `REVERT BRANCH {sha}` after an impact analysis ("Will affect N other envs bound to this branch").
+
+#### `/open-pr`
+
+> "Open a PR for my changes"
+
+Creates an ADO pull request from the bound branch with an auto-generated Power-Pages-friendly description ("Updated Web Template 'Header'", "Added Web Page 'Pricing'") instead of raw commit messages.
+
+#### `/diagnose-git-integration`
+
+> "Something's broken with git"
+
+Pattern-matches symptoms against 13 known failure patterns from the inner-loop error catalog. Three modes: paste an error, describe symptoms from a checklist, or run a full 13-pattern scan. Per-finding auto-fix consent for fixable errors.
 
 ### Polish
 

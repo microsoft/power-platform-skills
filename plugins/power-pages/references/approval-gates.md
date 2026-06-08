@@ -1,8 +1,8 @@
-# Approval Gates — ALM Skill Catalog (Draft v2)
+# Approval Gates — ALM + Inner-Loop Skill Catalog (Draft v2)
 
-> **Status: DRAFT v2.** Addresses review feedback on v1.
+> **Status: DRAFT v2.** Addresses review feedback on v1, extended with the 12 inner-loop skills in §6A.
 >
-> **Scope: ALM skills only.** §6 enumerates every `AskUserQuestion` in the 12 ALM skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). Non-ALM skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §10. Catalog completeness is asserted only for ALM.
+> **Scope: ALM + inner-loop skills.** §6 enumerates every `AskUserQuestion` in the 12 ALM (outer-loop) skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). §6A enumerates the 12 inner-loop (Git integration) skills (`plan-inner-loop`, `setup-git-integration`, `connect-solution-to-git`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `validate-pending-changes`, `branch-switch`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`). Non-ALM, non-inner-loop skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §8. Catalog completeness is asserted only for ALM and inner-loop.
 >
 > **Not yet applied to SKILL.md files.** This document defines terminology + marker + lint design. The follow-up PR will add the markers to each ALM SKILL.md and ship the lint rule. Run the decisions in §9 first.
 
@@ -453,24 +453,175 @@ The single `AskUserQuestion` template fires once per Error finding with `autoFix
 
 ---
 
+## 6A. The inner-loop-skill catalog
+
+Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop skills are landed in milestones M6 – M10 (see project `plan.md`). Catalog rows are pre-declared so SKILL.md authors can anchor markers as they write each skill.
+
+> **Lint scope.** Inner-loop skills use the same ALM-strictness lint rule (hard-fail) per §9 decision #4. The lint regex matcher in `scripts/lint-skills-alm.js` (or successor `lint-skills-inner-loop.js`) must include the 12 inner-loop skill names in its allow-list.
+
+---
+
+### 6A.1 `plan-inner-loop` (orchestrator / front door — projected 5 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `plan-inner-loop:0.stale-plan` | gate | intent | 0 | `inner-loop-plan-state.js` returned `stale-heartbeat:true` — *"Re-detect state / use cached / cancel"* | nothing |
+| `plan-inner-loop:1.broken` | gate | intent | 1 | State classified as `Broken` (persistent API failure) — *"Run diagnose-git-integration / continue anyway / cancel"* | nothing |
+| `plan-inner-loop:4.review` | gate | plan | 4 | Status page rendered — *"Run recommended skill / pick different skill / exit"* | nothing |
+| `plan-inner-loop:5.mixed-state` | gate | plan | 5 | State = `Mixed` (Changes + Updates, no conflicts) — *"Pull first / commit first / cancel"* | nothing |
+| `plan-inner-loop:6.dispatch` | gate | consent | 6 | About to dispatch downstream skill — *"Dispatch now / let me run manually / cancel"* | nothing |
+
+---
+
+### 6A.2 `setup-git-integration` (env binding — projected 4 calls + 1 not-a-gate)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `setup-git-integration:1.prereq-fail` | gate | intent | 1 | One or more prereqs failed (`verify-managed-env`, `verify-repo-initialized`, `verify-ado-permissions`) — *"Open remediation URLs / Cancel"* | nothing |
+| `setup-git-integration:2.repo-init` | gate | consent | 2 | ADO repo not initialized — *"Initialize with README commit / Cancel"* | nothing |
+| `setup-git-integration:4.plan` | gate | plan | 4 | *"Bind env X to repo {org}/{project}/{repo}, branch `{branch}`, folder `{folder}`?"* | nothing |
+| `setup-git-integration:5.consent` | gate | consent | 5 | Final consent before `ConnectToGit` — *"Connect now / Cancel"* | nothing |
+| `setup-git-integration:8.final` | gate | final | 8 | Binding verified; manifest written — *"Done / run sync-from-git now"* | nothing |
+| `setup-git-integration:2.ado-fields` | not-a-gate | — | 2 | Free-text ADO org/project/repo/branch/folder — data-gathering | — |
+
+---
+
+### 6A.3 `connect-solution-to-git` (solution binding — projected 5 calls + 1 not-a-gate)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `connect-solution-to-git:1.prereq-fail` | gate | intent | 1 | Same as `setup-git-integration:1.prereq-fail` | nothing |
+| `connect-solution-to-git:3.solution-pick` | gate | plan | 3 | List of bindable solutions (excluding Default) — *"Pick solution to bind"* | nothing |
+| `connect-solution-to-git:3.shared-object-warning` | gate | consent | 3 | Selected solution shares components with an already-Git-bound solution — *"Proceed (will fail at next add) / Cancel"* | nothing |
+| `connect-solution-to-git:4.plan` | gate | plan | 4 | *"Bind solution `{name}` to repo {org}/{project}/{repo}, branch `{branch}`?"* | nothing |
+| `connect-solution-to-git:5.consent` | gate | consent | 5 | Final consent before `ConnectToGit` (solution variant) | nothing |
+| `connect-solution-to-git:8.final` | gate | final | 8 | Binding verified — *"Done / run sync-from-git now"* | nothing |
+| `connect-solution-to-git:3.ado-fields` | not-a-gate | — | 3 | Free-text ADO fields — data-gathering | — |
+
+---
+
+### 6A.4 `commit-to-git` (projected 5 calls + 1 not-a-gate)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `commit-to-git:1.no-binding` | gate | intent | 1 | `detect-git-binding.js` returned null — *"Run setup-git-integration / cancel"* | nothing |
+| `commit-to-git:3.pre-flight-blockers` | gate | plan | 3 | `validate-pending-changes` found blockers (e.g. 17 MB cap) — *"Fix and re-run / cancel"* | nothing |
+| `commit-to-git:3.pre-flight-warnings` | gate | plan | 3 | Warnings only (PCF binary duplication, large canvas) — *"Proceed / cancel"* | nothing |
+| `commit-to-git:4.plan` | gate | plan | 4 | Plan rendered: *"Will commit N components: {list}"* — *"Proceed / change message / cancel"* | nothing |
+| `commit-to-git:6.consent` | gate | consent | 6 | Final consent before `CommitToGit` action — *"Commit now / cancel"* | nothing |
+| `commit-to-git:9.open-pr` | gate | final | 9 | Commit verified — *"Open PR now / not yet"* | nothing |
+| `commit-to-git:5.commit-message` | not-a-gate | — | 5 | Free-text commit message — data-gathering | — |
+
+---
+
+### 6A.5 `sync-from-git` (projected 4 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `sync-from-git:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
+| `sync-from-git:3.conflicts-detected` | gate | plan | 3 | Refresh found Conflicts > 0 — *"Dispatch resolve-conflicts / cancel"* | nothing |
+| `sync-from-git:4.plan` | gate | plan | 4 | *"Will pull N updates: {list}"* — *"Proceed / cancel"* | nothing |
+| `sync-from-git:5.consent` | gate | consent | 5 | Final consent before `PullChangesFromGit` — *"Pull now / cancel"* | nothing |
+| `sync-from-git:5.hard-delete` | gate | consent | 5 | One or more updates are deletions and user opted for hard-delete — *"`DeleteDeletedComponents: true` is DESTRUCTIVE — confirm"* | nothing |
+| `sync-from-git:8.final` | gate | final | 8 | Pull verified — *"Done / re-validate env"* | nothing |
+
+---
+
+### 6A.6 `resolve-conflicts` (projected 2 calls — bundled per `conflict-resolution-patterns.md` §5)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `resolve-conflicts:1.binding-check` | gate | intent | 1 | No binding OR Conflicts = 0 — *"Nothing to do; exit"* | nothing |
+| `resolve-conflicts:4.decisions` | gate | progress | 4 | Per-conflict (≤ 3) OR bundled HTML table (> 3) — *"Apply my decisions / cancel"* | partial-decisions |
+
+---
+
+### 6A.7 `validate-pending-changes` (projected 2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `validate-pending-changes:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
+| `validate-pending-changes:6.warnings-only` | gate | final | 6 | Findings are warnings only (no blockers) — *"Proceed to commit / fix first"* | nothing |
+
+---
+
+### 6A.8 `branch-switch` (projected 4 calls + 1 not-a-gate)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `branch-switch:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
+| `branch-switch:2.workspace-dirty` | gate | intent | 2 | Workspace not clean (Changes / Updates / Conflicts > 0) — **HARD STOP** — *"Run commit-to-git / sync-from-git / revert-workspace / cancel"* | nothing |
+| `branch-switch:4.plan` | gate | plan | 4 | *"Will disconnect from `{oldBranch}` and reconnect to `{newBranch}`?"* | nothing |
+| `branch-switch:5.consent` | gate | consent | 5 | Final consent before `DisconnectFromGit` + `ConnectToGit` — *"Switch now / cancel"* | nothing |
+| `branch-switch:9.final` | gate | final | 9 | Binding verified — *"Done / run sync-from-git now"* | nothing |
+| `branch-switch:3.target-branch` | not-a-gate | — | 3 | Free-text target branch name (validated against ADO) — data-gathering | — |
+
+---
+
+### 6A.9 `revert-workspace` (projected 3 calls — typed-confirmation pattern)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `revert-workspace:1.no-binding-or-empty` | gate | intent | 1 | No binding OR Changes = 0 — *"Nothing to revert; exit"* | nothing |
+| `revert-workspace:4.typed-consent` | gate | consent | 4 | Typed-confirmation: user must type `REVERT WORKSPACE` to proceed. Cancel leaves all N Changes intact. | nothing |
+| `revert-workspace:6.final` | gate | final | 6 | Revert verified; Changes tab now empty — *"Done"* | nothing |
+
+---
+
+### 6A.10 `revert-branch` (projected 3 calls — typed-confirmation, blast-radius warning)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `revert-branch:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
+| `revert-branch:5.typed-consent` | gate | consent | 5 | Typed-confirmation: user must type `REVERT BRANCH {sha}` after seeing the impact analysis ("Will affect N other envs bound to this branch"). | nothing |
+| `revert-branch:8.final` | gate | final | 8 | Branch HEAD verified at target SHA — *"Done / I'll tell my team to sync-from-git"* | nothing |
+| `revert-branch:3.target-sha` | not-a-gate | — | 3 | Free-text or list-pick target commit SHA — data-gathering | — |
+
+---
+
+### 6A.11 `open-pr` (projected 4 calls + 2 not-a-gate)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `open-pr:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
+| `open-pr:1.nothing-to-pr` | gate | intent | 1 | Bound branch has no commits ahead of target branch — *"Nothing to PR; exit"* | nothing |
+| `open-pr:5.plan` | gate | plan | 5 | Auto-generated PR description rendered — *"Use as-is / edit / cancel"* | nothing |
+| `open-pr:6.consent` | gate | consent | 6 | Final consent before `ado-create-pr.js` — *"Create PR now / cancel"* | nothing |
+| `open-pr:9.final` | gate | final | 9 | PR created; URL displayed — *"Open in browser / done"* | nothing |
+| `open-pr:4.pr-title` | not-a-gate | — | 4 | Free-text PR title — data-gathering | — |
+| `open-pr:4.reviewers` | not-a-gate | — | 4 | Free-text or list-pick reviewers — data-gathering | — |
+
+---
+
+### 6A.12 `diagnose-git-integration` (projected 2 gates — loop-style auto-fix mirrors `diagnose-deployment`)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `diagnose-git-integration:1.symptoms` | gate | intent | 1 | *"What's broken? Paste error / I'll describe / run full scan"* | nothing |
+| `diagnose-git-integration:5.auto-fix` | gate | consent | 5 | Per-finding: each auto-fixable Error pattern from `inner-loop-error-catalog.md` (IL-003, IL-008, IL-010, IL-011, etc.) loops through this same prompt template. Answer Yes / No / Skip-all per finding. | varies by fix |
+
+Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers all per-pattern loops; the catalog of patterns themselves lives in `references/inner-loop-error-catalog.md`.
+
+---
+
 ## 7. How to add a new gate
 
-When introducing a gate in an existing or new ALM skill:
+When introducing a gate in an existing or new ALM or inner-loop skill:
 
 1. **Pick the category** from §3. If it doesn't fit, propose a new one — don't shoehorn.
 2. **Pick a gate ID** of the form `skill-name:phase-id` (kebab-case skill name; phase number / step matches the SKILL.md heading).
-3. **Add a row to the catalog** (§6 table for the owning skill) with `kind`, `category`, `phase`, trigger, question, `cancel-leaves`.
+3. **Add a row to the catalog** (§6 table for ALM, §6A table for inner-loop) with `kind`, `category`, `phase`, trigger, question, `cancel-leaves`.
 4. **Add the marker block** in SKILL.md immediately before the (possibly distant) `AskUserQuestion` call. Use both the HTML comment and the human-readable block from §4.1.
 5. **If `category=intent`**, ensure the SKILL.md section invokes a helper script (`GATE-intent-must-call-helper` lint rule).
-6. **Run** `node scripts/lint-skills-alm.js`.
+6. **Run** `node scripts/lint-skills-alm.js` (or the successor `lint-skills-inner-loop.js` once landed).
 
 When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-## 8. Non-ALM skills — explicitly deferred
+## 8. Other non-catalogued skills — explicitly deferred
 
-Per the v1 review, the catalog was incomplete because it claimed full coverage but only covered ~30% of `AskUserQuestion` calls. v2 fixes this by **scoping to ALM only**. The 13 non-ALM skills below contain ~70 additional `AskUserQuestion` calls that need to be catalogued in a follow-up:
+Per the v1 review, the catalog was incomplete because it claimed full coverage but only covered ~30% of `AskUserQuestion` calls. v2 fixes this by **scoping to ALM + inner-loop** (the 24 skills in §6 and §6A). The 13 skills below contain ~70 additional `AskUserQuestion` calls that need to be catalogued in a follow-up:
 
 | Skill | `AskUserQuestion` count | Status |
 |---|---|---|
@@ -488,7 +639,7 @@ Per the v1 review, the catalog was incomplete because it claimed full coverage b
 | `integrate-backend` | (see SKILL.md) | Deferred |
 | `report-issue` | 1 | Deferred (cross-plugin, may not need a gate) |
 
-For non-ALM skills, the lint rules in §5 are **warn-only** until this section is extended. ALM lint rules are **hard-fail** from day one (per §9 decision).
+For non-ALM, non-inner-loop skills, the lint rules in §5 are **warn-only** until this section is extended. ALM and inner-loop lint rules are **hard-fail** from day one (per §9 decision).
 
 ---
 
@@ -501,7 +652,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 | 1 | Canonical term | **"Approval Gate"** | CI/CD heritage; already the most common word in our SKILL.md files; concrete. Drop "review gate" if used informally. |
 | 2 | Marker syntax | **HTML comment `<!-- gate: ID \| category=X \| cancel-leaves=Y -->` + human `> 🚦 Gate (...)` block** | Comment is the lint anchor; block is for humans. Robust to interleaved prose. |
 | 3 | Catalog location | **`plugins/power-pages/references/approval-gates.md`** (this file) + a one-line pointer in `PLUGIN_DEVELOPMENT_GUIDE.md` | Sits with other shared references; cross-skill scope is obvious from the path. |
-| 4 | Lint rollout strictness | **ALM: hard-fail. Non-ALM: warn-only until §8 catalog extends.** | ALM is fully catalogued; non-ALM is the follow-up. Hard-fail on ALM forces drift to be caught at PR time. |
+| 4 | Lint rollout strictness | **ALM + inner-loop: hard-fail. Other non-catalogued: warn-only until §8 catalog extends.** | ALM and inner-loop are fully catalogued; other skills are the follow-up. Hard-fail on catalogued skills forces drift to be caught at PR time. |
 | 5 | Emoji vs plain text | **Keep `🚦` in the human block; lint anchors on the HTML comment regardless** | Emoji is for humans; tooling doesn't depend on it. |
 | 6 | Wildcard gate IDs (e.g. `diagnose-deployment:6.*`) | **Disallowed. Enumerate per pattern.** | Per-pattern markers enforce that each catalog-listed deployment-error pattern has matching prompt logic. |
 

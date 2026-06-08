@@ -20,13 +20,16 @@ const http = require('http');
  *
  * @param {Array<{
  *   matcher: string | RegExp | ((req) => boolean),
- *   status?: number,
+ *   status?: number | ((req) => number),
  *   headers?: object,
  *   body?: any
  * } | ((req) => any)>} routes
  *   Each route either matches by path fragment (string), regex, or predicate.
  *   `body` can be a plain object (serialized to JSON) or a function that
  *   receives the request and returns a body.
+ *   `status` can be a number or a function that returns a number — useful
+ *   for routes that must vary status across calls (e.g. first call 400,
+ *   second call 204).
  * @returns {Promise<{ baseUrl: string, port: number, close: () => Promise<void>, calls: Array }>}
  */
 async function startMock(routes) {
@@ -45,7 +48,9 @@ async function startMock(routes) {
             : routeMatches(route, req.method, url);
         if (match) {
           const r = typeof route === 'function' ? route({ method: req.method, url, body }) : route;
-          const status = r.status || 200;
+          const status = typeof r.status === 'function'
+            ? r.status({ method: req.method, url, body })
+            : (r.status || 200);
           const respBody =
             typeof r.body === 'function'
               ? r.body({ method: req.method, url, body })

@@ -58,6 +58,48 @@ const TRACKED_SKILLS = {
     validatorScript: 'skills/setup-solution/scripts/validate-solution.js',
   },
   'test-site': {},
+
+  // ───── Inner Dev Loop skills (Dataverse Git integration) ─────
+  // 12-skill family that automates the Connect-to-Git workflow. Validators
+  // live alongside each skill and write markers to `docs/inner-loop/`.
+  // `connect-solution-to-git` shares the `setup-git-integration` validator
+  // (both skills write the same `.git-integration-manifest.json` + marker).
+  'plan-inner-loop': {
+    validatorScript: 'skills/plan-inner-loop/scripts/validate-plan-inner-loop.js',
+  },
+  'setup-git-integration': {
+    validatorScript: 'skills/setup-git-integration/scripts/validate-setup-git-integration.js',
+  },
+  'connect-solution-to-git': {
+    validatorScript: 'skills/connect-solution-to-git/scripts/validate-connect-solution-to-git.js',
+  },
+  'validate-pending-changes': {
+    validatorScript: 'skills/validate-pending-changes/scripts/validate-validate-pending-changes.js',
+  },
+  'commit-to-git': {
+    validatorScript: 'skills/commit-to-git/scripts/validate-commit-to-git.js',
+  },
+  'sync-from-git': {
+    validatorScript: 'skills/sync-from-git/scripts/validate-sync-from-git.js',
+  },
+  'resolve-conflicts': {
+    validatorScript: 'skills/resolve-conflicts/scripts/validate-resolve-conflicts.js',
+  },
+  'branch-switch': {
+    validatorScript: 'skills/branch-switch/scripts/validate-branch-switch.js',
+  },
+  'revert-workspace': {
+    validatorScript: 'skills/revert-workspace/scripts/validate-revert-workspace.js',
+  },
+  'revert-branch': {
+    validatorScript: 'skills/revert-branch/scripts/validate-revert-branch.js',
+  },
+  'open-pr': {
+    validatorScript: 'skills/open-pr/scripts/validate-open-pr.js',
+  },
+  'diagnose-git-integration': {
+    validatorScript: 'skills/diagnose-git-integration/scripts/validate-diagnose-git-integration.js',
+  },
 };
 
 function detectTrackedSkill(value) {

@@ -205,6 +205,24 @@ const ALM_SKILLS = new Set([
   'diagnose-deployment',
 ]);
 
+// Inner Dev Loop skills also get hard-fail severity. Same rationale as
+// ALM_SKILLS — these skills are fully catalogued in approval-gates.md §6A,
+// so any gate-rule violation is a regression rather than work-in-progress.
+const INNER_LOOP_SKILLS = new Set([
+  'plan-inner-loop',
+  'setup-git-integration',
+  'connect-solution-to-git',
+  'validate-pending-changes',
+  'commit-to-git',
+  'sync-from-git',
+  'resolve-conflicts',
+  'branch-switch',
+  'revert-workspace',
+  'revert-branch',
+  'open-pr',
+  'diagnose-git-integration',
+]);
+
 // `category=intent` markers must be backed by a real helper invocation.
 // Anything else is LLM-improvised entry logic, which defeats the rule's
 // purpose (deterministic state read, not LLM reasoning).
@@ -212,6 +230,14 @@ const INTENT_HELPERS = [
   'check-alm-plan.js',
   'verify-alm-prerequisites.js',
   'check-activation-status.js',
+  // Inner Dev Loop intent helpers — every inner-loop intent gate
+  // (no-binding / workspace-dirty / conflicts-present / etc.) is backed by
+  // one of these read-only Dataverse-query helpers.
+  'detect-git-binding.js',
+  'list-pending-changes.js',
+  'list-incoming-updates.js',
+  'list-conflicts.js',
+  'inner-loop-plan-state.js',
 ];
 
 // Normalized vocabulary for the `cancel-leaves=` marker field. Any value
@@ -437,7 +463,10 @@ function skillNameFromFile(file) {
 }
 
 function severityForSkill(skillName) {
-  return ALM_SKILLS.has(skillName) ? 'error' : 'warning';
+  if (ALM_SKILLS.has(skillName) || INNER_LOOP_SKILLS.has(skillName)) {
+    return 'error';
+  }
+  return 'warning';
 }
 
 // Parse the catalog file (references/approval-gates.md) and extract all
@@ -733,6 +762,7 @@ module.exports = {
   allowlistPathMatches,
   KNOWN_RULES,
   ALM_SKILLS,
+  INNER_LOOP_SKILLS,
   INTENT_HELPERS,
   CANCEL_LEAVES_VOCAB,
   // Approval Gate parsing helpers (exported for tests):

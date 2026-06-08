@@ -29,24 +29,19 @@ The `DeleteDeletedComponents: true` flag turns the pull into a destructive opera
 
 > 🛈 **`DeleteDeletedComponents` = "Delete from environment" UI button (HAR-confirmed 2026-06).** The maker-portal dialog *"Remove or delete items?"* shows two buttons — **Remove from solution** (safe; de-scopes from this solution, items stay in Dataverse) and **Delete from environment** (destructive; physically removes from Dataverse). The `--hard-delete` flag is the API equivalent of the second button. Almost every revert/cleanup scenario should default to NO (`Remove from solution`) — choosing hard-delete on standard OOTB components (CreatedOn / OwnerId / OOTB saved queries / ribbon diffs) is **irrecoverable without re-provision**. Phase 5's hard-delete consent gate is non-negotiable. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §18.
 
-> 🛈 **`RefreshChangesFromGit` is the only API that surfaces conflicts (HAR-confirmed 2026-06).** Maker portal **Refresh** ≠ **Check for updates**: Refresh only re-queries env-side state, while Check for updates triggers `RefreshChangesFromGit` which fetches git tip and recomputes the full Changes / Updates / Conflicts triad. Phase 2 of this skill correctly calls Refresh BEFORE conditionally dispatching to `resolve-conflicts` — keep that order. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §22.
-
-> 🛈 **Post-resolve return path may create new pending work (HAR-confirmed 2026-06).** When `resolve-conflicts` returns, items resolved with `Keep-Existing` have moved to pending **Changes** (not Updates) — those still need `commit-to-git` to reach `main`. Items resolved with `Accept-Incoming` are the ones this skill's `PullChangesFromGit` will materialise. Phase 4 must inspect both counts after the sub-skill returns and offer the user a `commit-to-git` follow-up before proceeding with the pull half. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §21.
-
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/git-integration-api-patterns.md` §6 (`RefreshChangesFromGit` — 204 No Content)
 - `${CLAUDE_PLUGIN_ROOT}/references/git-integration-api-patterns.md` §7 (`PullChangesFromGit` — 204 No Content, `DeleteDeletedComponents` flag)
 - `${CLAUDE_PLUGIN_ROOT}/references/conflict-resolution-patterns.md`
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md` §3 (Stale / Mixed / Conflicted state classification)
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §18 (Remove-from-solution vs Delete-from-environment safety rule)
-- `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §21 (Post-resolve Keep-Existing creates pending Changes; commit-to-git still required)
-- `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §22 (`RefreshChangesFromGit` is the only API that surfaces conflicts; plain Refresh does not)
 
 ## Prerequisites
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
 - A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+
 
 **Initial request:** $ARGUMENTS
 
@@ -330,10 +325,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 ## Error Handling
 
 - **`RefreshChangesFromGit` returns 4xx**: ADO branch unreachable (PAT expired, branch deleted, repo deleted). Surface the platform error verbatim and exit.
-- **`RefreshChangesFromGit` returns 204 but `list-incoming-updates.js` returns `count: 0` even though a teammate just pushed** (pattern IL-016): the `gitupdatefiles` entity is not exposed on this tenant. Fall back to `sourcecontrolbranchconfigurations.upstreambranchsyncedcommitid` vs the ADO branch tip — if the SHAs differ, treat as "incoming updates exist" and proceed. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-error-catalog.md` Pattern IL-016.
-- **`PullChangesFromGit` returns 400 with `0x80072033 — The Entity powerpagecomponent is missing primary key powerpagecomponentid`** (pattern IL-014): this env has `powerpagecomponent` mis-published as a custom entity. The pull cannot proceed via API — dispatch `/power-pages:diagnose-git-integration` and tell the user a Microsoft Support ticket is required. Commits and conflict-resolution still work; only the pull half is blocked.
 - **`PullChangesFromGit` returns 409 / 400 with conflict text**: state drifted between Phase 3 and Phase 5 (another user committed). Re-run from Phase 2.
-- **`CommitToGit` returned 400 in a previous step but the commit may have landed** (pattern IL-017): if the user reports the previous commit run as failed but ADO shows a matching new commit, treat that as a false-failure and update the manifest before proceeding. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-error-catalog.md` Pattern IL-017.
 - **Pull timeout (Phase 6) but tabs still show updates**: non-fatal — instruct the user to check the maker-portal Connect-to-Git panel and re-run if needed.
 - **Hard-delete chosen but Phase 6 reports remaining updates**: the platform may have rejected one or more deletions due to dependency holds. Surface the residual list; suggest the user reconcile manually.
 

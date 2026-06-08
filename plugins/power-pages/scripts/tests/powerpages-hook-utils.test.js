@@ -77,6 +77,57 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
   assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
 });
 
+test('detectTrackedSkill recognizes the 12 Inner Dev Loop skills', () => {
+  assert.equal(detectTrackedSkill('/power-pages:plan-inner-loop'), 'plan-inner-loop');
+  assert.equal(detectTrackedSkill('/power-pages:setup-git-integration'), 'setup-git-integration');
+  assert.equal(detectTrackedSkill('/power-pages:connect-solution-to-git'), 'connect-solution-to-git');
+  assert.equal(detectTrackedSkill('/power-pages:validate-pending-changes'), 'validate-pending-changes');
+  assert.equal(detectTrackedSkill('/power-pages:commit-to-git'), 'commit-to-git');
+  assert.equal(detectTrackedSkill('/power-pages:sync-from-git'), 'sync-from-git');
+  assert.equal(detectTrackedSkill('/power-pages:resolve-conflicts'), 'resolve-conflicts');
+  assert.equal(detectTrackedSkill('/power-pages:branch-switch'), 'branch-switch');
+  assert.equal(detectTrackedSkill('/power-pages:revert-workspace'), 'revert-workspace');
+  assert.equal(detectTrackedSkill('/power-pages:revert-branch'), 'revert-branch');
+  assert.equal(detectTrackedSkill('/power-pages:open-pr'), 'open-pr');
+  assert.equal(detectTrackedSkill('/power-pages:diagnose-git-integration'), 'diagnose-git-integration');
+});
+
+test('every Inner Dev Loop skill resolves to its validator script', () => {
+  // All 12 inner-loop skills MUST be registered with command-backed validators
+  // — they all write markers under docs/inner-loop/ that the PostToolUse hook
+  // checks. `connect-solution-to-git` aliases `setup-git-integration`'s
+  // validator (both skills produce the same .git-integration-manifest.json +
+  // docs/inner-loop/last-setup.json).
+  assert.match(getValidatorScript('plan-inner-loop'), /validate-plan-inner-loop\.js$/);
+  assert.match(getValidatorScript('setup-git-integration'), /validate-setup-git-integration\.js$/);
+  assert.match(getValidatorScript('connect-solution-to-git'), /validate-connect-solution-to-git\.js$/);
+  assert.match(getValidatorScript('validate-pending-changes'), /validate-validate-pending-changes\.js$/);
+  assert.match(getValidatorScript('commit-to-git'), /validate-commit-to-git\.js$/);
+  assert.match(getValidatorScript('sync-from-git'), /validate-sync-from-git\.js$/);
+  assert.match(getValidatorScript('resolve-conflicts'), /validate-resolve-conflicts\.js$/);
+  assert.match(getValidatorScript('branch-switch'), /validate-branch-switch\.js$/);
+  assert.match(getValidatorScript('revert-workspace'), /validate-revert-workspace\.js$/);
+  assert.match(getValidatorScript('revert-branch'), /validate-revert-branch\.js$/);
+  assert.match(getValidatorScript('open-pr'), /validate-open-pr\.js$/);
+  assert.match(getValidatorScript('diagnose-git-integration'), /validate-diagnose-git-integration\.js$/);
+});
+
+test('every TRACKED_SKILLS validatorScript path resolves to an existing file on disk', () => {
+  // Guardrail: registering a skill with a wrong path silently disables
+  // validation. The test catches typos and stale registrations at CI time.
+  const { TRACKED_SKILLS } = require('../lib/powerpages-hook-utils');
+  const pluginRoot = path.join(__dirname, '..', '..');
+  const missing = [];
+  for (const [skillName, entry] of Object.entries(TRACKED_SKILLS)) {
+    if (!entry.validatorScript) continue;
+    const full = path.join(pluginRoot, entry.validatorScript);
+    if (!fs.existsSync(full)) {
+      missing.push(`${skillName} → ${entry.validatorScript}`);
+    }
+  }
+  assert.deepEqual(missing, [], `These TRACKED_SKILLS validatorScript paths do not exist: ${missing.join('; ')}`);
+});
+
 test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse only)', () => {
   // Skill-specific Stop hooks are an anti-pattern documented in
   // PLUGIN_DEVELOPMENT_GUIDE.md — they duplicate the centralized PostToolUse
