@@ -22,10 +22,16 @@ const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
-// Anonymous telemetry is default-on. The single user-facing opt-out is the
-// POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
-function isUserOptedOut() {
-  return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
+const { isTransmissionOptedOut } = require("./user-config");
+
+// Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
+// config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
+// It suppresses TRANSMISSION only; the local mirror is written before this gate.
+function localConfigDir() {
+  return process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
+}
+function isUserOptedOut(pluginName) {
+  return isTransmissionOptedOut(localConfigDir(), pluginName);
 }
 
 // Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
@@ -97,9 +103,7 @@ function writeProbe(filePath, { headers, body }) {
 function writeLocalLog(event) {
   try {
     const { appendLocal } = require("./local-log");
-    const configDir =
-      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
-    appendLocal(event, { configDir });
+    appendLocal(event, { configDir: localConfigDir() });
   } catch {
     // fail closed
   }
@@ -138,8 +142,9 @@ process.stdin.on("end", () => {
   // short-circuited before stdin was even read.)
   writeLocalLog(localRecord);
 
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 opts out of TRANSMISSION only — the local mirror above is kept.
-  if (isUserOptedOut()) return exitSilently();
+  // User opt-out (per plugin) — transmission only; the local mirror above is kept.
+  const pluginName = event && event.data && event.data.pluginName;
+  if (isUserOptedOut(pluginName)) return exitSilently();
 
   // Placeholder / unprovisioned mode → local mirror already written; no POST.
   const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;

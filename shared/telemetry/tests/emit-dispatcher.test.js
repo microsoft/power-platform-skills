@@ -32,6 +32,13 @@ function mkEnabledIkey(tmp) {
 function runDispatcher({ event, env }) {
   const tmp = env.configDir;
   const ikeyJsonPath = env.ikeyJsonPath || mkEnabledIkey(tmp);
+  // Opt-out is now a per-plugin config.json in the config dir (env var removed).
+  if (env.off) {
+    fs.writeFileSync(
+      path.join(tmp, "config.json"),
+      JSON.stringify({ telemetry: { "power-pages": "off" } })
+    );
+  }
   return spawnSync(process.execPath, [DISPATCHER], {
     input: JSON.stringify(event),
     encoding: "utf8",
@@ -40,7 +47,6 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_CONFIG_DIR: tmp,
       POWER_PLATFORM_SKILLS_IKEY: env.iKey || "",
       POWER_PLATFORM_SKILLS_COLLECTOR: env.collectorUrl || "",
-      POWER_PLATFORM_SKILLS_TELEMETRY: env.off ? "0" : "",
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
     },
@@ -95,7 +101,7 @@ test("dispatcher POSTs by default (no opt-out present)", () => {
   );
 });
 
-test("dispatcher exits 0 when POWER_PLATFORM_SKILLS_TELEMETRY=0", () => {
+test("dispatcher exits 0 when the plugin is opted out via config.json", () => {
   const tmp = mkTmp();
   const { status } = runDispatcher({
     event: fakeEvent,
@@ -309,10 +315,10 @@ test("dispatcher fails closed when ikey.json is missing/unreadable", () => {
   );
 });
 
-test("dispatcher writes the local mirror when env opt-out is set, but does NOT POST", () => {
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 suppresses TRANSMISSION only — the local diagnostic mirror is
-  // still written. With a real iKey + fake-https probe AND the opt-out set, the
-  // local log exists and the probe (the would-be POST) does not.
+test("dispatcher writes the local mirror when opted out via config, but does NOT POST", () => {
+  // A per-plugin config opt-out suppresses TRANSMISSION only — the local
+  // diagnostic mirror is still written. With a real iKey + fake-https probe AND
+  // the opt-out set, the local log exists and the probe (would-be POST) does not.
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
@@ -326,15 +332,39 @@ test("dispatcher writes the local mirror when env opt-out is set, but does NOT P
     },
   });
   assert.equal(status, 0);
-  assert.ok(!fs.existsSync(probePath), "env opt-out must skip the POST");
+  assert.ok(!fs.existsSync(probePath), "config opt-out must skip the POST");
   const logFile = path.join(tmp, "events.jsonl");
   assert.ok(
     fs.existsSync(logFile),
-    "env opt-out must still write the local mirror"
+    "config opt-out must still write the local mirror"
   );
   const parsed = JSON.parse(fs.readFileSync(logFile, "utf8").trim());
   assert.equal(parsed.name, "PowerPagesPluginEvent");
   assert.equal(parsed.data.eventName, "skill_started");
+});
+
+test("a DIFFERENT plugin's opt-out does not silence this plugin", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  // config opts out 'model-apps', but the event is for 'power-pages'
+  fs.writeFileSync(
+    path.join(tmp, "config.json"),
+    JSON.stringify({ telemetry: { "model-apps": "off" } })
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent, // pluginName: "power-pages"
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(
+    fs.existsSync(probePath),
+    "power-pages must still POST when only model-apps is off"
+  );
 });
 
 test("local mirror records the same data + time that gets POSTed to Kusto", () => {
