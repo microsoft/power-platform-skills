@@ -87,11 +87,14 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
 });
 
 test('TRACKED_SKILLS is derived from every skill folder', () => {
+  // The `telemetry` skill is intentionally excluded from tracking so checking/
+  // toggling telemetry never self-emits (see EXCLUDED_FROM_TRACKING).
   const skillFolders = fs
     .readdirSync(SKILLS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((skillName) => fs.existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md')))
+    .filter((skillName) => skillName !== 'telemetry')
     .sort();
 
   assert.deepEqual(Object.keys(TRACKED_SKILLS).sort(), skillFolders);
@@ -125,4 +128,11 @@ test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse on
     [],
     `These SKILL.md files declare hooks frontmatter — register the skill in TRACKED_SKILLS instead: ${offenders.join(', ')}`
   );
+});
+
+test('the telemetry skill is excluded from tracking (no self-emit)', () => {
+  assert.equal(TRACKED_SKILLS.telemetry, undefined);
+  assert.equal(detectTrackedSkill('/power-pages:telemetry'), null);
+  assert.equal(detectTrackedSkill('telemetry'), null);
+  assert.equal(getTrackedSkillFromToolInput({ skill: 'power-pages:telemetry' }), null);
 });
