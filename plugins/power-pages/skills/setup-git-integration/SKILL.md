@@ -26,7 +26,7 @@ Binds the **whole Dataverse environment** to an Azure DevOps repo + branch + fol
 
 This is the most common Inner Dev Loop entry skill — env-level binding is what Microsoft Learn documents as the default Connect-to-Git topology. If the user wants to bind only a specific solution (rather than the whole env), use `/power-pages:connect-solution-to-git` instead — that's the lower-fan-out path with more ergonomic foot-guns (notably the shared-object restriction).
 
-The skill verifies prerequisites (Managed Env on, system-admin role, ADO PAT scopes, repo initialized), collects the binding fields, gets explicit consent, calls `ConnectToGit`, verifies the binding round-trips via `detect-git-binding`, and writes the load-bearing `.git-integration-manifest.json` that every other inner-loop skill reads in its Phase 1.
+The skill verifies prerequisites (Managed Env on, system-admin role, ADO Contributor on the repo, repo initialized — auto-init if empty), collects the binding fields, gets explicit consent, calls `ConnectToGit`, verifies the binding round-trips via `detect-git-binding`, and writes the load-bearing `.git-integration-manifest.json` that every other inner-loop skill reads in its Phase 1.
 
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/binding-strategy.md` (env vs solution binding tradeoffs)
@@ -36,11 +36,12 @@ The skill verifies prerequisites (Managed Env on, system-admin role, ADO PAT sco
 ## Prerequisites
 
 - PAC CLI installed and authenticated
-- Azure CLI installed and logged in
+- Azure CLI installed and `az login` is current
+- **`az` must be signed in to the same Microsoft Entra tenant that backs the target ADO organization.** This skill auto-acquires an ADO-scoped bearer token from `az` for the well-known ADO Entra app (`499b84ac-1321-427f-aa17-267ca6975798`) and uses it for the read-only pre-checks; **no PAT is needed**. Cross-tenant scenarios are not supported by this skill — use `/power-pages:connect-solution-to-git` (which still accepts `--token <PAT>`) for those.
 - **Recommended:** Managed Environment ON for the target env (HAR-confirmed 2026-06: solution-binding works on Basic envs in practice, but env-binding via `ConnectionType=1` has not been verified without Managed Env — treat as still required for env-binding until proven otherwise; see `references/inner-loop-empirical-findings.md` §1)
 - The signed-in user holds the system-administrator role on the target env
-- **Optional** ADO PAT with `Code (read & write)` scope on the target repo — only used by pre-check helpers (`verify-repo-initialized`, `verify-ado-permissions`); `ConnectToGit` itself uses your tenant Entra OAuth grant (set up out-of-band once per tenant via the maker portal "Authorize ADO" flow). See `references/inner-loop-empirical-findings.md` §5.
-- The target ADO repo exists and is initialized (or the user accepts the Phase 2 init flow)
+- The signed-in user has **Contribute** on the target ADO repo (needed for both the auto-init pre-check and the eventual `ConnectToGit` initial-sync commit).
+- The target ADO repo exists. If it is empty (no default branch / no commits), this skill will offer to create the first README commit for you in Phase 2 step 2 — no need to bootstrap it manually.
 
 **Initial request:** $ARGUMENTS
 
@@ -53,6 +54,17 @@ The skill verifies prerequisites (Managed Env on, system-admin role, ADO PAT sco
 **Do NOT create tasks yet.** Use natural-language progress reporting only during this phase.
 
 Steps:
+
+0. **Acquire an ADO Entra bearer token (`adoToken`).** Mint a tenant-scoped OAuth token for the ADO Entra app and cache it as `adoToken` for downstream pre-checks. This is the silent replacement for the old PAT prompt — the user is **never** asked for a PAT.
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js"
+   ```
+
+   Capture `.token` as `adoToken`. **Never echo it to the user, never write it to disk, never include it in any prompt.** On `ok:false`:
+   - The most common cause is `az login` is missing or stale. Surface the error verbatim (it already contains the actionable hint) and stop. No further steps run.
+
+   > 🔒 Tenant verification against the target ADO org happens in **Phase 2 step 1** (once we know the org name) — not here.
 
 1. Verify PAC CLI + Azure CLI are authenticated:
 
@@ -67,7 +79,7 @@ Steps:
    - Disconnect first and re-bind here (call `/power-pages:branch-switch` for an in-place change, or run `disconnect-from-git.js` for a full unbind), OR
    - Cancel this skill (current binding is fine).
 
-3. Verify Managed Environment + ADO permissions in parallel:
+3. Verify Managed Environment + ADO permissions in parallel. ADO permissions now always run with `--token "<adoToken>"` (acquired in step 0) — there is no "no PAT supplied" branch.
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-managed-env.js" --envUrl "<envUrl>"
@@ -79,8 +91,7 @@ Steps:
    - **Hard-block** on PAC CLI / Az CLI auth failure (no recovery within this skill).
    - **Hard-block** on a clearly malformed `verify-managed-env` response (HTTP/network error). A successful 200 returning `enabled:false` is NOT a hard-block (see warn-not-block below).
    - **Warn** on `verify-managed-env` returning `enabled:false`. Microsoft Learn lists Managed Env as required, but env-level binding behavior without Managed Env has not been fully characterized. Solution-level binding empirically works on Basic envs (see `references/inner-loop-empirical-findings.md` §1) — if the user knows that, they may want to switch to `/power-pages:connect-solution-to-git`.
-   - **Warn (not block)** on ADO permissions failure when no PAT was supplied — the PAT is optional, and `ConnectToGit` itself uses tenant Entra OAuth, not the PAT.
-   - **Hard-block** on ADO permissions failure when a PAT *was* supplied (real auth issue worth surfacing).
+   - **Hard-block** on any ADO permissions failure. `adoToken` is always present, so a failure means a real Contribute / repo / project issue worth surfacing.
 
    <!-- gate: setup-git-integration:1.prereq-fail | category=intent | cancel-leaves=nothing -->
    > 🚦 **Gate (intent · setup-git-integration:1.prereq-fail):** When any **hard-block** above fires, surface `AskUserQuestion`:
@@ -126,6 +137,16 @@ Steps:
    - Branch: non-empty.
    - Folder: non-empty; leading `/` stripped.
 
+   **Tenant cross-check.** Once `<org>` is known, re-mint the bearer token with tenant verification turned on:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --verifyTenant --organization "<org>"
+   ```
+
+   - `ok:true, tenantMismatch:false` (the common case, including the soft-skip path where the org tenant could not be extracted from `connectionData`) → refresh `adoToken` with the newly returned `.token` and continue to step 2.
+   - `ok:true, tenantMismatch:true` → **hard-block** with the helper's `hint` (it contains the exact `az login --tenant <guid>` command). Do not proceed; cross-tenant binding is not supported by this skill.
+   - `ok:false` → surface the error verbatim and stop.
+
 2. Repository init check:
 
    ```bash
@@ -141,23 +162,24 @@ Steps:
 
      | Question | Header | Options |
      |---|---|---|
-     | The ADO repo `{org}/{project}/{repo}` is empty. Initialize it now with a README commit? | Repo initialization | Initialize with README commit (Recommended), I'll initialize manually then re-run setup-git-integration, Cancel |
+     | The ADO repo `{org}/{project}/{repo}` is empty. Initialize it now with a single README commit on `{branch}` so `ConnectToGit` can bind cleanly? | Repo initialization | Initialize now (Recommended), Cancel |
 
-     - **Initialize now** → push a stub `README.md` on the chosen branch via ADO Git push REST. If that's not available in the current helper set, surface the manual command:
+     - **Initialize now** → push a stub `README.md` on the chosen branch via the ADO Git Pushes REST API:
 
        ```bash
-       git clone https://dev.azure.com/<org>/<proj>/_git/<repo>
-       cd <repo>
-       git switch -c <branch>
-       echo "# <repo>" > README.md
-       git add README.md && git commit -m "Initialize repo for Power Platform Git integration"
-       git push -u origin <branch>
+       node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/init-ado-repo.js" \
+           --organization "<org>" --project "<proj>" --repository "<repo>" \
+           --branch "<branch>" --token "<adoToken>"
        ```
 
-     - **Manual** → exit cleanly. The user re-runs this skill after initializing.
-     - **Cancel** → exit cleanly.
+       - `ok:true, initialized:true` (or `alreadyInitialized:true` — re-running the gate is safe) → continue to Phase 3.
+       - `ok:false, statusCode:403` → surface the helper's `hint` ("Your account lacks Contribute on this repo. Ask the project admin to grant the Contributors group write access on `<org>/<proj>/<repo>`, then re-run.") and stop. Cannot auto-fix; this is an ADO permission grant only the project admin can make.
+       - `ok:false, statusCode:404` → surface the helper's `hint` ("Repository `<org>/<proj>/<repo>` not found...") and stop. Most often a typo in one of the 5 free-text fields; the user should re-run the skill and double-check the field values.
+       - `ok:false` (other) → surface the helper's `error` + `hint` verbatim and stop. No Dataverse mutation has happened yet.
 
-**Output:** All 5 fields validated; target repo confirmed initialized.
+     - **Cancel** → exit cleanly. No Dataverse changes have been made. The user can manually initialize the repo (e.g. via the ADO portal "Initialize" button) and re-run this skill.
+
+**Output:** All 5 fields validated; tenant alignment confirmed; target repo confirmed initialized (or just-initialized by `init-ado-repo.js`).
 
 ---
 
@@ -394,10 +416,10 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: Prereq failure (Managed Env / sys-admin / ADO PAT scope) → open remediation URLs or cancel (gate `setup-git-integration:1.prereq-fail`).
+1. **Phase 1**: Prereq failure (Managed Env / sys-admin / ADO Contributor) → open remediation URLs or cancel (gate `setup-git-integration:1.prereq-fail`).
 2. **Phase 1**: Already-bound check → disconnect-and-rebind or cancel (no marker — conversational).
 3. **Phase 2**: ADO repo coordinates (data-gathering, not a gate).
-4. **Phase 2**: Empty repo detected → initialize with README commit, do it manually, or cancel (gate `setup-git-integration:2.repo-init`).
+4. **Phase 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
 5. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
 6. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
 7. **Phase 8**: Choose next action — `sync-from-git`, `commit-to-git`, or exit (gate `setup-git-integration:8.final`).
@@ -407,7 +429,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 ## Error Handling
 
 - **`ConnectToGit` returns 400 with "repo not initialized"**: Phase 2's verify-repo-initialized check passed but the platform rejected the bind. The repo may have been re-emptied between Phase 2 and Phase 5. Surface the error and offer to re-run Phase 2.
-- **`ConnectToGit` returns 401 / 403**: ADO PAT lacks `Code (read & write)` scope on the target repo. Surface the remediation from `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-error-catalog.md`.
+- **`ConnectToGit` returns 401 / 403**: the tenant Entra OAuth grant on the target ADO org is missing or revoked. `ConnectToGit` itself does NOT use the bearer token this skill mints for pre-checks — server-side it uses the tenant-level "Authorize ADO" grant configured once per tenant via the maker portal. Surface the remediation from `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-error-catalog.md` (typically: ask a tenant admin to re-authorize the ADO connection in the maker portal, then re-run).
 - **`ConnectToGit` returns 5xx**: transient — retry once. If second attempt fails, surface verbatim and stop; no manifest is written.
 - **Phase 6 reports drift between sent values and Dataverse-reported values**: write the canonical values into the manifest. This is normal for branch (`main` vs `refs/heads/main`) and is not an error.
 - **Manifest write fails** (permission / full disk): hard stop after `ConnectToGit` already succeeded — surface the error AND the canonical binding fields so the user can write the manifest manually.

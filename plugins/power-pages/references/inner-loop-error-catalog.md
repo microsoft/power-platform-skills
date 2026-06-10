@@ -62,9 +62,9 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 **Fix procedure:**
 
 1. Detect with `verify-repo-initialized.js` **before** calling `ConnectToGit`.
-2. **Ask explicit user permission:** *"The ADO repo `{org}/{project}/{repo}` is not initialized (no commits, no default branch). Initialize it now by creating an empty `README.md` commit on `main`? This is a one-time bootstrap; safe."*
-3. If approved: use ADO REST API to push an initial commit (`/_apis/git/repositories/{repo}/pushes`).
-4. Re-run `verify-repo-initialized.js` to confirm.
+2. **Ask explicit user permission:** *"The ADO repo `{org}/{project}/{repo}` is empty. Initialize it now with a single README commit on `{branch}` so `ConnectToGit` can bind cleanly?"* (consent gate, two options: Initialize now / Cancel.)
+3. If approved: invoke `scripts/lib/init-ado-repo.js --organization <o> --project <p> --repository <r> --branch <b> --token <adoToken>`. The helper GETs the repo metadata first and returns `alreadyInitialized:true` (no-op) when `defaultBranch` is already set — safe to retry. Otherwise it POSTs to `/_apis/git/repositories/{repoId}/pushes?api-version=7.1` with `oldObjectId` set to 40 zeros (ADO empty-repo marker) and a default README body. On 403 it surfaces an actionable "your account lacks Contribute" hint; on 404 it surfaces a "repository not found" hint.
+4. The helper is idempotent — no explicit re-verification step is needed. Continue to Phase 3 of `setup-git-integration`.
 
 ---
 
@@ -91,13 +91,13 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 - `CommitToGit` returns: `Permission denied while pushing to repository.`
 - ADO repo permission check returns `Contribute = false` for the calling identity.
 
-**Root cause:** The Dataverse → ADO connection's identity lacks Contribute on the repo.
+**Root cause:** The Dataverse → ADO connection's identity (or, when applicable, the user's Entra-issued bearer token used for ADO pre-checks) lacks Contribute on the repo. Note: `setup-git-integration` no longer collects a PAT — it acquires an Entra OAuth token via `get-ado-token.js`. A 403 from any ADO REST call (including `init-ado-repo.js`'s push) means the calling identity does not hold Contribute, regardless of which auth shape (PAT or Bearer JWT) was used.
 
 **Severity:** Error
 
-**Auto-fix available:** No (ADO admin only)
+**Auto-fix available:** No (ADO admin only — only the project admin can grant Contributors group write access)
 
-**Fix procedure:** Surface ADO repo permission URL: `https://dev.azure.com/{org}/{project}/_settings/repositories?_a=permissions&repo={repoId}`. Tell user to add their account (or the service identity) to the Contributors security group.
+**Fix procedure:** Surface ADO repo permission URL: `https://dev.azure.com/{org}/{project}/_settings/repositories?_a=permissions&repo={repoId}`. Tell the user (or the project admin) to add the calling identity to the Contributors security group on the target repo, then re-run the skill. `init-ado-repo.js` surfaces this exact remediation in its `hint` field on 403.
 
 ---
 

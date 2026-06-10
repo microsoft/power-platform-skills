@@ -31,11 +31,12 @@ Azure DevOps is currently the **only supported Git provider** (`GitProvider = 0`
 |---|---|---|
 | ADO organization exists | User-supplied URL `https://dev.azure.com/{org}` | Create at https://dev.azure.com |
 | ADO project exists | `GET https://dev.azure.com/{org}/_apis/projects/{project}?api-version=7.1` (via `ado-client.js`) | Skill prompts user to create in ADO |
-| ADO **repo exists AND is initialized** | `GET .../repos/{repo}` (200 + `defaultBranch` populated). **Empty repos return 200 with `defaultBranch=null` — must reject.** | `verify-repo-initialized.js`; if uninitialized, offer to bootstrap by creating an initial README commit |
-| User has **Contribute** permission on the repo | Try a no-op operation, or check `/_apis/permissions/{namespaceId}/...` | Surface ADO permission URL; cannot auto-grant |
+| ADO **repo exists AND is initialized** | `GET .../repos/{repo}` (200 + `defaultBranch` populated). **Empty repos return 200 with `defaultBranch=null` — must reject.** | `verify-repo-initialized.js` catches this; `setup-git-integration` then offers a one-tap consent gate that auto-creates the first README commit via `init-ado-repo.js` (idempotent — re-running against an initialized repo is a no-op). |
+| User has **Contribute** permission on the repo | Try a no-op operation, or check `/_apis/permissions/{namespaceId}/...` | Surface ADO permission URL; cannot auto-grant. `init-ado-repo.js` surfaces this exact remediation on 403. |
 | User has an ADO **Basic license** (not Stakeholder) | `GET .../graph/users/{descriptor}` | Stakeholders cannot push commits — escalate to ADO admin |
+| **Auth to `dev.azure.com` for the pre-checks** | `scripts/lib/get-ado-token.js` mints an ADO-scoped Microsoft Entra JWT via `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the well-known, tenant-invariant ADO Entra app id). `buildAuthHeader` in `verify-ado-permissions.js` auto-detects PAT vs JWT and emits the correct header. | `setup-git-integration` runs `get-ado-token.js` in Phase 1 step 0 (and re-runs it in Phase 2 step 1 with `--verifyTenant --organization <org>` once the org is known). On failure, the helper surfaces `az login` / `az login --tenant <guid>` hints. Cross-tenant scenarios are not supported by this skill — fall back to `connect-solution-to-git`, which still accepts `--token <PAT>`. |
 
-> ⚠️ **Cryptic-error footgun.** An uninitialized repo fails ~30 min into the Connect flow with *"Failed to retrieve default branch"*. `verify-repo-initialized.js` catches this in <1 sec.
+> ⚠️ **Cryptic-error footgun.** An uninitialized repo fails ~30 min into the Connect flow with *"Failed to retrieve default branch"*. `verify-repo-initialized.js` catches this in <1 sec; `init-ado-repo.js` fixes it in the same skill run with one consent.
 
 ---
 
@@ -80,14 +81,23 @@ These cannot be auto-checked end-to-end; the skill should surface them as a one-
 ## 6. Quick prerequisite-check pseudocode
 
 ```
+node scripts/lib/get-ado-token.js [--verifyTenant --organization <o>]
+  → { ok: true, token: "<jwt>", tokenType: "OAuth", tenantId, expiresOn, tenantMismatch: false }
+  // setup-git-integration runs this twice: once at Phase 1 step 0 (no --verifyTenant — org unknown), and again
+  // at Phase 2 step 1 (with --verifyTenant --organization <org>, once the user has supplied org). Hard-blocks
+  // on tenantMismatch:true. Caches the .token as `adoToken` for downstream helpers — never written to disk,
+  // never echoed to the user.
+
 node scripts/lib/verify-managed-env.js --envUrl <url>
   → { managedEnv: true, sysAdmin: true, byok: false }
 
-node scripts/lib/verify-repo-initialized.js --org <o> --project <p> --repo <r>
+node scripts/lib/verify-repo-initialized.js --organization <o> --project <p> --repository <r> --token <adoToken>
   → { initialized: true, defaultBranch: "main" }
+  // initialized:false → setup-git-integration calls init-ado-repo.js after a one-tap consent gate.
 
-node scripts/lib/verify-ado-permissions.js --org <o> --project <p> --repo <r>
+node scripts/lib/verify-ado-permissions.js --organization <o> --project <p> --repository <r> --token <adoToken>
   → { contribute: true, basicLicense: true }
+  // buildAuthHeader auto-detects: <2 dots in --token → Basic <base64(:PAT)>; exactly 2 dots → Bearer <JWT>.
 ```
 
 Skills must surface a **single composite "Prerequisites" report** before any mutating call — never run a Connect-to-Git API blind.

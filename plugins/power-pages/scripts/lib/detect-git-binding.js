@@ -341,8 +341,22 @@ async function detectGitBinding({ envUrl, token, solutionUniqueName } = {}) {
 
   // When env-binding is active there is exactly one row (connectiontype=1).
   // When solution binding is used there may be multiple rows (connectiontype=0),
-  // one per bound solution.
+  // one per bound solution. Surface ALL rows in `boundSolutions[]` so callers
+  // (e.g. switch-branch) can detect ambiguous multi-binding state — this is
+  // consistent with the sourcecontrol-entities fallback path, which always
+  // populates `boundSolutions[]`.
   const row = rows[0];
+  const isSolutionBinding = CONNECTION_TYPE[row.connectiontype] === 'solution';
+  const boundSolutionsLegacy = isSolutionBinding
+    ? rows
+      .filter((r) => CONNECTION_TYPE[r.connectiontype] === 'solution' && r.solutionuniquename)
+      .map((r) => ({
+        uniqueName: r.solutionuniquename,
+        solutionId: null,
+        pendingChangesCount: null,
+        sourceControlSyncStatus: null,
+      }))
+    : [];
   return {
     bound: true,
     bindingType: CONNECTION_TYPE[row.connectiontype] || String(row.connectiontype),
@@ -355,6 +369,8 @@ async function detectGitBinding({ envUrl, token, solutionUniqueName } = {}) {
     solutionUniqueName: row.solutionuniquename || null,
     connectionStatus: row.connectionstatus || null,
     gitIntegrationId: row.gitintegrationid || null,
+    boundSolutions: boundSolutionsLegacy,
+    multipleSolutionsBound: boundSolutionsLegacy.length > 1,
   };
 }
 

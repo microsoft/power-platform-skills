@@ -87,17 +87,23 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 
 ---
 
-## §5 — `ConnectToGit` does not require an ADO PAT in the request (2026-06)
+## §5 — `ConnectToGit` does not require an ADO PAT in the request (2026-06; updated 2026-07)
 
 **Earlier prereq:** "An ADO PAT with `Code (read & write)` scope on the target repo".
 
 **Empirical reality:**
 - `POST /api/data/v9.2/ConnectToGit` uses your **Entra (Dataverse) bearer token only**. ADO is authenticated via the tenant-level OAuth grant set up out-of-band on first use (the maker portal walks you through this once per tenant).
-- A PAT is only needed by the **pre-check helpers** (`verify-repo-initialized.js`, `verify-ado-permissions.js`, `ado-list-commits.js`) that hit `dev.azure.com` directly.
+- ADO REST calls from the pre-check helpers (`verify-repo-initialized.js`, `verify-ado-permissions.js`, `ado-list-commits.js`, and the newer `init-ado-repo.js`) need *some* `Authorization` header on `dev.azure.com`. ADO accepts both `Basic <base64(:PAT)>` and `Bearer <JWT>`. `buildAuthHeader` in `verify-ado-permissions.js` auto-detects which shape was passed by dot-counting (<2 dots → PAT, exactly 2 → JWT).
 
-**Action:**
-- Soften the PAT prereq: *"Optional — only needed to enable repo-init / permission pre-checks. ConnectToGit itself uses your tenant Entra grant."*
-- Make `verify-repo-initialized` an **optional** pre-check, not a hard gate. When the user has no PAT, skip it and trust the bind to surface a clear error if the repo is empty.
+**Current state (2026-07):**
+- `setup-git-integration` **no longer collects a PAT at all.** Phase 1 step 0 runs `scripts/lib/get-ado-token.js`, which shells `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the immutable, tenant-invariant ADO Entra app id documented at <https://learn.microsoft.com/azure/devops/integrate/get-started/authentication/entra>). The skill caches the resulting JWT as `adoToken` and passes it to all four pre-check helpers via `--token`.
+- Phase 2 step 1 re-runs `get-ado-token.js --verifyTenant --organization <org>` once the org is known and hard-blocks on `tenantMismatch:true`.
+- The pre-check helpers retain PAT support unchanged. Other inner-loop skills (`connect-solution-to-git`, `branch-switch`, `open-pr`, `diagnose-git-integration`) still take `--token <PAT>` from the caller — useful for cross-tenant scenarios that the Entra-OAuth path can't service, and for CI / SP flows where minting a token via `az` isn't viable.
+
+**Action for new inner-loop skills:**
+- Prefer the Entra-OAuth path (`get-ado-token.js`) when the user is interactively running the skill in a dev environment where `az login` is current.
+- Fall back to a `--token` CLI arg (PAT) when the skill needs to work in a CI/SP context or against a cross-tenant ADO org.
+- **Do not** add a new `AskUserQuestion` prompt for a PAT in any new skill — that pattern is deprecated as a UX/security smell.
 
 ---
 
