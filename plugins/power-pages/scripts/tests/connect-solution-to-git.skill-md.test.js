@@ -72,20 +72,94 @@ test('E2: Phase 1 has a step 0 that invokes get-ado-token.js --writeToFile docs/
   assert.match(phase1, /Tenant verification.*Phase 3 step 3a/i);
 });
 
-test('E2: Phase 1 step 0 lists every Phase 3 helper that consumes the token', () => {
-  const phase1Idx = prose.indexOf('## Phase 1 — Prereq Check');
-  const phase2Idx = prose.indexOf('## Phase 2');
-  const phase1 = prose.slice(phase1Idx, phase2Idx);
-  // These are the ADO helpers wired by E4 (3a-3e) and E5/E7 (3.4-3.5).
-  for (const helper of [
-    'list-ado-orgs',
-    'list-ado-projects',
-    'list-ado-repos',
-    'verify-ado-permissions',
-    'verify-repo-initialized',
-    'list-ado-folders',
-    'check-ado-folder-exists',
+// ===== E4 — Phase 3 step 3 cascading discovery (3a/3b/3c/3c.5/3d/3e) =====
+
+test('E4: Phase 3 step 3 declares cascading discovery (org → project → repo → branch → folder)', () => {
+  assert.match(prose, /Cascading selection of ADO coordinates \(org → project → repo → branch → folder\)/);
+  // The legacy free-text gate ID is RETIRED
+  assert.doesNotMatch(prose, /connect-solution-to-git:3\.ado-fields/);
+});
+
+test('E4: each sub-step 3a-3e is present with its gate ID', () => {
+  // 3a — org (gate)
+  assert.match(prose, /Sub-step 3a — Select organization/);
+  assert.match(prose, /connect-solution-to-git:3\.ado-org/);
+  // 3b — project (gate, no Create-new)
+  assert.match(prose, /Sub-step 3b — Select project/);
+  assert.match(prose, /connect-solution-to-git:3\.ado-project/);
+  assert.match(prose, /intentionally does NOT offer "Create new project"/);
+  // 3c — repo (gate, with Create-new sub-gate)
+  assert.match(prose, /Sub-step 3c — Select repository/);
+  assert.match(prose, /connect-solution-to-git:3\.ado-repo/);
+  assert.match(prose, /connect-solution-to-git:3\.create-repo/);
+  // 3c.5 — perms (intent gate, hard-block)
+  assert.match(prose, /Sub-step 3c\.5 — Verify ADO permissions/);
+  assert.match(prose, /connect-solution-to-git:3\.ado-perms/);
+  // 3d — branch (not-a-gate)
+  assert.match(prose, /Sub-step 3d — Collect branch \(free-text, not-a-gate\)/);
+  assert.match(prose, /connect-solution-to-git:3\.branch/);
+  // 3e — folder (not-a-gate, with format warning)
+  assert.match(prose, /Sub-step 3e — Select folder-in-repo/);
+  assert.match(prose, /connect-solution-to-git:3\.folder\b/);
+});
+
+test('E4: each cascading helper is wired with the canonical CLI args', () => {
+  assert.match(prose, /list-ado-orgs\.js"?\s+--token "<adoToken>"/);
+  assert.match(prose, /list-ado-projects\.js"?\s+--organization "<org>" --token "<adoToken>"/);
+  assert.match(prose, /list-ado-repos\.js"?\s+--organization "<org>" --project "<proj>" --token "<adoToken>"/);
+  assert.match(prose, /verify-ado-permissions\.js"?[\s\\]+--organization "<org>" --project "<proj>" --repository "<repo>" --token "<adoToken>"/);
+  assert.match(prose, /list-ado-folders\.js"?[\s\\]+--organization "<org>" --project "<proj>" --repository "<repo>" --token "<adoToken>"/);
+});
+
+test('E4: 3a and 3b auto-select when count==1', () => {
+  const orgIdx = prose.indexOf('Sub-step 3a — Select organization');
+  const projIdx = prose.indexOf('Sub-step 3b — Select project');
+  const repoIdx = prose.indexOf('Sub-step 3c — Select repository');
+  assert.ok(orgIdx > 0 && projIdx > orgIdx && repoIdx > projIdx);
+  const orgSect = prose.slice(orgIdx, projIdx);
+  const projSect = prose.slice(projIdx, repoIdx);
+  assert.match(orgSect, /singleOrg.*auto-select/is);
+  assert.match(projSect, /singleProject.*auto-select/is);
+});
+
+test('E4: tenant cross-check fires between 3a and 3b (after org known, before project list)', () => {
+  const orgIdx = prose.indexOf('Sub-step 3a — Select organization');
+  const projIdx = prose.indexOf('Sub-step 3b — Select project');
+  const between = prose.slice(orgIdx, projIdx);
+  assert.match(between, /Tenant cross-check/);
+  assert.match(between, /--verifyTenant --organization "<org>"/);
+  assert.match(between, /--writeToFile "docs\/inner-loop\/\.ado-token"/);
+});
+
+test('E4: folder-name format warning enforced in 3e prompt helper-text (anti-trailing-slash)', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  // The 0x80040265 error must be cited as the rationale
+  assert.match(phase3, /0x80040265/);
+  // Rejection of slashes + trailing slashes must be explicit
+  assert.match(phase3, /Rejected.*containing `\/`/);
+  assert.match(phase3, /trailing slash/i);
+  // Default suggestion is the solutionUniqueName (1:1 mapping)
+  assert.match(phase3, /default to suggest.*solutionUniqueName/is);
+});
+
+test('E4: approval-gates.md §6A.3 catalog lists every NEW gate ID', () => {
+  const cat = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'references', 'approval-gates.md'),
+    'utf8',
+  );
+  for (const id of [
+    'connect-solution-to-git:3.ado-org',
+    'connect-solution-to-git:3.ado-project',
+    'connect-solution-to-git:3.ado-repo',
+    'connect-solution-to-git:3.create-repo',
+    'connect-solution-to-git:3.ado-perms',
+    'connect-solution-to-git:3.repo-init',
+    'connect-solution-to-git:3.folder-occupied',
+    'connect-solution-to-git:3.branch',
+    'connect-solution-to-git:3.folder',
   ]) {
-    assert.match(phase1, new RegExp(helper), `Phase 1 step 0 must reference ${helper} as a downstream consumer`);
+    assert.match(cat, new RegExp(id.replace(/\./g, '\\.')), `approval-gates.md must list ${id}`);
   }
+  // The retired legacy ID is gone
+  assert.doesNotMatch(cat, /connect-solution-to-git:3\.ado-fields/);
 });

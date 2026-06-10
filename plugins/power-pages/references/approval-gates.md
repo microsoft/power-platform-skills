@@ -486,17 +486,25 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.3 `connect-solution-to-git` (solution binding — projected 5 calls + 1 not-a-gate)
+### 6A.3 `connect-solution-to-git` (solution binding — 11 gates + 4 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `connect-solution-to-git:1.prereq-fail` | gate | intent | 1 | Same as `setup-git-integration:1.prereq-fail` | nothing |
 | `connect-solution-to-git:3.solution-pick` | gate | plan | 3 | List of bindable solutions (excluding Default) — *"Pick solution to bind"* | nothing |
 | `connect-solution-to-git:3.shared-object-warning` | gate | consent | 3 | Selected solution shares components with an already-Git-bound solution — *"Proceed (will fail at next add) / Cancel"* | nothing |
+| `connect-solution-to-git:3.ado-org` | gate | plan | 3 | Cascading discovery — pick ADO org from `list-ado-orgs.js`. Auto-selected when count==1. | nothing |
+| `connect-solution-to-git:3.ado-project` | gate | plan | 3 | Cascading discovery — pick ADO project from `list-ado-projects.js`. Auto-selected when count==1. **No "Create new" branch** (out of scope this skill — use `/power-pages:setup-git-integration` for first-time setup). | nothing |
+| `connect-solution-to-git:3.ado-repo` | gate | plan | 3 | Cascading discovery — pick ADO repo from `list-ado-repos.js`, with `Create new` branch via `create-ado-repo.js`. | nothing |
+| `connect-solution-to-git:3.create-repo` | gate | consent | 3 | Consent before `create-ado-repo.js` POST (only fires when user picks `Create new` at 3.ado-repo). | nothing |
+| `connect-solution-to-git:3.ado-perms` | gate | intent | 3 | Hard-block on `verify-ado-permissions.js` `ok:false` or `hasAccess:false` — *"Pick a different repo / Cancel"*. | nothing |
+| `connect-solution-to-git:3.repo-init` | gate | consent | 3 | Empty repo detected by `verify-repo-initialized.js` — *"Auto-init via `init-ado-repo.js` / Initialize manually then re-run / Cancel"*. Replaces the legacy conversational footnote in Phase 3 step 4. | nothing |
+| `connect-solution-to-git:3.folder-occupied` | gate | consent | 3 | `check-ado-folder-exists.js` returned `itemCount > 0` — *"Pick a different gitFolder (back to 3e) / Pick a different repo (back to 3c) / Proceed anyway (acknowledge risk) / Cancel"*. Only fires when collision exists. | nothing |
 | `connect-solution-to-git:4.plan` | gate | plan | 4 | *"Bind solution `{name}` to repo {org}/{project}/{repo}, branch `{branch}`?"* | nothing |
 | `connect-solution-to-git:5.consent` | gate | consent | 5 | Final consent before `ConnectToGit` (solution variant) | nothing |
 | `connect-solution-to-git:8.final` | gate | final | 8 | Binding verified — *"Done / run sync-from-git now"* | nothing |
-| `connect-solution-to-git:3.ado-fields` | not-a-gate | — | 3 | Free-text ADO fields — data-gathering | — |
+| `connect-solution-to-git:3.branch` | not-a-gate | — | 3 | Free-text branch name with `defaultBranch`-stripped-of-`refs/heads/` default — data-gathering | — |
+| `connect-solution-to-git:3.folder` | not-a-gate | — | 3 | Folder picker / free-text with format warning — data-gathering | — |
 
 ---
 
