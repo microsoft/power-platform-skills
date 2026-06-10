@@ -71,6 +71,17 @@ test("readTelemetryChoice tolerates a corrupt config file (returns null)", () =>
   assert.equal(readTelemetryChoice(dir, "power-pages"), null);
 });
 
+test("an array config.json is ignored — setTelemetryChoice still persists", () => {
+  const dir = mkTmp();
+  // A JSON array passes `typeof === "object"`. Without the array guard, the write
+  // would set `.telemetry` on the array, JSON.stringify would drop it, and the
+  // choice would silently vanish while setTelemetryChoice returned true.
+  fs.writeFileSync(path.join(dir, CONFIG_FILE_NAME), JSON.stringify(["junk"]));
+  assert.equal(setTelemetryChoice(dir, "power-pages", "off"), true);
+  assert.equal(readTelemetryChoice(dir, "power-pages"), "off");
+  assert.deepEqual(readRaw(dir), { telemetry: { "power-pages": "off" } });
+});
+
 test("setTelemetryChoice fails safe (returns false) when the dir cannot be created", () => {
   const dir = mkTmp();
   const blocker = path.join(dir, "blocker");

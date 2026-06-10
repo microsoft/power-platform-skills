@@ -28,7 +28,10 @@ function discoverValidatorScript(skillName) {
 }
 
 function discoverTrackedSkills() {
-  const trackedSkills = {};
+  // Null-prototype map: membership is tested via bracket access (TRACKED_SKILLS[name]),
+  // so a plain {} would make inherited keys like "toString"/"constructor"/"__proto__"
+  // test truthy and emit bogus skill names. A null-proto object has no such keys.
+  const trackedSkills = Object.create(null);
 
   const entries = fs
     .readdirSync(SKILLS_DIR, { withFileTypes: true })

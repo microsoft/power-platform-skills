@@ -13,7 +13,10 @@ function configPath(configDir) {
 function readConfig(configDir) {
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath(configDir), "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
+    // Arrays pass `typeof === "object"` but break the merge-write: setTelemetryChoice
+    // would set `.telemetry` on the array and JSON.stringify would silently drop it,
+    // reporting success while persisting nothing. Treat non-plain objects as empty.
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }

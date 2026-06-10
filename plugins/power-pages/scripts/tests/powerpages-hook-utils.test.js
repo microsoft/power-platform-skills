@@ -136,3 +136,13 @@ test('the telemetry skill is excluded from tracking (no self-emit)', () => {
   assert.equal(detectTrackedSkill('telemetry'), null);
   assert.equal(getTrackedSkillFromToolInput({ skill: 'power-pages:telemetry' }), null);
 });
+
+test('Object.prototype keys are not mistaken for tracked skills', () => {
+  // TRACKED_SKILLS is a null-prototype map. With a plain {} these names would
+  // resolve to inherited functions on bracket access and emit bogus events.
+  assert.equal(detectTrackedSkill('toString'), null);
+  assert.equal(detectTrackedSkill('constructor'), null);
+  assert.equal(detectTrackedSkill('hasOwnProperty'), null);
+  assert.equal(detectTrackedSkill('__proto__'), null);
+  assert.equal(getTrackedSkillFromToolInput({ skill: 'toString' }), null);
+});
