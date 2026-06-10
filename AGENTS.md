@@ -53,14 +53,15 @@ Skills are defined in `SKILL.md` files with YAML frontmatter (name, description,
 
 ## Cross-Plugin Shared Skills
 
-Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The workflow logic is written once in a shared `.md` file, and each plugin has a thin `skills/<skill-name>/SKILL.md` that contains only the YAML frontmatter and a reference to the shared workflow file.
+Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The workflow logic is written once in a shared `.md` file, and each plugin has a thin `skills/<skill-name>/SKILL.md` that contains only the YAML frontmatter and a reference to the workflow path bundled inside that plugin at install time.
 
 **Pattern:**
 - `shared/skills/<skill-name>/<workflow>.md` — Full workflow (phases, instructions, field definitions)
 - `shared/skills/<skill-name>/SKILL.template.md` — Template SKILL.md (frontmatter + reference to workflow); supports `{{PLUGIN_NAME}}` placeholder
 - `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Per-plugin wrapper generated from the template above
+- `plugins/<plugin>/skills/<skill-name>/<workflow>.md` — Symlink to the shared workflow when the plugin must work after installing only its own plugin directory
 
-This keeps the skill discoverable in each plugin while avoiding content duplication. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + reference pointing to the shared workflow, with `{{PLUGIN_NAME}}` substituted) and commit them alongside the shared change.
+This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${CLAUDE_PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
 
 ## Code Conventions
 

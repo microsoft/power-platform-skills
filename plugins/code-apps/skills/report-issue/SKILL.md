@@ -10,4 +10,4 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
-**Shared workflow: [report-issue-workflow.md](${CLAUDE_PLUGIN_ROOT}/../../shared/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that file.
+**Workflow: [report-issue-workflow.md](${CLAUDE_PLUGIN_ROOT}/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that bundled file.
