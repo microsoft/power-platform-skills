@@ -55,14 +55,17 @@ The skill verifies prerequisites (Managed Env on, system-admin role, ADO Contrib
 
 Steps:
 
-0. **Acquire an ADO Entra bearer token (`adoToken`).** Mint a tenant-scoped OAuth token for the ADO Entra app and cache it as `adoToken` for downstream pre-checks. This is the silent replacement for the old PAT prompt — the user is **never** asked for a PAT.
+0. **Acquire an ADO Entra bearer token (`adoToken`) — written to a file, never echoed to stdout.** Mint a tenant-scoped OAuth token for the ADO Entra app and persist it to a gitignored 0o600 file for downstream pre-checks. This is the silent replacement for the old PAT prompt — the user is **never** asked for a PAT.
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --writeToFile "docs/inner-loop/.ado-token"
    ```
 
-   Capture `.token` as `adoToken`. **Never echo it to the user, never write it to disk, never include it in any prompt.** On `ok:false`:
-   - The most common cause is `az login` is missing or stale. Surface the error verbatim (it already contains the actionable hint) and stop. No further steps run.
+   The helper writes the full token payload (`{ token, tokenType, tenantId, expiresOn, adoOrgTenantId, tenantMismatch }`) to `docs/inner-loop/.ado-token` (mode `0o600` on POSIX) and returns a redacted JSON envelope to stdout containing `tokenFile`, `tokenSha256`, and the non-token metadata — but never the raw token itself. **Read the token from the file at call-time when invoking downstream helpers** (preferred shell pattern: `--token "$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(\"docs/inner-loop/.ado-token\",\"utf8\")).token)')"`) so the JWT never lands in tool-call arguments captured by the session log.
+
+   - **Never echo the token (or the file's contents) to the user, never `cat` / `view` the file into agent-visible output.** The 2026-06-11 live test showed a JWT leaked via stdout in the session event log; `--writeToFile` is the helper-side fix.
+   - The file is under `docs/inner-loop/` which must already be gitignored (covered by the inner-loop conventions).
+   - On `ok:false`: the most common cause is `az login` is missing or stale. Surface the error verbatim (it already contains the actionable hint) and stop. No further steps run.
 
    > 🔒 Tenant verification against the target ADO org happens in **Phase 2 step 1** (once we know the org name) — not here.
 
@@ -152,13 +155,15 @@ Steps:
    - `ok:true, orgs:[]` (the user is signed in but has no orgs) → surface the "Create new" hint above and exit cleanly.
    - `ok:false` → surface the helper's `error` + `hint` verbatim and stop.
 
-   **Tenant cross-check.** Now that `<org>` is known, re-mint the bearer token with tenant verification turned on:
+   **Tenant cross-check.** Now that `<org>` is known, re-mint the bearer token with tenant verification turned on. Pass `--writeToFile` so the refreshed token replaces `docs/inner-loop/.ado-token` and **no JWT enters stdout**:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --verifyTenant --organization "<org>"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" \
+       --verifyTenant --organization "<org>" \
+       --writeToFile "docs/inner-loop/.ado-token"
    ```
 
-   - `ok:true, tenantMismatch:false` (the common case, including the soft-skip path where the org tenant could not be extracted from `connectionData`) → refresh `adoToken` with the newly returned `.token` and continue to sub-step 1b.
+   - `ok:true, tenantMismatch:false` (the common case, including the soft-skip path where the org tenant could not be extracted from `connectionData`) → the token file has been refreshed atomically; continue to sub-step 1b using the same shell-expansion pattern documented in Phase 1 step 0.
    - `ok:true, tenantMismatch:true` → **hard-block** with the helper's `hint` (it contains the exact `az login --tenant <guid>` command). Do not proceed; cross-tenant binding is not supported by this skill.
    - `ok:false` → surface the error verbatim and stop.
 
