@@ -7,16 +7,28 @@ const { EventEmitter } = require('node:events');
 const {
   buildMcpArgs,
   launch,
+  quoteShellArg,
 } = require('../launch-playwright-mcp');
 
 test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
   const args = buildMcpArgs('chrome');
   const configIndex = args.indexOf('--config');
+  const quotedConfigPath = args[configIndex + 1];
+  const configPath = quotedConfigPath.slice(1, -1);
 
   assert.deepEqual(args.slice(0, 3), ['@playwright/mcp@latest', '--browser', 'chrome']);
   assert.equal(args.includes('--viewport-size'), false);
   assert.notEqual(configIndex, -1);
-  assert.equal(path.basename(args[configIndex + 1]), 'playwright-mcp-fullscreen.config.json');
+  assert.equal(quotedConfigPath, quoteShellArg(configPath));
+  assert.equal(path.basename(configPath), 'playwright-mcp-fullscreen.config.json');
+});
+
+test('buildMcpArgs quotes Windows config paths containing spaces', () => {
+  const configPath = 'C:\\Users\\Power User\\.claude\\plugins\\power-pages\\scripts\\playwright-mcp-fullscreen.config.json';
+  const args = buildMcpArgs('msedge', { configPath, platform: 'win32' });
+  const configIndex = args.indexOf('--config');
+
+  assert.equal(args[configIndex + 1], `"${configPath}"`);
 });
 
 test('fullscreen config maximizes the browser and uses the real viewport size', () => {
