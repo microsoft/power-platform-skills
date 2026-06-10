@@ -117,22 +117,130 @@ Steps:
 
 Tasks to create (`TaskCreate`):
 
-1. Gather ADO repo coordinates
-2. Verify ADO repo is initialized
-3. Render and review binding plan
-4. Final consent before bind
-5. Execute `ConnectToGit`
-6. Verify binding round-trips
-7. Write `.git-integration-manifest.json`
+1. Select ADO org (enumerated)
+2. Select ADO project (enumerated, create if needed)
+3. Select ADO repo (enumerated, create if needed)
+4. Pick branch + select / name folder (with folder-format warning)
+5. Verify ADO repo is initialized
+6. Render and review binding plan
+7. Final consent before bind
+8. Execute `ConnectToGit`
+9. Verify binding round-trips
+10. Write `.git-integration-manifest.json`
 
 Steps:
 
-1. <!-- not-a-gate: setup-git-integration:2.ado-fields — data-gathering for ADO org/project/repo/branch/folder -->
-   Collect free-text fields via `AskUserQuestion` (data-gathering, NOT a gate):
+1. **Cascading selection of ADO coordinates (org → project → repo → folder).** Each level lists what already exists in ADO and offers a "Create new" option; the user picks (or creates) one before the next prompt fires. Branch is collected as free text between repo and folder (a typed default of `main` is universally fine and listing branches before the bind is rarely useful).
 
-   `setup-git-integration:2.ado-fields` (not-a-gate) — ADO organization name, project name, repository name, target branch (default `main`), folder-in-repo (default `solutions` — see warning below).
+   This replaces the older free-text gather. Rationale: every typo in this phase costs the user a `ConnectToGit` 400 at Phase 5, which is the most-irreversible point. Enumerating the real ADO objects eliminates the typo surface entirely. Free-text fallback is still available via the "Create new" option at each level.
 
-   > ⚠️ **CRITICAL — folder name format (read this BEFORE asking the user for the `folder-in-repo` value).** The Dataverse `ConnectToGit` action validates the folder name **strictly** and rejects anything that looks path-like with HTTP 400, error code `0x80040265` *("The folder name 'solutions/' is invalid.")*. The validation failure fires at the most expensive step (Phase 5, after 4 prior consent gates), so we MUST prevent the mistake at the prompt itself.
+   > 💡 The four list/create helpers below all consume the same `<adoToken>` minted by Phase 1 step 0 (and re-verified for tenant alignment in sub-step 1a). No additional auth prompts.
+
+   **Sub-step 1a — Select organization.**
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-ado-orgs.js" --token "<adoToken>"
+   ```
+
+   - `ok:true, orgs:[…]` (one or more) → render the orgs as a table (columns: `#`, `accountName`, `accountUri`) and surface:
+
+     <!-- not-a-gate: setup-git-integration:2.select-org — data-gathering for ADO organization -->
+     `setup-git-integration:2.select-org` (not-a-gate) — select an organization. Options: each org by `accountName`, plus `Create new (opens browser — orgs cannot be created via API)`.
+
+     - If user picks an org → set `<org>` to its `accountName`.
+     - If user picks **Create new** → surface the hint *"Azure DevOps orgs can only be created via the web. Visit https://aex.dev.azure.com/go/signup, sign in with the same identity `az login` is using, finish the wizard, then re-run `/power-pages:setup-git-integration`."* and exit cleanly. (No Dataverse mutation has happened yet.)
+
+   - `ok:true, orgs:[]` (the user is signed in but has no orgs) → surface the "Create new" hint above and exit cleanly.
+   - `ok:false` → surface the helper's `error` + `hint` verbatim and stop.
+
+   **Tenant cross-check.** Now that `<org>` is known, re-mint the bearer token with tenant verification turned on:
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --verifyTenant --organization "<org>"
+   ```
+
+   - `ok:true, tenantMismatch:false` (the common case, including the soft-skip path where the org tenant could not be extracted from `connectionData`) → refresh `adoToken` with the newly returned `.token` and continue to sub-step 1b.
+   - `ok:true, tenantMismatch:true` → **hard-block** with the helper's `hint` (it contains the exact `az login --tenant <guid>` command). Do not proceed; cross-tenant binding is not supported by this skill.
+   - `ok:false` → surface the error verbatim and stop.
+
+   **Sub-step 1b — Select project.**
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-ado-projects.js" --organization "<org>" --token "<adoToken>"
+   ```
+
+   - `ok:true, projects:[…]` → render the projects as a table (columns: `#`, `name`, `state`, `visibility`) and surface:
+
+     <!-- not-a-gate: setup-git-integration:2.select-project — data-gathering for ADO project -->
+     `setup-git-integration:2.select-project` (not-a-gate) — select a project. Options: each project by `name`, plus `Create new`.
+
+     - If user picks an existing project → set `<proj>` and `<projectId>` (capture the GUID from the helper output; needed by `create-ado-repo.js` later if a new repo is created).
+     - If user picks **Create new** → prompt for the new project name (data-gathering AskUserQuestion, validate non-empty + no `/`/`\`), then surface a consent gate before the destructive create:
+
+       <!-- gate: setup-git-integration:2.create-project | category=consent | cancel-leaves=nothing -->
+       > 🚦 **Gate (consent · setup-git-integration:2.create-project):** Surface `AskUserQuestion`:
+
+       | Question | Header | Options |
+       |---|---|---|
+       | Create new ADO project `{newProjectName}` in org `{org}`? This is provisioned via `POST /_apis/projects` and takes ~30-60 s. | Create project | Create now (Recommended), Cancel — go back to project selection |
+
+       On **Create now**:
+       ```bash
+       node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-ado-project.js" \
+           --organization "<org>" --name "<newProjectName>" --token "<adoToken>"
+       ```
+       On `ok:true, projectId` → set `<proj>` = `<newProjectName>`, capture `<projectId>`, continue. On `ok:false` → surface `error` + `hint` and re-prompt at sub-step 1b (don't fail the whole skill).
+
+   - `ok:true, projects:[]` → no projects in the org. Skip directly to the **Create new** branch above.
+   - `ok:false` → surface the helper's `error` + `hint` verbatim and stop.
+
+   **Sub-step 1c — Select repository.**
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-ado-repos.js" --organization "<org>" --project "<proj>" --token "<adoToken>"
+   ```
+
+   - `ok:true, repos:[…]` → render the repos as a table (columns: `#`, `name`, `defaultBranch`, `size`). Annotate each row: rows with `defaultBranch === null` are empty (this skill's Phase 2 step 2 will offer to auto-init them; this is friendly, NOT a blocker). Then surface:
+
+     <!-- not-a-gate: setup-git-integration:2.select-repo — data-gathering for ADO repository -->
+     `setup-git-integration:2.select-repo` (not-a-gate) — select a repository. Options: each repo by `name` (annotated `(empty)` where `defaultBranch === null`), plus `Create new`.
+
+     - If user picks an existing repo → set `<repo>` and capture its `defaultBranch` for use as the branch default in sub-step 1d.
+     - If user picks **Create new** → prompt for the new repo name (data-gathering AskUserQuestion, validate non-empty + no `/`/`\`), then surface a consent gate:
+
+       <!-- gate: setup-git-integration:2.create-repo | category=consent | cancel-leaves=nothing -->
+       > 🚦 **Gate (consent · setup-git-integration:2.create-repo):** Surface `AskUserQuestion`:
+
+       | Question | Header | Options |
+       |---|---|---|
+       | Create new git repo `{newRepoName}` in project `{org}/{proj}`? This is synchronous (~1 s) and the new repo starts empty (no default branch). Phase 2 step 2 will then auto-init it with a README commit. | Create repo | Create now (Recommended), Cancel — go back to repo selection |
+
+       On **Create now**:
+       ```bash
+       node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-ado-repo.js" \
+           --organization "<org>" --project "<proj>" --projectId "<projectId>" \
+           --name "<newRepoName>" --token "<adoToken>"
+       ```
+       On `ok:true, repoId` → set `<repo>` = `<newRepoName>`. The new repo is empty, so Phase 2 step 2 will auto-init it with a README commit (no user action needed beyond accepting the init consent gate). On `ok:false, statusCode:409` → name conflict; surface hint and re-prompt at sub-step 1c. On other `ok:false` → surface `error` + `hint` and stop.
+
+   - `ok:true, repos:[]` → no repos in the project. Skip directly to the **Create new** branch above.
+   - `ok:false` → surface the helper's `error` + `hint` verbatim and stop.
+
+   **Sub-step 1d — Collect branch (free-text).**
+
+   <!-- not-a-gate: setup-git-integration:2.branch — data-gathering for branch name -->
+   `setup-git-integration:2.branch` (not-a-gate) — branch name. Default: the existing repo's `defaultBranch` (stripped of any `refs/heads/` prefix) if non-null, else `main`. Validate non-empty.
+
+   **Sub-step 1e — Select folder-in-repo (the `gitFolder`).**
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-ado-folders.js" \
+       --organization "<org>" --project "<proj>" --repository "<repo>" --token "<adoToken>"
+   ```
+
+   The helper enumerates top-level folders in the repo so the user can SEE what's already there and avoid colliding with unrelated content. On `ok:true, emptyRepo:true` the folder list is empty (the repo has no commits yet — Phase 2 step 2 will init it). On `ok:true, folders:[…]` non-empty, render the folders as a table (columns: `#`, `path`, `gitObjectType`).
+
+   > ⚠️ **CRITICAL — folder name format (read this BEFORE prompting for the folder value).** The Dataverse `ConnectToGit` action validates the folder name **strictly** and rejects anything that looks path-like with HTTP 400, error code `0x80040265` *("The folder name 'solutions/' is invalid.")*. The validation failure fires at Phase 5 (the most expensive step, after every prior consent gate), so we MUST prevent the mistake at the prompt itself.
    >
    > When presenting the `folder-in-repo` field, the prompt's helper-text / placeholder MUST explicitly say:
    >
@@ -141,20 +249,24 @@ Steps:
    > - **Default to suggest:** `solutions` (NOT `solutions/` — the trailing slash is the common typo this warning exists to prevent).
    > - **One-line summary in the prompt:** *"Folder name only — no slashes, no path separators. Type `solutions`, NOT `solutions/`."*
 
-   Validate inputs:
-   - Org / project / repo names: non-empty, no `/` or `\`.
-   - Branch: non-empty.
-   - Folder: non-empty; leading `/` stripped. **Per the warning above, the user should be guided NOT to type a trailing slash in the first place** (this skill intentionally does NOT silently sanitize trailing slashes — see the rationale in `references/inner-loop-empirical-findings.md` §5 / mentor directive).
+   <!-- not-a-gate: setup-git-integration:2.select-folder — data-gathering for ADO folder-in-repo -->
+   `setup-git-integration:2.select-folder` (not-a-gate) — select or name the folder. Options:
+   - Each existing folder by `path` (strip the leading `/` from the helper output before displaying so the value matches what `ConnectToGit` expects).
+   - `Type a new folder name (Recommended — default: solutions)`.
 
-   **Tenant cross-check.** Once `<org>` is known, re-mint the bearer token with tenant verification turned on:
+   - If user picks an existing folder → confirm with a one-question gate (since picking an existing non-empty folder co-locates Dataverse-managed files with whatever's already there — likely fine, occasionally not):
 
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --verifyTenant --organization "<org>"
-   ```
+     <!-- gate: setup-git-integration:2.folder-coexists | category=consent | cancel-leaves=nothing -->
+     > 🚦 **Gate (consent · setup-git-integration:2.folder-coexists):** Surface `AskUserQuestion`:
 
-   - `ok:true, tenantMismatch:false` (the common case, including the soft-skip path where the org tenant could not be extracted from `connectionData`) → refresh `adoToken` with the newly returned `.token` and continue to step 2.
-   - `ok:true, tenantMismatch:true` → **hard-block** with the helper's `hint` (it contains the exact `az login --tenant <guid>` command). Do not proceed; cross-tenant binding is not supported by this skill.
-   - `ok:false` → surface the error verbatim and stop.
+     | Question | Header | Options |
+     |---|---|---|
+     | Folder `/{folder}/` already exists in `{repo}` and contains content. Dataverse will write its solution files into the same folder. Continue with this folder, or pick a different one? | Existing folder | Use this folder (Recommended if it's a previous solutions folder), Go back and pick another |
+
+   - If user picks **Type a new folder name** → data-gathering AskUserQuestion with the warning above. Validate: non-empty, no `/` or `\`, no leading or trailing whitespace.
+
+   Validate the final value:
+   - Folder: non-empty; leading `/` stripped (defensive — the user shouldn't have typed one given the warning, but the helper output starts with `/` and we strip it when displaying). **Per the warning above, the user should be guided NOT to type a trailing slash in the first place** (this skill intentionally does NOT silently sanitize trailing slashes — see the rationale in `references/inner-loop-empirical-findings.md` §5 / mentor directive).
 
 2. Repository init check:
 
@@ -413,7 +525,12 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Gather ADO repo coordinates | Gathering binding fields | Collect org / project / repo / branch / folder via `AskUserQuestion`; validate non-empty, no slashes |
+| Select ADO org | Selecting organization | Call `list-ado-orgs.js`; user picks from enumerated list or hits "Create new" (browser-only) |
+| Verify tenant alignment | Verifying tenant alignment | Re-mint bearer with `get-ado-token.js --verifyTenant --organization <org>`; hard-block on mismatch |
+| Select ADO project | Selecting project | Call `list-ado-projects.js`; user picks or creates via `create-ado-project.js` (consent + ~30-60 s poll) |
+| Select ADO repo | Selecting repository | Call `list-ado-repos.js`; user picks or creates via `create-ado-repo.js` (consent + synchronous) |
+| Collect branch | Collecting branch | Free-text AskUserQuestion; default = repo's `defaultBranch` (stripped of `refs/heads/`) or `main` |
+| Select / name folder | Selecting folder-in-repo | Call `list-ado-folders.js`; user picks an existing folder (with co-exists gate) or types a new one (with format warning) |
 | Verify ADO repo is initialized | Verifying repo init | Call `verify-repo-initialized.js`; offer README-commit flow when empty |
 | Render and review binding plan | Rendering binding plan | Compose `.setup-plan-data.json`; show textual preview |
 | Final consent before bind | Awaiting bind consent | Surface explicit consent gate before any Dataverse mutation |
@@ -427,11 +544,15 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 1. **Phase 1**: Prereq failure (Managed Env / sys-admin / ADO Contributor) → open remediation URLs or cancel (gate `setup-git-integration:1.prereq-fail`).
 2. **Phase 1**: Already-bound check → disconnect-and-rebind or cancel (no marker — conversational).
-3. **Phase 2**: ADO repo coordinates (data-gathering, not a gate).
-4. **Phase 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
-5. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
-6. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
-7. **Phase 8**: Choose next action — `sync-from-git`, `commit-to-git`, or exit (gate `setup-git-integration:8.final`).
+3. **Phase 2 sub-step 1a**: Select ADO org from enumerated list, or "Create new" (browser hint + clean exit) (data-gathering `setup-git-integration:2.select-org`).
+4. **Phase 2 sub-step 1b**: Select ADO project, or "Create new" (data-gathering `setup-git-integration:2.select-project` + consent gate `setup-git-integration:2.create-project` when creating).
+5. **Phase 2 sub-step 1c**: Select ADO repo, or "Create new" (data-gathering `setup-git-integration:2.select-repo` + consent gate `setup-git-integration:2.create-repo` when creating).
+6. **Phase 2 sub-step 1d**: Collect branch (data-gathering, not a gate).
+7. **Phase 2 sub-step 1e**: Select folder (existing → confirm co-exists via gate `setup-git-integration:2.folder-coexists`; or "Type new" with the format warning) (data-gathering `setup-git-integration:2.select-folder`).
+8. **Phase 2 step 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
+9. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
+10. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
+11. **Phase 8**: Choose next action — `sync-from-git`, `commit-to-git`, or exit (gate `setup-git-integration:8.final`).
 
 ---
 
