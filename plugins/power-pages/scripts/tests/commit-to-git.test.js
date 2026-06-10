@@ -162,3 +162,26 @@ test('commit-to-git: accepts lower-cased commitid field', async () => {
   assert.equal(r.commitId, 'lower');
   assert.equal(r.type, 0);
 });
+
+// Regression for the 2026-06 "helper gives up before the server is done" bug.
+// Before the fix, commit-to-git.js called makeRequest without overriding the
+// 15 s default socket timeout — a CommitToGit POST that took 25 s to write a
+// small first-commit returned { error: 'Request timed out' } even though the
+// server had succeeded. This test pins the helper-level fix: the source MUST
+// import LONG_RUNNING_GIT_ACTION_TIMEOUT_MS from validation-helpers AND pass
+// it as socketTimeoutMs on the /CommitToGit POST.
+test('commit-to-git: passes socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS to makeRequest (regression for the 15 s helper timeout false-fail)', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(require.resolve('../lib/commit-to-git.js'), 'utf8');
+
+  assert.match(
+    src,
+    /\{[^}]*\bLONG_RUNNING_GIT_ACTION_TIMEOUT_MS\b[^}]*\}\s*=\s*require\(['"]\.\/validation-helpers['"]\)/,
+    'commit-to-git.js must destructure LONG_RUNNING_GIT_ACTION_TIMEOUT_MS from validation-helpers — otherwise the long-running override would be undefined at runtime.',
+  );
+  assert.match(
+    src,
+    /makeRequest\(\{[\s\S]*?\bsocketTimeoutMs:\s*LONG_RUNNING_GIT_ACTION_TIMEOUT_MS\b[\s\S]*?\}\)/,
+    'commit-to-git.js must pass socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS to the CommitToGit POST. Removing this line re-introduces the bug where a 25-s+ server reply surfaces { error: "Request timed out" } even after the commit succeeded.',
+  );
+});

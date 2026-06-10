@@ -37,7 +37,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { listIncomingUpdates } = require('./list-incoming-updates');
 const { pollGitOperation } = require('./poll-git-operation');
 
@@ -96,6 +96,11 @@ async function pullChangesFromGit({
       Accept: 'application/json',
     },
     body: JSON.stringify(bodyObj),
+    // PullChangesFromGit applies an arbitrary number of incoming updates into
+    // Dataverse — large pulls can run many minutes server-side. Override
+    // the helper's 15 s default so a slow-but-successful reply is not
+    // mis-classified as a timeout failure.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
   if (res.error) return { error: res.error };

@@ -31,7 +31,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { detectGitBinding } = require('./detect-git-binding');
 
 function parseArgs(argv) {
@@ -72,6 +72,11 @@ async function disconnectFromGit({ envUrl, token, solutionUniqueName = null, ver
       Accept: 'application/json',
     },
     body,
+    // DisconnectFromGit usually returns in seconds, but on an env with many
+    // staged components it can take 30 s+ to tear down server-side. Use the
+    // long-running override defensively so a slow tenant does not surface a
+    // misleading "Request timed out" right when the user is trying to unbind.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
   if (res.error) return { error: res.error };

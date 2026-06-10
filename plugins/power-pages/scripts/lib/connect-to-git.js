@@ -36,7 +36,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { detectGitBinding } = require('./detect-git-binding');
 
 const GIT_PROVIDER_ADO = 0;
@@ -112,6 +112,11 @@ async function connectToGit({
       Accept: 'application/json',
     },
     body,
+    // ConnectToGit fires the SourceControlInitialSyncPlugin which serializes
+    // every component in the env to the bound folder — typically 5–15 min
+    // server-side. Pass the long-running override so the helper does not
+    // mis-classify a successful slow reply as { error: 'Request timed out' }.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
   if (res.error) return { error: res.error };

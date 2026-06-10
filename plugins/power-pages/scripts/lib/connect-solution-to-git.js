@@ -44,7 +44,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { detectGitBinding } = require('./detect-git-binding');
 
 const GIT_PROVIDER_ADO = 0;
@@ -170,13 +170,19 @@ async function connectSolutionToGit({
       Accept: 'application/json',
     },
     body,
+    // ConnectToGit fires the SourceControlInitialSyncPlugin which serializes
+    // every solution component to the bound folder — typically 5–15 min
+    // server-side. Pass the long-running override so the helper does not
+    // mis-classify a slow-but-successful reply as { error: 'Request timed out' }.
+    // The post-call isTimeout band-aid below is now a defence-in-depth fallback
+    // for tenants that exceed the 15-min ceiling.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
-  // ConnectToGit triggers the SourceControlInitialSyncPlugin async op which
-  // can take 5–15 min. Dataverse holds the HTTP request open the whole time,
-  // so the default HTTP-helper timeout often fires before a real response
-  // arrives — but the binding usually committed server-side anyway.
-  // Verify by re-querying the solution. See references/inner-loop-empirical-findings.md §4.
+  // Defence-in-depth: even with the 15-min socketTimeoutMs above, a very large
+  // env can still exceed the ceiling. If we hit a timeout, the binding usually
+  // committed server-side anyway — verify by re-querying the solution. See
+  // references/inner-loop-empirical-findings.md §4.
   const isTimeout = res.error && /time(d)? ?out/i.test(res.error);
   if (isTimeout) {
     try {

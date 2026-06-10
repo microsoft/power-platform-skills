@@ -41,7 +41,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { listPendingChanges } = require('./list-pending-changes');
 const { pollGitOperation } = require('./poll-git-operation');
 
@@ -99,6 +99,13 @@ async function commitToGit({
       Accept: 'application/json',
     },
     body,
+    // CommitToGit blocks server-side until every component is written to ADO —
+    // ~25 s for a small first-commit, 5–15 min for a 1000+ component solution
+    // (references/inner-loop-empirical-findings.md §3 / §10). The helper's
+    // default 15 s socket timeout would misread a slow-but-successful reply
+    // as { error: 'Request timed out' } and Phase 6 of the commit-to-git skill
+    // would bail before Phase 7's pending-count poll could detect success.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
   if (res.error) return { error: res.error };

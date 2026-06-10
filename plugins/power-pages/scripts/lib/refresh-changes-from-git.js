@@ -32,7 +32,7 @@
 
 'use strict';
 
-const { getAuthToken, makeRequest } = require('./validation-helpers');
+const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { listIncomingUpdates } = require('./list-incoming-updates');
 const { listConflicts } = require('./list-conflicts');
 const { pollGitOperation } = require('./poll-git-operation');
@@ -81,6 +81,10 @@ async function refreshChangesFromGit({
       Accept: 'application/json',
     },
     body,
+    // RefreshChangesFromGit walks the ADO branch tip and stages every diff
+    // into sourcecontrolcomponent — can run for minutes on a busy branch.
+    // Override the helper's 15 s default so the call doesn't false-fail.
+    socketTimeoutMs: LONG_RUNNING_GIT_ACTION_TIMEOUT_MS,
   });
 
   if (res.error) return { error: res.error };

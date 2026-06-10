@@ -79,19 +79,18 @@ Steps:
    - Disconnect first and re-bind here (call `/power-pages:branch-switch` for an in-place change, or run `disconnect-from-git.js` for a full unbind), OR
    - Cancel this skill (current binding is fine).
 
-3. Verify Managed Environment + ADO permissions in parallel. ADO permissions now always run with `--token "<adoToken>"` (acquired in step 0) — there is no "no PAT supplied" branch.
+3. Verify Managed Environment.
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-managed-env.js" --envUrl "<envUrl>"
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-ado-permissions.js" \
-       --organization "<adoOrg>" --project "<adoProject>" --repository "<adoRepo>" --token "<adoToken>"
    ```
 
    Classification rules:
    - **Hard-block** on PAC CLI / Az CLI auth failure (no recovery within this skill).
    - **Hard-block** on a clearly malformed `verify-managed-env` response (HTTP/network error). A successful 200 returning `enabled:false` is NOT a hard-block (see warn-not-block below).
    - **Warn** on `verify-managed-env` returning `enabled:false`. Microsoft Learn lists Managed Env as required, but env-level binding behavior without Managed Env has not been fully characterized. Solution-level binding empirically works on Basic envs (see `references/inner-loop-empirical-findings.md` §1) — if the user knows that, they may want to switch to `/power-pages:connect-solution-to-git`.
-   - **Hard-block** on any ADO permissions failure. `adoToken` is always present, so a failure means a real Contribute / repo / project issue worth surfacing.
+
+   > ℹ️ **ADO permissions are NOT verified here.** Under the cascading-discovery design (Phase 2 sub-steps 1a / 1b / 1c), the `<org>` / `<proj>` / `<repo>` values are unknown at Phase 1 time — the user picks them later. The `verify-ado-permissions.js` call runs in **Phase 2 sub-step 1c.5** (immediately after the repo is picked, before the branch / folder sub-steps), where all three flags have real values. **Bug fixed 2026-06:** earlier revisions of this step inlined a `verify-ado-permissions.js` call with empty `<adoOrg> / <adoProject> / <adoRepo>` placeholders; that only worked by accident when `detect-git-binding` short-circuited Phase 2 entirely (already-bound env), and would have failed silently or hard-erred on a fresh-bind env.
 
    <!-- gate: setup-git-integration:1.prereq-fail | category=intent | cancel-leaves=nothing -->
    > 🚦 **Gate (intent · setup-git-integration:1.prereq-fail):** When any **hard-block** above fires, surface `AskUserQuestion`:
@@ -225,6 +224,28 @@ Steps:
 
    - `ok:true, repos:[]` → no repos in the project. Skip directly to the **Create new** branch above.
    - `ok:false` → surface the helper's `error` + `hint` verbatim and stop.
+
+   **Sub-step 1c.5 — Verify ADO permissions on the picked repo.**
+
+   This is the first moment all three flags (`<org>` / `<proj>` / `<repo>`) have real values, so it's the earliest valid place to verify the user has Contribute on the target. Moved here from Phase 1 step 3 (see the rationale note in that step).
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-ado-permissions.js" \
+       --organization "<org>" --project "<proj>" --repository "<repo>" --token "<adoToken>"
+   ```
+
+   - `ok:true, hasAccess:true` → continue to sub-step 1d.
+   - **Hard-block** on any failure (`ok:false` or `hasAccess:false`). `adoToken` is always present (acquired in Phase 1 step 0), so a failure means a real Contribute / repo / project issue worth surfacing. Surface the helper's `error` + `hint` verbatim and present:
+
+     <!-- gate: setup-git-integration:2.ado-perms-fail | category=intent | cancel-leaves=nothing -->
+     > 🚦 **Gate (intent · setup-git-integration:2.ado-perms-fail):** When the permissions check fails, surface `AskUserQuestion`:
+
+     | Question | Header | Options |
+     |---|---|---|
+     | ADO permissions check failed on `{org}/{proj}/{repo}` (`{shortError}`). How would you like to proceed? | ADO permissions failure | Pick a different repo (back to sub-step 1c), Cancel and fix permissions manually |
+
+     - **Pick a different repo** → loop back to sub-step 1c with the existing `<org>` + `<proj>` preserved (re-running 1a / 1b is unnecessary; only the repo choice was wrong).
+     - **Cancel and fix permissions manually** → exit cleanly; no Dataverse mutation has happened yet.
 
    **Sub-step 1d — Collect branch (free-text).**
 
@@ -708,14 +729,15 @@ Follow the skill tracking instructions in the reference to record this skill's u
 3. **Phase 2 sub-step 1a**: Select ADO org from enumerated list, or exit to web for new-org signup (not-a-gate `setup-git-integration:2.select-org`).
 4. **Phase 2 sub-step 1b**: Select ADO project or trigger create-new (not-a-gate `setup-git-integration:2.select-project` → gate `setup-git-integration:2.create-project` on creation).
 5. **Phase 2 sub-step 1c**: Select ADO repo or trigger create-new (not-a-gate `setup-git-integration:2.select-repo` → gate `setup-git-integration:2.create-repo` on creation).
-6. **Phase 2 sub-step 1d**: Free-text branch (not-a-gate `setup-git-integration:2.branch`).
-7. **Phase 2 sub-step 1e**: Select or name folder (not-a-gate `setup-git-integration:2.select-folder` → gate `setup-git-integration:2.folder-coexists` when an existing folder is picked).
-8. **Phase 2 step 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
-9. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
-10. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
-11. **Phase 8** (env-binding only): Discover candidate solutions → consent-and-enable for source control (gate `setup-git-integration:9.enable-approach` → per-solution gate `setup-git-integration:9.enable-solution`).
-12. **Phase 10** (only when ≥1 solution enabled in Phase 9): Choose initial-commit approach (gate `setup-git-integration:10.commit-approach` → per-solution gate `setup-git-integration:10.commit-solution`).
-13. **Phase 11**: Final routing — open ADO, re-run Phase 9 to enable more solutions, run `commit-to-git`, or exit (gate `setup-git-integration:11.final`).
+6. **Phase 2 sub-step 1c.5**: ADO permissions check fails on picked repo → pick a different repo or cancel (gate `setup-git-integration:2.ado-perms-fail`).
+7. **Phase 2 sub-step 1d**: Free-text branch (not-a-gate `setup-git-integration:2.branch`).
+8. **Phase 2 sub-step 1e**: Select or name folder (not-a-gate `setup-git-integration:2.select-folder` → gate `setup-git-integration:2.folder-coexists` when an existing folder is picked).
+9. **Phase 2 step 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
+10. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
+11. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
+12. **Phase 8** (env-binding only): Discover candidate solutions → consent-and-enable for source control (gate `setup-git-integration:9.enable-approach` → per-solution gate `setup-git-integration:9.enable-solution`).
+13. **Phase 10** (only when ≥1 solution enabled in Phase 9): Choose initial-commit approach (gate `setup-git-integration:10.commit-approach` → per-solution gate `setup-git-integration:10.commit-solution`).
+14. **Phase 11**: Final routing — open ADO, re-run Phase 9 to enable more solutions, run `commit-to-git`, or exit (gate `setup-git-integration:11.final`).
 
 ---
 
