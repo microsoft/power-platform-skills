@@ -148,9 +148,13 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
   if (!cfgRows || cfgRows.length === 0) return { bound: false };
   const cfg = cfgRows[0];
 
-  // 2. Read the per-(folder, branch) branch configs.
+  // 2. Read the per-(folder, branch) branch configs. The `partitionid` column
+  //    holds the solutionId this branch row belongs to (or the all-zeros GUID
+  //    for env-level rows). E10: we need it to distinguish a live solution
+  //    binding from a stale leftover row whose owning solution has been
+  //    disconnected.
   const branchRes = await makeRequest({
-    url: `${base}/api/data/v9.2/sourcecontrolbranchconfigurations?$select=branchname,rootfolderpath,branchsyncedcommitid,upstreambranchsyncedcommitid,statuscode`,
+    url: `${base}/api/data/v9.2/sourcecontrolbranchconfigurations?$select=branchname,rootfolderpath,branchsyncedcommitid,upstreambranchsyncedcommitid,statuscode,partitionid,_partitionid_value`,
     method: 'GET',
     headers: hdr,
   });
@@ -306,9 +310,87 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
   const gitFolder = lastSlash >= 0 ? fullPath.substring(lastSlash + 1) : fullPath;
   const rootFolder = lastSlash >= 0 ? fullPath.substring(0, lastSlash) : '';
 
+  // 6. E10: Disambiguate bindingType by reconciling each branchconfig row's
+  //    `partitionid` against the live solutions enumeration.
+  //
+  //    The legacy heuristic was: `bindingType: 'solution'` iff rootfolderpath
+  //    contains a `/`. That heuristic flips to `solution` for STALE
+  //    branchconfig rows whose owning solution has been disconnected — the
+  //    row's rootfolderpath is still `solutions/Foo` even though no row in
+  //    `solutions` has `solutionid === <Foo-id>` any more (and even if such
+  //    a row exists, it may have `enabledforsourcecontrolintegration=false`).
+  //
+  //    Live evidence: sri-alm-dev-1 2026-06-11 had `newBranchConfigsCreated=2`
+  //    when binding `RetailOS` — one for the env-level row (partitionid
+  //    all-zeros), one for the RetailOS solution row (partitionid=RetailOS-id).
+  //    A naive caller iterating `branchRows[0]` could see the wrong row first.
+  //
+  //    Rule:
+  //      bindingType = 'solution'
+  //        iff some branchconfig row has a NON-ZERO partitionid AND that
+  //        solutionid appears in `boundSolutions[]` (which itself filtered
+  //        on `enabledforsourcecontrolintegration eq true`).
+  //      bindingType = 'environment'
+  //        iff the surviving (non-stale) branchconfig is the env-level one
+  //        (partitionid = all-zeros OR no rootfolderpath /).
+  //      Otherwise fall back to the legacy path heuristic (preserve back-compat
+  //      on tenants where partitionid is not exposed for some reason).
+  const ZERO_GUID = '00000000-0000-0000-0000-000000000000';
+  const boundIds = new Set(boundSolutions.map((s) => (s.solutionId || '').toLowerCase()));
+  const partitionIdOf = (r) =>
+    (r._partitionid_value || r.partitionid || '').toString().toLowerCase();
+  const isStale = (r) => {
+    const pid = partitionIdOf(r);
+    // Unknown partitionid (older Dataverse versions): can't tell — not stale, not live.
+    if (!pid) return false;
+    // Env-level rows (zero-guid partition) are NOT stale — they're the env config row.
+    if (pid === ZERO_GUID) return false;
+    // Solution-scoped rows are stale when their partition doesn't match a live, enabled solution.
+    return !boundIds.has(pid);
+  };
+  const staleBranchConfigs = branchRows.filter(isStale).map((r) => ({
+    partitionId: partitionIdOf(r) || null,
+    rootFolderPath: r.rootfolderpath || null,
+    branchName: r.branchname || null,
+    reason: 'partitionId does not match any enabled solution row (sourcecontrolbranchconfigurations row may be leftover from a disconnected solution)',
+  }));
+  const liveSolutionRow = branchRows.find((r) => {
+    const pid = partitionIdOf(r);
+    return pid && pid !== ZERO_GUID && boundIds.has(pid);
+  });
+  // Only treat ALL-ZEROS partitionid as definitively env-level. Empty/missing
+  // partitionid (older Dataverse versions) means "unknown" — fall through to
+  // the legacy path heuristic instead of assuming env-level.
+  const liveEnvRow = branchRows.find((r) => partitionIdOf(r) === ZERO_GUID);
+  // "Tenant exposes partitionid" iff at least one branchRow has a non-empty
+  // partition value. When true, we use strict disambiguation; when false
+  // (older Dataverse), we fall back to the legacy path heuristic for
+  // back-compat.
+  const partitionIdExposed = branchRows.some((r) => !!partitionIdOf(r));
+  let bindingType;
+  if (solutionUniqueName) {
+    bindingType = 'solution';
+  } else if (liveSolutionRow) {
+    bindingType = 'solution';
+  } else if (liveEnvRow) {
+    bindingType = 'environment';
+  } else if (partitionIdExposed) {
+    // Tenant DOES expose partitionid, but no row matches a live enabled
+    // solution AND no row is the env-level zero-guid row. The remaining
+    // rows must all be stale → don't promote them to 'solution' or
+    // 'environment'; report 'environment' as the conservative default
+    // (the env CONFIG exists but no live binding owns it). This is what
+    // happens when every Git-bound solution has been disconnected but
+    // the sourcecontrolbranchconfigurations rows haven't been GC'd.
+    bindingType = 'environment';
+  } else {
+    // Tenant does NOT expose partitionid → fall back to legacy path heuristic.
+    bindingType = (fullPath && fullPath.includes('/')) ? 'solution' : 'environment';
+  }
+
   return {
     bound: true,
-    bindingType: solutionUniqueName ? 'solution' : (fullPath && fullPath.includes('/') ? 'solution' : 'environment'),
+    bindingType,
     organization: cfg.organizationname || null,
     project: cfg.projectname || null,
     repository: cfg.repositoryname || null,
@@ -325,6 +407,7 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
     cleanState: pendingChangesCount === 0 ? 'Clean' : (pendingChangesCount > 0 ? 'Dirty' : 'Unknown'),
     boundSolutions,
     multipleSolutionsBound,
+    staleBranchConfigs,
     connectionStatus: String(row.statuscode != null ? row.statuscode : ''),
     gitIntegrationId: cfg.sourcecontrolconfigurationid || null,
     detectedVia: 'sourcecontrol-entities',

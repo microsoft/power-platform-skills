@@ -544,3 +544,46 @@ After the PATCH:
 - scripts/lib/enable-solution-source-control.js IS the canonical helper for the env-binding opt-in flow (Phase 9 of setup-git-integration). Do NOT route the env-binding opt-in case through connect-solution-to-git.js — that helper is for the alternative flow of binding a solution from scratch (no prior env bind), where the additional sourcecontrolconfigurations row IS desired.
 - The poll for sourcecontrolsyncstatus === 3 is identical to what's documented in §3 for env-binding placeholder commit completion — the helper accepts --poll --pollIntervalMs --maxPollAttempts and applies the same convergence check.
 - This finding may seem redundant with §3 but is documented separately because §3 covers env-LEVEL post-bind state (sourcecontrolbranchconfigurations) whereas §24 covers per-SOLUTION post-enable state (sourcecontrolsyncstatus on solutions). Different entities, different convergence signals, same async plugin.
+
+
+---
+
+## §25 — `detect-git-binding.bindingType` must reconcile branchconfig `partitionid` against live solutions (2026-06-11)
+
+**Legacy heuristic (pre-E10):** `detect-git-binding.js` derived `bindingType` from `rootfolderpath.includes('/')` — `/` meant `solution`, no `/` meant `environment`.
+
+**Empirical reality (live test sri-alm-dev-1 binding RetailOS 2026-06-11):** the `sourcecontrolbranchconfigurations` table can hold MULTIPLE rows per env, including:
+
+- The env-level row (`partitionid = 00000000-0000-0000-0000-000000000000`, often `rootfolderpath` without `/`)
+- One row per actively-bound solution (`partitionid = <solutionId>`, `rootfolderpath` like `solutions/<gitFolder>`)
+- **Stale leftover rows** from previously-disconnected solutions — same shape as the solution rows above (non-zero `partitionid`, `rootfolderpath` with `/`) but the owning `solutions` row no longer has `enabledforsourcecontrolintegration eq true` (or has been deleted entirely)
+
+`newBranchConfigsCreated=2` was observed on the RetailOS bind, indicating `ConnectToGit` writes both an env-level and a solution-level branchconfig row. Consumers that pick `branchRows[0]` blindly can land on the wrong row; consumers that use the path heuristic can flip to `solution` on stale leftover rows.
+
+**Action (taken in `detect-git-binding.js` E10):**
+1. Extend the `sourcecontrolbranchconfigurations` `$select` to include `partitionid` (and `_partitionid_value` for the lookup-style fallback).
+2. Compute a `liveSolutionRow` = first branchconfig row whose `partitionid` matches a `solutionid` in the `boundSolutions[]` enumeration (which itself filtered on `enabledforsourcecontrolintegration eq true`).
+3. Compute a `liveEnvRow` = first branchconfig row whose `partitionid` is exactly the all-zeros GUID.
+4. Compute `staleBranchConfigs[]` = rows whose `partitionid` is non-zero AND doesn't match any live enabled solution. Each entry surfaces `{ partitionId, rootFolderPath, branchName, reason }`.
+5. Derive `bindingType`:
+   - `solutionUniqueName` passed → `'solution'` (consumer-asserted scope)
+   - `liveSolutionRow` exists → `'solution'`
+   - `liveEnvRow` exists → `'environment'`
+   - Neither, but partitionid IS exposed (modern Dataverse) → `'environment'` (all branchconfigs are stale; env CONFIG still exists but no live binding)
+   - Partitionid NOT exposed (older Dataverse) → legacy path heuristic for back-compat
+
+**Live verification (matrix from `scripts/tests/detect-git-binding.test.js` E10 scenarios):**
+
+| Scenario | branchRows | bindingType | staleBranchConfigs[] |
+|---|---|---|---|
+| 1. Clean solution bind | `[{pid=SolA-id, path=solutions/SolA}]` | `solution` | `[]` |
+| 2. Env bind | `[{pid=ZERO, path=solutions}]` | `environment` | `[]` |
+| 3. Stale solution only | `[{pid=SolGhost-id, path=solutions/SolGhost}]` (no matching enabled solution) | `environment` | `[{partitionId:SolGhost-id, ...}]` |
+| 4. Mixed (live + stale + env) | `[{pid=SolGhost-id}, {pid=ZERO}, {pid=SolA-id}]` | `solution` | `[{partitionId:SolGhost-id, ...}]` only — the env row is NOT stale |
+| Back-compat | `[{rootfolderpath=solutions/SolA}]` (no partitionid field) | `solution` (legacy heuristic) | `[]` |
+
+**Consumer consequence:** `plan-inner-loop` / `revert-workspace` / `switch-branch` callers should check `staleBranchConfigs.length > 0` after `detect-git-binding` and warn the user that orphan rows exist — these often correlate with the `0x80040217 sourcecontrolcomponentpayload missing` failure mode (§ "power-pages orphan rows" memory) that blocks `commit-to-git`. A `disconnect-from-git --solutionUniqueName <stale-name>` (if the row still has a name) or maker-portal "Disconnect" on the stale binding is the canonical cleanup.
+
+---
+
+> **§-numbering note (2026-06-11):** The E10 brief originally specified inserting this finding at §13, but §13 already exists with related content on `boundSolutions[]` enumeration. The new finding lands here at §25 to avoid renumbering; the §13 addendum at the top of this file (E8) cross-references this section.

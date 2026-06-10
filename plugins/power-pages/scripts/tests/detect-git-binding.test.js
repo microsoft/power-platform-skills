@@ -354,3 +354,132 @@ test('E8: detect-git-binding.pendingChangesCount equals list-pending-changes.cou
     assert.equal(detect.pendingChangesCount, list.count);
   } finally { server.close(); }
 });
+
+
+// ===== E10 — bindingType disambiguation + staleBranchConfigs =====
+
+test('E10 scenario 1: clean solution binding — partitionid matches an enabled solution → bindingType:solution, staleBranchConfigs:[]', async () => {
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions/SolA', partitionid: SOL_A, _partitionid_value: SOL_A, statuscode: 0 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 0, value: [] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 0, value: [] } },
+  ]);
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    assert.equal(result.bindingType, 'solution');
+    assert.deepEqual(result.staleBranchConfigs, []);
+  } finally { server.close(); }
+});
+
+test('E10 scenario 2: env binding — only branchconfig has all-zeros partitionid → bindingType:environment, staleBranchConfigs:[]', async () => {
+  const ZERO = '00000000-0000-0000-0000-000000000000';
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions', partitionid: ZERO, _partitionid_value: ZERO, statuscode: 0 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 0, value: [] } },
+  ]);
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    assert.equal(result.bindingType, 'environment');
+    assert.deepEqual(result.staleBranchConfigs, []);
+  } finally { server.close(); }
+});
+
+test('E10 scenario 3: stale solution branchconfig (partition does not match any enabled solution) → bindingType:environment, staleBranchConfigs surfaces the row', async () => {
+  const SOL_GHOST = 'aaaaaaaa-9999-9999-9999-999999999999';
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions/SolGhost', partitionid: SOL_GHOST, _partitionid_value: SOL_GHOST, statuscode: 0 },
+    ] } },
+    // solutions enumeration: SolGhost NOT in the result (disconnected, enabledforsourcecontrolintegration eq true filtered it out)
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 0, value: [] } },
+  ]);
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    // No live solution row matches the partitionid → not 'solution'
+    assert.notEqual(result.bindingType, 'solution', 'stale-only branchconfigs must NOT produce bindingType:solution');
+    assert.equal(result.staleBranchConfigs.length, 1);
+    assert.equal(result.staleBranchConfigs[0].partitionId, SOL_GHOST);
+    assert.equal(result.staleBranchConfigs[0].rootFolderPath, 'solutions/SolGhost');
+    assert.match(result.staleBranchConfigs[0].reason, /partitionId does not match any enabled solution/);
+  } finally { server.close(); }
+});
+
+test('E10 scenario 4: mixed — 1 live solution + 1 stale solution + 1 env row → bindingType:solution, staleBranchConfigs surfaces only the ghost row', async () => {
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  const SOL_GHOST = 'aaaaaaaa-9999-9999-9999-999999999999';
+  const ZERO = '00000000-0000-0000-0000-000000000000';
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      // Stale solution row first (worst case for the legacy heuristic)
+      { branchname: 'main', rootfolderpath: 'solutions/SolGhost', partitionid: SOL_GHOST, _partitionid_value: SOL_GHOST, statuscode: 0 },
+      // Env-level row (zero-guid partition)
+      { branchname: 'main', rootfolderpath: 'solutions',         partitionid: ZERO,      _partitionid_value: ZERO,      statuscode: 0 },
+      // Live solution row
+      { branchname: 'main', rootfolderpath: 'solutions/SolA',    partitionid: SOL_A,     _partitionid_value: SOL_A,     statuscode: 0 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 2, value: [] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 2, value: [] } },
+  ]);
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    // Live solution row exists → bindingType:'solution' regardless of branchRows order
+    assert.equal(result.bindingType, 'solution');
+    // Only the ghost row is stale; the zero-guid env row is NOT stale
+    assert.equal(result.staleBranchConfigs.length, 1, 'env-level zero-guid rows must NOT be flagged stale; only orphan solution rows');
+    assert.equal(result.staleBranchConfigs[0].partitionId, SOL_GHOST);
+  } finally { server.close(); }
+});
+
+test('E10 back-compat: tenant without partitionid exposure falls back to legacy path heuristic', async () => {
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    // partitionid / _partitionid_value absent entirely (older Dataverse versions)
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions/SolA', statuscode: 0 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 0, value: [] } },
+  ]);
+  try {
+    const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    // Path-based heuristic: rootfolderpath contains '/' → 'solution'
+    assert.equal(result.bindingType, 'solution');
+    // No stale rows because nothing has a partitionid to compare against
+    assert.deepEqual(result.staleBranchConfigs, []);
+  } finally { server.close(); }
+});
