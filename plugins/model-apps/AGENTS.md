@@ -29,6 +29,10 @@ claude --plugin-dir /path/to/plugins/model-apps
 .mcp.json                      ← MCP server config (Playwright for browser verification)
 AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
+README.md                      ← User-facing intro and prereqs
+CHANGELOG.md                   ← Keep-a-Changelog
+docs/
+  architecture.md              ← One-page architecture overview with diagrams
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
@@ -39,9 +43,10 @@ references/                    ← Shared reference docs
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 list/detail caching pattern (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
+  supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
-samples/                       ← Example .tsx files (10 samples)
+samples/                       ← Example .tsx files (12 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
@@ -53,8 +58,11 @@ scripts/
   create-record.js             ← Creates one or many records (auto-batches via $batch)
   create-solution.js           ← Creates a Dataverse solution with env's Default Publisher
   add-to-solution.js           ← Adds an existing component to a solution
+  generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
+  capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
+    supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
   tests/                       ← node --test coverage for the scripts above
 skills/
   genpage/
@@ -119,6 +127,33 @@ After modifying this plugin:
 
 1. Run `claude --debug` to see plugin loading details
 2. Run `node --test plugins/model-apps/scripts/tests/*.test.js` (must pass)
-3. Test skill invocation with `/genpage`
-4. Test with both Dataverse entity pages and mock data pages (smoke + edit)
-5. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)
+3. Run `node --test evals/model-apps/genpage/tests/*.test.js` (must pass)
+4. Run both eval-suite runners against shipping fixtures (Layer 1 + Layer 2):
+   - `node evals/model-apps/genpage/run-layer-1.js --tier smoke`
+   - `node evals/model-apps/genpage/run-layer-2.js --tier smoke`
+5. Test skill invocation with `/genpage`
+6. Test with both Dataverse entity pages and mock data pages (smoke + edit)
+7. Verify Playwright browser verification works (navigate, snapshot, click, screenshot)
+
+## Eval Suite
+
+The plugin has a 3-layer eval suite under `evals/model-apps/genpage/`. Two
+layers are automated (TAP v13 runners); Layer 3 is manual.
+
+- **Comprehensive guide:** `evals/model-apps/genpage/EVAL_GUIDE.md` — what
+  we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
+  (synthetic vs real captures), runner output, capture flow, cadence,
+  diagnosing failures, adding evals and assertions.
+- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 16 evals
+  with prompts, answers, and expectations.
+- **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —
+  one folder per captured or synthetic run. Each contains the `.tsx`,
+  `workflow-log.md`, `genpage-plan.md`, and (when applicable)
+  `entity-creation-log.md` and `RuntimeTypes.ts`.
+
+Run on every PR that touches the skill, agents, rules, or evals:
+
+```bash
+node evals/model-apps/genpage/run-layer-1.js --tier smoke
+node evals/model-apps/genpage/run-layer-2.js --tier smoke
+```

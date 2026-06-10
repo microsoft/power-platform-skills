@@ -1,6 +1,6 @@
 {
   "skill_name": "genpage",
-  "eval_instructions": "See eval-runbook.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
+  "eval_instructions": "See EVAL_GUIDE.md in this folder for how to run these evals, how the 3-layer check works (workflow → code quality → UX rubric), and what pass/fail means. Every eval run MUST save a workflow-log.md file documenting all phases attempted — agents invoked, commands run, questions asked, files read, decisions made.",
   "common_workflow_assertions": [
     "A workflow-log.md file is saved to the working directory documenting all phases attempted",
     "Phase 0: A working directory is created with a kebab-case name derived from the user's description",
@@ -23,6 +23,7 @@
     "Generated .tsx destructures props including `pageInput` (e.g., `const { dataApi, pageInput } = props;`)",
     "Generated .tsx imports types from `./RuntimeTypes` (for Dataverse pages) or uses realistic inline mock data (for mock pages)",
     "Generated .tsx uses `makeStyles` with tokens for styling — no inline styles for static values",
+    "Generated .tsx nests `@media` queries inside `makeStyles` slots — no media query used as a top-level slot key",
     "Generated .tsx does NOT use `100vh` or `100vw`",
     "Generated .tsx does NOT import `createTheme`, `mergeThemes`, or `useTheme` (these do not exist in Fluent UI V9)",
     "Generated .tsx does NOT wrap content in a top-level `<FluentProvider>` (already provided at root)",
@@ -36,7 +37,8 @@
     "For DataGrids, generated .tsx imports `createTableColumn` from `@fluentui/react-components` and configures column sizing (columnSizingOptions or resizableColumns)",
     "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
     "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions",
-    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs"
+    "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs",
+    "For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)"
   ],
   "evals": [
     {
