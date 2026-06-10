@@ -490,3 +490,38 @@ RetailOS is clean (post-commit); InternLearning has 3 pending Changes — exactl
 - `resolve-conflicts` skill operates via OData and bypasses this UI gate entirely — but its in-chat messages should NOT instruct users to "click Keep current in the maker portal" as a fallback without also saying *"select the conflicted row(s) first; the buttons stay disabled until you do."*
 - `plan-inner-loop` advisory list for the **Conflicted** state should mention this UX so users who fall back to manual resolution don't get stuck staring at greyed buttons.
 - This is purely a UX observation; no skill-level API call is affected.
+
+## §24 — nabledforsourcecontrolintegration is set via plain PATCH on solutions(<id>), not via a dedicated OData action (2026-06; HAR-confirmed)
+
+**Background:** When a user wants to opt a specific solution INTO source control AFTER an env-level ConnectToGit has already established the binding, the maker portal exposes an **Enable for source control** button on the solution detail page. The two prior alternatives the skill could have used:
+
+- **(a)** Reuse connect-solution-to-git.js which calls ConnectToGit with ConnectionType=0 (solution-level). Side-effect-wise this also sets nabledforsourcecontrolintegration=true but it ADDITIONALLY writes a sourcecontrolconfigurations row and a sourcecontrolbranchconfigurations row, which an env-bound env already has from the env-level bind — risking duplicate-row / "already bound" errors.
+- **(b)** A hypothetical batch action like AddSolutionsToSourceControl(SolutionIds: [...], …). No such action exists on $metadata.
+
+**Empirical reality (HAR file gitintegrationhar.har captured 2026-06-10, ~70 MB, maker portal manually enabling SriSol1 on org5ba33a19.crm.dynamics.com):**
+
+The portal's *Enable for source control* click fires **exactly ONE write call** — every other request in the HAR is a GET (telemetry / metadata / refresh) or an OPTIONS preflight. The single write is:
+
+``	ext
+PATCH https://<envHost>/api/data/v9.0/solutions(<solutionGuid>)
+Content-Type: application/json
+Authorization: Bearer <dataverse-token>
+
+{"enabledforsourcecontrolintegration":"true"}
+``
+
+- **Endpoint** is 9.0 (NOT 9.2) — matches the portal's behavior; using 9.2 also returns 204 but 9.0 is the canonical path captured.
+- **Body value is the JSON string "true"**, NOT the boolean 	rue. This is a Dataverse OData quirk for the Boolean attribute type on this entity. Sending boolean 	rue may or may not work depending on env; the captured wire format is the string. **Helpers MUST emit the string form** to be portal-equivalent.
+- **No special headers** are required — no if-match: *, no clienthost: Browser. Just Content-Type: application/json + Authorization: Bearer ….
+- **Response: HTTP 204 No Content.** No body.
+
+After the PATCH:
+
+- GET solutions(<id>)?=enabledforsourcecontrolintegration,sourcecontrolsyncstatus immediately shows nabledforsourcecontrolintegration: true (correctly boolean in the response) and sourcecontrolsyncstatus: 0.
+- Server-side SourceControlInitialSyncPlugin fires async; sourcecontrolsyncstatus transitions to 3 (Synced) over the next 5-30 s for a small-to-medium solution.
+
+**Action:**
+
+- scripts/lib/enable-solution-source-control.js IS the canonical helper for the env-binding opt-in flow (Phase 9 of setup-git-integration). Do NOT route the env-binding opt-in case through connect-solution-to-git.js — that helper is for the alternative flow of binding a solution from scratch (no prior env bind), where the additional sourcecontrolconfigurations row IS desired.
+- The poll for sourcecontrolsyncstatus === 3 is identical to what's documented in §3 for env-binding placeholder commit completion — the helper accepts --poll --pollIntervalMs --maxPollAttempts and applies the same convergence check.
+- This finding may seem redundant with §3 but is documented separately because §3 covers env-LEVEL post-bind state (sourcecontrolbranchconfigurations) whereas §24 covers per-SOLUTION post-enable state (sourcecontrolsyncstatus on solutions). Different entities, different convergence signals, same async plugin.

@@ -460,47 +460,206 @@ Steps:
 
 ---
 
-## Phase 8 — Wait for Component Staging, Show Where Files Land, Final Gate
+## Phase 8 — Verify Post-Bind State (branches on `bindingType`)
 
-**Goal:** Wait for the post-bind component-staging plugin to finish, count the now-staged pending Changes, print the ADO browse URL so the user can SEE the folder (initially almost-empty), route the user to `commit-to-git` (which pushes the staged components as the real initial commit), and record skill usage.
+**Goal:** Confirm the placeholder bookkeeping commit landed; for solution-binding wait for component staging; for env-binding skip the per-solution wait (env-binding never stages components automatically — it's opt-in per solution, handled in Phase 9). Print the ADO browse URL so the user can see what was bound. Do NOT render any final gate here — control passes to Phase 9 (env-bind) or Phase 11 (solution-bind).
 
-> ⚠️ **Earlier docs incorrectly claimed Connect-to-Git auto-pushes all components.** It does not. `ConnectToGit` only writes a placeholder `Readme.md` commit at `<rootFolder>/<gitFolder>/` and stages every solution component into the `sourcecontrolcomponent` Dataverse entity with `iscommitted=false`. The user MUST then run `/power-pages:commit-to-git` to push them. See `references/inner-loop-empirical-findings.md` §3 + §10.
+> ⚠️ **Earlier docs incorrectly claimed Connect-to-Git auto-pushes all components for env-binding.** It does not. For `ConnectionType=1` (environment) the action only writes a placeholder `Readme.md` commit at `<rootFolder>/<gitFolder>/`; it does NOT flip `enabledforsourcecontrolintegration` on any solution and does NOT create any `sourcecontrolcomponent` rows. The opt-in per solution is what Phase 9 handles. For `ConnectionType=0` (solution) the existing per-solution staging flow applies. See `references/inner-loop-empirical-findings.md` §3 + §10.
 
-Steps:
+### Step 1 — Branch on `bindingType`
 
-1. **Poll for component-staging completion.** `ConnectToGit` fires the `SourceControlInitialSyncPlugin` async op, which enumerates every component into `sourcecontrolcomponent` (but does NOT push them). Poll the solutions endpoint every 15 s, up to 30 attempts (≈ 7.5 min — large solutions may need more):
+Read `bindingType` from the in-flight binding state (the field captured in Phase 6 / written to `.git-integration-manifest.json` in Phase 7).
 
-   ```bash
-   GET <envUrl>/api/data/v9.2/solutions
-     ?$select=uniquename,enabledforsourcecontrolintegration,sourcecontrolsyncstatus,solutionid
-     &$filter=enabledforsourcecontrolintegration eq true
-   ```
+- **`bindingType === "solution"`** → execute step 2 below (per-solution staging poll), then step 3 (browse URL), then go to Phase 11 directly (Phase 9 + Phase 10 are env-only and are skipped).
+- **`bindingType === "environment"`** → SKIP step 2 entirely. Run a single verification probe that the placeholder commit landed (read `sourcecontrolbranchconfigurations.branchsyncedcommitid` for the env-level row — non-null means the post-bind `SourceControlInitialSyncPlugin` finished its env-level work). Then run step 3 (browse URL), then continue to **Phase 9** (NOT Phase 11). Report explicitly to the user: *"Env binding complete. 0 solutions staged — solutions are opt-in. Continuing to solution discovery..."*
 
-   Wait until `sourcecontrolsyncstatus == 3` (Synced = staging finished) for every newly-bound solution. If the poll budget is exhausted, tell the user staging is still running in the background — re-checking via `/power-pages:plan-inner-loop` later will show the final pending-count.
+### Step 2 — Per-solution staging poll (solution-binding only)
 
-2. **Capture the placeholder commit SHA and count staged components.** Re-query `sourcecontrolbranchconfigurations` and read `branchsyncedcommitid` for each `rootfolderpath` you bound — that's the placeholder Readme commit, not the components. Update the manifest's `lastCommitSha` to that value (it will be overwritten when the user runs `commit-to-git`). Then count staged components per solution:
+For `bindingType === "solution"`, poll the solutions endpoint every 15 s, up to 30 attempts (≈ 7.5 min — large solutions may need more):
 
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-pending-changes.js" \
-       --envUrl "<envUrl>" --solutionUniqueName "<sol>"
-   ```
+```bash
+GET <envUrl>/api/data/v9.2/solutions
+  ?$select=uniquename,enabledforsourcecontrolintegration,sourcecontrolsyncstatus,solutionid
+  &$filter=enabledforsourcecontrolintegration eq true and solutionid eq <boundSolutionId>
+```
 
-3. **Print the full ADO browse URL** with the `&path=` parameter so the user lands on `<rootFolder>/<gitFolder>/` directly (initially almost-empty — just the placeholder Readme) — not the repo root, which often only shows the pre-existing README and confuses fresh-bind users (`references/inner-loop-empirical-findings.md` §7):
+Wait until `sourcecontrolsyncstatus == 3` (Synced = staging finished) for the bound solution. If the poll budget is exhausted, tell the user staging is still running in the background — re-checking via `/power-pages:plan-inner-loop` later will show the final pending-count.
 
-   ```
-   https://dev.azure.com/<org>/<project>/_git/<repo>?path=/<rootFolder>/<gitFolder>&version=GB<branch>&_a=contents
-   ```
+> 💡 **Why not run this poll for env-binding?** For `ConnectionType=1` there is nothing to wait for — env-binding does not flip `enabledforsourcecontrolintegration` on any solution. The poll's filter (`enabledforsourcecontrolintegration eq true`) returns an empty set permanently, so the convergence check (`every row has sourcecontrolsyncstatus == 3`) would never fail OR succeed — it would simply run 30 × 15 s = 7.5 min and timeout pointlessly. Bug 3 fixed 2026-06: branch on `bindingType` instead.
 
-4. <!-- gate: setup-git-integration:8.final | category=final | cancel-leaves=nothing -->
-   > 🚦 **Gate (final · setup-git-integration:8.final):** Surface `AskUserQuestion`:
+### Step 3 — Print the ADO browse URL
 
-   | Question | Header | Options |
-   |---|---|---|
-   | Binding complete — folder `solutions/{gitFolder}/` was seeded with a placeholder Readme (commit `{shortSha}`). **{pendingCount}** components are now staged as pending Changes. Push them as the real initial commit? | Initial commit pending | Run /power-pages:commit-to-git now (Recommended), Run /power-pages:sync-from-git first (only if the branch had pre-existing content), Review staged Changes in the maker portal, Exit — I will commit later |
+Print the full ADO browse URL with the `&path=` parameter so the user lands on `<rootFolder>/<gitFolder>/` directly (initially almost-empty — just the placeholder Readme) — not the repo root, which often only shows the pre-existing README and confuses fresh-bind users (`references/inner-loop-empirical-findings.md` §7):
 
-   > 💡 **Why is `commit-to-git` the default?** Connect-to-Git only seeds the folder; staged components stay pending until the user explicitly commits them. Skipping this step leaves the repo with only the placeholder Readme. See `references/inner-loop-empirical-findings.md` §3.
+```
+https://dev.azure.com/<org>/<project>/_git/<repo>?path=/<rootFolder>/<gitFolder>&version=GB<branch>&_a=contents
+```
 
-   > ℹ️ **About the placeholder commit you'll see in ADO:** the `Creating new project folder solutions/<gitFolder>` commit is a one-time bookkeeping commit created by ConnectToGit. It is permanent in the branch history. Your next `/power-pages:commit-to-git` will add **one additional commit** on top of it (CommitToGit is strictly 1-call → 1-commit; it does NOT split into batches). See `references/inner-loop-empirical-findings.md` §12.
+**Output (solution-binding):** Component staging confirmed; placeholder commit verified; browse URL shown. Proceed to Phase 11.
+**Output (env-binding):** Placeholder commit verified; browse URL shown. Proceed to Phase 9 (solutions are opt-in — let's pick the ones to enable).
+
+---
+
+## Phase 9 — Discover & Enable Solutions for Source Control (env-binding only)
+
+**Goal:** After env-binding completes (Phase 8 step 1 branch), the env is wired up but ZERO solutions are bound. This phase lets the user enable one or more solutions in a single guided flow, without having to use the maker portal's "Enable for source control" button per solution.
+
+> 🔵 **Skipped for solution-binding.** This phase only runs when `bindingType === "environment"`. For `bindingType === "solution"`, the single bound solution is already enabled at `ConnectToGit` time — skip directly to Phase 11.
+
+### Step 1 — Discover candidate solutions
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-enableable-solutions.js" --envUrl "<envUrl>"
+```
+
+The helper queries unmanaged + visible solutions where `enabledforsourcecontrolintegration eq false` and excludes system solutions (by uniquename allowlist and publisher-prefix blocklist).
+
+- `ok:true, count:0, solutions:[]` → no candidate solutions in the env. Surface a note: *"No user-authored unmanaged solutions found that can be enabled. Either all of your solutions are already enabled, or the env only contains system solutions. Continuing to Phase 11."* Then skip to Phase 11.
+- `ok:true, count:N, solutions:[…]` → render the solutions as a table (columns: `#`, `uniqueName`, `friendlyName`, `version`, `modifiedOn`, `publisherPrefix`). Continue to Step 2.
+- `ok:false` → surface the helper's `error` + `hint` verbatim. Phase 9 fails soft (do NOT abort the whole skill — the env-binding was successful in Phase 5; this is just convenience). Skip to Phase 11 with a note that the user can re-run Phase 9 manually later by invoking `/power-pages:setup-git-integration` again or calling `enable-solution-source-control.js` directly per solution.
+
+### Step 2 — Pick approach gate
+
+<!-- gate: setup-git-integration:9.enable-approach | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-git-integration:9.enable-approach):** Surface `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Found `{count}` unmanaged solutions in `{envUrl}` that can be enabled for source control. Each one will be PATCH'd with `enabledforsourcecontrolintegration:"true"` (HAR-confirmed; this is exactly what the maker portal's "Enable for source control" button does). How do you want to proceed? | Enable solutions | Enable ALL `{count}` solutions now (Recommended for fresh-bind envs), Pick individually (one consent gate per solution), Skip — I will enable solutions later via the maker portal or by re-running this skill |
+
+- **Enable ALL** → loop over every solution in the candidate list; for each, run Step 3.
+- **Pick individually** → for each solution in the candidate list, surface a per-solution gate (next sub-step), then run Step 3 only for the consented ones.
+- **Skip** → do nothing in Phase 9; skip directly to Phase 11.
+
+For **Pick individually**, the per-solution gate is:
+
+<!-- gate: setup-git-integration:9.enable-solution | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · setup-git-integration:9.enable-solution):** Surface `AskUserQuestion` per candidate:
+
+| Question | Header | Options |
+|---|---|---|
+| Enable solution `{uniqueName}` (`{friendlyName}` v`{version}`, modified `{modifiedOn}`) for source control? | Per-solution enable | Enable this one, Skip this one |
+
+### Step 3 — Call the enable API per consented solution
+
+For each consented solution, call:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/enable-solution-source-control.js" \
+    --envUrl "<envUrl>" --solutionId "<solutionId>" --poll
+```
+
+The helper PATCHes `solutions(<solutionId>)` with `{"enabledforsourcecontrolintegration":"true"}` (note: string `"true"`, not boolean `true` — Dataverse OData quirk; HAR-confirmed 2026-06). With `--poll`, it then waits for `sourcecontrolsyncstatus === 3` (Synced) — the server-side `SourceControlInitialSyncPlugin` finishes asynchronously, typically in 5-30 s for a small-to-medium solution.
+
+Per-solution outcome handling:
+- `ok:true, finalSyncStatus:3` → record success; mark the solution `enabled=true`.
+- `ok:true, timedOut:true` → PATCH succeeded but the sync poll exhausted its budget. This is NOT a failure; sync continues server-side. Record `enabled=true, syncPending=true` and continue.
+- `ok:false, statusCode:404` → solution was deleted between Step 1 and Step 3. Record skip.
+- `ok:false` (other) → surface the helper's `error` + `hint`; record `enabled=false`. Continue with the next solution (don't abort the loop on a single failure).
+
+### Step 4 — Summary table
+
+Render a results table after the loop (columns: `Solution`, `Status` [Enabled / Sync pending / Skipped / Failed], `Notes`). Capture the list of successfully-enabled solutions for Phase 10.
+
+**Output:** A possibly-empty list of solutions now enabled for source control. If the list is empty (all skipped or all failed), skip Phase 10 entirely and go to Phase 11.
+
+---
+
+## Phase 10 — Initial Commits for Enabled Solutions (only when ≥1 solution enabled in Phase 9)
+
+**Goal:** Solutions enabled in Phase 9 now have their components staged as pending `sourcecontrolcomponent` rows but nothing has been pushed to ADO yet. This phase lets the user commit them in one guided flow.
+
+> 🔵 **Skipped when Phase 9 enabled zero solutions** (either because the user picked Skip in Phase 9 step 2, or because every per-solution enable failed). Skip directly to Phase 11.
+
+### Step 1 — Pick commit approach gate
+
+<!-- gate: setup-git-integration:10.commit-approach | category=plan | cancel-leaves=nothing -->
+> 🚦 **Gate (plan · setup-git-integration:10.commit-approach):** Surface `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| `{enabledCount}` solution(s) were enabled for source control in Phase 9. Each one's components are now staged as pending Changes. Push the initial commit per solution now? | Initial commits | Commit ALL `{enabledCount}` now with a default message (one CommitToGit per solution; Recommended), Commit one-by-one with a custom message per solution, Skip — I will commit later via /power-pages:commit-to-git per solution |
+
+- **Commit ALL** → loop over every enabled solution; for each, call `commit-to-git.js` with a default message (Step 2 below).
+- **Commit one-by-one** → for each enabled solution, surface a per-solution gate (sub-step below), then call `commit-to-git.js` only for the consented ones, optionally using a user-supplied message per solution.
+- **Skip** → do nothing in Phase 10; skip to Phase 11 with a reminder that `/power-pages:commit-to-git --solutionUniqueName <name>` can be run per solution at any time.
+
+For **Commit one-by-one**, the per-solution gate is:
+
+<!-- gate: setup-git-integration:10.commit-solution | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · setup-git-integration:10.commit-solution):** Surface `AskUserQuestion` per enabled solution:
+
+| Question | Header | Options |
+|---|---|---|
+| Commit the initial pending Changes for solution `{uniqueName}` now? Default message: `"Initial source-control commit for {uniqueName}"`. | Per-solution commit | Commit now with default message, Commit with custom message (next prompt), Skip this one |
+
+If the user picks **Commit with custom message**, follow up with a `not-a-gate` data-gathering AskUserQuestion to collect the message (validate non-empty, ≤ 250 chars).
+
+### Step 2 — Call CommitToGit per consented solution
+
+For each consented solution:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/commit-to-git.js" \
+    --envUrl "<envUrl>" \
+    --solutionUniqueName "<uniqueName>" \
+    --commitMessage "Initial source-control commit for <uniqueName>"
+```
+
+(Override `--commitMessage` with the user-supplied message when one was collected.)
+
+Per-solution outcome handling:
+- `committed:true, commitId:"<sha>"` → record success. Note the `polled.reached` flag — if `true` the pending Changes have already cleared; if `false` the post-commit poll timed out (non-fatal — commit landed, the Changes tab just hasn't refreshed yet).
+- `statusCode:400` with errorCode `0x80040216` (shared components) → surface the error verbatim; for this skill flow, record failure and skip to next solution. The user can resolve the overlap manually and re-run `/power-pages:commit-to-git` per affected solution.
+- `statusCode:400` with errorCode `0x80098015` (conflicts present) → record failure; the env has unresolved conflicts that block the commit. Surface guidance to run `/power-pages:resolve-conflicts` first, then re-run this skill or `/power-pages:commit-to-git` per solution.
+- Other failure → surface verbatim; record failure; continue with next solution.
+
+> 💡 **Why call `commit-to-git.js` directly instead of invoking `/power-pages:commit-to-git` as a sub-skill?** The full `/power-pages:commit-to-git` skill runs 5 pre-flight validators (file sizes, supported types, large canvas, PCF duplication, dependencies) plus its own consent gates. For the initial-commit case in Phase 10, the helper-only path is faster (no extra prompts) and the pre-flight risk is low (the solutions were just discovered + enabled in Phase 9; no maker edits have happened yet). Users who want the full pre-flight pipeline can re-run `/power-pages:commit-to-git --solutionUniqueName <name>` later.
+
+### Step 3 — Summary table
+
+Render a results table after the loop (columns: `Solution`, `Commit SHA` [short form] / `Status`, `Notes`).
+
+**Output:** A list of (solution, commit SHA) pairs that landed in ADO. The env is now in the same state it would be in after `/power-pages:setup-git-integration` + N x `/power-pages:connect-solution-to-git` + N x `/power-pages:commit-to-git` — but accomplished in a single guided flow.
+
+---
+
+## Phase 11 — Final Gate
+
+**Goal:** Final user touchpoint after all the binding + enable + commit work is complete.
+
+### Step 1 — Final gate
+
+<!-- gate: setup-git-integration:11.final | category=final | cancel-leaves=nothing -->
+> 🚦 **Gate (final · setup-git-integration:11.final):** Surface `AskUserQuestion`. The option set depends on what just ran:
+
+For env-binding where Phase 9 + Phase 10 ran successfully (≥1 solution enabled + ≥1 commit landed):
+
+| Question | Header | Options |
+|---|---|---|
+| Setup complete — `{commitCount}` initial commit(s) landed in `{branch}`. What next? | Setup complete | Open the ADO branch in browser (path = `solutions/{gitFolder}`), Enable more solutions for source control (re-run Phase 9), Open a PR now (/power-pages:open-pr), Done — exit |
+
+For env-binding where Phase 9 ran but Phase 10 was skipped (or all commits skipped/failed):
+
+| Question | Header | Options |
+|---|---|---|
+| Setup complete — `{enabledCount}` solution(s) enabled but no initial commits were pushed. What next? | Setup complete | Run /power-pages:commit-to-git per solution (Recommended), Enable more solutions for source control (re-run Phase 9), Open the ADO branch in browser, Done — exit |
+
+For env-binding where Phase 9 enabled zero solutions:
+
+| Question | Header | Options |
+|---|---|---|
+| Env binding complete — no solutions were enabled for source control yet. What next? | Setup complete | Enable solutions for source control (re-run Phase 9), Open the ADO branch in browser, Done — exit |
+
+For solution-binding (Phases 9 + 10 were skipped):
+
+| Question | Header | Options |
+|---|---|---|
+| Binding complete — folder `solutions/{gitFolder}/` was seeded with a placeholder Readme (commit `{shortSha}`). **{pendingCount}** components are now staged as pending Changes. Push them as the real initial commit? | Initial commit pending | Run /power-pages:commit-to-git now (Recommended), Run /power-pages:sync-from-git first (only if the branch had pre-existing content), Review staged Changes in the maker portal, Exit — I will commit later |
+
+> 💡 **Why is `commit-to-git` the default for solution-binding?** Connect-to-Git only seeds the folder; staged components stay pending until the user explicitly commits them. Skipping this step leaves the repo with only the placeholder Readme. See `references/inner-loop-empirical-findings.md` §3.
+
+> ℹ️ **About the placeholder commit you'll see in ADO:** the `Creating new project folder solutions/<gitFolder>` commit is a one-time bookkeeping commit created by ConnectToGit. It is permanent in the branch history. Your next `/power-pages:commit-to-git` will add **one additional commit** on top of it (CommitToGit is strictly 1-call → 1-commit; it does NOT split into batches). See `references/inner-loop-empirical-findings.md` §12.
 
 ### Record Skill Usage
 
@@ -525,18 +684,20 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Select ADO org | Selecting organization | Call `list-ado-orgs.js`; user picks from enumerated list or hits "Create new" (browser-only) |
-| Verify tenant alignment | Verifying tenant alignment | Re-mint bearer with `get-ado-token.js --verifyTenant --organization <org>`; hard-block on mismatch |
-| Select ADO project | Selecting project | Call `list-ado-projects.js`; user picks or creates via `create-ado-project.js` (consent + ~30-60 s poll) |
-| Select ADO repo | Selecting repository | Call `list-ado-repos.js`; user picks or creates via `create-ado-repo.js` (consent + synchronous) |
-| Collect branch | Collecting branch | Free-text AskUserQuestion; default = repo's `defaultBranch` (stripped of `refs/heads/`) or `main` |
-| Select / name folder | Selecting folder-in-repo | Call `list-ado-folders.js`; user picks an existing folder (with co-exists gate) or types a new one (with format warning) |
-| Verify ADO repo is initialized | Verifying repo init | Call `verify-repo-initialized.js`; offer README-commit flow when empty |
+| Select ADO org (enumerated) | Selecting ADO organization | Enumerate orgs via `list-ado-orgs.js`; pick one or exit-with-signup hint |
+| Select ADO project (enumerated, create if needed) | Selecting ADO project | Enumerate projects via `list-ado-projects.js`; pick one OR create-new via `create-ado-project.js` (with consent gate + poll) |
+| Select ADO repo (enumerated, create if needed) | Selecting ADO repo | Enumerate repos via `list-ado-repos.js`; pick one OR create-new via `create-ado-repo.js` (with consent gate) |
+| Pick branch + select / name folder | Choosing branch and folder | Free-text branch (default = existing repo's defaultBranch or `main`); enumerate folders via `list-ado-folders.js`; pick existing (with co-exist confirm) OR type new (with strict format warning) |
+| Verify ADO repo is initialized | Verifying repo init | Call `verify-repo-initialized.js`; offer README-commit flow via `init-ado-repo.js` when empty |
 | Render and review binding plan | Rendering binding plan | Compose `.setup-plan-data.json`; show textual preview |
 | Final consent before bind | Awaiting bind consent | Surface explicit consent gate before any Dataverse mutation |
 | Execute `ConnectToGit` | Executing ConnectToGit | Call `connect-to-git.js` helper; surface platform errors |
 | Verify binding round-trips | Verifying binding | Re-query `detect-git-binding.js`; capture canonical Dataverse-reported field values |
 | Write `.git-integration-manifest.json` | Writing manifest | Persist manifest at project root + skill-run marker at `docs/inner-loop/last-setup.json` |
+| Verify post-bind state (Phase 8) | Verifying post-bind state | For `bindingType=solution`: poll per-solution sync. For `bindingType=environment`: skip poll, verify placeholder commit, proceed to Phase 9. |
+| Discover & enable candidate solutions (Phase 9, env-binding only) | Enabling solutions for source control | Call `discover-enableable-solutions.js`; gate approach (Enable all / Pick / Skip); per-consented solution call `enable-solution-source-control.js --poll` |
+| Push initial commits per enabled solution (Phase 10, env-binding only) | Pushing initial commits | Gate commit approach (All / One-by-one / Skip); call `commit-to-git.js --solutionUniqueName` per consented solution |
+| Final routing (Phase 11) | Routing to next action | Surface env-binding-aware final gate (open ADO / re-run Phase 9 / open-pr / exit; option set depends on what just ran) |
 
 ---
 
@@ -544,15 +705,17 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 1. **Phase 1**: Prereq failure (Managed Env / sys-admin / ADO Contributor) → open remediation URLs or cancel (gate `setup-git-integration:1.prereq-fail`).
 2. **Phase 1**: Already-bound check → disconnect-and-rebind or cancel (no marker — conversational).
-3. **Phase 2 sub-step 1a**: Select ADO org from enumerated list, or "Create new" (browser hint + clean exit) (data-gathering `setup-git-integration:2.select-org`).
-4. **Phase 2 sub-step 1b**: Select ADO project, or "Create new" (data-gathering `setup-git-integration:2.select-project` + consent gate `setup-git-integration:2.create-project` when creating).
-5. **Phase 2 sub-step 1c**: Select ADO repo, or "Create new" (data-gathering `setup-git-integration:2.select-repo` + consent gate `setup-git-integration:2.create-repo` when creating).
-6. **Phase 2 sub-step 1d**: Collect branch (data-gathering, not a gate).
-7. **Phase 2 sub-step 1e**: Select folder (existing → confirm co-exists via gate `setup-git-integration:2.folder-coexists`; or "Type new" with the format warning) (data-gathering `setup-git-integration:2.select-folder`).
+3. **Phase 2 sub-step 1a**: Select ADO org from enumerated list, or exit to web for new-org signup (not-a-gate `setup-git-integration:2.select-org`).
+4. **Phase 2 sub-step 1b**: Select ADO project or trigger create-new (not-a-gate `setup-git-integration:2.select-project` → gate `setup-git-integration:2.create-project` on creation).
+5. **Phase 2 sub-step 1c**: Select ADO repo or trigger create-new (not-a-gate `setup-git-integration:2.select-repo` → gate `setup-git-integration:2.create-repo` on creation).
+6. **Phase 2 sub-step 1d**: Free-text branch (not-a-gate `setup-git-integration:2.branch`).
+7. **Phase 2 sub-step 1e**: Select or name folder (not-a-gate `setup-git-integration:2.select-folder` → gate `setup-git-integration:2.folder-coexists` when an existing folder is picked).
 8. **Phase 2 step 2**: Empty repo detected → initialize automatically with a README commit, or cancel (gate `setup-git-integration:2.repo-init`).
 9. **Phase 4**: Approve the binding plan (gate `setup-git-integration:4.plan`).
 10. **Phase 5**: Final consent before `ConnectToGit` (gate `setup-git-integration:5.consent`).
-11. **Phase 8**: Choose next action — `sync-from-git`, `commit-to-git`, or exit (gate `setup-git-integration:8.final`).
+11. **Phase 8** (env-binding only): Discover candidate solutions → consent-and-enable for source control (gate `setup-git-integration:9.enable-approach` → per-solution gate `setup-git-integration:9.enable-solution`).
+12. **Phase 10** (only when ≥1 solution enabled in Phase 9): Choose initial-commit approach (gate `setup-git-integration:10.commit-approach` → per-solution gate `setup-git-integration:10.commit-solution`).
+13. **Phase 11**: Final routing — open ADO, re-run Phase 9 to enable more solutions, run `commit-to-git`, or exit (gate `setup-git-integration:11.final`).
 
 ---
 
@@ -563,6 +726,11 @@ Follow the skill tracking instructions in the reference to record this skill's u
 - **`ConnectToGit` returns 5xx**: transient — retry once. If second attempt fails, surface verbatim and stop; no manifest is written.
 - **Phase 6 reports drift between sent values and Dataverse-reported values**: write the canonical values into the manifest. This is normal for branch (`main` vs `refs/heads/main`) and is not an error.
 - **Manifest write fails** (permission / full disk): hard stop after `ConnectToGit` already succeeded — surface the error AND the canonical binding fields so the user can write the manifest manually.
+- **Phase 9 `enable-solution-source-control.js` returns 404**: solution was deleted between discovery (Phase 9 step 1) and enable (step 3). Record skip; continue with next solution.
+- **Phase 9 `enable-solution-source-control.js` returns `ok:true, timedOut:true`**: the PATCH succeeded but the server-side `SourceControlInitialSyncPlugin` is still running after the poll budget (~2 min). NOT a failure — record `enabled=true, syncPending=true` and continue. The user can verify later via `/power-pages:plan-inner-loop` or by querying `solutions(<id>)?$select=sourcecontrolsyncstatus`.
+- **Phase 10 `commit-to-git.js` returns 400 / `0x80040216` (shared components)**: a component in the solution being committed also lives in another Git-bound solution. Record failure; skip to next solution. The user can resolve the overlap manually (remove the shared component from one solution) and re-run `/power-pages:commit-to-git --solutionUniqueName <name>`.
+- **Phase 10 `commit-to-git.js` returns 400 / `0x80098015` (conflicts present)**: the env has unresolved conflicts that block the commit. Record failure; surface guidance to run `/power-pages:resolve-conflicts` first. This generally only fires when a `sync-from-git` was attempted between Phase 9 enable and Phase 10 commit.
+- **Phase 9 or Phase 10 helper fails entirely** (network / Dataverse 5xx): record the failure, continue with remaining solutions, surface a summary table at the end of the phase. Do NOT abort the whole skill — the env-binding (Phase 5) already succeeded; Phase 9 + Phase 10 are convenience flows on top.
 
 ---
 
