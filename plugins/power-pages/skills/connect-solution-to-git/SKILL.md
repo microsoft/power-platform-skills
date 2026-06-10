@@ -358,13 +358,48 @@ Steps:
 
    Validate the final value: non-empty; leading `/` stripped (defensive — the user shouldn't have typed one given the warning, but the helper output starts with `/` and we strip it when displaying). Per the warning above, the user should be guided NOT to type a trailing slash in the first place (this skill intentionally does NOT silently sanitize trailing slashes).
 
-4. Repo-init check:
+4. Repo-init check — confirm the target repo has at least one commit on `<branch>` before any Dataverse mutation.
 
-   Same as `setup-git-integration` Phase 2 step 2 — call `verify-repo-initialized.js`. If empty, offer the README-commit option or exit for manual init.
+   `ConnectToGit` fails with a cryptic 400 against an empty repo (no `defaultBranch`, no refs), so we MUST verify here. The check uses the same `adoToken` already minted in Phase 1 step 0 / re-minted in 3a tenant cross-check — the user is never re-prompted for credentials.
 
-   *(No separate gate ID in the catalog for this — re-use the same conversational pattern as `setup-git-integration:2.repo-init` but DO NOT use that gate marker; it's owned by the other skill. Surface the prompt directly via `AskUserQuestion` without a marker comment — this is a documented exception per `approval-gates.md` §3 footnote on shared remediation prompts.)*
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-repo-initialized.js" \
+       --organization "<org>" --project "<proj>" --repository "<repo>" --token "<adoToken>"
+   ```
 
-**Output:** Target solution picked; shared-object risk acknowledged (or absent); ADO coordinates gathered; repo confirmed initialized.
+   Decision tree on the helper output:
+
+   - `initialized:true` → repo has `defaultBranch` and `branchCount > 0`. Continue to Phase 4 (no gate fires).
+   - `error` (non-200 / network / token rejected) → surface the helper's `error` field verbatim and stop. No Dataverse mutation has happened yet. Do NOT auto-retry; the user must fix the underlying issue (most often: tenant-scoped token expired between Phase 1 step 0 and now — re-run the skill).
+   - `initialized:false` → the repo is empty (just-created via 3c's create-repo branch, or it always was). Fire the repo-init consent gate below.
+
+   <!-- gate: connect-solution-to-git:3.repo-init | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · connect-solution-to-git:3.repo-init):** Surface `AskUserQuestion`:
+   >
+   > | Question | Header | Options |
+   > |---|---|---|
+   > | The ADO repo `{org}/{project}/{repo}` is empty (no default branch, no commits). `ConnectToGit` will fail with a cryptic 400 against an empty repo. Initialize it now with a single README commit on `{branch}` so the bind can proceed cleanly? | Repo initialization | Auto-init (Recommended), Initialize manually then re-run, Cancel and pick a different repo |
+   >
+   > - **Auto-init (Recommended)** → push a stub `README.md` on `<branch>` via the ADO Git Pushes REST API:
+   >
+   >   ```bash
+   >   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/init-ado-repo.js" \
+   >       --organization "<org>" --project "<proj>" --repository "<repo>" \
+   >       --branch "<branch>" --token "<adoToken>"
+   >   ```
+   >
+   >   - `ok:true, initialized:true` → continue to Phase 4. Persist `initialCommitId` from the helper output into `planData` for later audit.
+   >   - `ok:true, alreadyInitialized:true` → race: someone else (or a prior aborted run) initialized the repo between our `verify-repo-initialized` call and our push. Safe — the existing `defaultBranch` is preserved. Continue to Phase 4.
+   >   - `ok:false, statusCode:401` → surface the helper's `hint` (token scope rejected by ADO — needs `vso.code_write`). Stop; the user must re-run after fixing token scope. This is rare with the default Entra ADO scope but possible with custom PATs.
+   >   - `ok:false, statusCode:403` → surface the helper's `hint` ("Your account lacks Contribute on this repo. Ask the project admin to grant the Contributors group write access on `<org>/<proj>/<repo>`, then re-run.") and stop. Cannot auto-fix; this is an ADO permission grant only the project admin can make.
+   >   - `ok:false, statusCode:404` → surface the helper's `hint` ("Repository `<org>/<proj>/<repo>` not found...") and stop. Most often a typo somewhere in 3a/3b/3c that snuck past validation — the user should re-run the skill.
+   >   - `ok:false` (other) → surface the helper's `error` + `hint` verbatim and stop. No Dataverse mutation has happened yet.
+   >
+   > - **Initialize manually then re-run** → exit cleanly. No Dataverse changes have been made. Tell the user: *"Push your initial commit (e.g. README) to `{org}/{project}/{repo}` on branch `{branch}` — in the ADO portal use the "Initialize main branch with a README" button, or `git push` from a local clone — then re-run `/power-pages:connect-solution-to-git --envUrl {envUrl} --solutionUniqueName {sol}`."* This option exists for users who want full control over the initial commit (custom README, .gitignore, license file, etc.) instead of the stub README that auto-init writes.
+   >
+   > - **Cancel and pick a different repo** → exit cleanly. No Dataverse changes have been made. Tell the user: *"To pick a different repo, re-run `/power-pages:connect-solution-to-git --envUrl {envUrl} --solutionUniqueName {sol}` and select a different repo at sub-step 3c."* This exit path exists primarily for users who realize at this point that the empty repo they just selected in 3c was the wrong one (e.g. accidental Create-new at 3c with a typo'd name).
+
+**Output:** Target solution picked; shared-object risk acknowledged (or absent); ADO coordinates gathered; repo confirmed initialized (or just-initialized by `init-ado-repo.js`).
 
 ---
 

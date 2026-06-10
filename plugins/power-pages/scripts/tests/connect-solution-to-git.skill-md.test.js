@@ -163,3 +163,67 @@ test('E4: approval-gates.md §6A.3 catalog lists every NEW gate ID', () => {
   // The retired legacy ID is gone
   assert.doesNotMatch(cat, /connect-solution-to-git:3\.ado-fields/);
 });
+
+
+// ===== E5 — Phase 3 step 4 self-capable repo-init gate =====
+
+test('E5: Phase 3 step 4 declares the connect-solution-to-git:3.repo-init gate (no setup-git-integration cross-reference)', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  // The gate marker comment + headline must be inline in this skill, not delegated.
+  assert.match(phase3, /<!-- gate: connect-solution-to-git:3\.repo-init \| category=consent \| cancel-leaves=nothing -->/);
+  assert.match(phase3, /Gate \(consent · connect-solution-to-git:3\.repo-init\)/);
+  // The retired legacy "Same as setup-git-integration Phase 2 step 2" must be gone from step 4.
+  const step4Idx = phase3.indexOf('4. Repo-init check');
+  assert.ok(step4Idx > -1, 'Phase 3 step 4 must use the heading "4. Repo-init check"');
+  const step4 = phase3.slice(step4Idx);
+  assert.doesNotMatch(step4, /Same as `setup-git-integration` Phase 2 step 2/);
+  assert.doesNotMatch(step4, /setup-git-integration:2\.repo-init/);
+});
+
+test('E5: Phase 3 step 4 verify-repo-initialized CLI invocation includes the 4 required args', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  // The bash fence MUST contain the helper path and the 4 flags it requires.
+  assert.match(phase3, /scripts\/lib\/verify-repo-initialized\.js/);
+  // All 4 args must be there (--organization, --project, --repository, --token).
+  const helperBlock = phase3.slice(phase3.indexOf('verify-repo-initialized.js'));
+  assert.match(helperBlock, /--organization "<org>"/);
+  assert.match(helperBlock, /--project "<proj>"/);
+  assert.match(helperBlock, /--repository "<repo>"/);
+  assert.match(helperBlock, /--token "<adoToken>"/);
+});
+
+test('E5: repo-init gate offers all 3 prescribed options in the prescribed order', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const gateIdx = phase3.indexOf('connect-solution-to-git:3.repo-init');
+  const gateSect = phase3.slice(gateIdx);
+  // The 3 options must appear in this exact order in the options column.
+  assert.match(
+    gateSect,
+    /Auto-init \(Recommended\),\s*Initialize manually then re-run,\s*Cancel and pick a different repo/,
+  );
+});
+
+test('E5: Auto-init branch invokes init-ado-repo.js with the 5 required args', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const initIdx = phase3.indexOf('init-ado-repo.js');
+  assert.ok(initIdx > -1, 'Phase 3 step 4 must invoke init-ado-repo.js in the Auto-init branch');
+  const initBlock = phase3.slice(initIdx);
+  // Helper takes 5 args: org, project, repository, branch, token
+  assert.match(initBlock, /--organization "<org>"/);
+  assert.match(initBlock, /--project "<proj>"/);
+  assert.match(initBlock, /--repository "<repo>"/);
+  assert.match(initBlock, /--branch "<branch>"/);
+  assert.match(initBlock, /--token "<adoToken>"/);
+});
+
+test('E5: Auto-init decision tree handles statusCode 401, 403, 404, alreadyInitialized, and other failures', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const step4 = phase3.slice(phase3.indexOf('4. Repo-init check'));
+  // Each outcome must be explicitly covered so the gate does not silently swallow errors.
+  assert.match(step4, /ok:true, initialized:true/);
+  assert.match(step4, /ok:true, alreadyInitialized:true/);
+  assert.match(step4, /ok:false, statusCode:401/);
+  assert.match(step4, /ok:false, statusCode:403/);
+  assert.match(step4, /ok:false, statusCode:404/);
+  assert.match(step4, /ok:false.*other/i);
+});
