@@ -16,14 +16,13 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ho-"));
 }
 
-function runHook({ input, configDir, off }) {
+function runHook({ input, configDir }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
-      POWER_PLATFORM_SKILLS_TELEMETRY: off ? "0" : "",
     },
   });
 }

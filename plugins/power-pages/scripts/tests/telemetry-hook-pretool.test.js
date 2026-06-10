@@ -17,13 +17,19 @@ function mkConfigDir() {
 }
 
 function runHook({ input, configDir, off, fakeProbe, ikeyPath }) {
+  // Opt-out is a per-plugin config.json in the config dir (env var removed).
+  if (off) {
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ telemetry: { "power-pages": "off" } })
+    );
+  }
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {
       ...process.env,
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
-      POWER_PLATFORM_SKILLS_TELEMETRY: off ? "0" : "",
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
@@ -52,10 +58,11 @@ test("exits 0 and emits nothing when tool_input has no tracked skill", () => {
   assert.equal(status, 0);
 });
 
-test("env opt-out still writes the local mirror but does NOT POST", () => {
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 suppresses transmission only. With an enabled ikey.json (via the
-  // override seam) + a fake-https probe + the opt-out set, the hook builds and
-  // dispatches the event; the dispatcher writes events.jsonl and skips the POST.
+test("config opt-out still writes the local mirror but does NOT POST", () => {
+  // A per-plugin config opt-out suppresses transmission only. With an enabled
+  // ikey.json (via the override seam) + a fake-https probe + the opt-out set, the
+  // hook builds and dispatches the event; the dispatcher writes events.jsonl and
+  // skips the POST.
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const ikeyPath = path.join(configDir, "ikey.json");

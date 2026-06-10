@@ -288,46 +288,6 @@ test("disabled:true short-circuits BEFORE PAC / agent-info shellouts", () => {
   assert.equal(agentCalled, false, "agent-info must not be invoked when disabled");
 });
 
-test("POWER_PLATFORM_SKILLS_TELEMETRY=0 still emits (for the local mirror); opt-out is enforced downstream", () => {
-  // The env opt-out suppresses TRANSMISSION, not the local diagnostic mirror.
-  // So emit-from-prompt no longer fast-paths on POWER_PLATFORM_SKILLS_TELEMETRY=0: it builds the
-  // enriched event and dispatches it so the detached dispatcher can write the
-  // local mirror, then the dispatcher applies the opt-out and skips the POST.
-  const telemetryDir = mkTelemetryDir({
-    instrumentationKey: "x",
-    collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
-  });
-  const captured = {};
-  let pacCalled = false;
-  const prev = process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
-  process.env.POWER_PLATFORM_SKILLS_TELEMETRY = "0";
-  let result;
-  try {
-    result = emitSkillStartedFromPrompt("/power-pages:add-seo", {
-      pluginName: "power-pages",
-      pluginVersion: "1.2.3",
-      trackedSkills: TRACKED,
-      telemetryDir,
-      _emit: (e, o) => {
-        captured.event = e;
-        captured.spawnOpts = o;
-      },
-      _readPacAuth: () => {
-        pacCalled = true;
-        return null;
-      },
-    });
-  } finally {
-    if (prev === undefined) delete process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
-    else process.env.POWER_PLATFORM_SKILLS_TELEMETRY = prev;
-  }
-  assert.deepEqual(result, { emitted: true, skillName: "add-seo" });
-  assert.ok(captured.event, "event must still be dispatched so the dispatcher can local-log");
-  assert.equal(captured.event.data.skillName, "add-seo");
-  assert.equal(pacCalled, true, "enrichment runs so the local mirror is faithful");
-});
-
 test("missing instrumentationKey short-circuits BEFORE PAC / agent-info", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "",

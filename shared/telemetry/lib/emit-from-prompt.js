@@ -63,10 +63,10 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   if (!skillName) return { emitted: false, skillName: null };
 
   // Repo-side hard-off: short-circuit BEFORE any PAC / agent-info shellouts
-  // (~3-5s combined) so a disabled plugin pays effectively no cost. The
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is deliberately NOT a fast-path here: the event is
-  // still built and dispatched so the detached dispatcher can write the local
-  // diagnostic mirror; the dispatcher applies the opt-out and skips the POST.
+  // (~3-5s combined) so a disabled plugin pays effectively no cost. The user
+  // opt-out is NOT checked here: the event is still built and dispatched so the
+  // detached dispatcher can write the local diagnostic mirror; the dispatcher
+  // reads the per-plugin config and skips the POST when the plugin is opted out.
   const { ikey, collectorUrl, eventStreamName, disabled } = readIkey(telemetryDir);
   if (disabled) return { emitted: false, skillName };
   if (!ikey) return { emitted: false, skillName };

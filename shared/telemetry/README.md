@@ -13,7 +13,7 @@ Zero npm dependencies. Node stdlib only.
 Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
 
 ```
-hook (~5ms when disabled, ~3-5s otherwise — incl. the POWER_PLATFORM_SKILLS_TELEMETRY=0 opt-out)
+hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
   │
   └─ fireAndForget(event, opts)         ← shared/telemetry/lib/emit-spawn.js
        │
@@ -22,7 +22,7 @@ hook (~5ms when disabled, ~3-5s otherwise — incl. the POWER_PLATFORM_SKILLS_TE
             ├─ kill switch (cfg.disabled) → exit   ← HARD OFF: no local log, no POST
             ├─ sanitizeData (FIELD_TYPES allowlist)
             ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
-            ├─ env opt-out (POWER_PLATFORM_SKILLS_TELEMETRY=0) → exit (mirror already written, no POST)
+            ├─ user opt-out (config.json telemetry[plugin]="off") → exit (mirror written, no POST)
             ├─ iKey missing/placeholder → exit (mirror already written, no POST)
             ├─ build CS4.0 envelope (same time + sanitized data)
             └─ HTTPS POST to collector_url
@@ -32,12 +32,13 @@ The local log is the on-disk **mirror** of what is (or would be) sent to Kusto:
 each line is `{time, name, data}` where `data` is the sanitized payload whose
 field names ARE the Kusto column names. It is written for **every** event that
 clears the repo `disabled` kill switch — irrespective of whether a real iKey is
-configured **and** irrespective of the `POWER_PLATFORM_SKILLS_TELEMETRY=0` env opt-out. Only the repo
+configured **and** irrespective of the user opt-out. Only the repo
 `disabled: true` kill switch produces zero side effects.
 
-`POWER_PLATFORM_SKILLS_TELEMETRY=0` suppresses **transmission**, not the local diagnostic mirror — so
-an opted-out run still writes `events.jsonl` (and pays the same event-building
-cost as an enabled run), it just never POSTs.
+The per-plugin user opt-out (`config.json` `telemetry[<plugin>] === "off"`, set
+via `/<plugin>:telemetry off`) suppresses **transmission**, not the local
+diagnostic mirror — so an opted-out run still writes `events.jsonl` (and pays the
+same event-building cost as an enabled run), it just never POSTs.
 
 ## What is sent
 
@@ -71,10 +72,10 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 ## Privacy posture
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
-- **Opt out of transmission** via `POWER_PLATFORM_SKILLS_TELEMETRY=0`. This stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging.
+- **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
 - **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
-The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The `POWER_PLATFORM_SKILLS_TELEMETRY=0` opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
+The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The per-plugin user opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
 
 ---
 

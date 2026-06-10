@@ -10,7 +10,7 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
-// The live telemetry gates are POWER_PLATFORM_SKILLS_TELEMETRY=0 and the
+// The live telemetry gates are the per-plugin opt-out in config.json and the
 // `disabled` flag in ikey.json — no consent file is read. So this just needs
 // to hand back an isolated tmpdir for the probe / ikey override.
 function mkConfigDir() {

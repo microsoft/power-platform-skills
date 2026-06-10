@@ -21,6 +21,9 @@ Comprehensive rules for generating generative page code. Read this file during c
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
 15. **Data fetching — inline IIFE + cache guard (Dataverse list/detail pages)**: For pages where the user navigates away and returns (list paired with detail, tabbed UIs), use the module-level `window` cache + inline async IIFE pattern documented in `references/data-caching.md`. Never use `useCallback` for data-fetching functions — `dataApi` gets a new object reference after the initial render, so a `useCallback` recreates, re-fires the effect, and any `setData(loading: true)` call resets the spinner causing flicker. The cache guard (`if (cache.has(key)) return`) is the fix. **Do NOT apply this pattern to forms, single-visit dashboards, or mock-data pages.** See the reference for the full pattern.
+16. **Overlays must be confined to the page container (`mountNode`)**: The generated page shares the DOM with the genpage *designer* — the preview is NOT an isolated iframe. Every Fluent surface that renders through a portal (`Dialog` via `DialogSurface`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body` of the **designer**, so without a `mountNode` it escapes the preview and can cover the designer chrome — including the coding-agent panel. Establish a single `containerRef`/`mountNode` on the page root and thread it to every overlay. See **Special Patterns > Dialogs and Overlays**.
+17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
+18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
 
 ---
 
@@ -90,7 +93,24 @@ export default GeneratedComponent;
 - Use relative units (%, rem, em); avoid fixed widths
 - Root container is flex column; use flex properties to fill space
 - `boxSizing: border-box`; images: `max-width: 100%, height: auto`
-- NEVER use `100vh`/`100vw`
+- NEVER use `100vh`/`100vw` — the page is hosted inside the designer, not the full window; viewport units (and `position: fixed` overlays) size to the whole designer and bleed over the agent panel
+- **Media queries go INSIDE the slot they modify** — never as a top-level
+  `makeStyles` key. Griffel compiles each top-level key as an independent
+  class, so a top-level `'@media (...)'` slot generates an unused class
+  (its overrides never apply) and also fails type-checking. Nest the query
+  in each slot and override only that slot's properties:
+```typescript
+const useStyles = makeStyles({
+  // CORRECT: @media nested inside the slot
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    '@media (max-width: 768px)': { gridTemplateColumns: '1fr' },
+  },
+  // WRONG: @media as a top-level key reaching into other slots
+  // '@media (max-width: 768px)': { grid: { gridTemplateColumns: '1fr' } },
+});
+```
 
 ### Page Layout
 - Page-level functions (nav, search, filters) in header opposite title
@@ -227,6 +247,54 @@ const [lng] = useState(toNumberOrDefault(pageInput?.data?.longitude, 0));
 ---
 
 ## Special Patterns
+
+### Dialogs and Overlays
+
+**Why this matters:** the generated page renders into the **same document as the genpage designer** — the preview is not a sandboxed iframe. Any Fluent component that renders through a portal (`Dialog`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body`. In a normal app that's the page; in the designer that's the **whole tool**. A default `<Dialog>` (`modalType="modal"`) additionally paints a `position: fixed` backdrop and traps focus across the entire window. The result is the #1 reported genpage failure: a modal that **covers the designer and the coding-agent panel on the left, and can't be dismissed** — the user is locked out and can't even ask the agent to remove it.
+
+Three rules prevent it:
+
+1. **Thread a `mountNode` to every overlay** so the portal stays inside the page's own container.
+2. **Make the page root a containing block** (`position: relative` + `contain: layout`) so any `position: fixed` descendant is clipped to the page, never the designer.
+3. **Default dialogs to `modalType="non-modal"`** (no blocking scrim), or use an in-page panel. Never nest a `<Dialog>` inside another `<Dialog>`.
+
+```typescript
+const GeneratedComponent = (props: GeneratedComponentProps) => {
+    const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
+    // Callback ref captures the container the instant it mounts (before paint), so
+    // mountNode is set before any user-opened dialog renders — no window where the
+    // portal falls back to the designer's document.body. (Prefer this over a useEffect,
+    // whose first-paint gap leaves mountNode null if a dialog opens immediately.)
+    const setContainer = useCallback((node: HTMLDivElement | null) => setMountNode(node), []);
+
+    const [open, setOpen] = useState(false);
+
+    return (
+        // contain: 'layout' makes this div the containing block for any fixed-position overlay
+        <div ref={setContainer} style={{ position: "relative", contain: "layout", height: "100%", overflow: "hidden" }}>
+            {/* ...page content... */}
+
+            {/* Sibling dialog at top level — NOT nested inside another Dialog */}
+            <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)} modalType="non-modal">
+                <DialogSurface mountNode={mountNode}>
+                    <DialogBody>
+                        <DialogTitle>Edit item</DialogTitle>
+                        {/* ...fields... */}
+                        <DialogActions>
+                            <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+                            <Button appearance="primary" onClick={() => setOpen(false)}>Save</Button>
+                        </DialogActions>
+                    </DialogBody>
+                </DialogSurface>
+            </Dialog>
+        </div>
+    );
+};
+```
+
+- `mountNode` goes on **`DialogSurface`** (not `Dialog`). For `Popover`/`Menu`/`Tooltip` pass `mountNode` to the component; for `Combobox`/`Dropdown` use the same `mountNode`; for `DatePicker`/`TimePicker` the `mountNode` prop is already required (see sample 6).
+- If a dialog genuinely must block the page (rare), keep `modalType="modal"` **but still** pass `mountNode` and rely on the `contain: layout` root so the scrim is clipped to the page, not the designer.
+- **Multiple dialogs:** declare each as a separate top-level `<Dialog>` switched by its own state flag. Never render one `<Dialog>` inside another's JSX tree.
 
 ### Generative Page Navigation
 
@@ -571,4 +639,28 @@ const useStyles = makeStyles({
 });
 const styles = useStyles();
 <div className={styles.container}>
+```
+
+### 4. Media Queries as Top-Level makeStyles Keys
+Each top-level `makeStyles` key is compiled to an independent class. A media
+query placed at the top level becomes a class literally named
+`@media (...)`, whose nested slot overrides are never applied to any element
+— the responsive behavior silently does nothing, and it fails type-checking
+(`'<prop>' does not exist in type 'string[]'` when a slot name collides with a
+CSS shorthand). Nest the query inside each slot instead.
+```typescript
+// Error: media query as a top-level key, reaching into other slots
+const useStyles = makeStyles({
+  grid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" },
+  "@media (max-width: 768px)": { grid: { gridTemplateColumns: "1fr" } }
+});
+
+// Fix: nest the media query inside the slot it modifies
+const useStyles = makeStyles({
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    "@media (max-width: 768px)": { gridTemplateColumns: "1fr" }
+  }
+});
 ```

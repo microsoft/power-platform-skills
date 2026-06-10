@@ -4,6 +4,10 @@ const path = require('path');
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const SKILLS_DIR = path.join(PLUGIN_ROOT, 'skills');
 
+// Skills that must never emit usage telemetry about themselves. The telemetry
+// control skill is excluded so checking/toggling telemetry does not self-emit.
+const EXCLUDED_FROM_TRACKING = new Set(['telemetry']);
+
 function discoverValidatorScript(skillName) {
   const scriptsDir = path.join(SKILLS_DIR, skillName, 'scripts');
   if (!fs.existsSync(scriptsDir)) {
@@ -33,6 +37,9 @@ function discoverTrackedSkills() {
 
   for (const entry of entries) {
     const skillName = entry.name;
+    if (EXCLUDED_FROM_TRACKING.has(skillName)) {
+      continue;
+    }
     if (!fs.existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md'))) {
       continue;
     }

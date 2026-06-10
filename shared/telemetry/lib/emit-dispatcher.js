@@ -22,10 +22,16 @@ const IKEY = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_URL = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
-// Anonymous telemetry is default-on. The single user-facing opt-out is the
-// POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
-function isUserOptedOut() {
-  return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
+const { isTransmissionOptedOut } = require("./user-config");
+
+// Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
+// config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
+// It suppresses TRANSMISSION only; the local mirror is written before this gate.
+function localConfigDir() {
+  return process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
+}
+function isUserOptedOut(pluginName) {
+  return isTransmissionOptedOut(localConfigDir(), pluginName);
 }
 
 // Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
@@ -97,9 +103,7 @@ function writeProbe(filePath, { headers, body }) {
 function writeLocalLog(event) {
   try {
     const { appendLocal } = require("./local-log");
-    const configDir =
-      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
-    appendLocal(event, { configDir });
+    appendLocal(event, { configDir: localConfigDir() });
   } catch {
     // fail closed
   }
@@ -107,7 +111,7 @@ function writeLocalLog(event) {
 
 // ---- Repo-side kill switch (applies before ANY side effect) ----------------
 // The `disabled` repo config is the one true hard-off: no local log, no POST.
-// The POWER_PLATFORM_SKILLS_TELEMETRY=0 env opt-out is NOT checked here — it suppresses transmission
+// The per-plugin user opt-out is NOT checked here — it suppresses transmission
 // only, and is applied below AFTER the local mirror is written.
 if (isDisabledByConfig()) exitSilently();
 
@@ -132,14 +136,15 @@ process.stdin.on("end", () => {
 
   // Mirror to the local log for EVERY event that clears the repo kill switch —
   // irrespective of whether a real iKey is configured AND irrespective of the
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 transmission opt-out. The file stays on the user's machine; it
+  // per-plugin transmission opt-out. The file stays on the user's machine; it
   // is a local diagnostic mirror of what is (or would be) sent to Kusto, not
   // transmitted telemetry. (A `disabled: true` repo config wrote nothing — it
   // short-circuited before stdin was even read.)
   writeLocalLog(localRecord);
 
-  // POWER_PLATFORM_SKILLS_TELEMETRY=0 opts out of TRANSMISSION only — the local mirror above is kept.
-  if (isUserOptedOut()) return exitSilently();
+  // User opt-out (per plugin) — transmission only; the local mirror above is kept.
+  const pluginName = event && event.data && event.data.pluginName;
+  if (isUserOptedOut(pluginName)) return exitSilently();
 
   // Placeholder / unprovisioned mode → local mirror already written; no POST.
   const keyMissing = !IKEY || IKEY === PLACEHOLDER_IKEY || !COLLECTOR_URL;

@@ -34,10 +34,6 @@ function fireAndForget(event, opts = {}) {
         POWER_PLATFORM_SKILLS_COLLECTOR: collectorUrl,
         POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe,
-        // User-side kill switch: forward so the dispatcher's POWER_PLATFORM_SKILLS_TELEMETRY=0
-        // check works when set in the parent's env.
-        POWER_PLATFORM_SKILLS_TELEMETRY:
-          process.env.POWER_PLATFORM_SKILLS_TELEMETRY || "",
         // ikey.json path: an explicit env override (test seam) wins; otherwise
         // the calling plugin's ikey.json path so the dispatcher's kill-switch
         // reads the plugin's real config rather than shared/'s placeholder.
