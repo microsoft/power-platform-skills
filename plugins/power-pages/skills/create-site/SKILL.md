@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, 
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Create Power Pages Code Site
 
@@ -114,28 +114,28 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 > **The scaffold is a temporary branded loading screen** — it shows a Power Pages animated "Building your site" experience with orbiting elements, status messages, and feature cards. Its only purpose is to get the dev server running quickly so the user has something to look at while you plan and build. **During Phase 5 (Implementation), the entire scaffold — including theme.css, Layout, Home page, and all placeholder components — is completely replaced** with the user's actual site: their chosen typography, color palette, pages, components, and navigation. Do NOT try to build on top of the loading screen; replace it entirely.
 
-> See `${CLAUDE_PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
+> See `${PLUGIN_ROOT}/references/framework-conventions.md` for the full framework → build tool → router → output path mapping.
 
 **Actions**:
 
 ### 2.1 Copy Template
 
-> `${CLAUDE_PLUGIN_ROOT}` is already resolved to the plugin's absolute path at runtime. Use it directly in Glob/Read paths — do NOT search for the plugin directory.
+> `${PLUGIN_ROOT}` is already resolved to the plugin's absolute path at runtime. Use it directly in Glob/Read paths — do NOT search for the plugin directory.
 
 Read and copy all files from the matching asset template to the project directory:
 
 | Framework | Asset Directory |
 |-----------|----------------|
-| React | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/react/` |
-| Vue | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/vue/` |
-| Angular | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/angular/` |
-| Astro | `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/astro/` |
+| React | `${PLUGIN_ROOT}/skills/create-site/assets/react/` |
+| Vue | `${PLUGIN_ROOT}/skills/create-site/assets/vue/` |
+| Angular | `${PLUGIN_ROOT}/skills/create-site/assets/angular/` |
+| Astro | `${PLUGIN_ROOT}/skills/create-site/assets/astro/` |
 
 Use `Glob` to discover all files in the asset directory, `Read` each file, then `Write` to the project directory preserving the relative path structure.
 
 **Also copy the shared loader icon** that the scaffold references from its CSS (`url('/power-pages-icon.png')`):
 
-`Read` the binary file `${CLAUDE_PLUGIN_ROOT}/skills/create-site/assets/shared/power-pages-icon.png` and `Write` it to `<PROJECT_ROOT>/public/power-pages-icon.png`. (All four supported frameworks serve `public/` at the web root, so the same `/power-pages-icon.png` URL works for every framework.)
+`Read` the binary file `${PLUGIN_ROOT}/skills/create-site/assets/shared/power-pages-icon.png` and `Write` it to `<PROJECT_ROOT>/public/power-pages-icon.png`. (All four supported frameworks serve `public/` at the web root, so the same `/power-pages-icon.png` URL works for every framework.)
 
 **Seed the live status file** so the loader shows a real message the moment it mounts. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
 
@@ -244,7 +244,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    >
    > **If you include an Authentication feature option**, describe it generically as "Login/signup for tracking application status" or similar. Do NOT mention a specific identity provider (e.g., "Entra ID", "SAML", "Google") in the feature description — the `/power-pages:setup-auth` skill will ask the user which provider they want.
 
-3. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+3. Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
 4. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
 5. Analyze requirements and determine needed components. Present component plan to user as a table:
 
@@ -280,7 +280,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 ### 4.1 Read the Design Reference
 
-Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Every field you populate below should be justified by the chosen aesthetic + mood from Phase 3.
+Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Every field you populate below should be justified by the chosen aesthetic + mood from Phase 3.
 
 ### 4.2 Build the Plan Data
 
@@ -311,7 +311,7 @@ Assemble a single JSON object with the following keys. The plan template rejects
 Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
+node "${PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
 ```
 
 Use `--data-inline` so no temp JSON file is written. If the JSON is too large for a single shell argument, write it to a temp file and use `--data <path>` instead, then delete the temp file after the render succeeds.
@@ -363,7 +363,7 @@ Use `AskUserQuestion`:
 
 > **Prerequisite:** The dev server MUST already be running and verified via Playwright (completed in Phase 2). If it is not, go back and complete Phase 2.
 >
-> **Design reference:** Read `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and apply its principles throughout this phase. All pages and components should be built with the chosen typography, color palette, motion, and backgrounds from the start — do NOT build with neutral styling first and redesign later.
+> **Design reference:** Read `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and apply its principles throughout this phase. All pages and components should be built with the chosen typography, color palette, motion, and backgrounds from the start — do NOT build with neutral styling first and redesign later.
 
 **Actions**:
 
@@ -485,7 +485,7 @@ npm install --save-dev playwright
 Run the audit script via `Bash`, passing the dev server URL and all site routes:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
 The script launches a headless browser, navigates to each route, injects axe-core from CDN, runs the analysis, and outputs a JSON array of per-route results to stdout. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. The script exits with code 1 if any `critical` or `serious` violations are found.
@@ -575,7 +575,7 @@ Present a summary table to the user:
 
 1. Record skill usage:
 
-   > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+   > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
 

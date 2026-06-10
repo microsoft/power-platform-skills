@@ -21,7 +21,7 @@ Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`). Store
 Run the shared script to obtain an Azure CLI token and verify Dataverse API access in one step:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 On success (exit 0), it outputs JSON to stdout with `token`, `userId`, `organizationId`, and `tenantId`. On failure (exit 1), stderr explains the issue (missing `az login --allow-no-subscriptions`, expired token, etc.).

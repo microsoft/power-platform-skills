@@ -17,17 +17,17 @@ cat ~/.claude/.power-apps-last-version-check 2>/dev/null
 
 ### Step 2: Read the local version
 
-Read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` and extract the `version` field.
+Read `${PLUGIN_ROOT}/.plugin/plugin.json` and extract the `name` and `version` fields.
 
 ### Step 3: Fetch the latest version from the marketplace
 
 Fetch the remote marketplace manifest using Bash:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/.claude-plugin/marketplace.json 2>/dev/null
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/marketplace.json 2>/dev/null
 ```
 
-Parse the `version` field from the first plugin in the `plugins` array.
+Find the plugin entry whose `name` matches the local plugin name, then parse its `version` field.
 
 ### Step 4: Compare versions
 

@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskU
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Audit Permissions
 
@@ -95,7 +95,7 @@ Build a map of: which tables are referenced in code, which CRUD operations are p
 Run the shared validator against the existing site:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Parse the JSON output and carry the findings into the audit. Treat:
@@ -109,7 +109,7 @@ These findings should be included in the final audit report even if the later co
 After Step 3.1 determines the environment URL, if this audit is running locally with Dataverse access available, rerun the shared validator with live relationship verification enabled and merge any additional findings:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "<envUrl>"
+node "${PLUGIN_ROOT}/scripts/validate-permissions-schema.js" --projectRoot "<PROJECT_ROOT>" --validate-dataverse-relationships --envUrl "<envUrl>"
 ```
 
 Use this Dataverse-backed relationship validation only for local runs. Do **not** require it in CI or other offline contexts.
@@ -133,7 +133,7 @@ Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`) and us
 For each table that has permissions with `create` or `write` enabled, use the lookup query script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-lookups.js" --envUrl "<envUrl>" --table "<table_logical_name>"
+node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-lookups.js" --envUrl "<envUrl>" --table "<table_logical_name>"
 ```
 
 The script returns a JSON array of `{ logicalName, targets }` for each lookup column. Capture this output for the maps described below.
@@ -156,7 +156,7 @@ Both maps are used in Sections H and H2:
 For tables with parent-scope permissions, verify the relationship names using the relationship query script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-relationships.js" --envUrl "<envUrl>" --table "<parent_table>"
+node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/query-table-relationships.js" --envUrl "<envUrl>" --table "<parent_table>"
 ```
 
 The script returns a JSON array of `{ schemaName, referencedEntity, referencingEntity, referencingAttribute }`. Use `schemaName` to validate the `parentrelationship` value in parent-scope permissions.
@@ -466,7 +466,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
 Run the render script (it creates the output directory if needed):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`.
@@ -483,7 +483,7 @@ Open the actual output path in the user's default browser.
 
 ### 6.1 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "AuditPermissions"`.
 

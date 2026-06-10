@@ -16,7 +16,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # plan-alm
 
@@ -39,7 +39,7 @@ Steps:
 0. **Detect prior ALM deferral for this project.** Before any discovery work, check whether the project root contains a `.alm-deferred` marker file. The marker is written by users who explicitly opted ALM-skill validators out of "missing artifacts" warnings (e.g. *"this site is handled separately"* or *"ni-dev — no ALM"*). If a user is now invoking `plan-alm`, we should surface that the marker is present and ask what to do, rather than silently proceeding (which would build a plan the user previously decided not to maintain) or silently removing the marker (which would re-enable nags on every other ALM skill).
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
+   node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" --projectRoot "."
    ```
 
    <!-- gate: plan-alm:1.deferral | category=progress | cancel-leaves=deferral-marker -->
@@ -94,7 +94,7 @@ Steps:
 
 6. Acquire dev environment token (silently):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --envUrl "{DEV_ENV_URL}"
    ```
    Store `.token` as `DEV_TOKEN` and `.userId` as `userId`. If this fails (auth error), set `DEV_TOKEN = null` and continue — contents discovery will be skipped gracefully.
 
@@ -111,11 +111,11 @@ Steps:
    ```
    On each response, append `value[]` to the running array. If `@odata.nextLink` is present, GET that URL with the same headers (no need to re-add the filter — the nextLink already encodes the query). Stop when the response has no `@odata.nextLink`. Cap at 100 iterations for safety.
 
-   Classify the returned settings using `${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
+   Classify the returned settings using `${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js` — the single source of truth for the credential regex and tier mapping shared with `setup-solution` Phase 5. Either pipe the JSON array of `{name, value}` rows into the script's stdin (CLI mode) or `require()` it inline:
 
    ```bash
    echo '<JSON array of {name,value}>' \
-     | node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
+     | node "${PLUGIN_ROOT}/scripts/lib/classify-site-settings.js"
    ```
 
    Output (the four-bucket shape that downstream phases + `setup-solution` consume directly):
@@ -161,7 +161,7 @@ Steps:
     ```
     Run the estimate helper to classify the site across size, component count, schema heaviness, web file aggregate, and env var count. Use the tmp-file write pattern — if the estimator fails, a prior good `docs/alm/alm-size-estimate.json` is preserved instead of being overwritten with an empty/partial file. When `SOLUTION_DONE = true` (a `.solution-manifest.json` exists), pass `--solutionId {solutionId}` so the env var count is scoped to the target solution — without it, the estimator falls back to a publisher-prefix tenant-wide query and overcounts whenever the prefix is shared across projects (the common `new_` / `cr5fe_` regression):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/estimate-solution-size.js" \
       --envUrl "{DEV_ENV_URL}" --websiteRecordId "{websiteRecordId}" \
       --publisherPrefix "{publisherPrefix}" --siteName "{siteName}" \
       {if SOLUTION_DONE: --solutionId "{solutionManifest.solution.solutionId}"} \
@@ -172,7 +172,7 @@ Steps:
     When `SOLUTION_DONE = false`, omit `--solutionId`; the estimator's output will include `envVarCountScope: "publisher-prefix"` to signal the wider scope, and the renderer surfaces this caveat in the Env Variables tab so reviewers know the number reflects the tenant view, not a specific solution. `--projectRoot "."` enables the disk cross-check — the estimator walks the local build output (`dist/`, `public-output/`, `build/`, `.output/`) and surfaces `webFilesDiskMeasuredMB`. When that number is much larger than the Dataverse-measured `webFilesAggregateMB`, the estimator flips `truncationSuspected: true` with a warning — file-typed columns whose bytes aren't returned by `$select=content` are the usual cause and the plan should trust the disk number.
     Then run the decision tree (same tmp-file pattern):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/compute-split-plan.js" \
       --estimate ./docs/alm/alm-size-estimate.json \
       --projectRoot "." \
       --siteName "{siteName}" \
@@ -198,7 +198,7 @@ Steps:
     Pass `--solutionId` when `SOLUTION_DONE = true` so the returned envVars[] is scoped to the target solution. The helper paginates correctly (Prefer: odata.maxpagesize + @odata.nextLink) regardless of scope — the difference is just which env vars are returned.
 
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/discover-env-var-definitions.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" \
       --publisherPrefix "{publisherPrefix}" \
       --websiteRecordId "{websiteRecordId}" \
@@ -221,7 +221,7 @@ Steps:
     Run the shared discovery helper against the source environment:
 
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
       --envUrl "{envUrl}" --token "{token}" \
       --siteId "{websiteRecordId from powerpages.config.json}" \
       --publisherPrefix "{solutionManifest.publisher.prefix}" \
@@ -273,7 +273,7 @@ Steps:
 
     Run the detect-only wrapper. Use the same tmp-file-then-mv pattern as Phase 1 step 10 so a prior good `docs/alm/alm-host-resolution.json` is preserved if the script fails mid-write. Pass `--skus Production,Sandbox,Trial` so trial-license and developer tenants see their eligible envs in the env-first menu (the helper's default is `Production,Sandbox`; we widen to include Trial here because plan-alm's NoHost branch always offers an existing-env install path that Trial envs can take, even though Trial envs cannot use the create-new fast-path):
     ```bash
-    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
+    node "${PLUGIN_ROOT}/scripts/lib/ensure-pipelines-host-detect.js" \
       --envUrl "{DEV_ENV_URL}" --token "{DEV_TOKEN}" --userId "{userId}" \
       --bapToken "{BAP_TOKEN}" \
       --projectRoot "." \
@@ -854,7 +854,7 @@ Write `planData` to `docs/.alm-plan-data.json` (create `docs/` if it doesn't exi
 ### Render the HTML plan
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
+node "${PLUGIN_ROOT}/skills/plan-alm/scripts/render-alm-plan.js" \
   --output "<projectRoot>/docs/alm-plan.html" \
   --data "<projectRoot>/docs/.alm-plan-data.json"
 ```
@@ -1022,7 +1022,7 @@ Invoke the skill:
 After completion: mark task as `completed`. Update HTML checklist step to `status-completed`. Then run the post-run plan refresh — this is **not optional**; without it the Pipelines tab stays at "Will be ensured during setup-pipeline" and the risks list keeps surfacing the pre-run NoHost warning even though the host now exists:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase setup-pipeline \
   --render
@@ -1044,7 +1044,7 @@ After completion: mark task as `completed`. Update HTML checklist step to `statu
 **Refresh the plan after export.** Run the helper (export-solution self-refreshes too — this is belt-and-suspenders):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase export-solution \
   --render
@@ -1110,7 +1110,7 @@ Use `AskUserQuestion`:
 **Refresh the plan after each stage's deploy.** Run the helper (regardless of success/failure — the refresh ingests both outcomes):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase deploy-pipeline \
   --render
@@ -1166,7 +1166,7 @@ If a URL is available, invoke the skill (forwarding the URL as the argument):
 When `test-site` completes, ingest its `docs/alm/last-test-site.json` marker into `validationRuns[stageName]` and re-render via the same refresh helper used by other phases:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase test-site \
   --stageName "{stageName}" \
@@ -1213,7 +1213,7 @@ For each entry in `MANUAL_TARGETS`:
 5. **Refresh the plan after the import.** Run the helper (import-solution self-refreshes too — this is belt-and-suspenders):
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
      --projectRoot "." \
      --phase import-solution \
      --stageName "{targetLabel}" \
@@ -1226,7 +1226,7 @@ For each entry in `MANUAL_TARGETS`:
 
    PAC CLI is already pointing to the target environment from step 2. Run the activation check:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
+   node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "."
    ```
 
    - **`activated: true`**: Site is already live. Mark task as `completed`. Update checklist step to `status-completed`.
@@ -1236,7 +1236,7 @@ For each entry in `MANUAL_TARGETS`:
 7. **Refresh the plan after activation.** Run the helper (activate-site self-refreshes too — this is belt-and-suspenders):
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
      --projectRoot "." \
      --phase activate-site \
      --render
@@ -1258,7 +1258,7 @@ Mark the "Finalize" task as `in_progress`.
 Run the post-run plan refresh in `finalize` mode and re-render. This sets `planData.PLAN_STATUS = "Completed"` and produces the final HTML with all post-run state (latest hostResolution, pipelineMeta + lastDeploy, validationRuns, status footer) consistent across every tab:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase finalize \
   --render
@@ -1268,10 +1268,10 @@ If you also need to surface a timestamp in the footer (e.g. plan completion time
 
 ### 8.2 Run skill tracking
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
+node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
   --projectRoot "." \
   --skillName "PlanAlm" \
   --authoringTool "ClaudeCode"

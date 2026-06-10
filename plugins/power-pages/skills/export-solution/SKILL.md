@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # export-solution
 
@@ -42,7 +42,7 @@ When `inExecution.status` is anything other than `"active"` (`"not-running"`, `"
 **Step 1 — Run the gate helper.**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
+node "${PLUGIN_ROOT}/scripts/lib/check-alm-plan.js" \
   --projectRoot "." \
   --envUrl "{envUrl from .solution-manifest.json or pac env who, if available}" \
   --token "{token, if Phase 1 already acquired one}" \
@@ -112,19 +112,19 @@ Tasks to create:
 Steps:
 1. Run `verify-alm-prerequisites.js` with `--require-manifest` to confirm PAC CLI auth, acquire a token, verify API access, and validate that `.solution-manifest.json` exists:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js" --require-manifest
    ```
-   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${CLAUDE_PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
+   Capture output as JSON; extract `.envUrl` (store as `envUrl`) and `.token` (store as `token`). If the script exits non-zero, stop and explain what is missing (reference `${PLUGIN_ROOT}/references/dataverse-prerequisites.md`).
 
 ### Phase 1.5 — Ground in current ALM documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Pages solution export managed unmanaged ExportSolutionAsync ALM`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm` (and at most one sister page on managed vs unmanaged or solution layering) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about export semantics, managed vs unmanaged implications, and async export polling. Compare against `${CLAUDE_PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ExportSolutionAsync` / `DownloadSolutionExportData` signatures.
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about export semantics, managed vs unmanaged implications, and async export polling. Compare against `${PLUGIN_ROOT}/references/solution-api-patterns.md` and flag any divergence in `ExportSolutionAsync` / `DownloadSolutionExportData` signatures.
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3.
 
 ### Phase 2 — Identify Solution
@@ -144,7 +144,7 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 Before exporting, run the shared site-inventory helper to detect any components that exist on the site but are not in the solution. Catching this here avoids shipping an incomplete package to staging/prod.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" \
   --siteId "{websiteRecordId}" \
   --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
@@ -237,7 +237,7 @@ Before exporting, bump the patch segment (4th segment) of the source solution's 
 > **Why always-on, not "only when sync mode added components"**: `setup-solution` only bumps when it has new components to add. A user who modifies content of an already-in-solution component (a web template, a site setting value, a web file) and then re-exports must still get a strictly-increasing version label — otherwise the manual export/import path quietly ships stale-version zips. See the `Why this step exists` callout in `setup-solution` Phase 4.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
+node "${PLUGIN_ROOT}/scripts/lib/bump-solution-version.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --uniqueName "{solutionUniqueName}" \
@@ -255,7 +255,7 @@ Capture output as JSON; store `.previous` as `PRE_EXPORT_VERSION`, `.next` as `E
 Run `scripts/lib/export-solution-async.js` to POST `ExportSolutionAsync`, poll until terminal state, and return the `AsyncOperationId`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
+node "${PLUGIN_ROOT}/scripts/lib/export-solution-async.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --solutionName "{solutionUniqueName}" \
@@ -276,7 +276,7 @@ Handle script exit code:
 Run `scripts/lib/download-export-data.js` to POST `DownloadSolutionExportData`, decode the base64 zip, and write it to disk:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/download-export-data.js" \
   --envUrl "{envUrl}" \
   --token "{token}" \
   --asyncOperationId "{asyncOperationId}" \
@@ -345,14 +345,14 @@ The path is registered in `scripts/lib/alm-paths.js` under the key `lastExport` 
 
 ### Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ExportSolution"`.
 
 ### Refresh the ALM plan (if one exists)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase export-solution \
   --render

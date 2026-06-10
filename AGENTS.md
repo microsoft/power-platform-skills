@@ -4,17 +4,16 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 ## What This Repo Is
 
-A **plugin marketplace** for Power Platform development by Microsoft. The marketplace manifest (`.claude-plugin/marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
+A **plugin marketplace** for Power Platform development by Microsoft. The Open Plugins marketplace manifest (`marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
 
 ## Repository Structure
 
 ```
 power-platform-skills/
-├── .claude-plugin/
-│   └── marketplace.json      # Marketplace manifest (lists all available plugins)
+├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
-│       ├── .claude-plugin/
+│       ├── .plugin/
 │       │   └── plugin.json   # Plugin manifest
 │       ├── AGENTS.md         # Plugin-specific development guidelines
 │       ├── agents/           # Agent persona files
@@ -42,7 +41,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 
 Each plugin follows this structure:
 
-- `.claude-plugin/plugin.json` — Plugin metadata (name, version, keywords)
+- `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
@@ -61,7 +60,7 @@ Skills that apply to all plugins live in `shared/skills/<skill-name>/`. The work
 - `plugins/<plugin>/skills/<skill-name>/SKILL.md` — Per-plugin wrapper generated from the template above
 - `plugins/<plugin>/skills/<skill-name>/<workflow>.md` — Symlink to the shared workflow when the plugin must work after installing only its own plugin directory
 
-This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${CLAUDE_PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
+This keeps the skill discoverable in each plugin while preserving install-time portability. Marketplace installs copy only the plugin directory, so per-plugin wrappers must not reference repo-root `shared/` paths at runtime. Instead, point the wrapper at `${PLUGIN_ROOT}/skills/<skill-name>/<workflow>.md` and keep a symlink from that per-plugin path to the repo-root shared workflow; marketplace installers dereference same-marketplace symlinks into the installed plugin cache. When updating a shared skill, edit the workflow file and/or `SKILL.template.md` in `shared/`, then update the per-plugin wrappers (frontmatter + bundled workflow reference, with `{{PLUGIN_NAME}}` substituted) and ensure any per-plugin symlinks still resolve under `plugins/<plugin>/skills/<skill-name>/`. Commit the shared source and per-plugin symlinks together.
 
 ## Code Conventions
 

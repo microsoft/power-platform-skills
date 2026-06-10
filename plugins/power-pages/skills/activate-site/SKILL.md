@@ -9,7 +9,7 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Activate Power Pages Site
 
@@ -91,7 +91,7 @@ az account show
 Before gathering parameters, check whether the site is already activated by running the shared activation status script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Where `<PROJECT_ROOT>` is the directory containing `powerpages.config.json` or `.powerpages-site` folder.
@@ -133,7 +133,7 @@ Read the file and extract the `siteName` field. If not found, ask the user for t
 Run the subdomain generator script to create a random suggestion:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/generate-subdomain.js"
+node "${PLUGIN_ROOT}/skills/activate-site/scripts/generate-subdomain.js"
 ```
 
 This outputs a string like `site-a3f2b1`. Resolve the correct site URL domain from the **Cloud** value obtained in Phase 1.2:
@@ -211,7 +211,7 @@ Present all activation parameters to the user using `AskUserQuestion`:
 Run the shared activation script, passing all parameters gathered in Phases 1–2:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
+node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "<siteName>" --subdomain "<subdomain>" --organizationId "<organizationId>" --environmentId "<environmentId>" --cloud "<cloud>" --websiteRecordId "<websiteRecordId>"
 ```
 
 Omit `--websiteRecordId` if it is null/empty.
@@ -290,14 +290,14 @@ When the activation was an **already-activated** detection (Phase 1.4), still wr
 
 #### 5.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "ActivateSite"`.
 
 #### 5.2b Refresh the ALM plan (if one exists)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase activate-site \
   --stageName "{stageNameOrEmpty}" \

@@ -208,7 +208,7 @@ Extract the `Environment URL` (e.g., `https://org12345.crm.dynamics.com`).
 Verify Dataverse access and obtain an auth token:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
 ```
 
 This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The token is used automatically by the `dataverse-request.js` script below.
@@ -218,7 +218,7 @@ This outputs JSON with `token`, `userId`, `organizationId`, and `tenantId`. The 
 For each table that needs Web API access, fetch its columns:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,IsPrimaryId,SchemaName&\$filter=IsCustomAttribute eq true or IsPrimaryId eq true"
 ```
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `SchemaName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
@@ -340,13 +340,13 @@ For each table that needs Web API access, prepare the exact `create-site-setting
 **1. Enable setting:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/enabled" --value "true" --description "Enable Web API access for <table_logical_name> table" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/enabled" --value "true" --description "Enable Web API access for <table_logical_name> table" --type "boolean"
 ```
 
 **2. Fields setting:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
 **CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the table has File or Image columns accessed via the Web API, OR the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead — the `/$value` download endpoint internally does `SELECT *`, so an explicit column list causes 403.**
@@ -362,7 +362,7 @@ Example (with lookup column `cra5b_productcategoryid`):
 **3. Optionally**, if `Webapi/error/innererror` does not already exist, suggest it for debugging:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
 ### 6.2 Rationale, Summary, and Next Steps
@@ -401,10 +401,10 @@ After the user approves the plan, create the site setting files using the `creat
 
 ```bash
 # Enable setting
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/enabled" --value "true" --description "Enable Web API access for <table> table" --type "boolean"
 
 # Fields setting
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<validated-columns>" --description "Allowed fields for <table> Web API access"
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table>/fields" --value "<validated-columns>" --description "Allowed fields for <table> Web API access"
 ```
 
 The script handles UUID generation, alphabetical field ordering, correct YAML formatting (unquoted booleans/strings/UUIDs), and file naming automatically.

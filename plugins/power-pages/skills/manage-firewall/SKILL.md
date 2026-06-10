@@ -17,7 +17,7 @@ allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskU
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Manage Web Application Firewall
 
@@ -73,7 +73,7 @@ If missing, the site has not been deployed. Tell the user and recommend `/deploy
 Resolve to portalId:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --websiteId "<WEBSITE_ID>"
+node "${PLUGIN_ROOT}/scripts/website.js" --websiteId "<WEBSITE_ID>"
 ```
 
 Capture `Id` (portalId), `Type`, `Name`, `WebsiteUrl`. If exit code `2` → sign-in required (`pac auth create` or `az login`). If `null` → site not found in this environment. Stop in either case.
@@ -91,7 +91,7 @@ If the site is ineligible, tell the user in plain language what the limitation i
 ### 2.1 Get status (always run first)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>"
 ```
 
 The response shape is `{ "status": "ok", "value": "<state>" }`.
@@ -104,7 +104,7 @@ If the status response is `"status": "unsupported"`, tell the user the firewall 
 ### 2.2 Get rules (only when WAF is enabled)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>"
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>"
 ```
 
 Both scripts output the full response as JSON to stdout. If `get-rules.js` returns `"status": "unsupported"`, tell the user the firewall is not available and stop.
@@ -200,7 +200,7 @@ Apply the same status-then-rules gating as § 2 — `get-rules.js` MUST only be 
 **Step A — always run status:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-status.json"
 ```
 
 **Step B — branch on the captured `value`:**
@@ -208,7 +208,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --port
 - If `value` is `Created`, fetch rules:
 
   ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
+  node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId "<PORTAL_ID>" > "<REVIEW_DIR>/firewall-rules.json"
   ```
 
 - Otherwise (`Disabled`, `None`, `Enabling`, `Disabling`, `Failed`, anything else), do NOT call `get-rules.js`. Write the empty-rules payload yourself:
@@ -241,7 +241,7 @@ Power Pages WAF state semantics (use these when writing the state description �
 Then run the transform:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" \
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" \
   --statusFile "<REVIEW_DIR>/firewall-status.json" \
   --rulesFile  "<REVIEW_DIR>/firewall-rules.json" \
   --annotations "<REVIEW_DIR>/firewall-annotations.json"
@@ -255,7 +255,7 @@ Plain-language summary: firewall on/off, rule count, what changed, important gap
 
 ### 5.3 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "ManageFirewall"`.
 

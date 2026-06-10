@@ -100,7 +100,7 @@ Invoke the `genpage-edit-planner` agent via the `Task` tool. Pass:
 
 - The user's edit intent: `$ARGUMENTS`
 - The working directory (absolute path)
-- The plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- The plugin root: `${PLUGIN_ROOT}`
 - The app-id and page-id
 - The download directory: `<working-dir>/<page-id>/`
 
@@ -114,7 +114,7 @@ Read `<working-dir>/genpage-edit-plan.md` for the approved change list and
 preservation constraints.
 
 Also read:
-- `${CLAUDE_PLUGIN_ROOT}/references/rules.md` — all code-gen
+- `${PLUGIN_ROOT}/references/rules.md` — all code-gen
   rules still apply to edits (Fluent UI V9 only, makeStyles with tokens, WCAG AA,
   no `100vh`/`100vw`, etc.)
 - `<working-dir>/RuntimeTypes.ts` — if generated in Edit Phase 3, for verified

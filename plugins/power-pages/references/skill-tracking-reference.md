@@ -11,7 +11,7 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 Run the shared tracking script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
+node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 
 - `--projectRoot`: The project root directory (containing `powerpages.config.json`)

@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Excel Online
 
@@ -18,7 +18,7 @@ model: sonnet
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 ### Step 2: Gather
 
@@ -30,7 +30,7 @@ Ask the user:
 
 ### Step 3: Add Connector
 
-**First, find the connection ID** (see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md)):
+**First, find the connection ID** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill. Find the Excel Online (Business) connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
@@ -76,7 +76,7 @@ await ExcelOnlineBusinessService.AddRowIntoTable({
 - For SharePoint, use the site path and drive ID
 - The `body` is a flat key-value object matching column headers -- do NOT wrap in `{ items: ... }`
 
-Use `Grep` to find specific methods in `src/generated/services/ExcelOnlineBusinessService.ts` (generated files can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in `src/generated/services/ExcelOnlineBusinessService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
 ### Step 5: Build
 

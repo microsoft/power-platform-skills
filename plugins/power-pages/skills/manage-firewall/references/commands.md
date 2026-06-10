@@ -26,11 +26,11 @@ Two different GUIDs identify a Power Pages site:
 | `websiteId` | `.powerpages-site/website.yml` (`id` field), `pac pages list` ("Website Record ID") | Dataverse website record primary key. The user-facing identifier. |
 | `portalId` | `Id` field on the `/websites` Power Platform API response | The `{id}` segment in Power Platform API URL paths such as `/websites/{id}/enableWaf`. |
 
-The skill resolves `websiteId` → `portalId` once during prerequisites by reading `.powerpages-site/website.yml` and calling `${CLAUDE_PLUGIN_ROOT}/scripts/website.js --websiteId <guid>`. It reuses the resolved `portalId` for the rest of the run. The consumer scripts in this folder accept `--portalId` only — they never look up the site themselves.
+The skill resolves `websiteId` → `portalId` once during prerequisites by reading `.powerpages-site/website.yml` and calling `${PLUGIN_ROOT}/scripts/website.js --websiteId <guid>`. It reuses the resolved `portalId` for the rest of the run. The consumer scripts in this folder accept `--portalId` only — they never look up the site themselves.
 
 If `.powerpages-site/website.yml` does not exist, the site has not been deployed yet. The skill does **not** try to identify the site by name or URL (two sites in the same environment can share a name, and the URL changes when the subdomain is updated) — it directs the user to `/deploy-site` and stops.
 
-Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/website.js" --help` for the full contract.
+Run `node "${PLUGIN_ROOT}/scripts/website.js" --help` for the full contract.
 
 ---
 
@@ -41,7 +41,7 @@ Returns the current firewall status (None/ Enabling / Created / Disabled / Disab
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId <portal-id>
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-status.js" --portalId <portal-id>
 ```
 
 ### Response (stdout)
@@ -77,7 +77,7 @@ Returns the full firewall configuration (managed rule sets and custom rules).
 > **Important:** call `get-status.js` first and only invoke this script when the WAF is enabled (i.e. `Created`). When `get-status.js` returns `Disabled`, `None`, or `Failed`, no policy is provisioned and this endpoint will return a 500. Treat that case as "no rules configured" without calling this script.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId <portal-id> [--ruleType <name>]
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/get-rules.js" --portalId <portal-id> [--ruleType <name>]
 ```
 
 ### Parameters
@@ -102,7 +102,7 @@ Turns the firewall on. The underlying operation is asynchronous — the script p
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/enable.js" --portalId <portal-id> [--timeoutMinutes <n>]
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/enable.js" --portalId <portal-id> [--timeoutMinutes <n>]
 ```
 
 ### Parameters
@@ -147,7 +147,7 @@ Creates or updates firewall rules. Send only the rules being added or modified. 
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" --portalId <portal-id> --data-inline '<json>'
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/set-rules.js" --portalId <portal-id> --data-inline '<json>'
 ```
 
 ### Parameters
@@ -191,7 +191,7 @@ Deletes one or more **custom** rules by name. Managed rule sets are not affected
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" --portalId <portal-id> --names <name1,name2,...>
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/delete-rules.js" --portalId <portal-id> --names <name1,name2,...>
 ```
 
 ### Response (stdout)
@@ -211,7 +211,7 @@ Transforms `get-status.js` and `get-rules.js` stdout into the unified findings s
 ### Usage
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" --statusFile <status-file> --rulesFile <rules-file>
+node "${PLUGIN_ROOT}/skills/manage-firewall/scripts/transform-firewall.js" --statusFile <status-file> --rulesFile <rules-file>
 ```
 
 ### Parameters

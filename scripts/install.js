@@ -3,7 +3,7 @@
  * Power Platform Skills — Installation Script
  *
  * Clones the marketplace repository and uses CLI commands to register
- * the marketplace and install plugins for Claude Code and GitHub Copilot.
+ * the Open Plugins marketplace and install plugins for Claude Code and GitHub Copilot.
  *
  * Usage:
  *   node scripts/install.js                                              (from local clone)
@@ -110,21 +110,34 @@ async function loadMarketplace() {
   const scriptDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
   // Script lives in scripts/, so the repo root is one level up
   const repoRoot = path.resolve(scriptDir, "..");
-  const localFile = path.join(repoRoot, ".claude-plugin", "marketplace.json");
+  const roots = [...new Set([repoRoot, process.cwd()])];
+  const marketplacePaths = [
+    "marketplace.json",
+    path.join(".plugin", "marketplace.json"),
+    path.join(".claude-plugin", "marketplace.json"),
+  ];
 
-  if (fs.existsSync(localFile)) {
-    return JSON.parse(fs.readFileSync(localFile, "utf8"));
-  }
-
-  // Also check cwd (handles running from repo root or piped download)
-  const cwdFile = path.join(process.cwd(), ".claude-plugin", "marketplace.json");
-  if (fs.existsSync(cwdFile)) {
-    return JSON.parse(fs.readFileSync(cwdFile, "utf8"));
+  for (const root of roots) {
+    for (const relativePath of marketplacePaths) {
+      const filePath = path.join(root, relativePath);
+      if (fs.existsSync(filePath)) {
+        return JSON.parse(fs.readFileSync(filePath, "utf8"));
+      }
+    }
   }
 
   info("Fetching marketplace manifest from GitHub...");
-  const raw = await httpsGet(`${GITHUB_RAW}/.claude-plugin/marketplace.json`);
-  return JSON.parse(raw);
+  const errors = [];
+  for (const relativePath of ["marketplace.json", ".plugin/marketplace.json", ".claude-plugin/marketplace.json"]) {
+    try {
+      const raw = await httpsGet(`${GITHUB_RAW}/${relativePath}`);
+      return JSON.parse(raw);
+    } catch (err) {
+      errors.push(`${relativePath}: ${err.message}`);
+    }
+  }
+
+  throw new Error(`Could not load marketplace manifest. Tried: ${errors.join("; ")}`);
 }
 
 // ── Claude Code installation ──────────────────────────────────
