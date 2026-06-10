@@ -117,7 +117,18 @@ Steps:
 2. PAC CLI + Azure CLI authenticated (hard-block on failure); Managed Env probe (**warn only — solution-binding works on Basic envs**); system-admin role; ADO permissions (warn-only when no PAT was supplied).
 
    <!-- gate: connect-solution-to-git:1.prereq-fail | category=intent | cancel-leaves=nothing -->
-   > 🚦 **Gate (intent · connect-solution-to-git:1.prereq-fail):** Same shape as `setup-git-integration:1.prereq-fail`. Block only on auth / hard-network failures; warn-not-block on Managed Env OFF (see `references/inner-loop-empirical-findings.md` §1 — solution-level bind is HAR-confirmed working on Basic envs).
+   > 🚦 **Gate (intent · connect-solution-to-git:1.prereq-fail):** Block only on auth / hard-network failures (PAC CLI not signed in, Azure CLI `az account show` failure, Dataverse `/api/data/v9.2/WhoAmI` returning 401/403, or system-admin role check returning false). Warn-not-block on Managed Env OFF (see `references/inner-loop-empirical-findings.md` §1 — solution-level bind is HAR-confirmed working on Basic envs). Warn-not-block on missing PAT (`get-ado-token.js` will silently fall back to Azure CLI in Phase 1 step 0; PAT only matters as a back-up on hosts where the Azure CLI flow stalls).
+   >
+   > When any HARD prereq fails, surface the diagnostic verbatim and the recovery option list — do NOT proceed:
+   >
+   > | Question | Header | Options |
+   > |---|---|---|
+   > | `{prereqName}` failed: `{diagnostic}`. Recommended fix: `{recovery}`. How do you want to proceed? | prereq failed | Retry now (Recommended once the fix above is applied), Cancel — exit this skill cleanly |
+   >
+   > - On **Retry now** → re-run the failed probe in-place; if it passes, continue with the remaining prereqs. If it fails again, re-surface the same question.
+   > - On **Cancel** → exit cleanly. No Dataverse mutation has happened (this gate fires before any write).
+   >
+   > When any SOFT prereq fails (Managed Env OFF, no PAT), surface a single advisory line ("Managed Env is OFF — solution-bind still works on Basic; proceeding." or "No PAT detected — Azure CLI token flow will be used in Phase 1 step 0.") and continue without prompting.
 
 3. Check whether the env is already env-bound. Run `detect-git-binding.js` (with no `--solutionUniqueName`). If the helper reports `bindingType === 'environment'`, you cannot also bind a solution — surface this and exit (the user must `disconnect-from-git` the env binding first, then re-invoke this skill).
 
@@ -585,6 +596,8 @@ Steps:
 
 > ⚠️ **Earlier docs incorrectly claimed Connect-to-Git auto-pushes all components.** It does not. Connect-to-Git only writes a placeholder `Readme.md` commit at `<rootFolder>/<gitFolder>/` and stages every solution component into the `sourcecontrolcomponent` Dataverse entity with `iscommitted=false`. The user MUST then run `/power-pages:commit-to-git` to push them. See `references/inner-loop-empirical-findings.md` §3 + §10.
 
+> 🛈 **E9 evidence carry-forward (2026-06-11; under re-investigation):** Live bind on sri-alm-dev-1 / RetailOS recorded `newCommitCreated: false` in `last-setup.json` despite a non-empty `gitFolder`, contradicting §3's "placeholder commit always created" claim. The hypothesis under test is that the placeholder commit is created ONLY when `<rootFolder>/<gitFolder>/` does NOT already exist (or is empty) on the ADO side at bind time. Step 2 below now reports the observed behavior (`newCommitCreated: bool`) instead of asserting it; the §3 finding will be updated once a clean re-bind on an empty folder confirms or refutes.
+
 Steps:
 
 1. **Poll `solutions.sourcecontrolsyncstatus` for the bound solution** every 15 s (up to 30 attempts ≈ 7.5 min — larger solutions may need more):
@@ -604,7 +617,10 @@ Steps:
        --envUrl "<envUrl>" --solutionUniqueName "<sol>"
    ```
 
-   The returned `count` is the number of items the user's first `CommitToGit` will push (typically larger than the raw `solutioncomponents` count because dependencies are included). Capture the **placeholder Readme commit SHA** from `sourcecontrolbranchconfigurations` (the row whose `rootfolderpath` ends with `/<sol>`); update the manifest's `lastCommitSha` to that placeholder SHA — the manifest will be updated again after the first real `CommitToGit`.
+   The returned `count` is the number of items the user's first `CommitToGit` will push (typically larger than the raw `solutioncomponents` count because dependencies are included). Capture the **placeholder Readme commit SHA** from `sourcecontrolbranchconfigurations` (the row whose `rootfolderpath` ends with `/<sol>`) IF one was created — compare against the pre-bind tip SHA captured in Phase 3 step 5 (`preBindFolderOccupancy`). Record `newCommitCreated: bool` in the manifest:
+
+   - **If a new commit was created:** update `lastCommitSha` to the new placeholder SHA (it will be updated again after the first real `CommitToGit`).
+   - **If no new commit was created** (the existing folder was treated as pre-seeded — observed live on sri-alm-dev-1/RetailOS 2026-06-11): record `lastCommitSha` as the existing tip SHA and surface a one-line advisory: *"The folder `<rootFolder>/<gitFolder>/` already existed on `<branch>` — no placeholder commit was created. Your next `/power-pages:commit-to-git` will be the first content commit."*
 
 3. **Print the full ADO browse URL** with the `&path=` parameter so the user lands directly on `<rootFolder>/<gitFolder>/` (initially almost-empty — just the placeholder Readme) — not the repo root, which often only shows the pre-existing README and confuses fresh-bind users (`references/inner-loop-empirical-findings.md` §7):
 
@@ -617,7 +633,11 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | Solution `{uniquename}` is now Git-bound. The folder `solutions/{gitFolder}/` was seeded with a placeholder Readme (commit `{shortSha}`) and **{pendingCount}** components are now staged as pending Changes. Push them as the real initial commit? | Initial commit pending | Run /power-pages:commit-to-git now (Recommended), Review the staged Changes in the maker portal first, Exit — I will commit later |
+   | Solution `{uniquename}` is now Git-bound. `{placeholderClause}` and **{pendingCount}** components are now staged as pending Changes. Push them as the real initial commit? | Initial commit pending | Run /power-pages:commit-to-git now (Recommended), Review the staged Changes in the maker portal first, Exit — I will commit later |
+
+   > Render `{placeholderClause}` based on the manifest's `newCommitCreated`:
+   > - `true` → `"The folder \`solutions/{gitFolder}/\` was seeded with a placeholder Readme (commit \`{shortSha}\`)"`
+   > - `false` → `"The folder \`solutions/{gitFolder}/\` already existed at commit \`{shortSha}\` — no placeholder was created"`
 
    > 💡 **Why is `commit-to-git` the default?** Connect-to-Git only seeds the folder; the staged components stay pending until the user explicitly commits them. Skipping this step leaves the repo with only the placeholder Readme. See `references/inner-loop-empirical-findings.md` §3.
 
