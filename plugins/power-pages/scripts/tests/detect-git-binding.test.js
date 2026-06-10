@@ -209,7 +209,7 @@ function createRoutedServer(routes) {
   });
 }
 
-test('multi-solution-bound env (no --solutionUniqueName) returns boundSolutions[] and aggregates pendingChangesCount', async () => {
+test('multi-solution-bound env (no --solutionUniqueName) returns boundSolutions[] with pendingChangesCount (direct env-wide) and nonCommittedRootCount (per-solution sum)', async () => {
   const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
   const SOL_B = 'bbbbbbbb-2222-2222-2222-222222222222';
   const server = await createRoutedServer([
@@ -232,6 +232,10 @@ test('multi-solution-bound env (no --solutionUniqueName) returns boundSolutions[
     // 5. per-solution pending-changes counts (matched in URL via partitionid)
     { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 2, value: [] } },
     { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_B), status: 200, body: { '@odata.count': 5, value: [] } },
+    // 6. env-wide direct query (NO partitionid in URL) — E8: this is the new
+    //    `pendingChangesCount`. Returns 9 (= 2 + 5 + 2 stale rows from a
+    //    previously-disconnected solution that nonCommittedRootCount can't see).
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && !p.includes(SOL_A) && !p.includes(SOL_B), status: 200, body: { '@odata.count': 9, value: [] } },
   ]);
   try {
     const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
@@ -239,7 +243,11 @@ test('multi-solution-bound env (no --solutionUniqueName) returns boundSolutions[
     assert.ok(Array.isArray(result.boundSolutions), 'boundSolutions should be an array');
     assert.equal(result.boundSolutions.length, 2, 'should enumerate both bound solutions');
     assert.equal(result.multipleSolutionsBound, true);
-    assert.equal(result.pendingChangesCount, 7, 'should aggregate pending counts across all bound solutions (2+5)');
+    // E8: `pendingChangesCount` is now the DIRECT env-wide count (matches list-pending-changes
+    // without a filter). `nonCommittedRootCount` is the per-solution aggregate (sum across
+    // boundSolutions[] which excludes disabled solutions). The two CAN diverge.
+    assert.equal(result.pendingChangesCount, 9, 'pendingChangesCount = direct env-wide count (incl. stale rows)');
+    assert.equal(result.nonCommittedRootCount, 7, 'nonCommittedRootCount = sum across boundSolutions[] (2+5)');
     assert.equal(result.cleanState, 'Dirty');
     const names = result.boundSolutions.map((s) => s.uniqueName).sort();
     assert.deepEqual(names, ['SolA', 'SolB']);
@@ -259,7 +267,10 @@ test('single-solution-bound env (no --solutionUniqueName) returns boundSolutions
     { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
       { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
     ] } },
-    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents'), status: 200, body: { '@odata.count': 0, value: [] } },
+    // per-solution count for SolA
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 0, value: [] } },
+    // env-wide direct count (no partitionid) — Clean env
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && !p.includes(SOL_A), status: 200, body: { '@odata.count': 0, value: [] } },
   ]);
   try {
     const result = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
@@ -267,7 +278,79 @@ test('single-solution-bound env (no --solutionUniqueName) returns boundSolutions
     assert.equal(result.boundSolutions.length, 1);
     assert.equal(result.multipleSolutionsBound, false);
     assert.equal(result.pendingChangesCount, 0);
+    assert.equal(result.nonCommittedRootCount, 0, 'when both are 0 the env-wide and aggregate counts agree');
     assert.equal(result.cleanState, 'Clean');
     assert.equal(result.boundSolutions[0].uniqueName, 'SolA');
+  } finally { server.close(); }
+});
+
+
+// ===== E8 — pendingChangesCount equality regression vs list-pending-changes =====
+
+test('E8: detect-git-binding.pendingChangesCount equals list-pending-changes.count on identical mocked env (no --solutionUniqueName)', async () => {
+  const { listPendingChanges } = require('../lib/list-pending-changes');
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  // Spin up a server that responds the SAME way to BOTH helpers' env-wide
+  // sourcecontrolcomponents query (no partitionid filter). The env-wide
+  // count must be reported identically by both. Returns 9 for both helpers,
+  // even though the per-solution sum (nonCommittedRootCount) is only 2.
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions/SolA', branchsyncedcommitId: 'aaa', upstreambranchsyncedcommitid: 'aaa', statuscode: 0 },
+    ] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    // per-solution (with partitionid) → 2
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 2, value: [] } },
+    // env-wide (no partitionid) → 9 (= 2 for SolA + 7 stale rows from a previously-disconnected solution)
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && !p.includes(SOL_A), status: 200, body: { '@odata.count': 9, value: [] } },
+  ]);
+  try {
+    const detect = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok' });
+    const list = await listPendingChanges({ envUrl: serverUrl(server), token: 'test-tok' });
+    assert.equal(list.count, 9, 'list-pending-changes count must come from the env-wide query');
+    assert.equal(detect.pendingChangesCount, list.count,
+      `detect-git-binding.pendingChangesCount (${detect.pendingChangesCount}) must equal list-pending-changes.count (${list.count}) on identical mocked data`);
+    // And nonCommittedRootCount is the per-solution aggregate — different from list-pending-changes
+    assert.equal(detect.nonCommittedRootCount, 2);
+  } finally { server.close(); }
+});
+
+test('E8: detect-git-binding.pendingChangesCount equals list-pending-changes.count when --solutionUniqueName matches (per-solution direct count)', async () => {
+  const { listPendingChanges } = require('../lib/list-pending-changes');
+  const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
+  // With --solutionUniqueName, both helpers do the partitionid-filtered query.
+  // pendingChangesCount === nonCommittedRootCount === list.count in this case.
+  const server = await createRoutedServer([
+    { match: (p) => p.startsWith('/api/data/v9.2/gitintegrations'), status: 404, body: { error: { message: 'not found' } } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolconfigurations'), status: 200, body: { value: [{
+      sourcecontrolconfigurationid: 'cfg-1', organizationname: 'org', projectname: 'proj', repositoryname: 'repo', gitprovider: 0,
+    }] } },
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolbranchconfigurations'), status: 200, body: { value: [
+      { branchname: 'main', rootfolderpath: 'solutions/SolA', branchsyncedcommitId: 'aaa', upstreambranchsyncedcommitid: 'aaa', statuscode: 0 },
+    ] } },
+    // list-pending-changes' resolveSolutionId step (filtered by uniquename eq 'SolA')
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('uniquename') && p.includes('SolA'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    // detect-git-binding's solutions enumeration (filter=enabledforsourcecontrolintegration eq true)
+    { match: (p) => p.startsWith('/api/data/v9.2/solutions') && p.includes('enabledforsourcecontrolintegration%20eq%20true'), status: 200, body: { value: [
+      { solutionid: SOL_A, uniquename: 'SolA', enabledforsourcecontrolintegration: true, sourcecontrolsyncstatus: 3 },
+    ] } },
+    // BOTH helpers' SC query (with partitionid eq SOL_A) → 4
+    { match: (p) => p.startsWith('/api/data/v9.2/sourcecontrolcomponents') && p.includes(SOL_A), status: 200, body: { '@odata.count': 4, value: [] } },
+  ]);
+  try {
+    const detect = await detectGitBinding({ envUrl: serverUrl(server), token: 'test-tok', solutionUniqueName: 'SolA' });
+    const list = await listPendingChanges({ envUrl: serverUrl(server), token: 'test-tok', solutionUniqueName: 'SolA' });
+    assert.equal(list.count, 4);
+    assert.equal(detect.pendingChangesCount, 4);
+    assert.equal(detect.nonCommittedRootCount, 4, 'scoped case: both fields agree');
+    assert.equal(detect.pendingChangesCount, list.count);
   } finally { server.close(); }
 });

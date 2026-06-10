@@ -23,6 +23,7 @@
 //       sourceControlSyncStatus: <int>           | null,     // per-solution sync status
 //       enabledForSourceControlIntegration: <bool> | null,
 //       pendingChangesCount:     <int>           | null,     // see notes below
+//       nonCommittedRootCount:   <int>           | null,     // see notes below
 //       cleanState:              "Clean" | "Dirty" | "Unknown",
 //       boundSolutions: [                                    // ALL Git-bound solutions on env
 //         { uniqueName, solutionId, pendingChangesCount, sourceControlSyncStatus }
@@ -42,13 +43,42 @@
 //                              [--solutionUniqueName <name>]
 //
 // --solutionUniqueName semantics:
-//   • Provided  → result is scoped to that solution; pendingChangesCount and
-//     cleanState reflect THAT solution only.
+//   • Provided  → result is scoped to that solution; `pendingChangesCount` and
+//     `cleanState` reflect THAT solution only (direct count of
+//     `sourcecontrolcomponents?$filter=iscommitted eq false and partitionid eq <sid>`,
+//     which matches `list-pending-changes --solutionUniqueName <name>` exactly).
+//     `nonCommittedRootCount` is the same value in this scoped case.
 //   • Omitted   → the helper enumerates every Git-bound solution on the env,
-//     populates `boundSolutions[]`, sets `multipleSolutionsBound`, and the
-//     top-level `pendingChangesCount` becomes the SUM across all bound
-//     solutions (so `cleanState` is meaningful at env scope). When only one
-//     solution is bound this is equivalent to scoping to that solution.
+//     populates `boundSolutions[]`, sets `multipleSolutionsBound`, and exposes
+//     two distinct env-scope counters that historically reported the same
+//     number but can diverge significantly:
+//
+//       pendingChangesCount      = direct env-wide query of
+//                                  `sourcecontrolcomponents?$filter=iscommitted eq false`
+//                                  (NO partitionid filter). Matches what
+//                                  `list-pending-changes` returns without a
+//                                  --solutionUniqueName filter. This is the
+//                                  authoritative "is anything unflushed across
+//                                  the env" signal, including rows whose owning
+//                                  solution has `enabledforsourcecontrolintegration=false`
+//                                  (e.g. solutions that were disconnected but
+//                                  whose stale sourcecontrolcomponent rows still
+//                                  exist).
+//
+//       nonCommittedRootCount    = SUM of per-solution `pendingChangesCount`
+//                                  across the rows in `boundSolutions[]` (which
+//                                  EXCLUDES `enabledforsourcecontrolintegration=false`
+//                                  solutions). Useful for "how much will commit-to-git
+//                                  actually flush" — i.e. the user-actionable subset.
+//
+//     Live evidence (sri-alm-dev-1 2026-06-11 binding RetailOS):
+//       pendingChangesCount   = 344   (direct env-wide query)
+//       nonCommittedRootCount = 2     (only the freshly-bound RetailOS rows)
+//     The 342-row gap was stale rows from a disconnected solution.
+//
+//     `cleanState` is derived from `pendingChangesCount` (the direct env-wide
+//     signal) so a "Clean" answer means there are zero unflushed rows of any
+//     kind, not just unflushed rows for currently-enabled solutions.
 //
 // Callers (e.g. plan-inner-loop Phase 2) SHOULD inspect `multipleSolutionsBound`
 // and, if true, iterate `boundSolutions[]` to surface per-solution state to the
@@ -231,11 +261,43 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
     }
   } catch (_) { /* swallow — boundSolutions stays [] */ }
 
-  // 4c. When no --solutionUniqueName was provided and we successfully
-  //     enumerated bound solutions, expose the env-wide aggregate Clean/Dirty
-  //     so the orchestrator can route without iterating per-solution itself.
-  if (!solutionUniqueName && aggregatePendingComputed) {
-    pendingChangesCount = aggregatePending;
+  // 4c. When no --solutionUniqueName was provided, expose TWO distinct env-scope
+  //     counters because they can diverge (see header docstring "live evidence"):
+  //
+  //       pendingChangesCount   — direct env-wide query of sourcecontrolcomponents
+  //                               (no partitionid filter). Includes rows whose
+  //                               owning solution has enabledforsourcecontrolintegration=false.
+  //                               Matches list-pending-changes' unfiltered count.
+  //
+  //       nonCommittedRootCount — SUM of per-solution pendingChangesCount across
+  //                               boundSolutions[] (which excludes disabled solutions).
+  //
+  //     When --solutionUniqueName WAS provided, both fields are the same per-solution
+  //     direct count already computed above.
+  let nonCommittedRootCount = null;
+  if (solutionUniqueName) {
+    // Scoped case: per-solution count is authoritative for both fields.
+    nonCommittedRootCount = pendingChangesCount;
+  } else {
+    if (aggregatePendingComputed) {
+      nonCommittedRootCount = aggregatePending;
+    }
+    // Direct env-wide query — matches list-pending-changes without a filter.
+    // This is the field that should drive `cleanState` because it sees stale
+    // rows from disconnected solutions that the aggregate would miss.
+    try {
+      const envPendRes = await makeRequest({
+        url: `${base}/api/data/v9.2/sourcecontrolcomponents?$filter=${encodeURIComponent('iscommitted eq false')}&$count=true&$top=1`,
+        method: 'GET',
+        headers: { ...hdr, Prefer: 'odata.include-annotations="*"' },
+      });
+      if (envPendRes.statusCode === 200) {
+        try {
+          const p = JSON.parse(envPendRes.body);
+          pendingChangesCount = typeof p['@odata.count'] === 'number' ? p['@odata.count'] : null;
+        } catch { /* leave null */ }
+      }
+    } catch (_) { /* leave null — defensive */ }
   }
 
   // 5. Derive gitFolder = last segment of rootfolderpath, rootFolder = parent.
@@ -259,6 +321,7 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
     sourceControlSyncStatus: solRow ? solRow.sourcecontrolsyncstatus : null,
     enabledForSourceControlIntegration: solRow ? solRow.enabledforsourcecontrolintegration : null,
     pendingChangesCount,
+    nonCommittedRootCount,
     cleanState: pendingChangesCount === 0 ? 'Clean' : (pendingChangesCount > 0 ? 'Dirty' : 'Unknown'),
     boundSolutions,
     multipleSolutionsBound,

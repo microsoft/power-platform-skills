@@ -315,6 +315,25 @@ RetailOS is clean (post-commit); InternLearning has 3 pending Changes — exactl
 
 **Orchestrator consequence (`plan-inner-loop` Phase 2 + Phase 5):** when `multipleSolutionsBound === true`, the plan render MUST iterate `boundSolutions[]` and show per-solution Clean/Dirty rather than a single env-wide row. Phase 6's recommendation gate similarly needs to ask which solution to act on before dispatching `commit-to-git` / `sync-from-git` (those skills require `--solutionUniqueName` to scope correctly).
 
+**E8 addendum (2026-06-11) — `pendingChangesCount` semantics split into two fields:**
+
+The "SUM across all bound solutions" semantic for `pendingChangesCount` (item 4 above) turned out to silently drop rows from solutions whose `enabledforsourcecontrolintegration` flag is `false` (e.g. solutions that were disconnected but whose `sourcecontrolcomponents` rows still exist as orphans). Live evidence on `org5ba33a19.crm.dynamics.com` binding `RetailOS` on 2026-06-11:
+
+| Helper | Filter | Count |
+|---|---|---|
+| `list-pending-changes` (no `--solutionUniqueName`) | `iscommitted eq false` | **344** |
+| `detect-git-binding` aggregate (`Σ boundSolutions[].pendingChangesCount`) | per-solution × enabled only | **2** |
+
+The 342-row gap was stale orphans from a previously-disconnected solution. `detect-git-binding`'s aggregate quietly ignored them, so `cleanState: "Clean"` was reported for an env that `commit-to-git` would later fail on with `0x80040217` (no record value found for sourcecontrolcomponentpayload).
+
+**Fix (E8):**
+- `pendingChangesCount` now does a **direct env-wide query** `sourcecontrolcomponents?$filter=iscommitted eq false&$count=true&$top=1` (no `partitionid` filter). Matches `list-pending-changes` without a `--solutionUniqueName` filter — verified by a regression test in `scripts/tests/detect-git-binding.test.js` that runs both helpers against an identical mocked HTTP env and asserts strict equality on the count.
+- `nonCommittedRootCount` (new field) is the **SUM** across `boundSolutions[]` — the historical "aggregate of per-solution counts excluding disabled solutions" semantic, now exposed under an unambiguous name. Useful for "how much will `commit-to-git` actually flush" (the user-actionable subset, since disabled-solution rows can't be flushed without re-enabling first).
+- `cleanState` derives from `pendingChangesCount` (the direct env-wide count) so "Clean" means there are zero unflushed rows of any kind, not just unflushed rows for currently-enabled solutions.
+- When `--solutionUniqueName` IS provided, both fields are the per-solution direct count (which is unambiguous because the filter `partitionid eq <sid> and iscommitted eq false` is the same in both helpers).
+
+Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-switch" decisions and `nonCommittedRootCount` for "how many rows will the next `commit-to-git` actually flush" decisions.
+
 ---
 
 ## §14 — Maker-portal "switch branch" requires Disconnect → Connect-to-Git (no in-place branch picker) (2026-06)
