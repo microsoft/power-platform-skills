@@ -66,22 +66,51 @@ This skill warns the user when the selected solution shares components with an a
 
 ## Phase 1 — Prereq Check
 
-**Goal:** Same hard-gate as `setup-git-integration` Phase 1, plus a check that the env is not already env-bound (which would make solution-binding impossible).
+**Goal:** Hard-gate every Connect-to-Git prerequisite — auth, env-target match, existing-binding state, Managed Env, and ADO permissions — before doing any work.
+
+**Required parameter:** `<envUrl>` — the full Dataverse environment URL the user wants to bind (e.g. `https://orgXXXXXXXX.crm.dynamics.com/`). This skill does NOT have an implicit "use whatever PAC is signed into" fallback; the user (or upstream skill) must supply it. Capture it before Phase 1 begins, either via `$ARGUMENTS` or via `AskUserQuestion`.
 
 **Do NOT create tasks yet.** Use natural-language progress reporting only during this phase.
 
 Steps:
 
-1. PAC CLI + Azure CLI authenticated (hard-block on failure); Managed Env probe (**warn only — solution-binding works on Basic envs**); system-admin role; ADO permissions (warn-only when no PAT was supplied).
+1. **envUrl ↔ PAC CLI target check.** Compare `<envUrl>` against the env PAC is currently signed into, via `pac env who --json`. **Hard-fail with recovery on mismatch.** This guard prevents a 2026-06-11 misfire mode where PAC was signed into `prod-sri-pp-alm` but the user asked to bind `sri-alm-dev-1` — without the check, the wrong env would have been bound (see `references/inner-loop-empirical-findings.md` §1).
+
+   ```powershell
+   # E1: envUrl mismatch hard-fail (recovery via `pac org select`)
+   $expected = "<envUrl>"                                # the --envUrl arg the user passed
+   $who      = pac env who --json | ConvertFrom-Json
+   $actual   = $who.OrgUrl
+
+   # Normalize trailing slash + case for stable comparison
+   $expectedNorm = $expected.TrimEnd('/').ToLowerInvariant()
+   $actualNorm   = $actual.TrimEnd('/').ToLowerInvariant()
+
+   if ($expectedNorm -ne $actualNorm) {
+       Write-Host "[envUrl-mismatch] expected=$expected actual=$actual ($($who.FriendlyName))"
+       exit 1
+   }
+   ```
+
+   On mismatch (script exits non-zero), surface (no marker — conversational; this is a recovery prompt, not a gate):
+
+   | Question | Header | Options |
+   |---|---|---|
+   | PAC CLI is signed into `{actualOrgUrl}` ({actualFriendlyName}) but you asked to bind `{expectedOrgUrl}`. Switch PAC to the target env, or cancel? | envUrl mismatch | Switch PAC: `pac org select --environment {expectedOrgUrl}` (Recommended), Cancel — re-run with the correct --envUrl |
+
+   - On **Switch PAC** → run `pac org select --environment "<envUrl>"`, then re-run `pac env who --json` and assert the OrgUrl now matches before continuing. If the switch fails (e.g. the auth profile has no access to `<envUrl>`), surface the error verbatim and stop.
+   - On **Cancel** → exit cleanly. No Dataverse mutation has happened yet.
+
+2. PAC CLI + Azure CLI authenticated (hard-block on failure); Managed Env probe (**warn only — solution-binding works on Basic envs**); system-admin role; ADO permissions (warn-only when no PAT was supplied).
 
    <!-- gate: connect-solution-to-git:1.prereq-fail | category=intent | cancel-leaves=nothing -->
    > 🚦 **Gate (intent · connect-solution-to-git:1.prereq-fail):** Same shape as `setup-git-integration:1.prereq-fail`. Block only on auth / hard-network failures; warn-not-block on Managed Env OFF (see `references/inner-loop-empirical-findings.md` §1 — solution-level bind is HAR-confirmed working on Basic envs).
 
-2. Check whether the env is already env-bound. Run `detect-git-binding.js` (with no `--solutionUniqueName`). If the helper reports `bindingType === 'environment'`, you cannot also bind a solution — surface this and exit (the user must `disconnect-from-git` the env binding first, then re-invoke this skill).
+3. Check whether the env is already env-bound. Run `detect-git-binding.js` (with no `--solutionUniqueName`). If the helper reports `bindingType === 'environment'`, you cannot also bind a solution — surface this and exit (the user must `disconnect-from-git` the env binding first, then re-invoke this skill).
 
    When the helper falls back to the `sourcecontrol-entities` path (`detectedVia === 'sourcecontrol-entities'`) and returns a single solution-folder binding, that does NOT mean the env is env-bound — it just means another solution was previously bound here. Look at `rootfolderpath` on every `sourcecontrolbranchconfigurations` row to be sure: an env-binding writes to the repo root (no `/<solution>` suffix); solution-bindings write to `<rootFolder>/<solutionUniqueName>`.
 
-**Output:** All prereqs green (or warnings acknowledged); env is not env-bound.
+**Output:** `<envUrl>` matches PAC's current env; all prereqs green (or warnings acknowledged); env is not env-bound.
 
 ---
 
@@ -395,15 +424,16 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: Prereq failure → open remediation URLs or cancel (gate `connect-solution-to-git:1.prereq-fail`).
-2. **Phase 1**: Env-bound check (no marker — conversational; hard stop if env-bound).
-3. **Phase 3**: Solution picker (gate `connect-solution-to-git:3.solution-pick`).
-4. **Phase 3**: Shared-object overlap warning (gate `connect-solution-to-git:3.shared-object-warning`).
-5. **Phase 3**: ADO fields (data-gathering, not a gate).
-6. **Phase 3**: Empty repo detected → README-commit, manual, or cancel (no marker — conversational; see Phase 3 step 4 footnote).
-7. **Phase 4**: Approve the binding plan (gate `connect-solution-to-git:4.plan`).
-8. **Phase 5**: Final consent before `ConnectToGit` (gate `connect-solution-to-git:5.consent`).
-9. **Phase 8**: Choose next action (gate `connect-solution-to-git:8.final`).
+1. **Phase 1**: envUrl mismatch with `pac env who` (no marker — conversational; recovery via `pac org select --environment <envUrl>` or cancel).
+2. **Phase 1**: Prereq failure → open remediation URLs or cancel (gate `connect-solution-to-git:1.prereq-fail`).
+3. **Phase 1**: Env-bound check (no marker — conversational; hard stop if env-bound).
+4. **Phase 3**: Solution picker (gate `connect-solution-to-git:3.solution-pick`).
+5. **Phase 3**: Shared-object overlap warning (gate `connect-solution-to-git:3.shared-object-warning`).
+6. **Phase 3**: ADO fields (data-gathering, not a gate).
+7. **Phase 3**: Empty repo detected → README-commit, manual, or cancel (no marker — conversational; see Phase 3 step 4 footnote).
+8. **Phase 4**: Approve the binding plan (gate `connect-solution-to-git:4.plan`).
+9. **Phase 5**: Final consent before `ConnectToGit` (gate `connect-solution-to-git:5.consent`).
+10. **Phase 8**: Choose next action (gate `connect-solution-to-git:8.final`).
 
 ---
 
