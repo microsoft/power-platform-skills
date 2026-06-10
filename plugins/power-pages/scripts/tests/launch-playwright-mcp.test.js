@@ -11,16 +11,14 @@ const {
 } = require('../launch-playwright-mcp');
 
 test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
+  const expectedConfigPath = path.join(__dirname, '..', 'playwright-mcp-fullscreen.config.json');
   const args = buildMcpArgs('chrome');
   const configIndex = args.indexOf('--config');
-  const quotedConfigPath = args[configIndex + 1];
-  const configPath = quotedConfigPath.slice(1, -1);
 
   assert.deepEqual(args.slice(0, 3), ['@playwright/mcp@latest', '--browser', 'chrome']);
   assert.equal(args.includes('--viewport-size'), false);
   assert.notEqual(configIndex, -1);
-  assert.equal(quotedConfigPath, quoteShellArg(configPath));
-  assert.equal(path.basename(configPath), 'playwright-mcp-fullscreen.config.json');
+  assert.equal(args[configIndex + 1], quoteShellArg(expectedConfigPath));
 });
 
 test('buildMcpArgs quotes Windows config paths containing spaces', () => {
