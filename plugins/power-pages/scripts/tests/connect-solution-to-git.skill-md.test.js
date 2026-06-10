@@ -227,3 +227,64 @@ test('E5: Auto-init decision tree handles statusCode 401, 403, 404, alreadyIniti
   assert.match(step4, /ok:false, statusCode:404/);
   assert.match(step4, /ok:false.*other/i);
 });
+
+
+// ===== E7 — Phase 3 step 5 folder-occupancy check + gate =====
+
+test('E7: Phase 3 has a step 5 named "Folder-occupancy check"', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  assert.match(phase3, /^5\.\s+Folder-occupancy check/m);
+});
+
+test('E7: step 5 invokes check-ado-folder-exists.js with all 6 required args', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const step5Idx = phase3.indexOf('5. Folder-occupancy check');
+  const step5 = phase3.slice(step5Idx);
+  assert.match(step5, /scripts\/lib\/check-ado-folder-exists\.js/);
+  const helperBlock = step5.slice(step5.indexOf('check-ado-folder-exists.js'));
+  assert.match(helperBlock, /--organization "<org>"/);
+  assert.match(helperBlock, /--project "<proj>"/);
+  assert.match(helperBlock, /--repository "<repo>"/);
+  assert.match(helperBlock, /--gitFolder "<gitFolder>"/);
+  assert.match(helperBlock, /--branch "<branch>"/);
+  assert.match(helperBlock, /--token "<adoToken>"/);
+});
+
+test('E7: step 5 declares the connect-solution-to-git:3.folder-occupied gate inline (no cross-skill reference)', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  assert.match(phase3, /<!-- gate: connect-solution-to-git:3\.folder-occupied \| category=consent \| cancel-leaves=nothing -->/);
+  assert.match(phase3, /Gate \(consent · connect-solution-to-git:3\.folder-occupied\)/);
+});
+
+test('E7: folder-occupied gate fires ONLY when itemCount > 0 (decision tree explicit)', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const step5Idx = phase3.indexOf('5. Folder-occupancy check');
+  const step5 = phase3.slice(step5Idx);
+  // exists:false → no gate, continue
+  assert.match(step5, /ok:true, exists:false.*no collision/is);
+  assert.match(step5, /no gate fires/);
+  // exists:true → fire gate
+  assert.match(step5, /ok:true, exists:true, itemCount:N.*Fire the folder-occupied consent gate/is);
+});
+
+test('E7: folder-occupied gate offers the 4 prescribed options in the prescribed order', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  const gateIdx = phase3.indexOf('connect-solution-to-git:3.folder-occupied');
+  const gateSect = phase3.slice(gateIdx);
+  assert.match(
+    gateSect,
+    /Pick a different gitFolder \(back to 3e\),\s*Pick a different repo \(back to 3c\),\s*Proceed anyway \(acknowledge risk\),\s*Cancel/,
+  );
+});
+
+test('E7: preBindFolderOccupancy is persisted into Phase 4 planData', () => {
+  const phase4 = prose.slice(prose.indexOf('## Phase 4'), prose.indexOf('## Phase 5'));
+  // Field appears in the planData JSON shape
+  assert.match(phase4, /"preBindFolderOccupancy"/);
+});
+
+test('E7: Phase 3 step 5 final Output line mentions the folder-occupancy outcome', () => {
+  const phase3 = prose.slice(prose.indexOf('## Phase 3'), prose.indexOf('## Phase 4'));
+  // The final Output: line of Phase 3 must acknowledge step 5's contribution.
+  assert.match(phase3, /target folder confirmed empty.*collision acknowledged/i);
+});

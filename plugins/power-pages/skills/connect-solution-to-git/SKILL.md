@@ -399,7 +399,47 @@ Steps:
    >
    > - **Cancel and pick a different repo** → exit cleanly. No Dataverse changes have been made. Tell the user: *"To pick a different repo, re-run `/power-pages:connect-solution-to-git --envUrl {envUrl} --solutionUniqueName {sol}` and select a different repo at sub-step 3c."* This exit path exists primarily for users who realize at this point that the empty repo they just selected in 3c was the wrong one (e.g. accidental Create-new at 3c with a typo'd name).
 
-**Output:** Target solution picked; shared-object risk acknowledged (or absent); ADO coordinates gathered; repo confirmed initialized (or just-initialized by `init-ado-repo.js`).
+5. Folder-occupancy check — confirm `<gitFolder>` on `<branch>` is empty (or, if not, the user accepts the collision-risk explicitly).
+
+   `ConnectToGit` will happily co-locate Dataverse-managed solution files with whatever already lives at `/<gitFolder>/` on `<branch>` — no warning, no error, no platform-side safeguard. This is the single most insidious failure mode of solution-binding because it doesn't fail at bind-time: it fails at COMMIT-time, when the user's first `commit-to-git` mixes the pre-existing files into the Dataverse-managed snapshot and either (a) confuses subsequent reconciliation or (b) clobbers content nobody intended to put under Dataverse management. This check surfaces the collision BEFORE the bind so the user can pick a different folder or repo while it's still cheap.
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/check-ado-folder-exists.js" \
+       --organization "<org>" --project "<proj>" --repository "<repo>" \
+       --gitFolder "<gitFolder>" --branch "<branch>" --token "<adoToken>"
+   ```
+
+   Persist the result into a session-scoped variable `preBindFolderOccupancy` (used by Phase 4's `planData` and by Phase 8's empirical-findings emit):
+
+   ```jsonc
+   {
+     "exists":       true | false,
+     "itemCount":    <number>,
+     "headCommitId": "<sha>" | null,
+     "emptyRepo":    true | undefined,
+     "checkedAt":    "<ISO 8601>"
+   }
+   ```
+
+   Decision tree on the helper output:
+
+   - `ok:true, exists:false` (whether `emptyRepo:true` or just folder-not-found-on-populated-repo) → no collision. Continue to Phase 4 (no gate fires). The folder doesn't exist on `<branch>` yet — the bind will create it cleanly.
+   - `ok:true, exists:true, itemCount:N` (N > 0) → collision detected. Fire the folder-occupied consent gate below.
+   - `ok:false` (any) → surface the helper's `error` + `hint` verbatim and stop. No Dataverse mutation has happened yet. Common cases the helper distinguishes: `401` (token rejected), `403` (token lacks Reader on repo), `404` (repo not found / typo). Re-running the skill is the safe recovery — the tenant-scoped token may have expired between Phase 1 step 0 and now.
+
+   <!-- gate: connect-solution-to-git:3.folder-occupied | category=consent | cancel-leaves=nothing -->
+   > 🚦 **Gate (consent · connect-solution-to-git:3.folder-occupied):** Surface `AskUserQuestion`:
+   >
+   > | Question | Header | Options |
+   > |---|---|---|
+   > | The folder `/{gitFolder}/` on branch `{branch}` of `{org}/{project}/{repo}` already contains {itemCount} item(s). `ConnectToGit` will co-locate Dataverse-managed solution files into this folder without warning. How do you want to proceed? | Folder collision | Pick a different gitFolder (back to 3e), Pick a different repo (back to 3c), Proceed anyway (acknowledge risk), Cancel |
+   >
+   > - **Pick a different gitFolder (back to 3e)** → loop back to sub-step 3e of step 3. The repo + branch are kept; only the folder selection is re-prompted. After re-selection, step 5 fires again against the new folder.
+   > - **Pick a different repo (back to 3c)** → loop back to sub-step 3c of step 3. The org + project are kept; the repo + branch + folder are re-collected from scratch (since each new repo has its own defaultBranch + folder list). After re-selection, step 4 (repo-init) AND step 5 (folder-occupancy) both fire again.
+   > - **Proceed anyway (acknowledge risk)** → continue to Phase 4. The `preBindFolderOccupancy` record is preserved in `planData` so the Phase 4 plan-render explicitly shows *"Pre-bind folder occupancy: {itemCount} item(s) — user acknowledged"* in the plan summary. This is the audit trail for the deliberate-collision case (e.g. a folder previously used by a now-disconnected solution that the user is intentionally re-using).
+   > - **Cancel** → exit cleanly. No Dataverse changes have been made. Tell the user: *"To pick a different repo or folder, re-run `/power-pages:connect-solution-to-git --envUrl {envUrl} --solutionUniqueName {sol}`."*
+
+**Output:** Target solution picked; shared-object risk acknowledged (or absent); ADO coordinates gathered; repo confirmed initialized (or just-initialized by `init-ado-repo.js`); target folder confirmed empty (or collision acknowledged via the folder-occupied consent gate).
 
 ---
 
@@ -425,6 +465,7 @@ Steps:
      "repository":           "<repo>",
      "branch":               "<branch>",
      "gitFolder":            "<folder>",
+     "preBindFolderOccupancy": { /* from Phase 3 step 5 check-ado-folder-exists.js */ },
      "sharedOverlap":        [ /* { uniquename, sharedComponentIds } */ ]
    }
    ```
@@ -608,8 +649,9 @@ Follow the skill tracking instructions in the reference to record this skill's u
 | List bindable solutions | Listing bindable solutions | Query unmanaged solutions excluding Default / Active / Basic / CommonDataServiceDefault |
 | User picks target solution | Awaiting solution pick | Surface picker gate; skip with note when only one eligible solution exists |
 | Check shared-object overlap | Checking shared overlap | Query already-Git-bound solutions; compare component membership; surface warning gate on overlap |
-| Gather ADO coordinates | Gathering ADO fields | Collect org / project / repo / branch / folder via `AskUserQuestion` |
-| Verify ADO repo initialized | Verifying repo init | Call `verify-repo-initialized.js`; offer README-commit flow when empty |
+| Gather ADO coordinates | Gathering ADO fields | Cascading discovery org → project → repo → branch → folder (Phase 3 step 3 sub-steps 3a-3e); helpers `list-ado-orgs.js`, `list-ado-projects.js`, `list-ado-repos.js`, `verify-ado-permissions.js`, `list-ado-folders.js`; tenant cross-check between 3a and 3b |
+| Verify ADO repo initialized | Verifying repo init | Call `verify-repo-initialized.js`; offer README-commit flow via `init-ado-repo.js` when empty (Phase 3 step 4 gate `connect-solution-to-git:3.repo-init`) |
+| Check folder occupancy | Checking folder occupancy | Call `check-ado-folder-exists.js`; surface collision-risk consent gate when `itemCount > 0` (Phase 3 step 5 gate `connect-solution-to-git:3.folder-occupied`) |
 | Render binding plan | Rendering binding plan | Compose `.connect-solution-plan-data.json`; show textual preview |
 | Final consent | Awaiting bind consent | Surface explicit consent gate before any Dataverse mutation |
 | Execute `ConnectToGit` (solution) | Executing ConnectToGit | Call `connect-solution-to-git.js` helper; surface platform errors |
