@@ -53,11 +53,10 @@ This skill warns the user when the selected solution shares components with an a
 ## Prerequisites
 
 - PAC CLI installed and authenticated
-- Azure CLI installed and logged in
+- Azure CLI installed and logged in (`az login`) — this skill mints an ADO Entra bearer token via `az account get-access-token`; the user is **never** asked for a PAT
 - **Recommended** Managed Environment ON for the target env, but **empirically not required** for solution-binding — HAR-confirmed 2026-06 that `ConnectionType=0` succeeds on Basic envs (see `references/inner-loop-empirical-findings.md` §1). Skill warns but does not block.
 - The signed-in user holds the system-administrator role on the target env
-- **Optional** ADO PAT with `Code (read & write)` scope on the target repo — only used by pre-check helpers; `ConnectToGit` itself uses the tenant's Entra OAuth grant to ADO. See `references/inner-loop-empirical-findings.md` §5.
-- The target ADO repo exists and is initialized
+- The target ADO repo exists and is initialized (Phase 3 step 4 auto-initializes empty repos on consent)
 - The env is NOT already env-bound (env-binding and solution-binding are mutually exclusive)
 
 **Initial request:** $ARGUMENTS
@@ -73,6 +72,20 @@ This skill warns the user when the selected solution shares components with an a
 **Do NOT create tasks yet.** Use natural-language progress reporting only during this phase.
 
 Steps:
+
+0. **Acquire an ADO Entra bearer token (`adoToken`) — written to a file, never echoed to stdout.** Mint a tenant-scoped OAuth token for the ADO Entra app and persist it to a gitignored 0o600 file for the Phase 3 ADO pre-checks (`list-ado-orgs`, `list-ado-projects`, `list-ado-repos`, `verify-ado-permissions`, `verify-repo-initialized`, `list-ado-folders`, `check-ado-folder-exists`). This replaces the legacy "Optional ADO PAT" prereq — the user is **never** asked for a PAT.
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --writeToFile "docs/inner-loop/.ado-token"
+   ```
+
+   The helper writes the full token payload (`{ token, tokenType, tenantId, expiresOn, adoOrgTenantId, tenantMismatch }`) to `docs/inner-loop/.ado-token` (mode `0o600` on POSIX) and returns a redacted JSON envelope to stdout containing `tokenFile`, `tokenSha256`, and the non-token metadata — but never the raw token itself. **Read the token from the file at call-time when invoking downstream helpers** (preferred shell pattern: `--token "$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(\"docs/inner-loop/.ado-token\",\"utf8\")).token)')"`) so the JWT never lands in tool-call arguments captured by the session log.
+
+   - **Never echo the token (or the file's contents) to the user, never `cat` / `view` the file into agent-visible output.** The 2026-06-11 live test showed a JWT leaked via stdout in the session event log; `--writeToFile` is the helper-side fix.
+   - The file is under `docs/inner-loop/` which must already be gitignored (covered by the inner-loop conventions).
+   - On `ok:false`: the most common cause is `az login` is missing or stale. Surface the error verbatim (it already contains the actionable hint) and stop. No further steps run.
+
+   > 🔒 Tenant verification against the target ADO org happens in **Phase 3 step 3a** (once we know the org name) — not here.
 
 1. **envUrl ↔ PAC CLI target check.** Compare `<envUrl>` against the env PAC is currently signed into, via `pac env who --json`. **Hard-fail with recovery on mismatch.** This guard prevents a 2026-06-11 misfire mode where PAC was signed into `prod-sri-pp-alm` but the user asked to bind `sri-alm-dev-1` — without the check, the wrong env would have been bound (see `references/inner-loop-empirical-findings.md` §1).
 

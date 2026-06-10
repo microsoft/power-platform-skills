@@ -43,17 +43,49 @@ test('E1: mismatch recovery prompt offers `pac org select --environment <expecte
   assert.match(prose, /Cancel — re-run with the correct --envUrl/);
 });
 
-test('E1: Key Decision Points table records the envUrl-mismatch recovery prompt at Phase 1', () => {
-  // It MUST appear ahead of the prereq-fail gate so the user sees it first.
-  const kdpStart = prose.indexOf('## Key Decision Points');
-  assert.ok(kdpStart >= 0, 'Key Decision Points section must exist');
-  const kdp = prose.slice(kdpStart, kdpStart + 2500);
-  assert.match(kdp, /Phase 1\*\*: envUrl mismatch with `pac env who`/);
-  // It should be listed at position 1, before the prereq-fail entry.
-  const mismatchIdx = kdp.indexOf('envUrl mismatch');
-  const prereqIdx = kdp.indexOf('prereq-fail');
-  assert.ok(
-    mismatchIdx > 0 && prereqIdx > mismatchIdx,
-    'envUrl-mismatch entry must precede prereq-fail in Key Decision Points',
-  );
+// ===== E2 — drop PAT prereq + add Phase 1 step 0 silent token acquisition =====
+
+test('E2: Prerequisites section does NOT contain the legacy "Optional ADO PAT" line', () => {
+  // The 2026-06-11 live test removed PAT from the prereq path entirely —
+  // tokens are now minted via az / Entra. Any future re-introduction of
+  // a PAT prereq must be deliberate and re-evaluated.
+  assert.doesNotMatch(prose, /\*\*Optional\*\*\s*ADO PAT/i);
+  assert.doesNotMatch(prose, /Optional ADO PAT with `Code/i);
+});
+
+test('E2: Prerequisites section calls out az login as the auth path (no PAT)', () => {
+  assert.match(prose, /Azure CLI installed and logged in.*az login/i);
+  assert.match(prose, /never\*?\*?\s*asked for a PAT/i);
+});
+
+test('E2: Phase 1 has a step 0 that invokes get-ado-token.js --writeToFile docs/inner-loop/.ado-token', () => {
+  // The skill MUST acquire the bearer token BEFORE the envUrl/PAC mismatch
+  // check (step 1) because subsequent Phase 3 ADO pre-checks rely on it.
+  const phase1Idx = prose.indexOf('## Phase 1 — Prereq Check');
+  const phase2Idx = prose.indexOf('## Phase 2');
+  assert.ok(phase1Idx > 0 && phase2Idx > phase1Idx, 'Phase 1 and Phase 2 headers must exist');
+  const phase1 = prose.slice(phase1Idx, phase2Idx);
+  assert.match(phase1, /^0\. \*\*Acquire an ADO Entra bearer token/m);
+  assert.match(phase1, /get-ado-token\.js"?\s+--writeToFile\s+"docs\/inner-loop\/\.ado-token"/);
+  // Tenant verification must be deferred to Phase 3 step 3a — not done here
+  // because the org name isn't known yet.
+  assert.match(phase1, /Tenant verification.*Phase 3 step 3a/i);
+});
+
+test('E2: Phase 1 step 0 lists every Phase 3 helper that consumes the token', () => {
+  const phase1Idx = prose.indexOf('## Phase 1 — Prereq Check');
+  const phase2Idx = prose.indexOf('## Phase 2');
+  const phase1 = prose.slice(phase1Idx, phase2Idx);
+  // These are the ADO helpers wired by E4 (3a-3e) and E5/E7 (3.4-3.5).
+  for (const helper of [
+    'list-ado-orgs',
+    'list-ado-projects',
+    'list-ado-repos',
+    'verify-ado-permissions',
+    'verify-repo-initialized',
+    'list-ado-folders',
+    'check-ado-folder-exists',
+  ]) {
+    assert.match(phase1, new RegExp(helper), `Phase 1 step 0 must reference ${helper} as a downstream consumer`);
+  }
 });
