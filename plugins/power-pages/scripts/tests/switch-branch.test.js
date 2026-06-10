@@ -215,10 +215,10 @@ test('network error on initial detect → returns pre-check error', async () => 
 
 test('solution binding happy path (single solution): auto-picks solution, switches branch', async () => {
   const { server, received } = await createQueuedServer([
-    // 1. detect (env-scoped) — only InternLearning is bound
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
-    // 2. detect (scoped to InternLearning)
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    // 1. detect (env-scoped) — only SolutionA is bound
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
+    // 2. detect (scoped to SolutionA)
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 3. disconnect
     { statusCode: 204, body: '' },
     // 4. detect after disconnect (poll-clear)
@@ -236,23 +236,23 @@ test('solution binding happy path (single solution): auto-picks solution, switch
     });
     assert.equal(r.switched, true, `expected switched:true, got ${JSON.stringify(r)}`);
     assert.equal(r.bindingType, 'solution');
-    assert.equal(r.solutionUniqueName, 'InternLearning');
+    assert.equal(r.solutionUniqueName, 'SolutionA');
     assert.equal(r.previousBranch, 'main');
     assert.equal(r.newBranch, 'feature/intern-learning-data-model');
-    assert.equal(r.gitFolder, 'InternLearning');
+    assert.equal(r.gitFolder, 'SolutionA');
     assert.equal(r.rootFolder, 'solutions');
     assert.ok(r.disconnectedAt);
     assert.ok(r.reconnectedAt);
 
     // Disconnect body must include SolutionUniqueName so we don't unbind the env.
     const disconnectBody = JSON.parse(received[2].body);
-    assert.equal(disconnectBody.SolutionUniqueName, 'InternLearning');
+    assert.equal(disconnectBody.SolutionUniqueName, 'SolutionA');
 
     // Reconnect body must include SolutionUniqueName + new branch.
     const reconnectBody = JSON.parse(received[5].body);
-    assert.equal(reconnectBody.SolutionUniqueName, 'InternLearning');
+    assert.equal(reconnectBody.SolutionUniqueName, 'SolutionA');
     assert.equal(reconnectBody.Branch, 'feature/intern-learning-data-model');
-    assert.equal(reconnectBody.GitFolder, 'InternLearning');
+    assert.equal(reconnectBody.GitFolder, 'SolutionA');
   } finally { server.close(); }
 });
 
@@ -263,8 +263,8 @@ test('solution binding requires --solutionUniqueName when multiple solutions are
       statusCode: 200,
       body: {
         value: [
-          solutionBindingRow('RetailOS', 'main'),
-          solutionBindingRow('InternLearning', 'main'),
+          solutionBindingRow('SolutionB', 'main'),
+          solutionBindingRow('SolutionA', 'main'),
         ],
       },
     },
@@ -279,15 +279,15 @@ test('solution binding requires --solutionUniqueName when multiple solutions are
     assert.match(r.error, /--solutionUniqueName/);
     assert.equal(r.bindingType, 'solution');
     assert.ok(Array.isArray(r.boundSolutions));
-    assert.ok(r.boundSolutions.includes('RetailOS'));
-    assert.ok(r.boundSolutions.includes('InternLearning'));
+    assert.ok(r.boundSolutions.includes('SolutionB'));
+    assert.ok(r.boundSolutions.includes('SolutionA'));
     assert.equal(received.length, 1, 'should hard-stop after the initial detect');
   } finally { server.close(); }
 });
 
 test('solution binding rejects --solutionUniqueName naming an unbound solution', async () => {
   const { server, received } = await createQueuedServer([
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
   ]);
   try {
     const r = await switchBranch({
@@ -310,19 +310,19 @@ test('solution binding: --solutionUniqueName selects the requested solution when
       statusCode: 200,
       body: {
         value: [
-          solutionBindingRow('RetailOS', 'main'),
-          solutionBindingRow('InternLearning', 'main'),
+          solutionBindingRow('SolutionB', 'main'),
+          solutionBindingRow('SolutionA', 'main'),
         ],
       },
     },
-    // 2. scoped detect for InternLearning — legacy path filters to that row
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    // 2. scoped detect for SolutionA — legacy path filters to that row
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 3. disconnect
     { statusCode: 204, body: '' },
     // 4. poll-clear — scoped probe returns empty
     { statusCode: 200, body: { value: [] } },
-    // 5. connectSolutionToGit internal detect — RetailOS still bound → subsequent-binding shape
-    { statusCode: 200, body: { value: [solutionBindingRow('RetailOS', 'main')] } },
+    // 5. connectSolutionToGit internal detect — SolutionB still bound → subsequent-binding shape
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionB', 'main')] } },
     // 6. connectSolutionToGit POST
     { statusCode: 204, body: '' },
   ]);
@@ -330,15 +330,15 @@ test('solution binding: --solutionUniqueName selects the requested solution when
     const r = await switchBranch({
       envUrl: url(server), token: 'tok',
       newBranch: 'feature/intern',
-      solutionUniqueName: 'InternLearning',
+      solutionUniqueName: 'SolutionA',
       ...FAST,
     });
     assert.equal(r.switched, true, `expected switched:true, got ${JSON.stringify(r)}`);
-    assert.equal(r.solutionUniqueName, 'InternLearning');
+    assert.equal(r.solutionUniqueName, 'SolutionA');
 
     // Reconnect (subsequent-binding shape) must not include Organization/Project/Repository fields.
     const reconnectBody = JSON.parse(received[5].body);
-    assert.equal(reconnectBody.SolutionUniqueName, 'InternLearning');
+    assert.equal(reconnectBody.SolutionUniqueName, 'SolutionA');
     assert.equal(reconnectBody.Branch, 'feature/intern');
     assert.equal(reconnectBody.Organization, undefined,
       'subsequent solution binding should not re-send Organization');
@@ -348,9 +348,9 @@ test('solution binding: --solutionUniqueName selects the requested solution when
 test('solution binding reconnect fails: rolls back via connectSolutionToGit to original branch', async () => {
   const { server, received } = await createQueuedServer([
     // 1. detect (env-scoped)
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 2. detect (scoped)
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 3. disconnect
     { statusCode: 204, body: '' },
     // 4. poll-clear
@@ -373,23 +373,23 @@ test('solution binding reconnect fails: rolls back via connectSolutionToGit to o
     assert.ok(r.error);
     assert.equal(r.phase, 'reconnect');
     assert.equal(r.bindingType, 'solution');
-    assert.equal(r.solutionUniqueName, 'InternLearning');
+    assert.equal(r.solutionUniqueName, 'SolutionA');
     assert.equal(r.rolledBack, true);
     assert.equal(r.previousBranch, 'main');
     assert.equal(r.attemptedBranch, 'feature/nonexistent');
 
     const rollbackPostBody = JSON.parse(received[7].body);
     assert.equal(rollbackPostBody.Branch, 'main');
-    assert.equal(rollbackPostBody.SolutionUniqueName, 'InternLearning');
+    assert.equal(rollbackPostBody.SolutionUniqueName, 'SolutionA');
   } finally { server.close(); }
 });
 
 test('solution binding reconnect: retries on 0x80040265 (disconnect-in-progress) and succeeds', async () => {
   const { server, received } = await createQueuedServer([
     // 1. detect (env-scoped)
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 2. detect (scoped)
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     // 3. disconnect
     { statusCode: 204, body: '' },
     // 4. poll-clear
@@ -411,7 +411,7 @@ test('solution binding reconnect: retries on 0x80040265 (disconnect-in-progress)
     });
     assert.equal(r.switched, true, `expected switched:true after retry, got ${JSON.stringify(r)}`);
     assert.equal(r.bindingType, 'solution');
-    assert.equal(r.solutionUniqueName, 'InternLearning');
+    assert.equal(r.solutionUniqueName, 'SolutionA');
     assert.equal(received.length, 8, 'should make 8 requests with one retry on 0x80040265');
   } finally { server.close(); }
 });
@@ -425,8 +425,8 @@ test('solution binding reconnect: gives up after exhausting retries on persisten
   // + rollback attempts (4 × 2)                                   = 8 calls
   //                                                       TOTAL  = 20 calls
   const responses = [
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
-    { statusCode: 200, body: { value: [solutionBindingRow('InternLearning', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
+    { statusCode: 200, body: { value: [solutionBindingRow('SolutionA', 'main')] } },
     { statusCode: 204, body: '' },
     { statusCode: 200, body: { value: [] } },
   ];
@@ -450,7 +450,7 @@ test('solution binding reconnect: gives up after exhausting retries on persisten
     assert.equal(r.phase, 'reconnect');
     assert.match(r.error, /disconnect operation is already in progress/);
     assert.equal(r.bindingType, 'solution');
-    assert.equal(r.solutionUniqueName, 'InternLearning');
+    assert.equal(r.solutionUniqueName, 'SolutionA');
     assert.equal(r.rolledBack, false);
     assert.ok(r.rollbackError);
   } finally { server.close(); }

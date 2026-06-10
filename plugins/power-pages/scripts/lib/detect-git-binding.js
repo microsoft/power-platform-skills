@@ -71,9 +71,9 @@
 //                                  solutions). Useful for "how much will commit-to-git
 //                                  actually flush" — i.e. the user-actionable subset.
 //
-//     Live evidence (sri-alm-dev-1 2026-06-11 binding RetailOS):
+//     Live evidence (observed during live testing 2026-06-11):
 //       pendingChangesCount   = 344   (direct env-wide query)
-//       nonCommittedRootCount = 2     (only the freshly-bound RetailOS rows)
+//       nonCommittedRootCount = 2     (only the freshly-bound solution rows)
 //     The 342-row gap was stale rows from a disconnected solution.
 //
 //     `cleanState` is derived from `pendingChangesCount` (the direct env-wide
@@ -111,9 +111,9 @@ const CONNECTION_TYPE = Object.freeze({
   1: 'environment',
 });
 
-// HAR-confirmed 2026-06 (sri-alm-dev-1 tenant): many envs do NOT expose the
-// `gitintegrations` entity. The binding state lives in two other entities
-// instead. See references/inner-loop-empirical-findings.md §2.
+// HAR-confirmed 2026-06: many tenants do NOT expose the `gitintegrations`
+// entity. The binding state lives in two other entities instead.
+// See references/inner-loop-empirical-findings.md §2.
 //   - sourcecontrolconfigurations          (org/project/repository per env)
 //   - sourcecontrolbranchconfigurations    (branch/rootfolderpath/synced-commit-id per solution-folder)
 // Per-solution sync status is on `solutions` itself:
@@ -320,10 +320,11 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
   //    `solutions` has `solutionid === <Foo-id>` any more (and even if such
   //    a row exists, it may have `enabledforsourcecontrolintegration=false`).
   //
-  //    Live evidence: sri-alm-dev-1 2026-06-11 had `newBranchConfigsCreated=2`
-  //    when binding `RetailOS` — one for the env-level row (partitionid
-  //    all-zeros), one for the RetailOS solution row (partitionid=RetailOS-id).
-  //    A naive caller iterating `branchRows[0]` could see the wrong row first.
+  //    Live evidence (observed during live testing 2026-06-11): a fresh
+  //    solution bind produced `newBranchConfigsCreated=2` — one for the
+  //    env-level row (partitionid all-zeros), one for the per-solution
+  //    row (partitionid=<solutionId>). A naive caller iterating
+  //    `branchRows[0]` could see the wrong row first.
   //
   //    Rule:
   //      bindingType = 'solution'

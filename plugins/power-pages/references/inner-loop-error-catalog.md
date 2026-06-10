@@ -293,7 +293,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 2. **Workarounds (apply ONE):**
    - **Preferred — Use traditional ALM for the pull direction.** From the source env, run `/power-pages:export-solution`. Move the zip to the target env. Run `/power-pages:import-solution`. This entirely sidesteps `PullChangesFromGit`. Git integration's commit direction (`/power-pages:commit-to-git`) still works for snapshotting changes to ADO; only the cross-env pull is replaced.
    - **Use Maker Portal Source Control "Update from Git" per-component.** Some component types succeed under the portal's per-component path. Open `https://make.powerapps.com/environments/{envId}/solutions/{solutionId}/source-control?tab=Updates`, select non-type-10429 components individually, and click Update. Type-10429 rows will still fail one at a time.
-   - **Split the solution.** Move type-10429 components into a separate unbound solution (e.g., `RetailOS_SitePages`) and leave only non-type-10429 components (forms, views, web roles) in the git-bound `RetailOS`. The git-bound half then pulls cleanly. The unbound half must be deployed via export/import.
+   - **Split the solution.** Move type-10429 components into a separate unbound solution (e.g., `<solutionUniqueName>_SitePages`) and leave only non-type-10429 components (forms, views, web roles) in the git-bound `<solutionUniqueName>`. The git-bound half then pulls cleanly. The unbound half must be deployed via export/import.
 3. **Permanent fix:** Open a Microsoft Support ticket. Include:
    - Env URL and env ID.
    - The full `0x80072033` error response (both sync and async variants).

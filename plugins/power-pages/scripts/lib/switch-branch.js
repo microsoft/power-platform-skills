@@ -24,7 +24,7 @@
 // SOLUTION-PATH HARDENING:
 //   • Auto-picks `solutionUniqueName` when exactly one solution is Git-bound on
 //     the env; REQUIRES the caller to pass `--solutionUniqueName` when more
-//     than one is bound (e.g. RetailOS + InternLearning both bound to the same
+//     than one is bound (e.g. two distinct solutions both bound to the same
 //     env).
 //   • After `DisconnectFromGit({SolutionUniqueName})`, polls the SOLUTION-SCOPED
 //     `detect-git-binding` until the row disappears (max ~90s). Reconnecting

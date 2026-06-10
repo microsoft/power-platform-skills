@@ -11,9 +11,9 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 **Microsoft Learn says** ([Dataverse Git integration setup → Prerequisites](https://learn.microsoft.com/power-platform/alm/git-integration/connecting-to-git)):
 > *"Dataverse Git integration is a feature of Managed Environments. Development and target environments must be enabled as Managed Environments."*
 
-**Empirical reality** (tenant `sri-alm-dev-1`, env `2a89d6ac-0927-e77c-8939-aa99158dd11b`):
+**Empirical reality** (verified against a development tenant):
 - BAP `governanceConfiguration.protectionLevel` = `"Basic"` (i.e. Managed Env is OFF).
-- Two solutions in that env are nonetheless **successfully Git-bound** via `ConnectionType=0` (solution binding): `InternLearning` and `RetailOS`.
+- Two solutions in that env are nonetheless **successfully Git-bound** via `ConnectionType=0` (solution binding).
 - `solutions.enabledforsourcecontrolintegration = true` on both; `solutions.sourcecontrolsyncstatus = 3` (Synced).
 - The initial-sync async plugin (`SourceControlInitialSyncPlugin`) ran to completion on both.
 
@@ -27,7 +27,7 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 
 **Earlier assumption** (`scripts/lib/detect-git-binding.js`): query `GET /api/data/v9.2/gitintegrations` to find binding state.
 
-**Empirical reality** (`sri-alm-dev-1`):
+**Empirical reality** (development tenant):
 - `GET /gitintegrations` returns 404 with `"Resource not found for the segment 'gitintegrations'"`.
 - The binding lives in **two other entities** instead:
   - `sourcecontrolconfigurations` (one row per env) — holds `organizationname`, `projectname`, `repositoryname`, `gitprovider`.
@@ -51,17 +51,17 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 
 > ⚠️ **This section was wrong in an earlier revision.** The earlier claim was that `ConnectToGit`'s async op auto-commits every component. That is FALSE. Re-verified by inspecting the ADO repo after a fresh bind: only a `Readme.md` placeholder lands at the folder root.
 
-**Empirical reality** (HAR-confirmed against tenant `sri-alm-dev-1`):
+**Empirical reality** (HAR-confirmed against a development tenant):
 
 1. `POST /ConnectToGit` (`ConnectionType=0`) creates the folder `<rootFolder>/<gitFolder>/` in the ADO repo and writes a single auto-Readme commit, e.g.:
    ```
-   commit f6e486ab157ac61f98a76f9825d2466fcdee214b
-   message "Creating new project folder solutions/RetailOS PowerPortals Runtime"
-   files   solutions/RetailOS/Readme.md  ← only file
+   commit <sha>
+   message "Creating new project folder solutions/<solutionUniqueName>"
+   files   solutions/<solutionUniqueName>/Readme.md  ← only file
    ```
-2. `SourceControlInitialSyncPlugin` then enumerates every solution component into the `sourcecontrolcomponent` Dataverse entity, all with `iscommitted=false` and `action=Push`. For RetailOS this was **385 rows** (161 direct solutioncomponents + dependencies pulled in by the source-control plugin).
+2. `SourceControlInitialSyncPlugin` then enumerates every solution component into the `sourcecontrolcomponent` Dataverse entity, all with `iscommitted=false` and `action=Push`. For one observed solution this was **385 rows** (161 direct solutioncomponents + dependencies pulled in by the source-control plugin).
 3. `sourcecontrolsyncstatus` flips to `3` (Synced) and `branchsyncedcommitid == upstreambranchsyncedcommitid == <Readme placeholder SHA>`. **Both columns track the inbound/upstream pointer only** — they do NOT reflect outbound pending pushes.
-4. The user must then **explicitly call `POST /CommitToGit`** to push the staged components. In our run that produced commit `d8e10f26…` ~4.5 min after the call (the action holds the HTTP request open while ADO writes 344 file commits).
+4. The user must then **explicitly call `POST /CommitToGit`** to push the staged components. In one observed run that produced commit `<sha>` ~4.5 min after the call (the action holds the HTTP request open while ADO writes hundreds of file commits).
 
 **How to actually know if you have pending pushes:** count rows in `sourcecontrolcomponent` where `partitionid == <solutionId>` and `iscommitted == false`. See §10.
 
@@ -123,7 +123,7 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 
 **Symptom:** "After Connect-to-Git completed I only see README.md in my repo (1 commit)."
 
-**Cause:** Connect-to-Git writes the initial commit into `<rootFolder>/<gitFolder>/` (e.g. `solutions/RetailOS/`), not the repo root. ADO's default file-tree view shows the root — users miss the new folder unless they navigate to it or look at the commit history.
+**Cause:** Connect-to-Git writes the initial commit into `<rootFolder>/<gitFolder>/` (e.g. `solutions/<solutionUniqueName>/`), not the repo root. ADO's default file-tree view shows the root — users miss the new folder unless they navigate to it or look at the commit history.
 
 **Action:** Setup skills' final summary must print the **fully-qualified ADO browse URL with the `&path=` parameter** pre-filled, plus a one-liner "ADO's default Files view shows the repo root; click into `solutions/<gitFolder>/` to see your components."
 
@@ -164,7 +164,7 @@ These columns say nothing about **outbound pending pushes**. After Connect-to-Gi
   {
     "error": {
       "code": "0x80040216",
-      "message": "Shared components are not supported in source control. The connectionreference 'Microsoft Dataverse InternLearning-79ad0' is included in multiple solutions that are connected to source control (InternLearning, RetailOS). Source control requires each component to belong to a single solution in solution scope. Remove this component from one of the solutions before committing your changes."
+      "message": "Shared components are not supported in source control. The connectionreference 'Microsoft Dataverse <solutionUniqueName>-<hash>' is included in multiple solutions that are connected to source control (<solutionA>, <solutionB>). Source control requires each component to belong to a single solution in solution scope. Remove this component from one of the solutions before committing your changes."
     }
   }
   ```
@@ -195,7 +195,7 @@ These columns say nothing about **outbound pending pushes**. After Connect-to-Gi
 | `iscommitted` | `false` = pending push to ADO; `true` = already committed in a prior `CommitToGit`. |
 | `action` | `1` = Push, `2` = Delete, `0` = None (typically idle / already committed). |
 | `componenttypename` | Human-readable type ("Web Page", "Web Template", "Entity", "Solution", etc.). |
-| `componentpath` | The path the component will/did land at, e.g. `/powerpagesites/RetailOS/website.yml`. |
+| `componentpath` | The path the component will/did land at, e.g. `/powerpagesites/<solutionUniqueName>/website.yml`. |
 | `componentdisplayname` | The name shown in the maker portal Changes tab. |
 | `solutioncomponentstate` | `0`=Create, `1`=Update, `2`=Delete. |
 
@@ -252,21 +252,21 @@ Direct `DELETE /solutioncomponents(<id>)` is also rejected: `The 'Delete' method
 
 **Common user misperception:** *"When I committed manually via the maker portal I got 3 commits in batches, but when the skill called the API I only got 1 commit. Make the skill batch like the portal does."*
 
-**Empirical reality** (HAR-confirmed against tenant `sri-alm-dev-1` / repo `srijan-pp-alm`):
+**Empirical reality** (HAR-confirmed against a development tenant):
 
 1. The OData metadata for `CommitToGit` has exactly two parameters: `CommitMessage` (`Edm.String`) and `SolutionUniqueName` (`Edm.String`). There is **NO** `ComponentIds`, `BatchSize`, `Strategy`, or `MaxComponentsPerCommit` parameter. The maker portal has no privileged batching API — it calls the same action.
 
 2. `CommitToGitResponse` returns a single `CommitId`. One call → one commit, always. We confirmed this on both paths:
-   - **Manual portal commit on InternLearning** (user clicked Commit in maker portal): produced commit `38f63cf0` with `Add=48, Edit=0, Delete=0` — **one commit, 48 files**.
-   - **Programmatic API commit on RetailOS** (skill called `commit-to-git.js`): produced commit `d8e10f26` with `Add=387, Edit=0, Delete=0` — **one commit, 387 files**.
+   - **Manual portal commit** (user clicked Commit in maker portal): produced commit `<sha>` with `Add=48, Edit=0, Delete=0` — **one commit, 48 files**.
+   - **Programmatic API commit** (skill called `commit-to-git.js`): produced commit `<sha>` with `Add=387, Edit=0, Delete=0` — **one commit, 387 files**.
 
 3. What users misread as "3 batches" is actually the **3 separate bookkeeping commits** the Git-integration pipeline creates over a binding's lifetime:
 
    | # | Source | When | Example commit |
    |---|---|---|---|
-   | 1 | Repo-init pipeline | When ConnectToGit creates the repo (or first writes to it) | `ffb28685 — "Added README.md"` |
-   | 2 | `ConnectToGit` async-op | When a solution is bound — one such commit per bound solution | `738e8e4c — "Creating new project folder solutions/InternLearning"` |
-   | 3 | First `CommitToGit` | When the user pushes their staged components | `38f63cf0 — "import Intern Learning solution (...)"` |
+   | 1 | Repo-init pipeline | When ConnectToGit creates the repo (or first writes to it) | `<sha> — "Added README.md"` |
+   | 2 | `ConnectToGit` async-op | When a solution is bound — one such commit per bound solution | `<sha> — "Creating new project folder solutions/<solutionUniqueName>"` |
+   | 3 | First `CommitToGit` | When the user pushes their staged components | `<sha> — "<user-supplied commit message>"` |
 
    Commits #1 and #2 are platform-generated placeholders. Only commit #3 contains the user's content — and it is exactly **one** commit, regardless of how many files / components are in the staging set.
 
@@ -289,7 +289,7 @@ Direct `DELETE /solutioncomponents(<id>)` is also rejected: `The 'Delete' method
 - Skipped the per-solution `sourcecontrolcomponents` count (same gating).
 - Returned `cleanState: "Unknown"` and `pendingChangesCount: null` with no signal that the env actually had multiple bindings.
 
-**Empirical reality (env `org5ba33a19.crm.dynamics.com`):** the env had `InternLearning` and `RetailOS` both bound to the same ADO repo (`GitIntegration22/srijan-pp-alm/srijan-pp-alm` / branch `main`) under sibling folders `solutions/InternLearning` and `solutions/RetailOS`. Each is tracked as a separate row in `sourcecontrolbranchconfigurations`; pending Changes are scoped per-`partitionid` in `sourcecontrolcomponents`. There is no env-wide aggregate column on either entity.
+**Empirical reality (a development tenant):** the env had two solutions both bound to the same ADO repo (`<organization>/<project>/<repository>` / branch `main`) under sibling folders `solutions/<solutionA>` and `solutions/<solutionB>`. Each is tracked as a separate row in `sourcecontrolbranchconfigurations`; pending Changes are scoped per-`partitionid` in `sourcecontrolcomponents`. There is no env-wide aggregate column on either entity.
 
 **Action (taken in `detect-git-binding.js`):**
 1. After resolving the (arbitrary) primary branch row, ALWAYS query `solutions?$filter=enabledforsourcecontrolintegration eq true` to enumerate every bound solution on the env.
@@ -305,19 +305,19 @@ Direct `DELETE /solutioncomponents(<id>)` is also rejected: `The 'Delete' method
   "pendingChangesCount": 3,
   "cleanState": "Dirty",
   "boundSolutions": [
-    { "uniqueName": "RetailOS",       "pendingChangesCount": 0, "sourceControlSyncStatus": 3 },
-    { "uniqueName": "InternLearning", "pendingChangesCount": 3, "sourceControlSyncStatus": 3 }
+    { "uniqueName": "<solutionA>", "pendingChangesCount": 0, "sourceControlSyncStatus": 3 },
+    { "uniqueName": "<solutionB>", "pendingChangesCount": 3, "sourceControlSyncStatus": 3 }
   ],
   "multipleSolutionsBound": true
 }
 ```
-RetailOS is clean (post-commit); InternLearning has 3 pending Changes — exactly what the maker portal shows. The env-wide `cleanState` correctly reports `Dirty` because at least one bound solution has pending pushes.
+`<solutionA>` is clean (post-commit); `<solutionB>` has 3 pending Changes — exactly what the maker portal shows. The env-wide `cleanState` correctly reports `Dirty` because at least one bound solution has pending pushes.
 
 **Orchestrator consequence (`plan-inner-loop` Phase 2 + Phase 5):** when `multipleSolutionsBound === true`, the plan render MUST iterate `boundSolutions[]` and show per-solution Clean/Dirty rather than a single env-wide row. Phase 6's recommendation gate similarly needs to ask which solution to act on before dispatching `commit-to-git` / `sync-from-git` (those skills require `--solutionUniqueName` to scope correctly).
 
 **E8 addendum (2026-06-11) — `pendingChangesCount` semantics split into two fields:**
 
-The "SUM across all bound solutions" semantic for `pendingChangesCount` (item 4 above) turned out to silently drop rows from solutions whose `enabledforsourcecontrolintegration` flag is `false` (e.g. solutions that were disconnected but whose `sourcecontrolcomponents` rows still exist as orphans). Live evidence on `org5ba33a19.crm.dynamics.com` binding `RetailOS` on 2026-06-11:
+The "SUM across all bound solutions" semantic for `pendingChangesCount` (item 4 above) turned out to silently drop rows from solutions whose `enabledforsourcecontrolintegration` flag is `false` (e.g. solutions that were disconnected but whose `sourcecontrolcomponents` rows still exist as orphans). Live evidence on a development tenant 2026-06-11:
 
 | Helper | Filter | Count |
 |---|---|---|
@@ -340,7 +340,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common user expectation:** *"I'll just change the branch dropdown on the Git connection panel like a normal Git client."*
 
-**Empirical reality** (Power Pages maker portal at `make.powerpages.microsoft.com/.../sourcecontrol`, tenant `sri-alm-dev-1`, 2026-06):
+**Empirical reality** (Power Pages maker portal at `make.powerpages.microsoft.com/.../sourcecontrol`, observed 2026-06):
 - The **Git connection** side panel exposes the current binding fields (Organization / Project / Repository / Branch / Git folder) as **read-only labels** plus a single **Disconnect solution from Git** button.
 - There is **no branch dropdown, no "edit binding" affordance, and no "switch branch" action** anywhere in the maker portal UI.
 - To work on a different branch, the user must (a) click **Disconnect**, then (b) click **Connect to Git** in the top toolbar and re-enter Organization / Project / Repository / **new branch** / Folder from scratch.
@@ -357,7 +357,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common ADO PR workflow:** in the *Complete pull request* dialog, ☑ *"Delete `feature/<name>` after merging"* is **ticked by default** for non-default branches.
 
-**Empirical reality** (tenant `sri-alm-dev-1`, solution `InternLearning` bound to `feature/demo-edit`, 2026-06):
+**Empirical reality** (solution bound to `feature/<name>` branch, observed 2026-06):
 - After completing PR #3 (`feature/demo-edit` → `main`) with the auto-delete checkbox ticked, the maker portal **Source control** page for the solution surfaces a red error banner: *"The connected organization, project, repository, or branch does not exist or you do not have access to it. Please check your permissions and the existence of the location in Git and refresh the page. If it has been deleted, disconnect and reconnect to a valid location."*
 - The error is sticky — **Refresh**, **Check for updates**, and **Commit** all fail until the binding is re-pointed at an existing branch.
 - The only recovery path is **Git connection → Disconnect solution from Git → Connect to Git → pick the merge target** (typically `main`). The solution's local environment state is preserved across the reconnect because `DisconnectFromGit` does not touch Dataverse rows, only `sourcecontrolconfigurations` / `sourcecontrolbranchconfigurations` linkage.
@@ -392,9 +392,9 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common user surprise:** *"I only added one new table, but the maker portal shows 189 Changes ready to commit. Did I break something?"*
 
-**Empirical reality** (tutorial run on `InternLearning` solution, 2026-06):
+**Empirical reality** (tutorial run on a development tenant, 2026-06):
 - Before the first `CommitToGit` call, every solution component (custom entities + their auto-attached standard system columns + any pre-existing pulled-in OOTB items like Account ribbon diffs / saved queries / views) is enumerated in `sourcecontrolcomponent` with `iscommitted = false`.
-- The user's tutorial solution contained one custom `sri_Task` entity, but the **Changes** count was **189** because the solution also referenced ~40 standard Account-related saved queries / system attributes that had been added to it pre-Git, plus the system columns Dataverse auto-attaches to every custom table (CreatedOn, ModifiedBy, OwnerId, statuscode, … — ~13 per table).
+- The user's tutorial solution contained one custom `new_Task` entity, but the **Changes** count was **189** because the solution also referenced ~40 standard Account-related saved queries / system attributes that had been added to it pre-Git, plus the system columns Dataverse auto-attaches to every custom table (CreatedOn, ModifiedBy, OwnerId, statuscode, … — ~13 per table).
 - This is not a bug — it's the inevitable consequence of the first commit being a **baseline snapshot** of "what's in the solution today" rather than "what the user just edited".
 
 **Action:**
@@ -411,7 +411,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 >
 > Buttons: **Remove from solution** / **Delete from environment** / **Cancel**
 
-**Empirical reality** (tutorial run on `InternLearning`, 2026-06):
+**Empirical reality** (tutorial run on a development tenant, 2026-06):
 - After the `Added a new Table` commit was reverted via ADO PR-revert, the pull surfaced 189 "Remove or delete" items — every component the original commit had added.
 - The vast majority were **standard OOTB Account columns / saved queries** (CreatedBy, Address1_Country, OwnerId, OOTB views, ribbon diffs). Clicking **Delete from environment** on those would have **physically deleted standard Dataverse rows** from the org — irrecoverable without a re-provision.
 - The safe choice in nearly every revert/cleanup scenario is **Remove from solution** — it de-scopes the items from THIS solution but leaves them in Dataverse, intact and usable by other solutions or default views.
@@ -428,11 +428,11 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common user surprise:** *"I committed 44 Changes, then opened a PR — but the PR's Files tab shows only 1 changed file. Where did my other 43 go?"*
 
-**Empirical reality** (tutorial run on `InternLearning`, `feature/demo-edit` branch, 2026-06):
+**Empirical reality** (tutorial run on a development tenant, `feature/<name>` branch, 2026-06):
 - 44 items showed in the maker-portal **Changes** tab after switching the bound branch (the env had components that the new branch's Git folder didn't know about).
-- The user clicked Commit; the action returned a single new commit SHA on `feature/demo-edit`.
-- ADO **Branches** correctly reported `feature/demo-edit` as **1 ahead, 0 behind** of `main`.
-- When the PR was opened (`feature/demo-edit` → `main`), the **Files** tab showed only **1 changed file** (`publisher.yml`, −146 / +1 lines) and the **Commits** tab showed the single commit.
+- The user clicked Commit; the action returned a single new commit SHA on `feature/<name>`.
+- ADO **Branches** correctly reported `feature/<name>` as **1 ahead, 0 behind** of `main`.
+- When the PR was opened (`feature/<name>` → `main`), the **Files** tab showed only **1 changed file** (`publisher.yml`, −146 / +1 lines) and the **Commits** tab showed the single commit.
 - The other 43 "Changes" did not generate file-level diffs — when serialized to YAML they were bit-identical to whatever `main` already had on disk (e.g. standard system columns that are deterministic given the table they hang off of, or items whose Git-folder content matched the env's hash but whose `sourcecontrolcomponent` row was still flagged `iscommitted=false` due to a state-tracking mismatch).
 
 **Action:**
@@ -444,10 +444,10 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 ## §20 — Conflicts don't double-count in Changes / Updates tabs (2026-06)
 
-**Common user perception:** *"If sri_Task is conflicted, I'd expect to see Changes (1) AND Updates (1) AND Conflicts (1) — once for each side that touched it."*
+**Common user perception:** *"If `new_Task` is conflicted, I'd expect to see Changes (1) AND Updates (1) AND Conflicts (1) — once for each side that touched it."*
 
-**Empirical reality** (tutorial run on `InternLearning`, 2026-06):
-- After `Check for updates` detected that both env and `main` had modified `entity.yml` line 19 (description), the **Source control** tabs read **Changes (0)**, **Updates (0)**, **Conflicts (1)** — the same `sri_Task` row.
+**Empirical reality** (tutorial run on a development tenant, 2026-06):
+- After `Check for updates` detected that both env and `main` had modified `entity.yml` line 19 (description), the **Source control** tabs read **Changes (0)**, **Updates (0)**, **Conflicts (1)** — the same `new_Task` row.
 - The three tabs are **mutually exclusive per component**: an item is in exactly ONE of `{Changes, Updates, Conflicts, in-sync}` at any given moment.
 - The platform suppresses the Changes / Updates entries for conflicted items because acting on them via `Commit` or `Pull` would silently lose one side's edit; forcing the user through `resolve-conflicts` first is the design intent.
 - After resolution, the item moves back to whichever tab matches the chosen strategy (Changes for `Keep current`, Updates for `Accept incoming`) — see §21.
@@ -463,10 +463,10 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common user perception:** *"I clicked Keep current changes and the banner says 'Resolved 1 conflict.' I'm done — main is now updated, right?"*
 
-**Empirical reality** (tutorial run on `InternLearning`, 2026-06):
-- Clicking **Keep current changes** on a `sri_Task` conflict produced banner *"Resolved 1 conflict(s) by keeping current changes in this environment"* and moved the item from `Conflicts (1)` → `Changes (1)`.
+**Empirical reality** (tutorial run on a development tenant, 2026-06):
+- Clicking **Keep current changes** on a `new_Task` conflict produced banner *"Resolved 1 conflict(s) by keeping current changes in this environment"* and moved the item from `Conflicts (1)` → `Changes (1)`.
 - ADO `main` was **unchanged at this point** — the env value had won locally, but no commit had landed.
-- A subsequent **Commit** action on the now-pending Change pushed the env value to `main` as commit `5353c0d1`. Only after this commit did `entity.yml` line 19 show the env value on the remote.
+- A subsequent **Commit** action on the now-pending Change pushed the env value to `main` as commit `<sha>`. Only after this commit did `entity.yml` line 19 show the env value on the remote.
 - The symmetric path: **Accept incoming changes** moves the item to `Updates (1)` and requires a subsequent **Pull** (the `PullChangesFromGit` action) to actually write the git value into the env.
 - The eventual commit/pull is a **normal** commit/pull on top of the conflict point — no special "merge commit" semantics, no two-parent ancestry; just a flat linear commit recording the winning value.
 
@@ -481,7 +481,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 
 **Common user perception:** *"Refresh updates the page — surely it also re-checks for conflicts."*
 
-**Empirical reality** (tutorial run on `InternLearning`, 2026-06):
+**Empirical reality** (tutorial run on a development tenant, 2026-06):
 - After editing the env-side description AND committing a different value to `main` directly in ADO, clicking the maker-portal **Refresh** button kept the state at `Changes (1) / Updates (0) / Conflicts (0)` — the env-side pending change was visible but the incoming git edit was NOT.
 - Only after clicking **Check for updates** did the page re-evaluate and produce `Changes (0) / Updates (0) / Conflicts (1)`.
 - The two buttons map to different APIs:
@@ -517,7 +517,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 - **(a)** Reuse connect-solution-to-git.js which calls ConnectToGit with ConnectionType=0 (solution-level). Side-effect-wise this also sets nabledforsourcecontrolintegration=true but it ADDITIONALLY writes a sourcecontrolconfigurations row and a sourcecontrolbranchconfigurations row, which an env-bound env already has from the env-level bind — risking duplicate-row / "already bound" errors.
 - **(b)** A hypothetical batch action like AddSolutionsToSourceControl(SolutionIds: [...], …). No such action exists on $metadata.
 
-**Empirical reality (HAR file gitintegrationhar.har captured 2026-06-10, ~70 MB, maker portal manually enabling SriSol1 on org5ba33a19.crm.dynamics.com):**
+**Empirical reality (HAR file captured 2026-06-10, ~70 MB, maker portal manually enabling a test solution on a development tenant):**
 
 The portal's *Enable for source control* click fires **exactly ONE write call** — every other request in the HAR is a GET (telemetry / metadata / refresh) or an OPTIONS preflight. The single write is:
 
@@ -552,13 +552,13 @@ After the PATCH:
 
 **Legacy heuristic (pre-E10):** `detect-git-binding.js` derived `bindingType` from `rootfolderpath.includes('/')` — `/` meant `solution`, no `/` meant `environment`.
 
-**Empirical reality (live test sri-alm-dev-1 binding RetailOS 2026-06-11):** the `sourcecontrolbranchconfigurations` table can hold MULTIPLE rows per env, including:
+**Empirical reality (live test on a development tenant, 2026-06-11):** the `sourcecontrolbranchconfigurations` table can hold MULTIPLE rows per env, including:
 
 - The env-level row (`partitionid = 00000000-0000-0000-0000-000000000000`, often `rootfolderpath` without `/`)
 - One row per actively-bound solution (`partitionid = <solutionId>`, `rootfolderpath` like `solutions/<gitFolder>`)
 - **Stale leftover rows** from previously-disconnected solutions — same shape as the solution rows above (non-zero `partitionid`, `rootfolderpath` with `/`) but the owning `solutions` row no longer has `enabledforsourcecontrolintegration eq true` (or has been deleted entirely)
 
-`newBranchConfigsCreated=2` was observed on the RetailOS bind, indicating `ConnectToGit` writes both an env-level and a solution-level branchconfig row. Consumers that pick `branchRows[0]` blindly can land on the wrong row; consumers that use the path heuristic can flip to `solution` on stale leftover rows.
+`newBranchConfigsCreated=2` was observed on a fresh solution-bind, indicating `ConnectToGit` writes both an env-level and a solution-level branchconfig row. Consumers that pick `branchRows[0]` blindly can land on the wrong row; consumers that use the path heuristic can flip to `solution` on stale leftover rows.
 
 **Action (taken in `detect-git-binding.js` E10):**
 1. Extend the `sourcecontrolbranchconfigurations` `$select` to include `partitionid` (and `_partitionid_value` for the lookup-style fallback).

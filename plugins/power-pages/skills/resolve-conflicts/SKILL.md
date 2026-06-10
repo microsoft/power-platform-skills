@@ -28,7 +28,7 @@ A conflict in Power Platform Connect-to-Git terminology is a single component (w
 
 **Bundling rule:** when more than 3 conflicts exist, this skill collapses the per-conflict prompts into one bundled question with `Keep all` / `Accept all` / `Decide per-object` options. This caps approval-gate count and matches the convention in `${CLAUDE_PLUGIN_ROOT}/references/conflict-resolution-patterns.md` §5.
 
-> 🛈 **Three tabs are mutually exclusive per component.** When a `sri_Task` (or any other component) is in Conflicts, it does NOT also appear in Changes or Updates — the platform suppresses the dual entry to force the user through resolution first. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §20. Don't sum the three counts when summarising "pending work".
+> 🛈 **Three tabs are mutually exclusive per component.** When a custom table (e.g. `new_Task`) is in Conflicts, it does NOT also appear in Changes or Updates — the platform suppresses the dual entry to force the user through resolution first. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §20. Don't sum the three counts when summarising "pending work".
 
 > 🛈 **Resolution decides the winner; it does NOT push/pull.** After Keep-Existing → the item lands in pending Changes and STILL needs `commit-to-git` to reach `main`. After Accept-Incoming → the item lands in pending Updates and STILL needs `sync-from-git` to write to the env. The Phase 7 hand-back surface MUST state the remaining work, not declare overall success. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §21.
 

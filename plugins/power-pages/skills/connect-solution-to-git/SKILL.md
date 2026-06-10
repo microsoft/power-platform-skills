@@ -87,7 +87,7 @@ Steps:
 
    > 🔒 Tenant verification against the target ADO org happens in **Phase 3 step 3a** (once we know the org name) — not here.
 
-1. **envUrl ↔ PAC CLI target check.** Compare `<envUrl>` against the env PAC is currently signed into, via `pac env who --json`. **Hard-fail with recovery on mismatch.** This guard prevents a 2026-06-11 misfire mode where PAC was signed into `prod-sri-pp-alm` but the user asked to bind `sri-alm-dev-1` — without the check, the wrong env would have been bound (see `references/inner-loop-empirical-findings.md` §1).
+1. **envUrl ↔ PAC CLI target check.** Compare `<envUrl>` against the env PAC is currently signed into, via `pac env who --json`. **Hard-fail with recovery on mismatch.** This guard prevents a real misfire mode (observed during live testing 2026-06-11) where PAC was signed into a different env than the one the user asked to bind — without the check, the wrong env would have been bound (see `references/inner-loop-empirical-findings.md` §1).
 
    ```powershell
    # E1: envUrl mismatch hard-fail (recovery via `pac org select`)
@@ -596,7 +596,7 @@ Steps:
 
 > ⚠️ **Earlier docs incorrectly claimed Connect-to-Git auto-pushes all components.** It does not. Connect-to-Git only writes a placeholder `Readme.md` commit at `<rootFolder>/<gitFolder>/` and stages every solution component into the `sourcecontrolcomponent` Dataverse entity with `iscommitted=false`. The user MUST then run `/power-pages:commit-to-git` to push them. See `references/inner-loop-empirical-findings.md` §3 + §10.
 
-> 🛈 **E9 evidence carry-forward (2026-06-11; under re-investigation):** Live bind on sri-alm-dev-1 / RetailOS recorded `newCommitCreated: false` in `last-setup.json` despite a non-empty `gitFolder`, contradicting §3's "placeholder commit always created" claim. The hypothesis under test is that the placeholder commit is created ONLY when `<rootFolder>/<gitFolder>/` does NOT already exist (or is empty) on the ADO side at bind time. Step 2 below now reports the observed behavior (`newCommitCreated: bool`) instead of asserting it; the §3 finding will be updated once a clean re-bind on an empty folder confirms or refutes.
+> 🛈 **E9 evidence carry-forward (2026-06-11; under re-investigation):** Live testing observed `newCommitCreated: false` in `last-setup.json` despite a non-empty `gitFolder`, contradicting §3's "placeholder commit always created" claim. The hypothesis under test is that the placeholder commit is created ONLY when `<rootFolder>/<gitFolder>/` does NOT already exist (or is empty) on the ADO side at bind time. Step 2 below now reports the observed behavior (`newCommitCreated: bool`) instead of asserting it; the §3 finding will be updated once a clean re-bind on an empty folder confirms or refutes.
 
 Steps:
 
@@ -620,7 +620,7 @@ Steps:
    The returned `count` is the number of items the user's first `CommitToGit` will push (typically larger than the raw `solutioncomponents` count because dependencies are included). Capture the **placeholder Readme commit SHA** from `sourcecontrolbranchconfigurations` (the row whose `rootfolderpath` ends with `/<sol>`) IF one was created — compare against the pre-bind tip SHA captured in Phase 3 step 5 (`preBindFolderOccupancy`). Record `newCommitCreated: bool` in the manifest:
 
    - **If a new commit was created:** update `lastCommitSha` to the new placeholder SHA (it will be updated again after the first real `CommitToGit`).
-   - **If no new commit was created** (the existing folder was treated as pre-seeded — observed live on sri-alm-dev-1/RetailOS 2026-06-11): record `lastCommitSha` as the existing tip SHA and surface a one-line advisory: *"The folder `<rootFolder>/<gitFolder>/` already existed on `<branch>` — no placeholder commit was created. Your next `/power-pages:commit-to-git` will be the first content commit."*
+   - **If no new commit was created** (the existing folder was treated as pre-seeded — observed during live testing 2026-06-11): record `lastCommitSha` as the existing tip SHA and surface a one-line advisory: *"The folder `<rootFolder>/<gitFolder>/` already existed on `<branch>` — no placeholder commit was created. Your next `/power-pages:commit-to-git` will be the first content commit."*
 
 3. **Print the full ADO browse URL** with the `&path=` parameter so the user lands directly on `<rootFolder>/<gitFolder>/` (initially almost-empty — just the placeholder Readme) — not the repo root, which often only shows the pre-existing README and confuses fresh-bind users (`references/inner-loop-empirical-findings.md` §7):
 

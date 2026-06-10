@@ -3,7 +3,7 @@
 // Lists the pending Changes in the bound Dataverse environment — the
 // equivalent of the "Changes" tab in the maker portal's Git integration UI.
 //
-// HAR-CONFIRMED (2026-06, tenant sri-alm-dev-1):
+// HAR-CONFIRMED (2026-06, development tenant):
 //   Pending Changes live in the `sourcecontrolcomponent` entity, NOT
 //   `gitcommitfiles` (the older guess returned 404 on every tenant we tried).
 //   See references/inner-loop-empirical-findings.md §10.

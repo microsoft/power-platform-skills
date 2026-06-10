@@ -58,7 +58,7 @@ test('maps a sourcecontrolcomponent row to the canonical output shape', async ()
         name:                     'Header',
         componenttype:            10,
         componenttypename:        'Web Template',
-        componentpath:            '/powerpagesites/RetailOS/web-templates/Header.webtemplate.yml',
+        componentpath:            '/powerpagesites/SolutionA/web-templates/Header.webtemplate.yml',
         solutioncomponentstate:   1,
         action:                   1,
         'action@OData.Community.Display.V1.FormattedValue': 'Push',
@@ -76,7 +76,7 @@ test('maps a sourcecontrolcomponent row to the canonical output shape', async ()
     assert.equal(item.componentType,  'Web Template');
     assert.equal(item.changeType,     'Modify');
     assert.equal(item.action,         'Push');
-    assert.equal(item.filePath,       '/powerpagesites/RetailOS/web-templates/Header.webtemplate.yml');
+    assert.equal(item.filePath,       '/powerpagesites/SolutionA/web-templates/Header.webtemplate.yml');
     assert.equal(item.partitionId,    '52cdfb68-415e-f111-a826-6045bd08be8b');
     assert.equal(item.lastModifiedOn, '2026-05-30T10:00:00Z');
   } finally { server.close(); }
@@ -142,9 +142,9 @@ test('resolves solutionUniqueName → solutionId via solutions query, then filte
     { status: 200, body: { '@odata.count': 5, value: [] } },
   ]);
   try {
-    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', solutionUniqueName: 'RetailOS' });
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', solutionUniqueName: 'SolutionA' });
     assert.equal(result.count, 5);
-    assert.equal(result.scope.solutionUniqueName, 'RetailOS');
+    assert.equal(result.scope.solutionUniqueName, 'SolutionA');
     assert.equal(result.scope.solutionId, '52cdfb68-415e-f111-a826-6045bd08be8b');
   } finally { server.close(); }
 });

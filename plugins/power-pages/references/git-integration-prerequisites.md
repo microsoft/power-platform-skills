@@ -16,7 +16,7 @@ Dataverse Git integration is documented as a **feature of Managed Environments**
 - **Env-level binding (`ConnectionType=1`)** — treat Managed Env as **required** until proven otherwise. Hard-block setup with the message below.
 - **Solution-level binding (`ConnectionType=0`)** — Managed Env is **empirically not enforced** on multiple tenants. Skills must **warn-not-block** and offer an "I know what I'm doing, proceed anyway" option.
 
-> ⚠️ **Field test (June 2026, tenant `sri-alm-dev-1`):** `protectionLevel: "Basic"` (Managed Env OFF), yet two solutions (`InternLearning`, `RetailOS`) were successfully solution-bound, the `SourceControlInitialSyncPlugin` ran to completion, and `sourcecontrolsyncstatus` reached `3` (Synced) on both. The reference doc was previously too strict. See [`inner-loop-empirical-findings.md`](inner-loop-empirical-findings.md) §1.
+> ⚠️ **Field test (June 2026, development tenant):** `protectionLevel: "Basic"` (Managed Env OFF), yet two solutions were successfully solution-bound, the `SourceControlInitialSyncPlugin` ran to completion, and `sourcecontrolsyncstatus` reached `3` (Synced) on both. The reference doc was previously too strict. See [`inner-loop-empirical-findings.md`](inner-loop-empirical-findings.md) §1.
 
 **Recommended hard-block remediation message** (for env-binding only):
 > "Managed Environments is OFF on env `{envName}`. Enable it in [Power Platform Admin Center → Environments → {env} → Manage → Edit Managed Environments](https://admin.powerplatform.microsoft.com/environments). Or switch to `/power-pages:connect-solution-to-git`, which is empirically known to work without Managed Env on some tenants."
