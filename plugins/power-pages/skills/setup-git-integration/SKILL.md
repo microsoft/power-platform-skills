@@ -130,12 +130,21 @@ Steps:
 1. <!-- not-a-gate: setup-git-integration:2.ado-fields — data-gathering for ADO org/project/repo/branch/folder -->
    Collect free-text fields via `AskUserQuestion` (data-gathering, NOT a gate):
 
-   `setup-git-integration:2.ado-fields` (not-a-gate) — ADO organization name, project name, repository name, target branch (default `main`), folder-in-repo (default `<solutionName>` or `src`).
+   `setup-git-integration:2.ado-fields` (not-a-gate) — ADO organization name, project name, repository name, target branch (default `main`), folder-in-repo (default `solutions` — see warning below).
+
+   > ⚠️ **CRITICAL — folder name format (read this BEFORE asking the user for the `folder-in-repo` value).** The Dataverse `ConnectToGit` action validates the folder name **strictly** and rejects anything that looks path-like with HTTP 400, error code `0x80040265` *("The folder name 'solutions/' is invalid.")*. The validation failure fires at the most expensive step (Phase 5, after 4 prior consent gates), so we MUST prevent the mistake at the prompt itself.
+   >
+   > When presenting the `folder-in-repo` field, the prompt's helper-text / placeholder MUST explicitly say:
+   >
+   > - **Accepted:** a plain folder name like `solutions`, `Power Pages`, `src`, `my-bound-folder`.
+   > - **Rejected:** anything containing `/`, `\`, leading or trailing slashes (e.g. `solutions/`, `/solutions`, `solutions/sub`), or whitespace-only.
+   > - **Default to suggest:** `solutions` (NOT `solutions/` — the trailing slash is the common typo this warning exists to prevent).
+   > - **One-line summary in the prompt:** *"Folder name only — no slashes, no path separators. Type `solutions`, NOT `solutions/`."*
 
    Validate inputs:
    - Org / project / repo names: non-empty, no `/` or `\`.
    - Branch: non-empty.
-   - Folder: non-empty; leading `/` stripped.
+   - Folder: non-empty; leading `/` stripped. **Per the warning above, the user should be guided NOT to type a trailing slash in the first place** (this skill intentionally does NOT silently sanitize trailing slashes — see the rationale in `references/inner-loop-empirical-findings.md` §5 / mentor directive).
 
    **Tenant cross-check.** Once `<org>` is known, re-mint the bearer token with tenant verification turned on:
 
