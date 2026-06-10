@@ -65,9 +65,9 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 
 ## Shared Telemetry
 
-1DS telemetry code for all plugins lives at `shared/telemetry/`. The repo-root copy is development-time only — each adopting plugin syncs a copy into `plugins/<plugin>/scripts/lib/telemetry/` via `node shared/telemetry/sync-to-plugin.js --target plugins/<plugin>`. Only the synced copy runs at user time.
+1DS telemetry code for all plugins lives at `shared/telemetry/`. Each adopting plugin **symlinks** the library into its own tree — `plugins/<plugin>/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`. The marketplace installer dereferences that symlink into the installed plugin at install time, so the shared code ships without copying it into each plugin. Each plugin keeps its own real `ikey.json` next to the symlink.
 
-Edit `shared/telemetry/` and re-run the sync to propagate changes. Never hand-edit the synced copies.
+Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
 
 Current adopters: `power-pages`. Others adopt on demand.
 

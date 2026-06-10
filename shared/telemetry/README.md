@@ -1,8 +1,8 @@
 # Shared 1DS Telemetry Library
 
-Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin syncs a copy into its own tree via `sync-to-plugin.js`.
+Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin **symlinks** this library into its own tree: `plugins/<plugin>/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`, so there is a single source of truth and no copy to keep in sync.
 
-The repo-root copy under `shared/telemetry/` is **development-time only** — nothing here runs at user time. Only the synced copy under `plugins/<plugin>/scripts/lib/telemetry/` is wired into hooks.
+`shared/telemetry/lib` is the **only** copy of the library. The marketplace installer dereferences the per-plugin symlink into the installed plugin at install time, so the library ships without a per-plugin copy. Each plugin keeps its own real `ikey.json` next to the symlink.
 
 Zero npm dependencies. Node stdlib only.
 
@@ -83,8 +83,7 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 
 ```
 shared/telemetry/
-├─ ikey.json                 # template config (placeholder values)
-├─ sync-to-plugin.js         # copies lib/ + ikey.json into a plugin
+├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
 │  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
@@ -105,19 +104,26 @@ shared/telemetry/
 
 These steps assume your plugin already lives under `plugins/<your-plugin>/` with a `.claude-plugin/plugin.json` and `hooks/hooks.json`.
 
-### 1. Sync the library
+### 1. Link the library
 
-From the repo root:
+Create a git symlink at `plugins/<your-plugin>/scripts/lib/telemetry/lib` pointing at the relative path to `shared/telemetry/lib`. From the `telemetry` directory that target is `../../../../../shared/telemetry/lib` (five levels up to the repo root).
+
+Create it as a mode-`120000` blob so it works on every checkout regardless of local symlink privileges (the same way the skill-workflow symlinks under `skills/*/` were made):
 
 ```bash
-node shared/telemetry/sync-to-plugin.js --target plugins/<your-plugin>
+# from the repo root
+TARGET=plugins/<your-plugin>/scripts/lib/telemetry
+mkdir -p "$TARGET"
+hash=$(printf '../../../../../shared/telemetry/lib' | git hash-object -w --stdin)
+git update-index --add --cacheinfo 120000,$hash,"$TARGET/lib"
+git checkout -- "$TARGET/lib"
 ```
 
-This copies `shared/telemetry/lib/*` and `shared/telemetry/ikey.json` into `plugins/<your-plugin>/scripts/lib/telemetry/`.
+Now `scripts/lib/telemetry/lib` resolves to the shared library — there is no copy to keep in sync.
 
 ### 2. Configure `ikey.json`
 
-Edit `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json`:
+Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder):
 
 ```json
 {
@@ -129,6 +135,8 @@ Edit `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json`:
 ```
 
 **Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and FieldNameMappings are provisioned. Flip to `false` in a separate PR once verified.
+
+**Posture rule:** the **committed** `ikey.json` must stay `disabled: true`. A working-tree `disabled: false` is a local experiment only — never commit it.
 
 ### 3. Register hooks
 
@@ -142,10 +150,10 @@ These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` 
 
 ### 4. Verify locally
 
-Run the synced test suite:
+Run the plugin's test suite:
 
 ```bash
-node --test plugins/<your-plugin>/scripts/tests/
+node --test plugins/<your-plugin>/scripts/tests/*.test.js
 ```
 
 Then invoke one of your tracked skills with `disabled: true` and confirm via Claude Code's hook logs that no telemetry-related work happens. With `disabled: false` and a real iKey, set `POWER_PLATFORM_SKILLS_FAKE_HTTPS=/tmp/probe.json` and verify the probe file is written with the expected envelope shape.
@@ -154,15 +162,11 @@ Then invoke one of your tracked skills with `disabled: true` and confirm via Cla
 
 ## Updating the shared library
 
-**DO NOT hand-edit** the synced copy under `plugins/<plugin>/scripts/lib/telemetry/lib/`. Edit `shared/telemetry/lib/` and re-run the sync:
+Edit `shared/telemetry/lib/` directly. Because each adopting plugin's `scripts/lib/telemetry/lib` is a **symlink** to this directory, the change is live for every plugin immediately — there is no copy to re-sync and nothing to propagate per-plugin.
 
-```bash
-node shared/telemetry/sync-to-plugin.js --target plugins/<plugin>
-```
+Each plugin's `ikey.json` is a separate real file (not symlinked), so editing the shared library never touches a plugin's provisioned key.
 
-The sync **preserves** an adopting plugin's `ikey.json` when it already carries a real (non-placeholder) `instrumentationKey` — re-running the sync refreshes only the library code, not your provisioned config. It seeds `ikey.json` from the placeholder template only when the target is missing or still on the placeholder. So you can re-sync freely without clobbering your plugin's key; the sync output reports `ikey.json preserved` vs `seeded`.
-
-If you change the wire-level shape (envelope, transport, allowlist), update every adopting plugin's synced copy in the same PR.
+If you change the wire-level shape (envelope, transport, allowlist), it applies to every adopting plugin at once — bump and validate accordingly.
 
 ## Strict allowlist
 

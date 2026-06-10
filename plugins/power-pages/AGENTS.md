@@ -390,9 +390,9 @@ These patterns have caused repeated PR review feedback. Check for them before su
 
 ## Telemetry
 
-This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; the synced copy at `scripts/lib/telemetry/` is the live code. Zero npm dependencies — nothing to install.
+This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **symlink** to `shared/telemetry/lib`, so the shared code is the live code. Zero npm dependencies — nothing to install.
 
-- **DO NOT hand-edit** files under `scripts/lib/telemetry/`. Edit `shared/telemetry/` and re-run `node shared/telemetry/sync-to-plugin.js --target plugins/power-pages`.
+- **`scripts/lib/telemetry/lib` is a symlink** to the repo-root `shared/telemetry/lib` — edit `shared/telemetry/lib/` directly; there is no copy to re-sync. The one real file under `scripts/lib/telemetry/` is `ikey.json` (this plugin's config). **Posture:** the committed `ikey.json` ships `disabled: true`; a working-tree `disabled: false` is a local experiment only — never commit it.
 - **Privacy posture:** anonymous telemetry is **default-on**. There is no consent prompt in skills. Users opt out via `/power-pages:telemetry off`, which stores a per-plugin choice in `~/.power-platform-skills/config.json` (`telemetry["power-pages"] = "off"`). Opting out stops transmission only; the local diagnostic mirror is still written. Re-enable with `/power-pages:telemetry on`.
 - **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the design doc.
 - **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.
