@@ -13,4 +13,4 @@ model: haiku
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-**Shared workflow: [telemetry-workflow.md](${CLAUDE_PLUGIN_ROOT}/../../shared/skills/telemetry/telemetry-workflow.md)** — Read and follow it.
+**Workflow: [telemetry-workflow.md](${CLAUDE_PLUGIN_ROOT}/skills/telemetry/telemetry-workflow.md)** — Read and follow all steps defined in that bundled file.

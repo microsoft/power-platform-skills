@@ -11,4 +11,4 @@ allowed-tools: Bash
 model: haiku
 ---
 
-**Shared workflow: [telemetry-workflow.md](${CLAUDE_PLUGIN_ROOT}/../../shared/skills/telemetry/telemetry-workflow.md)** — Read and follow it.
+**Workflow: [telemetry-workflow.md](${CLAUDE_PLUGIN_ROOT}/skills/telemetry/telemetry-workflow.md)** — Read and follow all steps defined in that bundled file.
