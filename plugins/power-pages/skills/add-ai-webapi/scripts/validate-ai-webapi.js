@@ -117,29 +117,41 @@ runValidation((cwd) => {
   const projectHasSearchSummary = hits.some((h) => h.hasSearch);
 
   if (!allContent.includes('__RequestVerificationToken')) {
-    errors.push('summarization integration is missing the __RequestVerificationToken header in every source file (CSRF token is required on these POST requests — fetch it from /_layout/tokenhtml)');
+    errors.push(
+      'summarization integration is missing the __RequestVerificationToken header anywhere under src/ (CSRF token is required on these POST requests — fetch it from /_layout/tokenhtml)'
+    );
   }
   if (!allContent.includes('X-Requested-With')) {
-    warnings.push('summarization integration does not set the X-Requested-With: XMLHttpRequest header in any source file (not strictly required by the docs, but matches shell.ajaxSafePost behaviour used by the Microsoft case-page snippet)');
+    warnings.push(
+      'summarization integration does not set the X-Requested-With: XMLHttpRequest header anywhere under src/ (not strictly required by the docs, but matches shell.ajaxSafePost behaviour used by the Microsoft case-page snippet)'
+    );
   }
   if (projectHasData) {
     if (!/\$select=/.test(allContent)) {
-      errors.push('data summarization integration is missing $select in every source file — Power Pages Web API requires explicit column lists, never wildcards');
+      errors.push(
+        'data summarization integration is missing $select anywhere under src/ — Power Pages Web API requires explicit column lists, never wildcards'
+      );
     }
     // OData 4.0 headers are mandatory on the data-summarization endpoint — it inherits
     // the Power Pages Web API rules and rejects requests without them.
     if (!allContent.includes('OData-MaxVersion')) {
-      errors.push('data summarization integration is missing the OData-MaxVersion: 4.0 header in every source file — the Power Pages Web API rejects requests without it');
+      errors.push(
+        'data summarization integration is missing the OData-MaxVersion: 4.0 header anywhere under src/ — the Power Pages Web API rejects requests without it'
+      );
     }
     if (!allContent.includes('OData-Version')) {
-      errors.push('data summarization integration is missing the OData-Version: 4.0 header in every source file — the Power Pages Web API rejects requests without it');
+      errors.push(
+        'data summarization integration is missing the OData-Version: 4.0 header anywhere under src/ — the Power Pages Web API rejects requests without it'
+      );
     }
   }
   if (projectHasSearchSummary) {
     // Search Summary requires application/x-www-form-urlencoded. Sending application/json
     // (the most common copy-paste failure from the data endpoint) returns 400.
     if (!allContent.includes('application/x-www-form-urlencoded')) {
-      errors.push('Search Summary integration is missing Content-Type: application/x-www-form-urlencoded in every source file — sending application/json returns 400 (this is the #1 way to break /_api/search/v1.0/summary)');
+      errors.push(
+        'Search Summary integration is missing Content-Type: application/x-www-form-urlencoded anywhere under src/ — sending application/json returns 400 (this is the #1 way to break /_api/search/v1.0/summary)'
+      );
     }
   }
 
