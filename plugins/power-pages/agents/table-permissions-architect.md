@@ -518,3 +518,15 @@ After creating all files, return a summary to the calling context:
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
 - **Parent before child**: Always create parent table permissions before child permissions that reference them.
+
+## AI-only read mode
+
+When the invoking skill's prompt signals **AI-only read mode** (e.g. `/add-ai-webapi` delegating through `/integrate-webapi`), the permissions proposal hardens to a strict read-only posture for every table in scope:
+
+- **`read: true` only.** Do NOT propose `create`, `write`, or `delete` — the Power Pages AI summarization endpoints are semantically reads (POST carries a body but never mutates), so broader CRUD flags grant unused surface. This overrides the default CRUD convention, including for publisher-prefixed tables where the default is usually full CRUD.
+- **Collection-valued `$expand` targets use Parent scope with `read: true`** via the specific relationship the primary's code `$expand`s on (e.g. `incident_adx_portalcomments` for the case preset). The parent permission still needs `appendTo: true` so the AI endpoint can traverse the navigation property.
+- **Skip Administrators entirely** — same default as normal mode.
+- **Web roles**: if no role matches the site's auth model, surface the gap back to the caller rather than creating one yourself. The upstream skill (`/add-ai-webapi`) invokes `/create-webroles` before calling `/integrate-webapi`; duplicate role creation here would conflict.
+- **Scope selection rules still apply**: Global for shared records, Contact/Account/Self where records are owner-scoped, Parent for child collections behind a parent record. The AI-only posture does not change scope selection — only the CRUD-flag posture and the "no roles created here" rule.
+
+The forcing function is the invoking skill's prompt. This section documents the contract so reviewers can verify it without reading downstream skill files.

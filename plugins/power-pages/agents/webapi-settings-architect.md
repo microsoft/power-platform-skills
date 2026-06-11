@@ -427,3 +427,15 @@ After creating all files, return a summary to the calling context:
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
+
+## AI-only read mode
+
+When the invoking skill's prompt signals **AI-only read mode** (e.g. `/add-ai-webapi` delegating through `/integrate-webapi`), the fields-list rules tighten for every table in scope:
+
+- **Fields list = exactly the primary's `$select` / `$expand` columns.** No more, no less. Extra columns expand the allowlist without any caller using them.
+- **Omit the primary key column.** The Power Pages summarization endpoint carries the record id in the URL path, not in `$select`. Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid` — match that pattern.
+- **Lookup columns use the `_<col>_value` OData read form only.** Do NOT include the LogicalName write form (`<col>`) unless the same table has non-AI mutation code elsewhere in the site. In pure AI-only targets there are no writes, so the write form adds attackable surface without any reader.
+- **Case-sensitivity and Dataverse-as-authority rules still apply** — all the above LogicalNames must still be the exact lowercase forms returned by the Dataverse metadata API.
+- **File/Image and aggregate exceptions still apply** — if the summarised table also has File/Image columns or aggregate OData elsewhere, `*` still wins.
+
+The forcing function is the invoking skill's prompt. This section documents the contract so reviewers can verify it without reading downstream skill files.

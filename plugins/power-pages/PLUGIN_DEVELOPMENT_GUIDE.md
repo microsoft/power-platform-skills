@@ -197,7 +197,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 |--------|---------|
 | `validation-helpers.js` | `runValidation()`, `findPath()`, `findProjectRoot()`, `approve()`, `block()` — shared boilerplate for all validators |
 | `powerpages-config.js` | Loads `.powerpages-site` YAML files (table permissions, site settings, web roles) with consistent parsing |
-| `powerpages-hook-utils.js` | Maps skill names to validator scripts for the hook dispatcher |
+| `powerpages-hook-utils.js` | Discovers skill folders and optional validator scripts for the hook dispatcher |
 | `powerpages-schema-validator.js` | Validates permission/site-setting YAML schema |
 | `table-permissions-validator.js` | Validates table permission YAML |
 | `web-roles-validator.js` | Validates web role YAML |
@@ -410,7 +410,7 @@ echo '{"reason":"ni-dev — ALM handled by infra"}' > .alm-deferred
 
 PostToolUse on the `Skill` tool fires **once per skill invocation**. Stop fires on **every assistant pause** (including user-input waits — every "Continue?" prompt fires it).
 
-This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. To wire validation for a new skill, register it in the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js` (see `AGENTS.md` → "Hooks" for the registration steps).
+This plugin uses PostToolUse via `hooks/hooks.json` → `run-skill-posttool-validation.js` → per-skill validator. Skill frontmatter must NOT declare its own `hooks: Stop:` block — those duplicate the centralized PostToolUse hook and fire too often. `scripts/lib/powerpages-hook-utils.js` automatically tracks every `skills/*/SKILL.md` folder and discovers an optional `skills/<skill>/scripts/validate*.js` validator, so new skills do not need manual hook registration.
 
 #### 4. Skills write explicit status, not just artifact presence
 

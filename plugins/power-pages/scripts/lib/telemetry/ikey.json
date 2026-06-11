@@ -1,0 +1,6 @@
+{
+  "instrumentationKey": "197418c5cb8c4426b201f9db2e87b914-87887378-2790-49b0-9295-51f43b6204b1-7172",
+  "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/",
+  "event_stream_name": "PagesAIPluginEvent",
+  "disabled": true
+}
