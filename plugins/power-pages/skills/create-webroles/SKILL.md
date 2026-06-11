@@ -38,7 +38,7 @@ When the flag is set, skip every deploy prompt this skill would otherwise issue:
 - **Phase 1 missing-deploy ask**: if `.powerpages-site` is absent, do NOT ask the user to
   deploy now. Stop with a clear contract-violation message back to the caller — the caller
   was supposed to gate on this before invoking us.
-- **Phase 6.3 "deploy to apply roles" ask** and the closing "Please run `/deploy-site`"
+- **Phase 6 deploy ask (step 3)** and the closing "Please run `/deploy-site`"
   reminder: skip both. The caller batches the single deploy decision at end-of-orchestration.
 
 When the sentinel is absent, proceed exactly as today (full interactive flow). This is the
