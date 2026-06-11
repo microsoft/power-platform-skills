@@ -32,7 +32,10 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 agents/
   data-model-architect.md      ← Agent: proposes Dataverse data models (read-only)
   webapi-integration.md        ← Agent: implements Web API integration in frontend code
-  webapi-permissions.md        ← Agent: proposes Web API permissions plan (read-only)
+  table-permissions-architect.md ← Agent: proposes table permissions plan (read-only)
+  webapi-settings-architect.md ← Agent: proposes Web API site settings with validated column names (read-only)
+  ai-webapi-integration.md     ← Agent: implements generative-AI summarization service code + UI wiring
+  ai-webapi-settings-architect.md ← Agent: proposes Summarization/* site settings (read-only)
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
@@ -76,6 +79,14 @@ skills/
   integrate-webapi/
     SKILL.md                   ← Web API integration skill definition
     scripts/validate-webapi-integration.js ← Node script validating Web API integration code
+  add-ai-webapi/
+    SKILL.md                   ← Generative-AI summarization integration skill (Layer 3; preview)
+    references/ai-api-reference.md ← Canonical Search/Data Summarization API shapes, headers, error codes
+    references/explore-prompt.md   ← Phase 2 Explore-agent prompt body + manifest shape
+    references/scope-classification.md ← Phase 3 list-trigger / scope-confirmation question mapping
+    references/agent-invocation-prompt.md ← Phase 5 ai-webapi-integration prompt template
+    references/framework-equivalents.md ← Vue/Angular/Astro safe-markdown + citation rendering snippets
+    scripts/validate-ai-webapi.js ← Node script validating summarization code, headers, and Summarization/* settings
   setup-auth/
     SKILL.md                   ← Authentication & authorization skill definition
     references/authentication-reference.md ← Login/logout flow, auth service, framework patterns
@@ -123,7 +134,10 @@ Auto-triggered by the main conversation when relevant:
 
 - `data-model-architect`: Read-only agent that analyzes site requirements, discovers existing Dataverse tables via OData API, and proposes a data model (new/modified/reused tables + Mermaid ER diagram). Uses `pac env who` + Azure CLI auth to query Dataverse. Renders the ER diagram visually in the browser via Playwright (writes a temp HTML file with Mermaid.js CDN, navigates to it, takes a screenshot) before entering plan mode. Does NOT create, modify, or delete any tables — purely advisory. The main conversation uses its output to create tables.
 - `webapi-integration`: Implementation agent that creates production-ready Web API integration code for a single Dataverse table in a Power Pages code site. Detects the frontend framework (React/Vue/Angular/Astro), creates a shared `powerPagesApi.ts` client (token management, retry logic, OData URL builder) if one doesn't exist, then generates TypeScript entity types, a domain mapper, and a CRUD service layer for the target table. Also creates framework-specific hooks (React), composables (Vue), or injectable services (Angular). Follows Power Pages Web API best practices: `/_api/` endpoints, dual token headers, `@odata.bind` for lookups, explicit `$select` (never `*`), formatted value annotations, exponential backoff retry, and 8-minute token TTL. Handles one table per invocation — invoke separately for multiple tables.
-- `webapi-permissions`: Read-only agent that analyzes site code, discovers existing web roles and table permissions, queries Dataverse for table columns, and proposes a complete Web API permissions plan (table permissions + site settings). Checks for `.powerpages-site` folder to verify site deployment. Renders a Mermaid flowchart showing web roles → table permissions → tables visually in the browser via Playwright. Never uses `*` for Web API field settings — always lists specific columns. Does NOT create any YAML files — purely advisory. The main conversation uses its output to create table permission and site setting files.
+- `table-permissions-architect`: Read-only agent that analyzes site code, discovers existing web roles and table permissions, and proposes a table-permissions plan (web roles → table permissions with CRUD flags and scopes) rendered as a Mermaid flowchart. Checks for `.powerpages-site` folder to verify site deployment. Presents the plan via plan mode; after approval, creates web role and table-permission YAML files using deterministic scripts. Supports an **AI-only read posture** (invoked transitively by `/add-ai-webapi` via `/integrate-webapi`) that proposes `read: true` only, with Parent scope + `appendTo` for `$expand` targets. Invoked by `/integrate-webapi` and `/audit-permissions`.
+- `webapi-settings-architect`: Read-only agent that queries Dataverse for exact column LogicalNames (case-sensitive) and proposes `Webapi/<table>/enabled` and `Webapi/<table>/fields` site settings. Never uses `*` for field settings except for aggregate OData queries — always lists specific columns. Presents the plan via plan mode; after approval, creates site-setting YAML files using `create-site-setting.js`. Supports the **AI-only read posture** (minimal fields list: no primary key, only `_<col>_value` lookup read forms). Invoked by `/integrate-webapi`.
+- `ai-webapi-integration`: Implementation agent that creates production-ready generative-AI summarization service code for a Power Pages SPA site — Search Summary (`/_api/search/v1.0/summary`) and Data Summarization (`/_api/summarization/data/v1.0/...`). Uses raw `fetch` (never the OData wrapper), attaches the `__RequestVerificationToken` CSRF header, groups all functions in a single `aiSummaryService.*` file, emits a framework-idiomatic wrapper (React hook / Vue composable / Angular service / Astro util), and wires real UI call sites with loading/error/content/empty branches, citation rendering, and a safe-markdown renderer. Invoked **sequentially per target** by `/add-ai-webapi` (every target shares the one service file, so parallel runs would conflict).
+- `ai-webapi-settings-architect`: Read-only agent that proposes the three Layer-3 summarization settings — `Summarization/Data/Enable`, per-prompt `Summarization/prompt/<identifier>`, and `Summarization/Data/ContentSizeLimit` (mandatory `200000` for list summaries). Cross-checks that Layer 1/2 prerequisites (`Webapi/<table>/*`, table permissions) exist for every summarised table and `$expand` target. Presents the plan via plan mode; after approval, creates site-setting YAMLs (script path, or hand-written block-literal YAML for long/complex prompts). Invoked by `/add-ai-webapi` Phase 6.
 
 ### Skills
 
@@ -136,7 +150,8 @@ User-invocable via `/power-pages:<skill-name>`:
 - `activate-site`: 5-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution + activation status check via shared script), gather parameters (site name, subdomain, website record ID), confirm with user, activate & poll via `skills/activate-site/scripts/activate-site.js`, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
 - `create-webroles`: 6-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, verify web roles (validate files, UUIDs, uniqueness constraints), review & prompt deployment via deploy-site skill.
-- `integrate-webapi`: 7-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, verify integrations (validate all files exist, project builds), invoke `webapi-permissions` agent to configure table permissions and site settings, review & deploy via `deploy-site` skill.
+- `integrate-webapi`: 7-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, verify integrations (validate all files exist, project builds), invoke `table-permissions-architect` and `webapi-settings-architect` agents (in parallel) to configure table permissions and site settings, review & deploy via `deploy-site` skill. Supports an `[AI-READ-ONLY]` sentinel that hardens the flow to read-only when invoked by `/add-ai-webapi`.
+- `add-ai-webapi`: 8-phase workflow — verify site/deployment, Explore-agent scan for search/data summarization candidates, review plan with user, **delegate Layer 1/2** (Web API site settings + table permissions) to `/integrate-webapi` in AI-only read mode and to `/create-webroles`, invoke `ai-webapi-integration` agent **sequentially per target** to create the summarization service + framework wrapper + UI wiring, invoke `ai-webapi-settings-architect` for Layer 3 (`Summarization/*` settings), verify (header-contract grep, `$select` grep, build, validator), review & deploy. This skill owns **Layer 3 only** and delegates everything else. Validator: `skills/add-ai-webapi/scripts/validate-ai-webapi.js`. AI summarization APIs are a **preview** feature gated by a three-level admin hierarchy.
 - `setup-auth`: 8-step workflow — verify prerequisites (site deployed + web roles), gather auth requirements and plan, create auth service with Entra ID login/logout (anti-forgery token + form POST), create authorization utilities (role checking), create auth UI (AuthButton component), apply role-based access control to components, verify auth setup (validate files, build, auth UI renders), create `ProfileRedirectEnabled` site setting and deploy.
 - `setup-solution`: 7-step workflow — verify prerequisites, gather publisher/solution configuration (publisher prefix is irreversible — requires explicit confirmation), check existing publishers/solutions to avoid duplicates, create publisher + solution via OData API, add Power Pages website and web role components via `AddSolutionComponent`, verify components and write `.solution-manifest.json`, present summary. Reuses `references/solution-api-patterns.md`.
 - `export-solution`: 7-step workflow — verify prerequisites, identify solution (from `.solution-manifest.json` or user input), confirm managed vs unmanaged export (irreversible choice), trigger `ExportSolutionAsync`, poll via `scripts/poll-async-operation.js`, download and decode solution zip via `DownloadSolutionExportData`, verify zip contains `Solution.xml`. Reuses `scripts/poll-async-operation.js` and `references/solution-api-patterns.md`.
@@ -153,15 +168,15 @@ Skills are defined in `SKILL.md` files with YAML frontmatter (name, description,
 
 ### Hooks
 
-Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner consults the `TRACKED_SKILLS` map in `scripts/lib/powerpages-hook-utils.js`, looks up the validator for the skill that just completed, and invokes it with the current cwd.
+Hook registration is centralized in `hooks/hooks.json` — a single PostToolUse hook (matcher `Skill`) runs `hooks/run-skill-posttool-validation.js` after every Skill tool call. The runner derives tracked skills directly from `skills/*/SKILL.md` via `scripts/lib/powerpages-hook-utils.js`, looks up an optional `skills/<skill>/scripts/validate*.js` validator for the skill that just completed, and invokes it with the current cwd.
 
 To wire a new skill into validation:
 
 1. Write the validator at `skills/<skill>/scripts/validate-<skill>.js` using the `runValidation((cwd) => { ... })` pattern from `scripts/lib/validation-helpers.js`.
-2. Register the skill in `TRACKED_SKILLS` (in `scripts/lib/powerpages-hook-utils.js`) with its `validatorScript` path.
-3. Add test coverage in `scripts/tests/powerpages-hook-utils.test.js` so an unregistered skill is caught in CI.
+2. No manual tracked-skill registration is needed. Any folder with `skills/<skill>/SKILL.md` is automatically tracked for telemetry and hook detection.
+3. Add or update test coverage in `scripts/tests/powerpages-hook-utils.test.js` if you introduce a new validator naming pattern.
 
-Skills currently registered with command-backed validators: `activate-site`, `add-cloud-flow`, `add-seo`, `add-server-logic`, `audit-permissions`, `configure-env-variables`, `create-site`, `create-webroles`, `deploy-pipeline`, `ensure-pipelines-host`, `export-solution`, `force-link-environment`, `import-solution`, `integrate-webapi`, `plan-alm`, `setup-auth`, `setup-datamodel`, `setup-pipeline`, `setup-solution`. `add-sample-data` and `test-site` are tracked without command validators (no artifacts to verify). `diagnose-deployment` is intentionally not tracked — it's read-only and produces no artifacts to verify.
+All skill folders are tracked. Skills without a `scripts/validate*.js` file are tracked for telemetry/detection but skip validation.
 
 **Anti-patterns** (see `PLUGIN_DEVELOPMENT_GUIDE.md` for the rationale): do not add `hooks: Stop:` blocks to individual SKILL.md frontmatter — they duplicate the centralized PostToolUse hook and fire too often. Do not use `type: prompt` Stop hooks for skill-completion checks — they create runaway forced-continuation loops.
 
@@ -342,7 +357,7 @@ This runs a lightweight check comparing the local plugin version against `origin
 
 - **Approval Gates** — Every load-bearing `AskUserQuestion` is an **Approval Gate**. Pause at minimum after gathering requirements, after presenting a plan, after implementation, and before deployment (Three-Point Approval Pattern). **Every skill in this plugin** (ALM and non-ALM alike) must (a) catalogue each gate in `references/approval-gates.md` §6 with a stable `gate-id`, and (b) mark it in SKILL.md with the explicit-pairing comment `<!-- gate: skill:phase | category=<intent|plan|progress|consent|final|pause> | cancel-leaves=<vocab> -->` followed by a human-readable `> 🚦 **Gate (...)**` block. Pure data-gathering prompts (free-text fallbacks, configuration sub-prompts) take a `<!-- not-a-gate: <reason> -->` comment instead. `scripts/lint-skills-alm.js` enforces this at **hard-fail** severity across the whole plugin — there is no warn-only carve-out for any skill class. **When you add a new skill that introduces an `AskUserQuestion`, you must extend `references/approval-gates.md` §6 with the new gate-id(s) in the same PR; CI will block the PR otherwise.** Do not coin alternative terms ("review gate", "approval checkpoint", "manual step" etc.) — the canonical term is **Approval Gate**.
 - **Deployment prompt** — Skills that modify site artifacts should end by asking "Ready to deploy?" and invoke `/deploy-site` if yes.
-- **Lifecycle hooks** — If a skill needs command validation or checklist enforcement, update `hooks/hooks.json` and `scripts/lib/powerpages-hook-utils.js`. Do not define hook registration in individual `SKILL.md` files.
+- **Lifecycle hooks** — Hook registration is centralized in `hooks/hooks.json`; `scripts/lib/powerpages-hook-utils.js` derives tracked skills from `skills/*/SKILL.md` and discovers optional `scripts/validate*.js` validators. Do not define hook registration in individual `SKILL.md` files.
 - **Graceful failure** — Track API call results, never auto-rollback, report failures clearly, continue with remaining items.
 - **Token refresh** — Refresh Azure CLI token every ~20 records / 3-4 tables / ~60 seconds.
 - **Git commits** — Commit after every significant milestone (each page/component, design foundations, phase completion).
@@ -387,6 +402,17 @@ These patterns have caused repeated PR review feedback. Check for them before su
 - **Hook scripts run on every Skill tool use** — The PostToolUse hook fires for all tracked skills, so unconditional `process.stderr.write` creates noise. Gate debug logging behind `process.env.DEBUG`. Only errors should go to stderr unconditionally.
 - **Template placeholders in `<script>` blocks need special care** — `render-template.js` injects string values as-is (no encoding), which is safe for HTML text contexts but risky inside JavaScript. Avoid declaring JS variables with `"__PLACEHOLDER__"` in script blocks; prefer reading from the DOM or using `JSON.stringify` for JS contexts.
 - **Guidance must be consistent within a skill** — If one section says "always use raw fetch", a framework-specific table in the same file must not recommend a different HTTP client without qualification. Reviewers will flag contradictions.
+
+## Telemetry
+
+This plugin ships 1DS telemetry for skill-run and script-run signals. The shared library lives at the repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **symlink** to `shared/telemetry/lib`, so the shared code is the live code. Zero npm dependencies — nothing to install.
+
+- **`scripts/lib/telemetry/lib` is a symlink** to the repo-root `shared/telemetry/lib` — edit `shared/telemetry/lib/` directly; there is no copy to re-sync. The one real file under `scripts/lib/telemetry/` is `ikey.json` (this plugin's config). **Posture:** the committed `ikey.json` ships `disabled: true`; a working-tree `disabled: false` is a local experiment only — never commit it.
+- **Privacy posture:** anonymous telemetry is **default-on**. There is no consent prompt in skills. Users opt out via `/power-pages:telemetry off`, which stores a per-plugin choice in `~/.power-platform-skills/config.json` (`telemetry["power-pages"] = "off"`). Opting out stops transmission only; the local diagnostic mirror is still written. Re-enable with `/power-pages:telemetry on`.
+- **Strict allowlist:** `shared/telemetry/lib/events.js` enforces exactly the fields listed in the spec. Never add a field to a builder without first adding it to the allowlist and documenting it in the design doc.
+- **Fail closed:** telemetry code must never change a script's exit code or break a skill run. Emission is fire-and-forget via a detached dispatcher child, so the hook or script returns before the HTTPS POST completes.
+
+See `shared/telemetry/README.md` for the integration guide.
 
 ## Maintaining This File
 

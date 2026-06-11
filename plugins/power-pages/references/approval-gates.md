@@ -657,6 +657,19 @@ The `### Option rules` sections in `manage-firewall` and `scan-site` retain `<!-
 
 ---
 
+### 6.29 `add-ai-webapi` (4 calls)
+
+New skill introduced by PR #144. Orchestrates AI summarization API integration across three layers (Web API settings, table permissions, and `Summarization/*` site settings). It delegates heavily to `/integrate-webapi` and `/create-webroles` sub-skills; the gates below cover the orchestrator-level decisions.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-ai-webapi:iter.deploy-commit` | gate | consent | Iteration mode | End-of-iteration batched prompt — *"Deploy and commit now? / Just commit / Just deploy / Neither"*. Avoids per-tweak upload + commit noise on re-entry runs. | nothing |
+| `add-ai-webapi:4.2.skip-webrole` | gate | consent | 4.2 | *"Continue without a web role (AI endpoints will 403) / Stop here"* — fires only when the user skipped web-role creation and the run is on a known-broken path. | nothing |
+| `add-ai-webapi:5.5.commit` | gate | consent | 5.5 | *"Commit Phase 5 Layer 3 integration changes now? / Skip"* — explicit commit after summarization-service + UI wiring complete. | nothing |
+| `add-ai-webapi:6.4.commit` | gate | consent | 6.4 | *"Commit new Summarization/* site settings? / Skip"* — explicit commit after `ai-webapi-settings-architect` creates the YAMLs. | nothing |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — The power-pages SKILL.md wrapper at `plugins/power-pages/skills/report-issue/SKILL.md` is a thin re-export that contains no prompts. The actual workflow with `AskUserQuestion` calls lives in `shared/skills/report-issue/report-issue-workflow.md`, which is consumed by every plugin (not just power-pages). The shared workflow lies outside the per-plugin lint scope (`plugins/power-pages/skills/`), so its prompts are not catalogued here. If the shared workflow is ever ported into per-plugin SKILL.md files, add a `report-issue:*` section to this catalog.

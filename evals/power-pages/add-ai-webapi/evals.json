@@ -1,0 +1,27 @@
+{
+  "skill_name": "add-ai-webapi",
+  "notes": "Dry-run decision-trace evals: each prompt asks the subagent to analyse a Power Pages fixture project using the skill and output the decisions it would make (integration manifest, Phase 5 agent-invocation prompts, Phase 6 settings plan). Sub-skill/agent invocations are mocked — the subagent prints what it would send without actually spawning agents. This isolates the skill's classification and routing logic from the broader Power Pages environment.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "list-only-workorders",
+      "prompt": "You have read access to a Power Pages Single Page Application (SPA) site fixture at <FIXTURE_PATH>. The site has a WorkOrderList.tsx page that fetches and iterates over a collection of cr363_workorder records (it's a list page). The user has just invoked the /add-ai-webapi skill on this project and wants to add an AI summary to this list page.\n\nLoad the skill from <SKILL_PATH>. Execute Phases 1-3 (site check, explore, plan review) and draft what Phase 5 and Phase 6 WOULD do — but DO NOT actually invoke any sub-skills, sub-agents, or run any scripts. Instead, produce a single output file at <OUTPUT_PATH>/decision-trace.md containing:\n\n1. ## Phase 2 integration manifest — the compiled manifest table, one row per target, with the new Target kind column.\n2. ## Phase 3 AskUserQuestion prompts — the exact question(s) you would ask the user (integration selection + per-target follow-ups), with the full option list per question.\n3. ## Phase 5 agent-invocation prompt — for every data/case target, the exact prompt string you would send to the ai-webapi-integration agent, with all placeholders filled in.\n4. ## Phase 6 settings-architect invocation — the exact prompt string you would send to the ai-webapi-settings-architect agent.\n5. ## Projected settings plan — the settings the architect would propose (name + value + write-path script-or-manual for each), based on the prompt-pattern and URL-form rules in the architect's Step 3/5.\n\nFor any AskUserQuestion, assume the user picks the first/Recommended option. Do not actually modify any files in the fixture. Do not invoke Task, Skill, or Bash to run scripts.",
+      "files": [],
+      "fixture": "list-only-workorders"
+    },
+    {
+      "id": 2,
+      "name": "single-record-case-regression",
+      "prompt": "You have read access to a Power Pages Single Page Application (SPA) site fixture at <FIXTURE_PATH>. The site has a CaseDetail.tsx page that reads a case id from the URL querystring and displays a single incident record. The user has just invoked the /add-ai-webapi skill on this project and wants to add the canonical case-page Copilot preset.\n\nLoad the skill from <SKILL_PATH>. Execute Phases 1-3 and draft what Phase 5 and Phase 6 WOULD do — but DO NOT actually invoke any sub-skills, sub-agents, or run any scripts. Produce <OUTPUT_PATH>/decision-trace.md with the same 5 sections as eval 1.\n\nFor any AskUserQuestion, assume the user picks the first/Recommended option. Do not actually modify any files in the fixture. Do not invoke Task, Skill, or Bash to run scripts.",
+      "files": [],
+      "fixture": "single-record-case"
+    },
+    {
+      "id": 3,
+      "name": "collision-search-vs-list-results",
+      "prompt": "You have read access to a Power Pages Single Page Application (SPA) site fixture at <FIXTURE_PATH>. The site has TWO pages: SearchResults.tsx (a pure search-results page that calls /_api/search/v1.0/query) AND WorkOrderResults.tsx (which iterates over a collection of cr363_workorder records — despite the `Results` suffix, it's a Dataverse list). The user wants to add AI summaries to both pages.\n\nLoad the skill from <SKILL_PATH>. Execute Phases 1-3 and draft what Phase 5 and Phase 6 WOULD do — but DO NOT actually invoke any sub-skills, sub-agents, or run any scripts. Produce <OUTPUT_PATH>/decision-trace.md with the same 5 sections as eval 1.\n\nFor any AskUserQuestion, assume the user picks the first/Recommended option. Do not actually modify any files in the fixture. Do not invoke Task, Skill, or Bash to run scripts.",
+      "files": [],
+      "fixture": "collision-search-vs-results"
+    }
+  ]
+}
