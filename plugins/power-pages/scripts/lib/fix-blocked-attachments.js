@@ -18,20 +18,48 @@
 //     [--envUrl <url>]            target env (default: current PAC active env)
 //     [--extensions js,css]       extensions to unblock (default: js)
 //     [--dry-run]                 report what would change, don't apply
+//     [--check-only]              READ-ONLY pre-flight mode. Returns the
+//                                  validator-shaped envelope
+//                                  ({ ok, blocking[], warnings[], info[] })
+//                                  used by run-prevalidators.js. Does NOT
+//                                  mutate the env. Implies --dry-run for the
+//                                  underlying pac call. Exit code 0 on both
+//                                  "ok" and "would block" — the orchestrator
+//                                  interprets the envelope.
 //     [--quiet]                   suppress informational output
 //
 // Output (JSON to stdout):
-//   {
-//     "envUrl": "https://...",
-//     "wasBlocked": ["js"],
-//     "removed": ["js"],
-//     "unchanged": [],
-//     "newValue": "exe;dll;...",
-//     "changed": true,
-//     "dryRun": false
-//   }
+//   default / --dry-run mode:
+//     {
+//       "envUrl": "https://...",
+//       "wasBlocked": ["js"],
+//       "removed": ["js"],
+//       "unchanged": [],
+//       "newValue": "exe;dll;...",
+//       "changed": true,
+//       "dryRun": false
+//     }
+//   --check-only mode:
+//     {
+//       "ok": false,
+//       "totalChecked": 1,
+//       "blocking": [
+//         {
+//           "severity": "blocker",
+//           "key": "blocked-attachment-extension",
+//           "message": "Extension 'js' is blocked on this env (blockedattachments setting).",
+//           "ref": "IL-012",
+//           "details": { "extension": "js", "envUrl": "<envUrl>" },
+//           "remediation": "Run scripts/lib/fix-blocked-attachments.js without --check-only to remove the extension."
+//         }
+//       ],
+//       "warnings": [],
+//       "info": [],
+//       "scope": { "envUrl": "<envUrl>" }
+//     }
 //
-// Exit 0 on success (including when nothing changed), exit 1 on error.
+// Exit 0 on success (including when nothing changed, and including
+// --check-only with blockers). Exit 1 on error.
 
 'use strict';
 
@@ -43,6 +71,7 @@ function parseArgs(argv) {
     envUrl: null,
     extensions: ['js'],
     dryRun: false,
+    checkOnly: false,
     quiet: false,
   };
   for (let i = 0; i < args.length; i++) {
@@ -51,6 +80,7 @@ function parseArgs(argv) {
       opts.extensions = args[++i].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     }
     else if (args[i] === '--dry-run') opts.dryRun = true;
+    else if (args[i] === '--check-only') { opts.checkOnly = true; opts.dryRun = true; }
     else if (args[i] === '--quiet') opts.quiet = true;
   }
   return opts;
@@ -88,6 +118,35 @@ function parseBlockedAttachmentsFromPacOutput(pacOutput) {
     }
   }
   return null;
+}
+
+/**
+ * Translate a fixBlockedAttachments result into the validator envelope
+ * { ok, totalChecked, blocking[], warnings[], info[], scope } used by
+ * run-prevalidators.js. Pure transform (no side effects).
+ *
+ * @param {object} result - return value of fixBlockedAttachments()
+ * @returns {{ ok: boolean, totalChecked: number, blocking: object[], warnings: object[], info: object[], scope: object }}
+ */
+function toCheckOnlyEnvelope(result) {
+  const blocking = (result.wasBlocked || []).map((ext) => ({
+    severity: 'blocker',
+    key: 'blocked-attachment-extension',
+    message: `Extension '${ext}' is blocked on this env (blockedattachments setting).`,
+    ref: 'IL-012',
+    details: { extension: ext, envUrl: result.envUrl },
+    remediation:
+      `Run \`node scripts/lib/fix-blocked-attachments.js --envUrl "${result.envUrl}" --extensions ${ext}\` ` +
+      'without --check-only to remove the extension.',
+  }));
+  return {
+    ok: blocking.length === 0,
+    totalChecked: (result.wasBlocked || []).length + (result.unchanged || []).length,
+    blocking,
+    warnings: [],
+    info: [],
+    scope: { envUrl: result.envUrl },
+  };
 }
 
 async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execImpl } = {}) {
@@ -157,7 +216,8 @@ if (require.main === module) {
   const opts = parseArgs(process.argv);
   fixBlockedAttachments(opts)
     .then(result => {
-      console.log(JSON.stringify(result));
+      const out = opts.checkOnly ? toCheckOnlyEnvelope(result) : result;
+      console.log(JSON.stringify(out));
       process.exit(0);
     })
     .catch(err => {
@@ -166,4 +226,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { fixBlockedAttachments };
+module.exports = { fixBlockedAttachments, toCheckOnlyEnvelope };

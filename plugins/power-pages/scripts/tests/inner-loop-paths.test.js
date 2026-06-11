@@ -33,13 +33,15 @@ test('FILE_NAMES exposes the inner-loop artifact keys and uses kebab-case file n
     'lastConflictResolution', 'lastBranchSwitch', 'lastRevert',
     'lastBranchRevert', 'lastPr', 'lastDiagnosis',
     'preCommitReportHtml', 'conflictsHtml', 'diagnosisHtml',
+    'pendingChangesSnapshot', 'pendingChangesCache',
+    'lastValidationJunit', 'lastValidationSarif',
   ];
   assert.deepEqual(Object.keys(FILE_NAMES).sort(), expected.slice().sort());
   for (const name of Object.values(FILE_NAMES)) {
     assert.ok(!name.startsWith('.'),
       `file name ${name} should not start with a dot — it lives in docs/inner-loop/`);
-    assert.ok(/^[a-z0-9.-]+\.(json|html)$/.test(name),
-      `file name ${name} should be kebab-case .json or .html`);
+    assert.ok(/^[a-z0-9.-]+\.(json|html|xml|sarif)$/.test(name),
+      `file name ${name} should be kebab-case .json/.html/.xml/.sarif`);
   }
 });
 
@@ -70,6 +72,22 @@ test('innerLoopPath returns a stable absolute path for known keys', () => {
   assert.equal(
     innerLoopPath(root, 'conflictsHtml'),
     path.join(root, 'docs', 'inner-loop', 'conflicts.html'),
+  );
+  assert.equal(
+    innerLoopPath(root, 'pendingChangesSnapshot'),
+    path.join(root, 'docs', 'inner-loop', 'pending-changes-snapshot.json'),
+  );
+  assert.equal(
+    innerLoopPath(root, 'pendingChangesCache'),
+    path.join(root, 'docs', 'inner-loop', 'pending-changes-cache.json'),
+  );
+  assert.equal(
+    innerLoopPath(root, 'lastValidationJunit'),
+    path.join(root, 'docs', 'inner-loop', 'last-validation.junit.xml'),
+  );
+  assert.equal(
+    innerLoopPath(root, 'lastValidationSarif'),
+    path.join(root, 'docs', 'inner-loop', 'last-validation.sarif'),
   );
 });
 

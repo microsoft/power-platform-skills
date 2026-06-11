@@ -448,6 +448,39 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 ---
 
+## Pattern IL-019: Orphan `sourcecontrolcomponent` rows (null payload FK) → `CommitToGit` `0x80040217 No record value found for sourcecontrolcomponentpayload`
+
+**Detection signal:**
+
+- `CommitToGit` returns HTTP 400 with `0x80040217 "No record value found for Entity: sourcecontrolcomponentpayload, EntityId: <guid>, FileAttribute: componentpayload"`.
+- The server **stops at the first orphan** — fixing one surfaces the next on the next attempt, which makes interactive recovery a multi-round whack-a-mole.
+- Authoritative probe (server-side truth, used by `validate-no-orphan-source-control-rows.js`):
+  ```bash
+  curl -s -H "Authorization: Bearer <dvToken>" \
+    "<envUrl>/api/data/v9.2/sourcecontrolcomponents?\$filter=_sourcecontrolcomponentpayloadid_value%20eq%20null%20and%20iscommitted%20eq%20false&\$select=sourcecontrolcomponentid,componenttype,componentpath,action&\$count=true&\$top=200"
+  # @odata.count > 0 ⇒ IL-019 applies; every returned row is a blocker.
+  ```
+  Schema note (verified 2026-06 against sri-alm-dev-1 via `EntityDefinitions(LogicalName='sourcecontrolcomponent')/Attributes`): the entity has **no `_objectid_value` column** — the underlying component reference lives in the plain `componentid` Uniqueidentifier attribute. The payload FK is `sourcecontrolcomponentpayloadid` (Lookup), queried in OData as `_sourcecontrolcomponentpayloadid_value`. Earlier hypotheses that targeted `_objectid_value eq null` were incorrect for this entity's schema.
+- `PreValidateGitComponents` does NOT detect this (returns `IsValid:true` even with orphans present). Likewise `ValidateSourceControlConnection`.
+
+**Root cause:** The `sourcecontrolcomponent` row's payload FK (`sourcecontrolcomponentpayloadid`) is null, so when the commit pipeline reads the row and tries to follow the lookup to fetch the encoded `componentpayload` blob, the indirection terminates at NULL and the server raises `0x80040217 No record value found ... FileAttribute: componentpayload`. The whole commit batch aborts at the first such row.
+
+**Severity:** Error (hard-stop on CommitToGit; the user cannot commit until every orphan is cleared)
+
+**Auto-fix available:** Partial — direct API DELETE on the orphan rows is blocked by `0x80040216` ("Restricted API is not called by Microsoft publisher plugin") because `sourcecontrolcomponentpayload` is a platform-internal entity. The supported clearance path is the Maker Portal Source Control panel **Discard** action.
+
+**Fix procedure:**
+
+1. **Enumerate every orphan** via `validate-no-orphan-source-control-rows.js` (run as part of `/power-pages:validate-pending-changes`). The output names every row's `sourcecontrolcomponentid` plus `componentpath` for context. This is faster than letting `CommitToGit` surface them one at a time.
+2. **In Maker Portal → Source control → Changes**: for each row reported, click **Discard**. Confirm. The portal call hits a privileged plugin path the public OData layer can't reach.
+3. **Optional belt-and-suspenders:** call `RefreshChangesFromGit` after the last Discard, then re-run `validate-no-orphan-source-control-rows.js` to confirm `@odata.count == 0`. (Note: `RefreshChangesFromGit` alone does NOT clear orphans — it only re-syncs the Updates side.)
+4. **Retry `CommitToGit`.** A successful pre-flight validator pass is necessary but not sufficient; a parallel IL-010 (conflicts) or IL-009 (shared components) can still block. Run the full `/power-pages:validate-pending-changes` skill end-to-end.
+5. **If Discard fails** (rare; happens when the orphan row's solution itself is mid-disconnect): fall back to `Disconnect from Git → Connect to Git` to wipe the source-control workspace and start fresh. Note that this drops all pending push-direction changes, so commit them first if possible.
+
+**Relationship to other patterns:** IL-019 (orphan push rows blocking commit) and IL-018 (orphan payload cache blocking pull) are sibling cache-orphan failures on the same source-control plugin. IL-019 surfaces on the push path (commit); IL-018 surfaces on the pull path. Distinct queries / fixes; do not conflate.
+
+---
+
 ## Schema for new entries
 
 When adding a new pattern, follow the same shape:

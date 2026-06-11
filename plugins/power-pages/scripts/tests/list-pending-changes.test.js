@@ -170,3 +170,82 @@ test('null lastModifiedOn when modifiedon is absent from row', async () => {
     assert.equal(result.items[0].lastModifiedOn, null);
   } finally { server.close(); }
 });
+
+// ===== probe mode =====
+
+test('probe=true returns count + probe:true and NO items[] (count-only fast path)', async () => {
+  // Server still echoes @odata.count even with $top=0; value should be empty.
+  const server = await createTestServer({ status: 200, body: { '@odata.count': 44, value: [] } });
+  try {
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', probe: true });
+    assert.equal(result.count, 44);
+    assert.equal(result.probe, true);
+    assert.equal(result.items, undefined);
+    assert.ok(result.scope);
+  } finally { server.close(); }
+});
+
+test('probe=true with solutionUniqueName still resolves solutionId before the count query', async () => {
+  const server = await createTestServer([
+    { status: 200, body: { value: [{ solutionid: 'sol-guid-001' }] } },
+    { status: 200, body: { '@odata.count': 12, value: [] } },
+  ]);
+  try {
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', solutionUniqueName: 'InternLearning', probe: true });
+    assert.equal(result.count, 12);
+    assert.equal(result.probe, true);
+    assert.equal(result.scope.solutionUniqueName, 'InternLearning');
+    assert.equal(result.scope.solutionId, 'sol-guid-001');
+  } finally { server.close(); }
+});
+
+test('probe=true issues query with $top=1 and minimal $select (verified via captured URL)', async () => {
+  // Capture the URL the helper hits so we can assert the probe query shape.
+  // We use $top=1 instead of $top=0 because Dataverse rejects $top=0 with
+  // "Invalid value for $top query option." (HTTP 400, verified 2026-06-11
+  // against org5ba33a19).
+  let captured = null;
+  const server = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      captured = req.url;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ '@odata.count': 7, value: [] }));
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', probe: true });
+    assert.ok(captured);
+    assert.match(captured, /\$top=1(&|$)/, 'probe should use $top=1 (NOT $top=0 — Dataverse rejects 0)');
+    assert.match(captured, /\$count=true/, 'probe should still request count');
+    assert.match(captured, /\$select=sourcecontrolcomponentid(&|$)/, 'probe should select only the minimal id field');
+    // Confirm the heavy field set is NOT in the probe URL.
+    assert.ok(!/componentdisplayname/.test(captured), 'probe must omit componentdisplayname');
+    assert.ok(!/componenttypename/.test(captured), 'probe must omit componenttypename');
+  } finally { server.close(); }
+});
+
+test('probe=false (default) still returns items[] with full field set', async () => {
+  let captured = null;
+  const server = await new Promise((resolve) => {
+    const s = http.createServer((req, res) => {
+      captured = req.url;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        '@odata.count': 1,
+        value: [{
+          componentid: 'c1', componentdisplayname: 'X', componenttypename: 'Web Page',
+          solutioncomponentstate: 0, action: 1,
+        }],
+      }));
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok' });
+    assert.equal(result.probe, undefined);
+    assert.equal(result.items.length, 1);
+    assert.match(captured, /\$select=/, 'non-probe path must include $select');
+    assert.match(captured, /\$top=50/, 'non-probe path default top is 50');
+  } finally { server.close(); }
+});

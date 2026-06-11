@@ -37,6 +37,10 @@
 //       [--solutionUniqueName <name>]   // preferred way to scope per-solution
 //       [--solutionId <guid>]           // alternative if you already have the id
 //       [--top <n>]                     // default 50 items returned; count is always exact
+//       [--probe]                       // fast count-only mode: returns { count } without
+//                                       // materialising items[]. Used by the cache layer
+//                                       // in validate-pending-changes Phase 2 to compute
+//                                       // a cache key without paying for full row fetch.
 
 'use strict';
 
@@ -44,13 +48,14 @@ const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-h
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null, top: 50 };
+  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null, top: 50, probe: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--solutionUniqueName' && args[i + 1]) out.solutionUniqueName = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
     else if (args[i] === '--top' && args[i + 1]) out.top = parseInt(args[++i], 10);
+    else if (args[i] === '--probe') out.probe = true;
   }
   return out;
 }
@@ -88,7 +93,7 @@ async function resolveSolutionId({ base, tok, solutionUniqueName }) {
  * @param {object} options
  * @returns {Promise<object>}
  */
-async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionId, top = 50 } = {}) {
+async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionId, top = 50, probe = false } = {}) {
   const url = envUrl || getEnvironmentUrl();
   if (!url) return { error: 'Could not determine environment URL.' };
   const tok = token || getAuthToken(url);
@@ -107,11 +112,20 @@ async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionI
   if (sid) filterParts.push(`partitionid eq ${sid}`);
   const filterExpr = filterParts.join(' and ');
 
-  const apiUrl =
-    `${base}/api/data/v9.2/sourcecontrolcomponents` +
-    `?$filter=${encodeURIComponent(filterExpr)}` +
-    `&$select=sourcecontrolcomponentid,componentid,componentdisplayname,name,componenttypename,componenttype,componentpath,solutioncomponentstate,action,partitionid,modifiedon` +
-    `&$count=true&$top=${top}`;
+  // Probe mode: count-only query. We use $top=1 (Dataverse rejects $top=0)
+  // and the smallest viable $select so the server returns @odata.count with a
+  // near-empty payload. ~50-100ms round-trip vs ~300-700ms for the full row
+  // fetch on tenants with a few hundred pending Changes — used by the cache
+  // layer to compute a key cheaply.
+  const apiUrl = probe
+    ? `${base}/api/data/v9.2/sourcecontrolcomponents` +
+      `?$filter=${encodeURIComponent(filterExpr)}` +
+      `&$select=sourcecontrolcomponentid` +
+      `&$count=true&$top=1`
+    : `${base}/api/data/v9.2/sourcecontrolcomponents` +
+      `?$filter=${encodeURIComponent(filterExpr)}` +
+      `&$select=sourcecontrolcomponentid,componentid,componentdisplayname,name,componenttypename,componenttype,componentpath,solutioncomponentstate,action,partitionid,modifiedon` +
+      `&$count=true&$top=${top}`;
 
   const res = await makeRequest({
     url: apiUrl,
@@ -149,6 +163,15 @@ async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionI
   const totalCount = typeof parsed['@odata.count'] === 'number'
     ? parsed['@odata.count']
     : (parsed.value || []).length;
+
+  if (probe) {
+    // Probe mode returns count only — caller (cache layer) needs just the key.
+    return {
+      count: totalCount,
+      scope: solutionUniqueName ? { solutionUniqueName, solutionId: sid } : (sid ? { solutionId: sid } : { all: true }),
+      probe: true,
+    };
+  }
 
   const items = (parsed.value || []).map((r) => ({
     componentId:    r.componentid || null,

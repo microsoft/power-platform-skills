@@ -53,6 +53,23 @@ const FILE_NAMES = Object.freeze({
   preCommitReportHtml:       'pre-commit-report.html',
   conflictsHtml:             'conflicts.html',
   diagnosisHtml:             'diagnosis.html',
+
+  // Transient internal state for validate-pending-changes (not user-facing).
+  // - Snapshot is the materialised list-pending-changes output that the 5
+  //   pre-flight validators consume via --pending-file. Overwritten each run.
+  // - Cache is a TTL-bounded memo of the same payload keyed by
+  //   (boundSyncedCommitId, pendingChangesCount, solutionUniqueName), used to
+  //   skip the full Dataverse list call when a user re-runs the skill after
+  //   fixing a blocker. See scripts/lib/pending-changes-cache.js.
+  pendingChangesSnapshot:    'pending-changes-snapshot.json',
+  pendingChangesCache:       'pending-changes-cache.json',
+
+  // Optional CI-friendly emissions from run-prevalidators.js. Written only
+  // when the orchestrator runs with --format junit / --format sarif (the
+  // default --format json still goes to lastValidation). Both formats
+  // describe the same findings; pipelines pick whichever they ingest.
+  lastValidationJunit:       'last-validation.junit.xml',
+  lastValidationSarif:       'last-validation.sarif',
 });
 
 /**

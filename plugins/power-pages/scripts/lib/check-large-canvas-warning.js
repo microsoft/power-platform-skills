@@ -6,9 +6,15 @@
 // Canvas app at 12 MB today is often at 18 MB next month and BLOCKS commit.
 //
 // This is INFORMATIONAL: it does NOT block commit. The validate-file-sizes
-// validator does the actual blocking at 17 MB. This validator surfaces a
-// proactive nudge ("your Canvas app is at 80% of the cap — consider splitting")
-// BEFORE the user hits the wall.
+// validator does the actual blocking at 17 MB encoded. This validator
+// surfaces a proactive nudge ("your Canvas app is at 60% of the cap —
+// consider splitting") BEFORE the user hits the wall.
+//
+// V-12 change: thresholds switched from encoded-fraction (0.70 / 0.90 of
+// encoded CAP_BYTES) to **raw-byte** thresholds (8 MB warn / 11 MB
+// critical). Empirically a 9 MB Canvas .msapp commonly grows to 18 MB
+// within a month, so an encoded-fraction model warned too late. Raw-byte
+// thresholds also match what users see in Explorer / their PR diff stats.
 //
 // API reference: references/inner-loop-error-catalog.md IL-003 (Canvas grew
 // past cap) and references/git-integration-api-patterns.md §9.
@@ -27,11 +33,12 @@
 //     ok: bool,                  // always true (warnings only)
 //   }
 //
-// Severity bands:
-//   warn       — encoded between 70% and 90% of cap
-//   critical   — encoded between 90% and 100% of cap (next commit may fail)
+// Severity bands (raw bytes):
+//   warn       — 8 MB ≤ rawBytes < 11 MB
+//   critical   — 11 MB ≤ rawBytes < RAW_CAP_BYTES (~12.75 MB)
 //
-// Files at >100% of cap are NOT included here — those are surfaced by
+// Files whose encoded size already exceeds CAP_BYTES (i.e. rawBytes ≥
+// RAW_CAP_BYTES) are NOT included here — those are surfaced by
 // validate-file-sizes.js as blocking errors.
 //
 // Usage:
@@ -44,8 +51,21 @@
 const fs = require('node:fs');
 const { base64Length, CAP_BYTES } = require('./validate-file-sizes');
 
-const WARN_THRESHOLD = 0.70;
-const CRITICAL_THRESHOLD = 0.90;
+// V-12: raw-byte thresholds. ~60% / ~85% of RAW_CAP_BYTES.
+const WARN_BYTES     = 8  * 1024 * 1024; // 8 MB raw
+const CRITICAL_BYTES = 11 * 1024 * 1024; // 11 MB raw
+
+// Effective raw-byte cap = encoded-cap / base64 expansion factor.
+// base64Length(n) ≈ ceil(n/3)*4, so raw-cap ≈ CAP_BYTES * 3 / 4. Approx
+// 12.75 MB for CAP_BYTES = 17 MB. Anything ≥ this is blocked by
+// validate-file-sizes (because its encoded size exceeds CAP_BYTES).
+const RAW_CAP_BYTES = Math.floor(CAP_BYTES * 3 / 4);
+
+// Kept as exports for back-compat with older callers / tests. Derived from
+// the new raw thresholds so they stay in sync if WARN_BYTES / CRITICAL_BYTES
+// move.
+const WARN_THRESHOLD     = WARN_BYTES     / RAW_CAP_BYTES;
+const CRITICAL_THRESHOLD = CRITICAL_BYTES / RAW_CAP_BYTES;
 
 // componentType strings the platform uses for Canvas apps. Multiple variants
 // because PowerApps has shipped under different umbrella names over the years.
@@ -85,14 +105,16 @@ function parseArgs(argv) {
 /**
  * @param {Array<object>} items
  * @param {object} [options]
- * @param {number} [options.capBytes]
- * @param {number} [options.warnThreshold]
- * @param {number} [options.criticalThreshold]
+ * @param {number} [options.capBytes]                 // encoded cap (legacy)
+ * @param {number} [options.warnBytes]                // raw warn threshold (V-12)
+ * @param {number} [options.criticalBytes]            // raw critical threshold (V-12)
+ * @param {number} [options.rawCapBytes]              // raw cap (anything ≥ this is excluded; validate-file-sizes blocks)
  */
 function checkLargeCanvasWarning(items, {
-  capBytes = CAP_BYTES,
-  warnThreshold = WARN_THRESHOLD,
-  criticalThreshold = CRITICAL_THRESHOLD,
+  capBytes      = CAP_BYTES,
+  warnBytes     = WARN_BYTES,
+  criticalBytes = CRITICAL_BYTES,
+  rawCapBytes   = RAW_CAP_BYTES,
 } = {}) {
   if (!Array.isArray(items)) {
     throw new Error('checkLargeCanvasWarning: items must be an array');
@@ -106,10 +128,10 @@ function checkLargeCanvasWarning(items, {
     const raw = typeof it.estimatedBytes === 'number' ? it.estimatedBytes : null;
     if (raw === null) continue;
     const encoded = base64Length(raw);
-    const pct = encoded / capBytes;
-    if (pct < warnThreshold) continue;
-    if (pct >= 1) continue; // these are blocking — let validate-file-sizes own them
+    if (raw < warnBytes) continue;                     // below warn band
+    if (raw >= rawCapBytes) continue;                  // encoded over cap → validate-file-sizes owns it
 
+    const pct = raw / rawCapBytes;
     warnings.push({
       componentId: it.componentId ?? null,
       componentName: it.componentName ?? null,
@@ -118,7 +140,7 @@ function checkLargeCanvasWarning(items, {
       rawBytes: raw,
       encodedBytes: encoded,
       percentOfCap: Number((pct * 100).toFixed(2)),
-      severity: pct >= criticalThreshold ? 'critical' : 'warn',
+      severity: raw >= criticalBytes ? 'critical' : 'warn',
     });
   }
 
@@ -166,4 +188,5 @@ module.exports = {
   checkLargeCanvasWarning, isCanvasApp,
   CANVAS_APP_TYPES, CANVAS_FILE_REGEX,
   WARN_THRESHOLD, CRITICAL_THRESHOLD,
+  WARN_BYTES, CRITICAL_BYTES, RAW_CAP_BYTES,
 };

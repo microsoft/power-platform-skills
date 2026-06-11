@@ -109,3 +109,78 @@ test('throws when blockedattachments line not found in output', async () => {
     /Could not parse blockedattachments/,
   );
 });
+
+
+// ===== --check-only envelope tests (V-11) =====
+
+const { toCheckOnlyEnvelope } = require('../lib/fix-blocked-attachments');
+
+test('toCheckOnlyEnvelope: ok=true when no extensions blocked', () => {
+  const env = toCheckOnlyEnvelope({
+    envUrl: 'https://x',
+    wasBlocked: [],
+    unchanged: ['js', 'css'],
+  });
+  assert.equal(env.ok, true);
+  assert.equal(env.totalChecked, 2);
+  assert.deepEqual(env.blocking, []);
+  assert.deepEqual(env.warnings, []);
+  assert.deepEqual(env.info, []);
+  assert.deepEqual(env.scope, { envUrl: 'https://x' });
+});
+
+test('toCheckOnlyEnvelope: ok=false + one BLOCKER per wasBlocked extension', () => {
+  const env = toCheckOnlyEnvelope({
+    envUrl: 'https://x',
+    wasBlocked: ['js'],
+    unchanged: [],
+  });
+  assert.equal(env.ok, false);
+  assert.equal(env.blocking.length, 1);
+  assert.equal(env.blocking[0].severity, 'blocker');
+  assert.equal(env.blocking[0].key, 'blocked-attachment-extension');
+  assert.equal(env.blocking[0].ref, 'IL-012');
+  assert.equal(env.blocking[0].details.extension, 'js');
+  assert.equal(env.blocking[0].details.envUrl, 'https://x');
+  assert.match(env.blocking[0].remediation, /without --check-only/);
+});
+
+test('toCheckOnlyEnvelope: emits one blocker per blocked extension (js + css)', () => {
+  const env = toCheckOnlyEnvelope({
+    envUrl: 'https://x',
+    wasBlocked: ['js', 'css'],
+    unchanged: [],
+  });
+  assert.equal(env.ok, false);
+  assert.equal(env.blocking.length, 2);
+  assert.equal(env.blocking[0].details.extension, 'js');
+  assert.equal(env.blocking[1].details.extension, 'css');
+});
+
+test('toCheckOnlyEnvelope: tolerates missing wasBlocked/unchanged keys', () => {
+  const env = toCheckOnlyEnvelope({ envUrl: 'https://x' });
+  assert.equal(env.ok, true);
+  assert.equal(env.totalChecked, 0);
+});
+
+test('fixBlockedAttachments + --check-only flow: result has wasBlocked but env DOES NOT change', async () => {
+  let updateCalled = false;
+  const result = await fixBlockedAttachments({
+    extensions: ['js'],
+    quiet: true,
+    dryRun: true, // mimic what parseArgs sets when --check-only is given
+    execImpl: (cmd) => {
+      if (cmd.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
+      if (cmd.includes('update-settings')) { updateCalled = true; return ''; }
+      return '';
+    },
+  });
+  assert.deepEqual(result.wasBlocked, ['js']);
+  assert.deepEqual(result.removed, []);   // dry-run: nothing removed
+  assert.equal(result.dryRun, true);
+  assert.equal(updateCalled, false, 'pac env update-settings must NOT be invoked in check-only/dry-run');
+  // Envelope translates this into a blocker.
+  const env = toCheckOnlyEnvelope(result);
+  assert.equal(env.ok, false);
+  assert.equal(env.blocking.length, 1);
+});
