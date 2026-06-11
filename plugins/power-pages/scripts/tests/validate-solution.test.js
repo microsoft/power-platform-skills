@@ -40,9 +40,15 @@ function writeManifest(dir, manifest) {
 }
 
 function run(cwd) {
+  const cliIsolatedEnv = {
+    ...process.env,
+    PATH: path.dirname(process.execPath),
+    Path: path.dirname(process.execPath),
+  };
   const result = spawnSync(process.execPath, [VALIDATOR], {
     input: JSON.stringify({ cwd }),
     encoding: 'utf8',
+    env: cliIsolatedEnv,
     timeout: 10000,
   });
   return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };

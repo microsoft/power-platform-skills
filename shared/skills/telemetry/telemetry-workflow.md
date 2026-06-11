@@ -10,7 +10,7 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 2. Run the synced CLI (it auto-detects the plugin from the plugin manifest):
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/telemetry/lib/telemetry-config.js" --action <action>
+   node "${PLUGIN_ROOT}/scripts/lib/telemetry/lib/telemetry-config.js" --action <action>
    ```
 
 3. Show the command's stdout to the user verbatim. Do not add or remove lines.

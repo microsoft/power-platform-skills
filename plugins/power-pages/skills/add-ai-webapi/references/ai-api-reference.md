@@ -526,7 +526,7 @@ Apply every rule below — the orchestrator skill (`/add-ai-webapi`) and the
 4. **Use the tabular-insight prompt**, not a narrative prompt. The 3-insights /
    <=200-words / no-suggested-actions pattern produces much stronger output than "write a
    4-sentence narrative". Use the compact template in
-   `${CLAUDE_PLUGIN_ROOT}/agents/ai-webapi-settings-architect.md` (~570 chars) so the
+   `${PLUGIN_ROOT}/agents/ai-webapi-settings-architect.md` (~570 chars) so the
    deployed prompt fits the size budget.
 5. **Include at most one short domain-neutral few-shot example** (~250 chars) —
    sales-by-region, software purchases, fleet maintenance. Avoid domain-matched examples —

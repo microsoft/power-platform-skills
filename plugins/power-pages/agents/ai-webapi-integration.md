@@ -45,9 +45,9 @@ identifier), not a third endpoint.
 Read these first — they have the authoritative API shapes, headers, request bodies, and error
 codes:
 
-- `${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` — canonical reference
+- `${PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` — canonical reference
   for both APIs (Search Summary, Data Summarization) with the CSRF rules
-- `${CLAUDE_PLUGIN_ROOT}/agents/webapi-integration.md` — general Web API integration patterns
+- `${PLUGIN_ROOT}/agents/webapi-integration.md` — general Web API integration patterns
   (framework detection, file placement, hook conventions)
 
 Upstream Microsoft Learn sources (already captured in the reference above — only re-fetch via
@@ -266,7 +266,7 @@ The service must contain:
 
 ### 3.1 CSRF helper
 
-The reference (`${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` —
+The reference (`${PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md` —
 "CSRF token handling" section) is the canonical source for this helper. The snippet below is a
 copy for convenience; if the regex or response shape ever needs changing, change the reference
 first and re-paste here:
@@ -740,7 +740,7 @@ below.
   **Framework equivalents.** The same shape applies — no `v-html` / `innerHTML`, same token set.
   For a Vue/Angular/Astro site, copy the worked **SummaryMarkdown** snippet for that framework
   verbatim from
-  `${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/framework-equivalents.md` §1 ("Safe-markdown
+  `${PLUGIN_ROOT}/skills/add-ai-webapi/references/framework-equivalents.md` §1 ("Safe-markdown
   renderer") rather than re-deriving it — the React version above is the worked example; the
   reference carries the other three. (Quick shape reminder: Vue splits on `/\n{2,}/` and `v-for`s
   paragraphs → segments with no `v-html`; Angular is a pure `@Input() text` component using
@@ -762,12 +762,12 @@ below.
   opens an XSS surface on content the server doesn't sanitize for that purpose.
 
   Use `parseSummaryWithCitations` from the reference (see
-  `${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md#1-search-summary-api`)
+  `${PLUGIN_ROOT}/skills/add-ai-webapi/references/ai-api-reference.md#1-search-summary-api`)
   to split the summary into alternating text and citation parts, then emit framework-native
   clickable elements (`<a>` in React/Astro, `<a>` + `v-for` in Vue, `[href]` + `*ngFor` in
   Angular). For a Vue/Angular/Astro site, copy the worked citation-rendering snippet for that
   framework verbatim from
-  `${CLAUDE_PLUGIN_ROOT}/skills/add-ai-webapi/references/framework-equivalents.md` §2 ("Citation
+  `${PLUGIN_ROOT}/skills/add-ai-webapi/references/framework-equivalents.md` §2 ("Citation
   rendering") instead of hand-translating the React example below.
 
   ```tsx
