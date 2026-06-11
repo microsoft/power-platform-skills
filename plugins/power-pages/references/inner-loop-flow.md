@@ -14,7 +14,7 @@ Every Power Pages dev env that has touched Connect-to-Git is in **exactly one** 
 |---|---|---|---|
 | **Disconnected** | `null` | n/a | `setup-git-integration` (or `connect-solution-to-git`) |
 | **Connected & Clean** | binding object | `0 / 0 / 0`. **NB:** A freshly-bound env enters this state automatically — Connect-to-Git creates the initial commit via `SourceControlInitialSyncPlugin`, so you do NOT see Dirty after a fresh bind. See `inner-loop-empirical-findings.md` §3. | Idle; user may edit |
-| **Dirty** | binding object | `>0 / 0 / 0` | `commit-to-git` (+ optional pre-flight `validate-pending-changes`) |
+| **Dirty** | binding object | `>0 / 0 / 0` | `commit-to-git` (use `--dry-run` for a non-mutating pre-flight) |
 | **Stale** | binding object | `0 / >0 / 0` | `sync-from-git` |
 | **Mixed** | binding object | `>0 / >0 / 0` | `commit-to-git` first OR `sync-from-git` first — user's choice (gate) |
 | **Conflicted** | binding object | `* / * / >0` | `resolve-conflicts` (then continue) |
@@ -110,7 +110,7 @@ Given a detected state, `plan-inner-loop` recommends:
 |---|---|---|
 | Disconnected | `setup-git-integration` (env binding) | `connect-solution-to-git` (per-solution) |
 | Connected & Clean | "You're idle. Make a change in the env to start a commit, or close." | n/a |
-| Dirty | `validate-pending-changes` then `commit-to-git` | Skip pre-flight if user knows pending changes are safe |
+| Dirty | `commit-to-git --dry-run` then `commit-to-git` | Skip pre-flight if user knows pending changes are safe |
 | Stale | `sync-from-git` | n/a |
 | Mixed | **Gate the user**: "Commit local changes first" OR "Pull incoming first" | If conflicts surface mid-pull, `resolve-conflicts` runs anyway |
 | Conflicted | `resolve-conflicts` | n/a |

@@ -277,7 +277,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | Sync complete — N update(s) applied from `{branch}`. What next? | Done | Run /power-pages:validate-pending-changes (check my env before next commit), Run /power-pages:commit-to-git (I have pending changes too), Exit |
+   | Sync complete — N update(s) applied from `{branch}`. What next? | Done | Run /power-pages:commit-to-git --dry-run (check my env before next commit), Run /power-pages:commit-to-git (I have pending changes too), Exit |
 
 ### Record Skill Usage
 
@@ -307,7 +307,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 | Final consent + execute `PullChangesFromGit` | Pulling from ADO | Surface consent gate(s); call `pull-changes-from-git.js` with optional hard-delete |
 | Poll until updates clear | Polling updates | Poll `list-incoming-updates.js` every 5s until count = 0 (≤ 3 min) |
 | Verify + write `last-sync.json` marker | Writing sync marker | Persist `docs/inner-loop/last-sync.json` with status + counts |
-| Final gate | Finalising sync | Offer follow-up actions (`validate-pending-changes` / `commit-to-git` / exit) |
+| Final gate | Finalising sync | Offer follow-up actions (`commit-to-git --dry-run` / `commit-to-git` / exit) |
 
 ---
 

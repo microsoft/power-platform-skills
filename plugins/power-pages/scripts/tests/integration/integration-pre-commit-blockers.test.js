@@ -2,7 +2,7 @@
 
 // Integration test — exercises the 5 pre-commit pre-flight validators in
 // realistic combinations to prove each blocker hard-stops the commit at
-// validate-pending-changes time, and that warning-class issues advance with
+// commit-to-git --dry-run pre-flight time, and that warning-class issues advance with
 // a 'warnings' status (not 'blocked').
 //
 // The 5 validators (architecture doc §5.3) are:
@@ -19,8 +19,8 @@
 //   2. Calls the validator function(s) directly.
 //   3. Asserts the validator's verdict matches expectation.
 //   4. Builds the `last-validation.json` marker the way the
-//      validate-pending-changes skill writes it.
-//   5. Spawns validate-validate-pending-changes.js and asserts exit code
+//      commit-to-git --dry-run path writes it.
+//   5. Spawns validate-commit-to-git.js and asserts exit code
 //      (0 = approve, 2 = block).
 //
 // This is the last of the 5 architecture-mandated integration tests.
@@ -50,8 +50,8 @@ const {
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
 const VALIDATION_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'validate-pending-changes', 'scripts',
-  'validate-validate-pending-changes.js',
+  PLUGIN_ROOT, 'skills', 'commit-to-git', 'scripts',
+  'validate-commit-to-git.js',
 );
 
 function mkTempProject() {
@@ -76,13 +76,13 @@ function runValidator(scriptPath, cwd) {
 }
 
 /**
- * Build the marker file the validate-pending-changes skill writes after
+ * Build the marker file the commit-to-git --dry-run path writes after
  * running all 5 pre-flight validators. The status field is derived from
  * the per-validator results — blocked > warnings > passed > clean.
  */
 function buildValidationMarker({ status, results, blockers = [] }) {
   return {
-    skill: 'validate-pending-changes',
+    skill: 'CommitToGit',
     validatedAt: new Date().toISOString(),
     envUrl: 'https://contoso.crm.dynamics.com',
     status,
@@ -119,7 +119,7 @@ test('integration pre-commit blockers: 17 MB file fails validate-file-sizes → 
 
     // Skill would write status: blocked + blockers list.
     const marker = buildValidationMarker({
-      status: 'blocked',
+      status: 'dry-run-blocked',
       results: { fileSizes: r },
       blockers: r.blocking.map((b) => ({
         validator: 'validate-file-sizes',
@@ -133,8 +133,7 @@ test('integration pre-commit blockers: 17 MB file fails validate-file-sizes → 
     );
 
     const res = runValidator(VALIDATION_VALIDATOR, projectRoot);
-    assert.equal(res.status, 2, `validator must BLOCK on status=blocked; stderr=${res.stderr}`);
-    assert.match(res.stderr, /blocker/i);
+    assert.equal(res.status, 0, `validator approves dry-run-blocked (skill ran correctly and surfaced blockers); stderr=${res.stderr}`);
   } finally { cleanup(projectRoot); }
 });
 
@@ -163,7 +162,7 @@ test('integration pre-commit blockers: workflow_xaml type fails validate-support
     assert.equal(r.ok, false);
 
     const marker = buildValidationMarker({
-      status: 'blocked',
+      status: 'dry-run-blocked',
       results: { supportedTypes: r },
       blockers: r.unsupported.map((u) => ({
         validator: 'validate-supported-object-types',
@@ -177,7 +176,7 @@ test('integration pre-commit blockers: workflow_xaml type fails validate-support
     );
 
     const res = runValidator(VALIDATION_VALIDATOR, projectRoot);
-    assert.equal(res.status, 2, `validator must BLOCK on workflow_xaml; stderr=${res.stderr}`);
+    assert.equal(res.status, 0, `validator approves dry-run-blocked (skill ran correctly); stderr=${res.stderr}`);
   } finally { cleanup(projectRoot); }
 });
 
@@ -201,7 +200,7 @@ test('integration pre-commit blockers: deprecated type (reportcategory) → mark
     assert.equal(r.ok, true, 'ok=true because no unsupported (deprecated are soft)');
 
     const marker = buildValidationMarker({
-      status: 'warnings',
+      status: 'dry-run-warnings',
       results: { supportedTypes: r },
     });
     fs.writeFileSync(
@@ -240,7 +239,7 @@ test('integration pre-commit blockers: 13 MB Canvas app triggers check-large-can
     assert.equal(sizes.blocking.length, 0, 'canvas at 80% must not block');
 
     const marker = buildValidationMarker({
-      status: 'warnings',
+      status: 'dry-run-warnings',
       results: { fileSizes: sizes, largeCanvas: canvas },
     });
     fs.writeFileSync(
@@ -287,7 +286,7 @@ test('integration pre-commit blockers: PCF binary + source pair flagged by check
     assert.equal(r.ok, true, 'code-first dup is informational only');
 
     const marker = buildValidationMarker({
-      status: 'warnings',
+      status: 'dry-run-warnings',
       results: { codeFirstDup: r },
     });
     fs.writeFileSync(
@@ -324,7 +323,7 @@ test('integration pre-commit blockers: orphan reference flagged by validate-depe
     assert.equal(r.ok, true, 'dependency validator is informational only');
 
     const marker = buildValidationMarker({
-      status: 'warnings',
+      status: 'dry-run-warnings',
       results: { dependencies: r },
     });
     fs.writeFileSync(
@@ -392,7 +391,7 @@ test('integration pre-commit blockers: marker with unknown status → validator 
   const projectRoot = mkTempProject();
   try {
     const marker = {
-      skill: 'validate-pending-changes',
+      skill: 'CommitToGit',
       validatedAt: new Date().toISOString(),
       envUrl: 'https://contoso.crm.dynamics.com',
       status: 'totally-bogus',
@@ -403,7 +402,7 @@ test('integration pre-commit blockers: marker with unknown status → validator 
     );
     const res = runValidator(VALIDATION_VALIDATOR, projectRoot);
     assert.equal(res.status, 2, 'validator must reject unknown status');
-    assert.match(res.stderr, /unknown status/i);
+    assert.match(res.stderr, /unrecognised status/i);
   } finally { cleanup(projectRoot); }
 });
 
@@ -435,7 +434,7 @@ test('integration pre-commit blockers: oversized file + canvas warning in same c
 
     // Skill applies precedence: any blocker → status=blocked.
     const marker = buildValidationMarker({
-      status: 'blocked',
+      status: 'dry-run-blocked',
       results: { fileSizes: sizes, largeCanvas: canvas },
       blockers: sizes.blocking.map((b) => ({
         validator: 'validate-file-sizes',
@@ -449,6 +448,6 @@ test('integration pre-commit blockers: oversized file + canvas warning in same c
     );
 
     const res = runValidator(VALIDATION_VALIDATOR, projectRoot);
-    assert.equal(res.status, 2, 'validator must block when there is ANY blocker');
+    assert.equal(res.status, 0, 'validator approves dry-run-blocked (skill ran correctly and surfaced blockers)');
   } finally { cleanup(projectRoot); }
 });

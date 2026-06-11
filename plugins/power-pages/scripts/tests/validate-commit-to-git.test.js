@@ -118,4 +118,99 @@ describe('validate-commit-to-git', () => {
     const r = run(dir);
     assert.equal(r.status, 0, r.stderr);
   });
+
+  // --- Dry-run mode (X-4 / D2): last-validation.json present, last-commit.json absent.
+
+  function makeDryRunProject(tmpDir, markerData) {
+    const innerLoopDir = path.join(tmpDir, 'docs', 'inner-loop');
+    fs.mkdirSync(innerLoopDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'powerpages.config.json'),
+      JSON.stringify({ siteName: 'test', compiledPath: 'dist' })
+    );
+    if (markerData !== undefined) {
+      fs.writeFileSync(
+        path.join(innerLoopDir, 'last-validation.json'),
+        typeof markerData === 'string' ? markerData : JSON.stringify(markerData)
+      );
+    }
+  }
+
+  it('approves dry-run with status=dry-run-passed', () => {
+    const dir = path.join(tmp, 'dry-passed');
+    makeDryRunProject(dir, { status: 'dry-run-passed', blockers: [], warnings: [] });
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('approves dry-run with status=dry-run-warnings', () => {
+    const dir = path.join(tmp, 'dry-warnings');
+    makeDryRunProject(dir, { status: 'dry-run-warnings', warnings: [{ id: 'V-12' }] });
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('approves dry-run with status=dry-run-blocked (skill correctly surfaced findings; not a hook failure)', () => {
+    const dir = path.join(tmp, 'dry-blocked');
+    makeDryRunProject(dir, { status: 'dry-run-blocked', blockers: [{ id: 'V-4' }] });
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('approves dry-run with legacy status=passed (orchestrator-direct invocation)', () => {
+    const dir = path.join(tmp, 'dry-passed-legacy');
+    makeDryRunProject(dir, { status: 'passed' });
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('approves dry-run with status=clean (count-zero short-circuit)', () => {
+    const dir = path.join(tmp, 'dry-clean');
+    makeDryRunProject(dir, { status: 'clean' });
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('blocks dry-run with unrecognised status', () => {
+    const dir = path.join(tmp, 'dry-bogus');
+    makeDryRunProject(dir, { status: 'mystery-status' });
+    const r = run(dir);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, /unrecognised status/);
+  });
+
+  it('blocks dry-run missing the status field', () => {
+    const dir = path.join(tmp, 'dry-no-status');
+    makeDryRunProject(dir, { blockers: [] });
+    const r = run(dir);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, /missing required field: status/);
+  });
+
+  it('blocks dry-run when marker is not valid JSON', () => {
+    const dir = path.join(tmp, 'dry-bad-json');
+    makeDryRunProject(dir, 'NOT JSON');
+    const r = run(dir);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, /last-validation\.json is not valid JSON/);
+  });
+
+  it('prefers last-commit.json when both markers exist', () => {
+    const dir = path.join(tmp, 'both-markers');
+    makeProject(dir, GOOD_MARKER);
+    fs.writeFileSync(
+      path.join(dir, 'docs', 'inner-loop', 'last-validation.json'),
+      JSON.stringify({ status: 'totally-bogus-should-not-be-checked' })
+    );
+    const r = run(dir);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  it('blocks real-commit with unrecognised status', () => {
+    const dir = path.join(tmp, 'real-bogus');
+    makeProject(dir, { ...GOOD_MARKER, status: 'mystery-status' });
+    const r = run(dir);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, /unrecognised status/);
+  });
 });

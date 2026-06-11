@@ -47,7 +47,7 @@ For teams that mix code-site content with maker-portal-edited content (Web Templ
 ```
 
 - Two distinct sources of changes (UI + code), both flowing through Git integration.
-- Devs should `validate-pending-changes` before every commit to see the mix.
+- Devs should `commit-to-git --dry-run` before every commit to see the mix.
 - Recommended for: hybrid sites.
 
 ---
@@ -63,7 +63,7 @@ If a dev runs `pac pages upload-code-site` **while there are already pending Cha
 **Mitigation in our skills:**
 
 1. `commit-to-git` Phase 4 (plan rendering) **always lists each component by name** before asking for the commit message — so even commingled changes are visible to the user.
-2. `validate-pending-changes` warns if it detects a mix of `mspp_webfile` (likely from PAC upload) AND other component types (maker-portal edits) AND the list is large (> 20 items): *"Looks like a code-site upload commingled with maker-portal edits. Consider committing one batch at a time for cleaner history. Continue, or split?"*
+2. `commit-to-git --dry-run` warns if it detects a mix of `mspp_webfile` (likely from PAC upload) AND other component types (maker-portal edits) AND the list is large (> 20 items): *"Looks like a code-site upload commingled with maker-portal edits. Consider committing one batch at a time for cleaner history. Continue, or split?"*
 3. `plan-inner-loop` surfaces this as Pattern IL-012 in `inner-loop-error-catalog.md` if a deployment-time failure traces back to it.
 
 ---
@@ -78,7 +78,7 @@ When using both PAC and Git integration in the same project:
 | 2. `npm run build` | Build outside the agent so failures surface early |
 | 3. `/power-pages:deploy-site` (runs `pac pages upload-code-site`) | Uploads the build to Dataverse |
 | 4. `plan-inner-loop` → expect `Dirty` now | Confirm the upload landed |
-| 5. `/power-pages:validate-pending-changes` | Pre-flight check (file sizes, supported types) |
+| 5. `/power-pages:commit-to-git --dry-run` | Pre-flight check (file sizes, supported types) |
 | 6. `/power-pages:commit-to-git` with a meaningful message | Captures *what* was deployed in Git audit trail |
 | 7. (Optional) `/power-pages:open-pr` | Code review of the upload before it merges to `main` |
 

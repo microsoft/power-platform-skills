@@ -70,6 +70,25 @@ const FILE_NAMES = Object.freeze({
   // describe the same findings; pipelines pick whichever they ingest.
   lastValidationJunit:       'last-validation.junit.xml',
   lastValidationSarif:       'last-validation.sarif',
+
+  // Append-only JSONL journal written by every inner-loop skill run via
+  // scripts/lib/append-skill-metric.js. One JSON-encoded line per run with
+  // {ts, skill, durationMs, commitId?, pollAttempts?, componentsCommitted?,
+  // payloadBytes?, branch?, status, ...}. Used for trend analysis ("commits
+  // got 3× slower this week") and ALM health dashboards. Append-only so
+  // concurrent writers never clobber each other.
+  skillMetricsJsonl:         'skill-metrics.jsonl',
+
+  // Ticket file written by commit-to-git --background when the helper POSTs
+  // CommitToGit and returns immediately. Carries the spawned poller's PID
+  // and the commitId stub so a follow-up `commit-to-git --background-status`
+  // can find the polling process and read last-commit.json once it lands.
+  pendingCommitTicket:       'pending-commit-ticket.json',
+
+  // Last-known git tag (C-13) — written by commit-to-git Phase 9 after a
+  // user-accepted tag-offer choice. Captures { name, tagSha, commitSha,
+  // url, taggedAt }.
+  lastTag:                   'last-tag.json',
 });
 
 /**

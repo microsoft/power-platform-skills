@@ -371,17 +371,16 @@ Binds the whole Dataverse environment to an ADO repo + branch + folder via the `
 
 Solution-scoped variant of `setup-git-integration` (`ConnectionType=0`). Warns about the shared-object restriction (a component cannot be in two Git-bound solutions concurrently).
 
-#### `/validate-pending-changes`
-
-> "Will my next commit work?"
-
-Pre-commit dry run — runs five validators (17 MB file-size cap, unsupported object types, large Canvas Apps, PCF binary duplication, dependency integrity), renders an HTML findings report, and surfaces blockers + warnings.
-
 #### `/commit-to-git`
 
-> "Push my changes to ADO"
+> "Push my changes to ADO" — or, with `--dry-run`, "will my next commit work?"
 
-Calls `CommitToGit` against the bound branch with pre-flight validation, polls until the env's pending-changes count reaches zero, verifies the SHA in ADO, and offers to open a PR.
+Calls `CommitToGit` against the bound branch. Runs 14 pre-flight validators (17 MB file-size cap, unsupported object types, large Canvas Apps, PCF binary duplication, dependency integrity, orphan source-control rows, action=3 conflicts, shared components, default-solution binding, version-bump, IsCustomizable=false, blocked attachments, publisher-prefix consistency, total payload size), polls until the env's pending-changes count reaches zero, verifies the SHA in ADO, and offers to open a PR or tag the commit.
+
+**Flags:**
+- `--dry-run` — run pre-flight only; emit `pre-commit-report.html` + `last-validation.json`; do not touch Dataverse.
+- `--dry-run --json` — additionally stream the orchestrator's JSON envelope to stdout for CI consumption.
+- `--background` — fire-and-forget: POST returns immediately; a detached child polls and writes `last-commit.json` on completion.
 
 #### `/sync-from-git`
 

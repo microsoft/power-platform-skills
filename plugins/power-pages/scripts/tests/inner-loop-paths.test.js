@@ -35,13 +35,15 @@ test('FILE_NAMES exposes the inner-loop artifact keys and uses kebab-case file n
     'preCommitReportHtml', 'conflictsHtml', 'diagnosisHtml',
     'pendingChangesSnapshot', 'pendingChangesCache',
     'lastValidationJunit', 'lastValidationSarif',
+    'skillMetricsJsonl',
+    'pendingCommitTicket', 'lastTag',
   ];
   assert.deepEqual(Object.keys(FILE_NAMES).sort(), expected.slice().sort());
   for (const name of Object.values(FILE_NAMES)) {
     assert.ok(!name.startsWith('.'),
       `file name ${name} should not start with a dot — it lives in docs/inner-loop/`);
-    assert.ok(/^[a-z0-9.-]+\.(json|html|xml|sarif)$/.test(name),
-      `file name ${name} should be kebab-case .json/.html/.xml/.sarif`);
+    assert.ok(/^[a-z0-9.-]+\.(json|jsonl|html|xml|sarif)$/.test(name),
+      `file name ${name} should be kebab-case .json/.jsonl/.html/.xml/.sarif`);
   }
 });
 

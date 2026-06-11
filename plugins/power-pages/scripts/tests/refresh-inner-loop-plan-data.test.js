@@ -104,7 +104,7 @@ test('rejects unknown phase', async () => {
   } finally { cleanup(dir); }
 });
 
-test('PHASES set covers all 12 inner-loop skills plus finalize', () => {
+test('PHASES set covers all 11 inner-loop skills plus finalize (validate-pending-changes was folded into commit-to-git per the VPC merge)', () => {
   // Snapshot: locks the phase vocabulary so a new skill must explicitly extend
   // the handler map alongside the test.
   const expected = [
@@ -113,7 +113,6 @@ test('PHASES set covers all 12 inner-loop skills plus finalize', () => {
     'commit-to-git',
     'sync-from-git',
     'resolve-conflicts',
-    'validate-pending-changes',
     'branch-switch',
     'revert-workspace',
     'revert-branch',
@@ -258,20 +257,44 @@ test('resolve-conflicts: zeros pendingCounts.conflicts, re-classifies state', as
   } finally { cleanup(dir); }
 });
 
-test('validate-pending-changes: ingests last-validation.json but does NOT change counts/state', async () => {
+test('commit-to-git (dry-run mode, X-5 merge): ingests last-validation.json and does NOT zero pendingCounts when last-commit.json absent', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
     pendingCounts: { changes: 3, updates: 0, conflicts: 0 },
     state: 'Dirty',
   });
-  writeMarker(dir, 'last-validation.json', { issues: 0, validatedAt: 'x' });
+  writeMarker(dir, 'last-validation.json', { status: 'dry-run-passed', issues: 0, validatedAt: 'x' });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'validate-pending-changes' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
     const plan = readPlan(dir);
     assert.equal(plan.lastValidation.issues, 0);
-    assert.deepEqual(plan.pendingCounts, { changes: 3, updates: 0, conflicts: 0 }, 'validation is read-only');
+    assert.equal(plan.lastValidation.status, 'dry-run-passed');
+    assert.deepEqual(plan.pendingCounts, { changes: 3, updates: 0, conflicts: 0 },
+      'dry-run is read-only — pendingCounts.changes must NOT be zeroed when last-commit.json is absent');
     assert.equal(plan.state, 'Dirty');
+  } finally { cleanup(dir); }
+});
+
+test('commit-to-git (real-commit mode): both markers present — ingests lastCommit, zeros pendingCounts.changes, AND surfaces lastValidation', async () => {
+  const dir = tempProject({
+    PLAN_STATUS: 'In Execution',
+    binding: { bindingType: 'environment' },
+    pendingCounts: { changes: 5, updates: 0, conflicts: 0 },
+    state: 'Dirty',
+  });
+  writeMarker(dir, 'last-commit.json', {
+    skill: 'commit-to-git', committedAt: 'x', envUrl: 'y', commitMessage: 'm', status: 'succeeded',
+    commitId: 'sha', branch: 'main',
+  });
+  writeMarker(dir, 'last-validation.json', { status: 'dry-run-passed', issues: 0 });
+  try {
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    const plan = readPlan(dir);
+    assert.equal(plan.lastCommit.commitId, 'sha');
+    assert.equal(plan.lastValidation.status, 'dry-run-passed');
+    assert.deepEqual(plan.pendingCounts, { changes: 0, updates: 0, conflicts: 0 });
+    assert.equal(plan.state, 'Connected & Clean');
   } finally { cleanup(dir); }
 });
 
@@ -398,7 +421,7 @@ test('state-only mode: skips marker read, just re-classifies from current counts
   } finally { cleanup(dir); }
 });
 
-test('missing marker is a silent no-op for that phase (still bumps LAST_REFRESH_AT)', async () => {
+test('missing marker is a silent no-op for that phase (X-5 merge: handler no longer zeros changes without evidence of mutation)', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -409,9 +432,12 @@ test('missing marker is a silent no-op for that phase (still bumps LAST_REFRESH_
     const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
     assert.equal(r.ok, true);
     const plan = readPlan(dir);
-    // Even without a marker, commit handler's "zero changes" invariant still fires.
-    assert.equal(plan.pendingCounts.changes, 0);
-    assert.equal(plan.state, 'Connected & Clean');
+    // Post-X-5: without a last-commit.json marker, the handler has no evidence
+    // a real commit landed — it must NOT zero the count (that would mask a
+    // dry-run or a failed commit as a clean state).
+    assert.equal(plan.pendingCounts.changes, 5,
+      'no marker = no evidence of mutation; count must stay put');
+    assert.equal(plan.state, 'Dirty');
     assert.equal(plan.lastCommit, undefined, 'no marker = no lastCommit field added');
     assert.ok(plan.LAST_REFRESH_AT);
   } finally { cleanup(dir); }

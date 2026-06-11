@@ -66,8 +66,8 @@ const NEXT_STEP = {
     alts: ['/power-pages:branch-switch', '/power-pages:open-pr'],
   },
   Dirty: {
-    cmd: '/power-pages:validate-pending-changes',
-    desc: 'Run pre-flight validators on the pending Changes, then commit via /power-pages:commit-to-git.',
+    cmd: '/power-pages:commit-to-git --dry-run',
+    desc: 'Run pre-flight validators on the pending Changes (dry run), then commit via /power-pages:commit-to-git.',
     alts: ['/power-pages:commit-to-git', '/power-pages:revert-workspace'],
   },
   Stale: {

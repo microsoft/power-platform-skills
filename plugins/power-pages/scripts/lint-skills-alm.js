@@ -212,7 +212,6 @@ const INNER_LOOP_SKILLS = new Set([
   'plan-inner-loop',
   'setup-git-integration',
   'connect-solution-to-git',
-  'validate-pending-changes',
   'commit-to-git',
   'sync-from-git',
   'resolve-conflicts',

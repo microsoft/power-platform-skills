@@ -116,7 +116,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 **Fix procedure:**
 
-1. Run `validate-file-sizes.js` as a pre-flight in `validate-pending-changes` skill.
+1. Run `validate-file-sizes.js` as a pre-flight in the `commit-to-git --dry-run` mode.
 2. For each over-size file, surface: *"`{filename}` is {sizeMB} MB after base64 encoding (cap is 17 MB). Options: (a) move it to web files outside the solution; (b) split the component (Canvas app → smaller libraries; PCF bundle → split); (c) reduce media; (d) remove unused resources."*
 3. Block commit until resolved.
 
@@ -225,7 +225,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 **Fix procedure:** Cite `pac-pages-vs-git-integration.md` for the recommended workflow:
 
 1. Commit (or revert) pending Changes **before** running `pac pages upload-code-site`.
-2. Or accept that the next commit will bundle both. Use `validate-pending-changes` to see the full list and decide.
+2. Or accept that the next commit will bundle both. Use `commit-to-git --dry-run` to see the full list and decide.
 
 ---
 
@@ -262,7 +262,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
   - `GET {envUrl}/api/data/v9.2/powerpagecomponents?$top=1` returns 200 with a real record including the `powerpagecomponentid` field. Records are accessible.
   - `PreValidateGitComponents` on the same solution returns HTTP 200 with empty `ValidationMessages` — the platform's own pre-validator sees nothing wrong.
   - `PublishAllXml` returns 204 but the pull still fails after — it's not a stale metadata cache.
-- `CommitToGit`, `RefreshChangesFromGit`, `ValidateSourceControlConnection`, `branch-switch`, `validate-pending-changes`, and conflict-detection all work on the same solution. The failure is isolated to the pull mutation.
+- `CommitToGit`, `RefreshChangesFromGit`, `ValidateSourceControlConnection`, `branch-switch`, `commit-to-git --dry-run`, and conflict-detection all work on the same solution. The failure is isolated to the pull mutation.
 
 **Root cause:** A bug in the Dataverse SourceControl plugin's pull-direction handler. When the handler enumerates the solution's components and encounters one of type `10429` (`powerpagecomponent`), an internal metadata-resolver call returns a result that fails the "primary key column is present" assertion, even though the public metadata API contradicts that conclusion. This is platform-internal and not user-fixable at the OData layer. Likely root location is the plugin's compiled-metadata cache or a SQL view (different from the publicly exposed `EntityDefinitions` endpoint) that it reads first. **The previous IL-014 hypothesis — that the entity was misregistered with `IsCustomEntity=true` — is incorrect.** `IsCustomEntity=true` is the normal state for ALL Power Pages entities on tenants installed via the modern provisioning path (verified against `mspp_contentsnippet` which is undeniably Microsoft-managed).
 
@@ -471,10 +471,10 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 **Fix procedure:**
 
-1. **Enumerate every orphan** via `validate-no-orphan-source-control-rows.js` (run as part of `/power-pages:validate-pending-changes`). The output names every row's `sourcecontrolcomponentid` plus `componentpath` for context. This is faster than letting `CommitToGit` surface them one at a time.
+1. **Enumerate every orphan** via `validate-no-orphan-source-control-rows.js` (run as part of `/power-pages:commit-to-git --dry-run`). The output names every row's `sourcecontrolcomponentid` plus `componentpath` for context. This is faster than letting `CommitToGit` surface them one at a time.
 2. **In Maker Portal → Source control → Changes**: for each row reported, click **Discard**. Confirm. The portal call hits a privileged plugin path the public OData layer can't reach.
 3. **Optional belt-and-suspenders:** call `RefreshChangesFromGit` after the last Discard, then re-run `validate-no-orphan-source-control-rows.js` to confirm `@odata.count == 0`. (Note: `RefreshChangesFromGit` alone does NOT clear orphans — it only re-syncs the Updates side.)
-4. **Retry `CommitToGit`.** A successful pre-flight validator pass is necessary but not sufficient; a parallel IL-010 (conflicts) or IL-009 (shared components) can still block. Run the full `/power-pages:validate-pending-changes` skill end-to-end.
+4. **Retry `CommitToGit`.** A successful pre-flight validator pass is necessary but not sufficient; a parallel IL-010 (conflicts) or IL-009 (shared components) can still block. Run the full `/power-pages:commit-to-git --dry-run` skill end-to-end.
 5. **If Discard fails** (rare; happens when the orphan row's solution itself is mid-disconnect): fall back to `Disconnect from Git → Connect to Git` to wipe the source-control workspace and start fresh. Note that this drops all pending push-direction changes, so commit them first if possible.
 
 **Relationship to other patterns:** IL-019 (orphan push rows blocking commit) and IL-018 (orphan payload cache blocking pull) are sibling cache-orphan failures on the same source-control plugin. IL-019 surfaces on the push path (commit); IL-018 surfaces on the pull path. Distinct queries / fixes; do not conflate.

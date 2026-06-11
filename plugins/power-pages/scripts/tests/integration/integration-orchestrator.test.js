@@ -106,11 +106,16 @@ function bindingRow({ branch = 'main', solutionUniqueName = null } = {}) {
 }
 
 function changeRow(n) {
+  // list-pending-changes.js queries /sourcecontrolcomponents (NOT /gitcommitfiles).
   return {
-    gitcommitfileid: `chg-${n}`, componentname: `Change${n}`,
-    componenttype: 'mspp_webpage', changetype: 1,
-    filepath: `src/web-pages/p${n}.html`, sizeestimate: 1024,
-    modifiedon: '2025-01-01T00:00:00Z', solutionuniquename: 'IntSol',
+    sourcecontrolcomponentid: `scc-${n}`, componentid: `chg-${n}`,
+    componentdisplayname: `Change${n}`, name: `Change${n}`,
+    componenttypename: 'mspp_webpage', componenttype: 1054,
+    solutioncomponentstate: 1, action: 0,
+    'action@OData.Community.Display.V1.FormattedValue': 'Push',
+    componentpath: `src/web-pages/p${n}.html`,
+    partitionid: '00000000-0000-0000-0000-000000000000',
+    modifiedon: '2025-01-01T00:00:00Z',
   };
 }
 
@@ -156,8 +161,8 @@ function routesForCounts({
     },
     {
       method: 'GET',
-      matcher: '/gitcommitfiles',
-      body: { value: Array.from({ length: changes }, (_, i) => changeRow(i + 1)) },
+      matcher: '/sourcecontrolcomponents',
+      body: { '@odata.count': changes, value: Array.from({ length: changes }, (_, i) => changeRow(i + 1)) },
     },
     {
       method: 'GET',

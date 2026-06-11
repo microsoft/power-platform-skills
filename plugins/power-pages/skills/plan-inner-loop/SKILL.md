@@ -239,7 +239,7 @@ Steps:
    |---|---|---|
    | `Disconnected` | `/power-pages:setup-git-integration` | `/power-pages:connect-solution-to-git` |
    | `Clean`        | (no action — env is in sync)         | `/power-pages:branch-switch`, `/power-pages:open-pr` |
-   | `Dirty`        | `/power-pages:validate-pending-changes` then `/power-pages:commit-to-git` | `/power-pages:revert-workspace` |
+   | `Dirty`        | `/power-pages:commit-to-git --dry-run` then `/power-pages:commit-to-git` | `/power-pages:revert-workspace` |
    | `Stale`        | `/power-pages:sync-from-git`         | — |
    | `Mixed`        | depends on user choice (gate below)  | — |
    | `Conflicted`   | `/power-pages:resolve-conflicts`     | `/power-pages:revert-workspace`, `/power-pages:sync-from-git` (with conflict handling) |

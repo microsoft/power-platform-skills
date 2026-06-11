@@ -191,7 +191,8 @@ test('xmlEscape / htmlEscape: handles undefined and reserved chars', () => {
 
 test('renderHtmlReport: contains badges, IL hyperlinks, breakdown, timings, delta', () => {
   const html = renderHtmlReport({
-    skill: 'validate-pending-changes',
+    skill: 'commit-to-git',
+    mode: 'dry-run',
     generatedAt: '2026-06-12T00:00:00Z',
     envUrl: 'https://o.crm.dynamics.com',
     solutionUniqueName: 'InternLearning',

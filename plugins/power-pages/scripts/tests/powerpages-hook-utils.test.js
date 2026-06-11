@@ -77,11 +77,13 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
   assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
 });
 
-test('detectTrackedSkill recognizes the 12 Inner Dev Loop skills', () => {
+test('detectTrackedSkill recognizes the 11 Inner Dev Loop skills', () => {
   assert.equal(detectTrackedSkill('/power-pages:plan-inner-loop'), 'plan-inner-loop');
   assert.equal(detectTrackedSkill('/power-pages:setup-git-integration'), 'setup-git-integration');
   assert.equal(detectTrackedSkill('/power-pages:connect-solution-to-git'), 'connect-solution-to-git');
-  assert.equal(detectTrackedSkill('/power-pages:validate-pending-changes'), 'validate-pending-changes');
+  // NOTE: 'validate-pending-changes' was folded into 'commit-to-git --dry-run'
+  // (per VPC merge / D1). Both real-commit and dry-run requests resolve to
+  // 'commit-to-git' so they share a single PostToolUse validator.
   assert.equal(detectTrackedSkill('/power-pages:commit-to-git'), 'commit-to-git');
   assert.equal(detectTrackedSkill('/power-pages:sync-from-git'), 'sync-from-git');
   assert.equal(detectTrackedSkill('/power-pages:resolve-conflicts'), 'resolve-conflicts');
@@ -90,18 +92,20 @@ test('detectTrackedSkill recognizes the 12 Inner Dev Loop skills', () => {
   assert.equal(detectTrackedSkill('/power-pages:revert-branch'), 'revert-branch');
   assert.equal(detectTrackedSkill('/power-pages:open-pr'), 'open-pr');
   assert.equal(detectTrackedSkill('/power-pages:diagnose-git-integration'), 'diagnose-git-integration');
+  // The legacy slug is no longer routed — should now return null.
+  assert.equal(detectTrackedSkill('/power-pages:validate-pending-changes'), null);
 });
 
 test('every Inner Dev Loop skill resolves to its validator script', () => {
-  // All 12 inner-loop skills MUST be registered with command-backed validators
+  // All 11 inner-loop skills MUST be registered with command-backed validators
   // — they all write markers under docs/inner-loop/ that the PostToolUse hook
   // checks. `connect-solution-to-git` aliases `setup-git-integration`'s
   // validator (both skills produce the same .git-integration-manifest.json +
-  // docs/inner-loop/last-setup.json).
+  // docs/inner-loop/last-setup.json). 'validate-pending-changes' was folded
+  // into 'commit-to-git --dry-run' — see references/approval-gates.md §6A.7.
   assert.match(getValidatorScript('plan-inner-loop'), /validate-plan-inner-loop\.js$/);
   assert.match(getValidatorScript('setup-git-integration'), /validate-setup-git-integration\.js$/);
   assert.match(getValidatorScript('connect-solution-to-git'), /validate-connect-solution-to-git\.js$/);
-  assert.match(getValidatorScript('validate-pending-changes'), /validate-validate-pending-changes\.js$/);
   assert.match(getValidatorScript('commit-to-git'), /validate-commit-to-git\.js$/);
   assert.match(getValidatorScript('sync-from-git'), /validate-sync-from-git\.js$/);
   assert.match(getValidatorScript('resolve-conflicts'), /validate-resolve-conflicts\.js$/);
@@ -110,6 +114,8 @@ test('every Inner Dev Loop skill resolves to its validator script', () => {
   assert.match(getValidatorScript('revert-branch'), /validate-revert-branch\.js$/);
   assert.match(getValidatorScript('open-pr'), /validate-open-pr\.js$/);
   assert.match(getValidatorScript('diagnose-git-integration'), /validate-diagnose-git-integration\.js$/);
+  // Legacy slug must NOT resolve to a validator post-merge.
+  assert.equal(getValidatorScript('validate-pending-changes'), null);
 });
 
 test('every TRACKED_SKILLS validatorScript path resolves to an existing file on disk', () => {

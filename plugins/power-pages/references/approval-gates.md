@@ -2,7 +2,7 @@
 
 > **Status: DRAFT v2.** Addresses review feedback on v1, extended with the 12 inner-loop skills in §6A.
 >
-> **Scope: ALM + inner-loop skills.** §6 enumerates every `AskUserQuestion` in the 12 ALM (outer-loop) skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). §6A enumerates the 12 inner-loop (Git integration) skills (`plan-inner-loop`, `setup-git-integration`, `connect-solution-to-git`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `validate-pending-changes`, `branch-switch`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`). Non-ALM, non-inner-loop skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §8. Catalog completeness is asserted only for ALM and inner-loop.
+> **Scope: ALM + inner-loop skills.** §6 enumerates every `AskUserQuestion` in the 12 ALM (outer-loop) skills (`plan-alm`, `setup-solution`, `setup-pipeline`, `deploy-pipeline`, `export-solution`, `import-solution`, `configure-env-variables`, `ensure-pipelines-host`, `force-link-environment`, `activate-site`, `test-site`, `diagnose-deployment`). §6A enumerates the 11 inner-loop (Git integration) skills (`plan-inner-loop`, `setup-git-integration`, `connect-solution-to-git`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `branch-switch`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`). (The previously separate `validate-pending-changes` skill was merged into `commit-to-git --dry-run` — see §6A.7.) Non-ALM, non-inner-loop skills (`create-site`, `deploy-site`, `add-cloud-flow`, `add-server-logic`, `add-seo`, `add-sample-data`, `audit-permissions`, `create-webroles`, `integrate-backend`, `integrate-webapi`, `setup-auth`, `setup-datamodel`) are intentionally **deferred** — see §8. Catalog completeness is asserted only for ALM and inner-loop.
 >
 > **Not yet applied to SKILL.md files.** This document defines terminology + marker + lint design. The follow-up PR will add the markers to each ALM SKILL.md and ship the lint rule. Run the decisions in §9 first.
 
@@ -513,7 +513,7 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `commit-to-git:1.no-binding` | gate | intent | 1 | `detect-git-binding.js` returned null — *"Run setup-git-integration / cancel"* | nothing |
-| `commit-to-git:3.pre-flight-blockers` | gate | plan | 3 | `validate-pending-changes` found blockers (e.g. 17 MB cap) — *"Fix and re-run / cancel"* | nothing |
+| `commit-to-git:3.pre-flight-blockers` | gate | plan | 3 | Pre-flight validation found blockers (e.g. 17 MB cap, orphan rows, action=3 conflicts, shared components) — *"Fix and re-run / cancel"* | nothing |
 | `commit-to-git:3.pre-flight-warnings` | gate | plan | 3 | Warnings only (PCF binary duplication, large canvas) — *"Proceed / cancel"* | nothing |
 | `commit-to-git:4.plan` | gate | plan | 4 | Plan rendered: *"Will commit N components: {list}"* — *"Proceed / change message / cancel"* | nothing |
 | `commit-to-git:6.consent` | gate | consent | 6 | Final consent before `CommitToGit` action — *"Commit now / cancel"* | nothing |
@@ -544,12 +544,14 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.7 `validate-pending-changes` (projected 2 calls)
+### 6A.7 ~~`validate-pending-changes`~~ — **MERGED INTO `commit-to-git --dry-run`** (per VPC merge / D4)
 
-| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
-|---|---|---|---|---|---|
-| `validate-pending-changes:1.no-binding` | gate | intent | 1 | No binding — *"Run setup-git-integration / cancel"* | nothing |
-| `validate-pending-changes:6.warnings-only` | gate | final | 6 | Findings are warnings only (no blockers) — *"Proceed to commit / fix first"* | nothing |
+The `validate-pending-changes` skill was folded into `commit-to-git` as a `--dry-run` mode. The two gates previously listed here are now satisfied by `commit-to-git`'s existing pre-flight gates (per design decision D4 — reuse the existing `commit-to-git:3.pre-flight-*` IDs in dry-run mode rather than introduce new VPC-named gates):
+
+- `validate-pending-changes:1.no-binding` → `commit-to-git:1.no-binding`
+- `validate-pending-changes:6.warnings-only` → `commit-to-git:3.pre-flight-warnings`
+
+See §6A.3 (`commit-to-git`) for the canonical gate inventory.
 
 ---
 

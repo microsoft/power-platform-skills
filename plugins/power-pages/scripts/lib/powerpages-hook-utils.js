@@ -73,9 +73,10 @@ const TRACKED_SKILLS = {
   'connect-solution-to-git': {
     validatorScript: 'skills/connect-solution-to-git/scripts/validate-connect-solution-to-git.js',
   },
-  'validate-pending-changes': {
-    validatorScript: 'skills/validate-pending-changes/scripts/validate-validate-pending-changes.js',
-  },
+  // NOTE: 'validate-pending-changes' was folded into 'commit-to-git --dry-run'.
+  // The merged validator (skills/commit-to-git/scripts/validate-commit-to-git.js)
+  // accepts BOTH last-commit.json (real-commit) AND last-validation.json
+  // (dry-run) markers — see references/approval-gates.md §6A.7.
   'commit-to-git': {
     validatorScript: 'skills/commit-to-git/scripts/validate-commit-to-git.js',
   },

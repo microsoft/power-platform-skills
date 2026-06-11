@@ -122,7 +122,8 @@ test('render-inner-loop-plan: Dirty state with items in changes table', () => {
   assert.match(html, /mspp_webpage/);
   assert.match(html, /class="badge add"/);
   assert.match(html, /class="badge mod"/);
-  assert.match(html, /validate-pending-changes/);
+  // post-VPC-merge: render now suggests commit-to-git --dry-run for pre-flight
+  assert.match(html, /commit-to-git --dry-run/);
 });
 
 test('render-inner-loop-plan: Stale state shows sync-from-git', () => {

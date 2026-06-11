@@ -72,7 +72,6 @@ const PHASES = new Set([
   'commit-to-git',
   'sync-from-git',
   'resolve-conflicts',
-  'validate-pending-changes',
   'branch-switch',
   'revert-workspace',
   'revert-branch',
@@ -157,8 +156,16 @@ const HANDLERS = {
   'commit-to-git': (planData, projectRoot) => {
     const marker = readJsonMarker(projectRoot, 'lastCommit');
     if (marker) planData.lastCommit = marker;
+    // Per X-5 (VPC merge): commit-to-git --dry-run writes last-validation.json
+    // and last-commit.json is absent. Pull that marker too so the orchestrator
+    // continues to surface validation findings even when no real commit
+    // happened in this phase.
+    const validation = readJsonMarker(projectRoot, 'lastValidation');
+    if (validation) planData.lastValidation = validation;
     ensureCountsShape(planData);
-    planData.pendingCounts.changes = 0;
+    // Only drop pending changes to 0 on a real-commit run. A dry-run leaves
+    // the count untouched.
+    if (marker) planData.pendingCounts.changes = 0;
     planData.state = classifyState(planData.binding, planData.pendingCounts);
   },
   'sync-from-git': (planData, projectRoot) => {
@@ -178,11 +185,6 @@ const HANDLERS = {
     ensureCountsShape(planData);
     planData.pendingCounts.conflicts = 0;
     planData.state = classifyState(planData.binding, planData.pendingCounts);
-  },
-  'validate-pending-changes': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastValidation');
-    if (marker) planData.lastValidation = marker;
-    // No count changes — validation is read-only.
   },
   'branch-switch': (planData, projectRoot) => {
     const marker = readJsonMarker(projectRoot, 'lastBranchSwitch');
