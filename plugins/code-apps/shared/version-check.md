@@ -6,10 +6,10 @@
 
 ### Step 1: Check if a version check is needed
 
-Look for the file `~/.claude/.power-apps-last-version-check`. Use Bash to read it if it exists:
+Look for the file `~/.claude/.code-apps-preview-last-version-check`. Use Bash to read it if it exists:
 
 ```bash
-cat ~/.claude/.power-apps-last-version-check 2>/dev/null
+cat ~/.claude/.code-apps-preview-last-version-check 2>/dev/null
 ```
 
 - If the file exists and contains today's date (YYYY-MM-DD format), **skip the entire check** and continue with the skill silently.
@@ -40,7 +40,7 @@ Compare the local version against the remote version using semver rules — spli
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║  UPDATE AVAILABLE: v{local} → v{remote}                    ║
-║  Run: claude plugin update power-apps                       ║
+║  Run: claude plugin update code-apps-preview                ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
@@ -48,10 +48,10 @@ Compare the local version against the remote version using semver rules — spli
 
 ### Step 6: Update the timestamp
 
-Write today's date (YYYY-MM-DD) to `~/.claude/.power-apps-last-version-check` using Bash:
+Write today's date (YYYY-MM-DD) to `~/.claude/.code-apps-preview-last-version-check` using Bash:
 
 ```bash
-mkdir -p ~/.claude && echo "YYYY-MM-DD" > ~/.claude/.power-apps-last-version-check
+mkdir -p ~/.claude && echo "YYYY-MM-DD" > ~/.claude/.code-apps-preview-last-version-check
 ```
 
 > **Note:** Writing to `~/.claude/` is a pre-approved exception to the "confirm before writing outside project root" guardrail. This file is a shared cache and does not affect the user's project.

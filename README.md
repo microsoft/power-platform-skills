@@ -47,7 +47,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
     /plugin install mcp-apps@power-platform-skills
-    /plugin install code-apps@power-platform-skills
+    /plugin install code-apps-preview@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     ```
 
