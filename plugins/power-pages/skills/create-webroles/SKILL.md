@@ -20,7 +20,7 @@ Create web roles for a Power Pages code site. Web roles define the permissions a
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
 - **Always use the UUID script**: Never generate UUIDs manually — always use `${CLAUDE_PLUGIN_ROOT}/scripts/generate-uuid.js` to produce valid UUID v4 values for each web role.
 - **Preserve uniqueness constraints**: Only one role can have `anonymoususersrole: true` and only one can have `authenticatedusersrole: true`. Always check existing roles before setting these flags.
-- **Caller-suppress mode is opt-in**: When invoked by another skill (e.g. `/add-ai-webapi`) with the `[CALLED-BY-PARENT-SKILL]` sentinel in `$ARGUMENTS`, suppress this skill's deploy prompts (Phase 1's missing-deploy ask, Phase 6.3's "deploy to apply roles" ask, and the closing reminder) and return as soon as roles are created. The caller batches the deploy at end-of-orchestration. Human invocations never trigger this mode. See Phase 0 below for parsing.
+- **Caller-suppress mode is opt-in**: When invoked by another skill (e.g. `/add-ai-webapi`) with the `[CALLED-BY-PARENT-SKILL]` sentinel in `$ARGUMENTS`, suppress this skill's deploy prompts (Phase 1's missing-deploy ask, Phase 6's deploy ask (step 3), and the closing reminder) and return as soon as roles are created. The caller batches the deploy at end-of-orchestration. Human invocations never trigger this mode. See Phase 0 below for parsing.
 
 > **Prerequisite:** The site must be deployed at least once before web roles can be created, since deployment creates the `.powerpages-site` folder structure that stores web role definitions.
 
