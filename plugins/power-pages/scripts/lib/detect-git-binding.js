@@ -154,7 +154,16 @@ async function detectViaSourceControlEntities(tok, base, solutionUniqueName) {
   //    binding from a stale leftover row whose owning solution has been
   //    disconnected.
   const branchRes = await makeRequest({
-    url: `${base}/api/data/v9.2/sourcecontrolbranchconfigurations?$select=branchname,rootfolderpath,branchsyncedcommitid,upstreambranchsyncedcommitid,statuscode,partitionid,_partitionid_value`,
+    // NOTE: `partitionid` on `sourcecontrolbranchconfiguration` is a plain
+    // UUID column, NOT a lookup. Requesting `_partitionid_value` returns
+    // HTTP 400 "Could not find a property named '_partitionid_value'"
+    // (verified 2026-06-11 on org5ba33a19/v9.2). Do NOT add it back to the
+    // $select — the source-grep regression test in detect-git-binding.test.js
+    // enforces this. The defensive read at partitionIdOf() below still tries
+    // `r._partitionid_value` first to remain forward-compatible in the
+    // hypothetical case some tenant exposes it as a lookup; that path is
+    // dead in current Dataverse but costs nothing.
+    url: `${base}/api/data/v9.2/sourcecontrolbranchconfigurations?$select=branchname,rootfolderpath,branchsyncedcommitid,upstreambranchsyncedcommitid,statuscode,partitionid`,
     method: 'GET',
     headers: hdr,
   });

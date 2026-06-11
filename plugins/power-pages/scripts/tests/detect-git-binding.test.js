@@ -459,6 +459,33 @@ test('E10 scenario 4: mixed â€” 1 live solution + 1 stale solution + 1 env row â
   } finally { server.close(); }
 });
 
+// REGRESSION (2026-06-11): commit 4936f62 shipped E10 with a `$select` that
+// requested `_partitionid_value` (imagined lookup-style fallback). Dataverse
+// rejects this with HTTP 400 "Could not find a property named
+// '_partitionid_value' on type ... sourcecontrolbranchconfiguration" because
+// `partitionid` is a plain UUID column on this entity, not a lookup. The
+// bug blocked detect-git-binding on every modern tenant (verified live on
+// org5ba33a19/v9.2, 2026-06-11) and cascaded through every git skill that
+// calls detect-git-binding for verification (disconnect-from-git --verify,
+// list-pending-changes prereq probe, plan-inner-loop status check). Source-
+// grep this line so the bad field cannot creep back into the URL.
+test('detect-git-binding: $select must NOT include _partitionid_value (regression for the 4936f62 HTTP 400 bug)', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(require.resolve('../lib/detect-git-binding.js'), 'utf8');
+
+  // Find every occurrence of a sourcecontrolbranchconfigurations URL with a $select
+  // clause and assert _partitionid_value is not in it.
+  const selectMatches = src.match(/sourcecontrolbranchconfigurations\?\$select=[^`'"\n]+/g);
+  assert.ok(selectMatches && selectMatches.length > 0,
+    'expected at least one sourcecontrolbranchconfigurations $select URL in detect-git-binding.js');
+  for (const match of selectMatches) {
+    assert.ok(!match.includes('_partitionid_value'),
+      `sourcecontrolbranchconfigurations $select must NOT request _partitionid_value (it is not a valid field and returns HTTP 400 on modern Dataverse); offending URL: ${match}`);
+    assert.ok(match.includes('partitionid'),
+      `sourcecontrolbranchconfigurations $select MUST include the plain partitionid column for E10 reconciliation; offending URL: ${match}`);
+  }
+});
+
 test('E10 back-compat: tenant without partitionid exposure falls back to legacy path heuristic', async () => {
   const SOL_A = 'aaaaaaaa-1111-1111-1111-111111111111';
   const server = await createRoutedServer([
