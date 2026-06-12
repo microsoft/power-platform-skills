@@ -400,7 +400,15 @@ For each failed API request, provide specific remediation:
 
 #### 5.5 Test Form Submissions (Optional)
 
-If forms are detected on any page (via `browser_snapshot` showing form elements), ask the user before interacting:
+<!-- gate: test-site:5.5.form-submit | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · test-site:5.5.form-submit):** About to submit a form on the live site — may create or modify Dataverse records. Destructive against shared state (the live Dataverse env); requires explicit opt-in.
+>
+> **Trigger:** Forms detected via `browser_snapshot` in Phase 5.
+> **Why we ask:** Auto-submitting test data into production records pollutes real customer data.
+> **Cancel leaves:** Nothing — read-only API checks continue from earlier 5.x phases.
+
+If forms are detected on any page (via `browser_snapshot` showing form elements), ask the user via `AskUserQuestion` before interacting:
 
 | Question | Header | Options |
 |----------|--------|---------|

@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 29 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -139,6 +139,22 @@ The skill first scans your codebase to find components using mock data, placehol
 
 - Existing components are refactored to use real API calls (mock data and placeholder fetches are replaced)
 - `.powerpages-site/table-permissions/` and `.powerpages-site/site-settings/` directories are populated for deployment
+
+#### `/add-ai-webapi`
+
+> "Add AI summaries to my site"
+
+Integrates Power Pages generative-AI summarization APIs into a Single Page Application (SPA) site: the **Search Summary API** (`/_api/search/v1.0/summary`) and the **Data Summarization API** (`/_api/summarization/data/v1.0/...`). Data Summarization can be configured for any record-detail or list page; Microsoft documents one ready-made recipe for a Copilot-style summary on a support-case detail page (`incident` table with `$select=description,title` and the portal-comments expand) — that recipe is available as a maker pick, not an automatic recommendation.
+
+The skill scans your code for search pages and record-detail / list pages and proposes which APIs to wire where. For any Data Summarization target that is missing its Web API prerequisites (Layer 1 `Webapi/<table>/*` settings, Layer 2 table permissions, or the shared `powerPagesApi.ts` client), the skill delegates to `/integrate-webapi` in an **AI-only read mode** — read-only permissions, minimal fields list (no primary key, only `_<col>_value` for lookups) — and to `/create-webroles` if no web role exists yet. Once Layer 1/2 is in place, the skill spawns the **AI Web API Integration** agent sequentially per target to create a single summarization service (`fetchSearchSummary`, `fetchDataSummary`) with correct CSRF handling, a framework-idiomatic wrapper, and real UI call sites. Finally, the **AI Web API Settings Architect** is invoked for Layer 3 to propose the `Summarization/Data/Enable` toggle and per-prompt `Summarization/prompt/<identifier>` settings.
+
+**What gets created:**
+
+- `src/services/aiSummaryService.ts` (or extended if it already exists) with raw `fetch` + both required CSRF headers
+- Framework-specific wrapper (React hook / Vue composable / Angular service)
+- Real call sites in the target page(s) with loading, error, and recommendation-button handling
+- `Summarization/Data/Enable` site setting and one `Summarization/prompt/<identifier>` per prompt
+- `Webapi/<table>/enabled` / `Webapi/<table>/fields`, read-only table permissions, and the shared `powerPagesApi.ts` client for the summarised tables and every `$expand` target (delegated to `/integrate-webapi`)
 
 #### `/add-server-logic`
 
@@ -373,16 +389,29 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 - Attaches relevant file paths and environment info
 - Opens the issue in your browser for final review
 
+#### `/telemetry`
+
+> "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
+
+Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+
+- `/power-pages:telemetry status` — show the current setting
+- `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
+- `/power-pages:telemetry on` — resume sending telemetry
+- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+
 ## Agents
 
-The plugin includes 4 specialized agents that are spawned automatically by skills when needed:
+The plugin includes 6 specialized agents that are spawned automatically by skills when needed:
 
 | Agent | Purpose | Triggered by |
 |---|---|---|
 | **Data Model Architect** | Analyzes your site and proposes a Dataverse data model with an ER diagram | `/setup-datamodel` |
-| **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` |
-| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi`, `/audit-permissions` |
-| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` |
+| **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, when it delegates) |
+| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode); `/audit-permissions` |
+| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode) |
+| **AI Web API Integration** | Creates raw-`fetch` summarization service with CSRF, framework wrapper, and UI wiring | `/add-ai-webapi` |
+| **AI Web API Settings Architect** | Proposes `Summarization/Data/Enable` and maker-defined `Summarization/prompt/<identifier>` site settings | `/add-ai-webapi` |
 
 The Data Model Architect, Table Permissions, and Web API Settings agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
 
@@ -406,15 +435,16 @@ A common end-to-end workflow looks like this:
 4.  /setup-datamodel        →  Create Dataverse tables
 5.  /add-sample-data        →  Populate tables with test records
 6.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
-7.  /create-webroles        →  Define access roles
-8.  /setup-auth             →  Add login/logout + role-based UI
-9.  /audit-permissions      →  Verify table permissions are safe
-10. /add-seo                →  Search engine optimization
-11. /deploy-site            →  Push final changes live
-12. /test-site              →  Runtime smoke test on the live URL
-13. /security-review        →  Full security review (headers, firewall, scan, permissions)
-14. /plan-alm               →  Plan multi-environment promotion
-15. /deploy-pipeline        →  Promote through staging → production
+7.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
+8.  /create-webroles        →  Define access roles
+9.  /setup-auth             →  Add login/logout + role-based UI
+10. /audit-permissions      →  Verify table permissions are safe
+11. /add-seo                →  Search engine optimization
+12. /deploy-site            →  Push final changes live
+13. /test-site              →  Runtime smoke test on the live URL
+14. /security-review        →  Full security review (headers, firewall, scan, permissions)
+15. /plan-alm               →  Plan multi-environment promotion
+16. /deploy-pipeline        →  Promote through staging → production
 ```
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
@@ -475,6 +505,27 @@ node plugins/power-pages/scripts/validate-permissions-schema.js --projectRoot /p
 ```
 
 This Dataverse relationship check is intended for local validation only and should not be used in CI.
+
+## Telemetry & privacy
+
+This plugin sends **anonymous** usage telemetry by default to help Microsoft
+improve it. **No personal data is ever collected** — only things like skill name,
+plugin version, OS, and Node version. It never includes file paths, prompts, tool
+inputs, site names, URLs, credentials, usernames, or hostnames.
+
+**Turn it on or off (per-user, applies to every project):**
+
+```bash
+/power-pages:telemetry status   # show the current setting
+/power-pages:telemetry off      # stop sending telemetry
+/power-pages:telemetry on       # resume sending telemetry
+```
+
+When **off**, nothing leaves your machine. A local diagnostic copy of each event
+is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
+what would have been sent; delete it anytime. The setting is stored at
+`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
+so CI/headless environments can opt out by writing that file directly.
 
 ## License
 

@@ -7,6 +7,7 @@ const path = require("node:path");
 const https = require("node:https");
 const { FIELD_TYPES, pick } = require("./events");
 const { resolve: resolveRegion } = require("./region-resolver");
+const { isTransmissionOptedOut } = require("./user-config");
 
 function exitSilently() {
   process.exit(0);
@@ -20,18 +21,24 @@ const DEFAULT_LOCAL_DIR = path.join(os.homedir(), ".power-platform-skills");
 const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
-// Override env vars — TEST seams only. Production no longer sets these.
+// Override env vars — TEST seams only. Production resolves the iKey/collector
+// via the regions map in ikey.json (see region-resolver) and never sets these.
 const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 
-// Anonymous telemetry is default-on. The single user-facing opt-out is the
-// POWER_PLATFORM_SKILLS_TELEMETRY=0 env kill switch.
-function isUserOptedOut() {
-  return process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0";
+function localConfigDir() {
+  return CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
+}
+
+// Anonymous telemetry is default-on. The user opt-out is per-plugin and lives in
+// config.json (telemetry[<pluginName>] === "off"), written by the telemetry skill.
+// It suppresses TRANSMISSION only; the local mirror is written before this gate.
+function isUserOptedOut(pluginName) {
+  return isTransmissionOptedOut(localConfigDir(), pluginName);
 }
 
 // Path to the ikey.json config. Overridable via POWER_PLATFORM_SKILLS_IKEY_JSON
-// so tests can point at a temp file with their own disabled / iKey state.
+// so tests can point at a temp file with their own disabled / region state.
 function ikeyJsonPath() {
   return (
     process.env.POWER_PLATFORM_SKILLS_IKEY_JSON ||
@@ -39,19 +46,24 @@ function ikeyJsonPath() {
   );
 }
 
+// Returns the parsed ikey.json, or null when it is missing/unreadable. null is
+// treated as the repo kill switch (fail CLOSED): if we cannot read the config
+// we cannot confirm emission is authorized, so we suppress rather than risk a
+// POST / local log in an unexpected state.
 function readIkeyConfig() {
   try {
     return JSON.parse(fs.readFileSync(ikeyJsonPath(), "utf8"));
   } catch {
-    return {}; // ikey.json missing/unreadable → fail open.
+    return null;
   }
 }
 
-// Repo-side kill switch: when ikey.json contains "disabled": true, no events
-// are emitted regardless of opt-out or iKey state. Lets infrastructure PRs
-// land while tenant-side annotation + Kusto table are being provisioned.
+// Repo-side kill switch: a missing/unreadable config (null) or an explicit
+// `"disabled": true` suppresses ALL events regardless of opt-out or region
+// state. Lets infrastructure PRs land while the tenant-side annotation + Kusto
+// table are still being provisioned. Flip `disabled` to false when ready.
 function isDisabledByConfig(cfg) {
-  return cfg && cfg.disabled === true;
+  return !cfg || cfg.disabled === true;
 }
 
 // Reserved meta fields that builders always write into event.data. They are
@@ -73,36 +85,45 @@ function sanitizeData(data) {
   return filtered;
 }
 
-function buildEnvelope(event, resolvedIKey, eventStreamName) {
+// Build the CS4.0 envelope from a pre-sanitized payload + timestamp. Both are
+// computed once in the stdin handler and shared with the local mirror so the
+// on-disk record and the wire envelope carry byte-identical `data` and `time`.
+function buildEnvelope(eventName, time, sanitized, resolvedIKey, eventStreamName) {
   return {
     ver: "4.0",
-    name: eventStreamName || event.name || "",
-    time: new Date().toISOString(),
+    name: eventStreamName || eventName || "",
+    time,
     iKey: "o:" + String(resolvedIKey || "").split("-")[0],
-    data: sanitizeData(event.data),
+    data: sanitized,
   };
 }
 
 function writeProbe(filePath, { headers, body }) {
   try {
     fs.writeFileSync(filePath, JSON.stringify({ headers, body }), "utf8");
-  } catch { /* ignore */ }
+  } catch {
+    // ignore
+  }
 }
 
-function writeLocalLog(event) {
+function writeLocalLog(record) {
   try {
     const { appendLocal } = require("./local-log");
-    const configDir = CONFIG_DIR_ENV || DEFAULT_LOCAL_DIR;
-    appendLocal(event, { configDir });
-  } catch { /* fail closed */ }
+    appendLocal(record, { configDir: localConfigDir() });
+  } catch {
+    // fail closed
+  }
 }
 
-// ---- Read config + apply kill switches ----
+// ---- Read config + repo-side kill switch (applies before ANY side effect) --
+// The `disabled` repo config (and an unreadable config) is the one true
+// hard-off: no local log, no POST. The per-plugin user opt-out is NOT checked
+// here — it suppresses transmission only, and is applied below AFTER the local
+// mirror is written. cfg is reused for region resolution in the stdin handler.
 const cfg = readIkeyConfig();
 if (isDisabledByConfig(cfg)) exitSilently();
-if (isUserOptedOut()) exitSilently();
 
-// ---- Read stdin ----
+// ---- Read stdin ------------------------------------------------------------
 let raw = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
@@ -114,8 +135,27 @@ process.stdin.on("end", async () => {
     return exitSilently();
   }
 
-  // Override env vars take precedence (test seam). Production code path
-  // ignores these and resolves via the regions map.
+  // Compute the sanitized payload + timestamp ONCE. The sanitized data is
+  // exactly what lands in Kusto (its field names ARE the Kusto column names);
+  // the local mirror and the wire envelope share it so they can never diverge.
+  const time = new Date().toISOString();
+  const sanitized = sanitizeData(event.data);
+  const localRecord = { time, name: event.name, data: sanitized };
+
+  // Mirror to the local log for EVERY event that clears the repo kill switch —
+  // irrespective of whether a real iKey resolves AND irrespective of the
+  // per-plugin transmission opt-out. The file stays on the user's machine; it
+  // is a local diagnostic mirror of what is (or would be) sent to Kusto, not
+  // transmitted telemetry. (A `disabled: true` repo config wrote nothing — it
+  // short-circuited before stdin was even read.)
+  writeLocalLog(localRecord);
+
+  // User opt-out (per plugin) — transmission only; the local mirror above is kept.
+  const pluginName = event && event.data && event.data.pluginName;
+  if (isUserOptedOut(pluginName)) return exitSilently();
+
+  // Resolve the iKey + collector for this org's region. Override env vars take
+  // precedence (test seam); production resolves via the regions map in cfg.
   let iKey = IKEY_OVERRIDE;
   let collectorUrl = COLLECTOR_OVERRIDE;
   if (!iKey || !collectorUrl) {
@@ -132,14 +172,15 @@ process.stdin.on("end", async () => {
     }
   }
 
-  // Placeholder / unprovisioned mode → append to local dev log and exit.
+  // Placeholder / unprovisioned mode → local mirror already written; no POST.
   const keyMissing = !iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl;
   if (keyMissing) {
-    writeLocalLog(event);
     return exitSilently();
   }
 
-  const envelope = buildEnvelope(event, iKey, cfg.event_stream_name);
+  // Real iKey → Common Schema envelope (reuses the same time + sanitized data
+  // as the local mirror) → HTTPS POST.
+  const envelope = buildEnvelope(event.name, time, sanitized, iKey, cfg.event_stream_name);
   const body = JSON.stringify(envelope) + "\n";
   const headers = {
     "Content-Type": "application/x-json-stream; charset=utf-8",

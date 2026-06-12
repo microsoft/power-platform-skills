@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const {
+  TRACKED_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
@@ -15,7 +16,7 @@ test('detectTrackedSkill recognizes tracked skill references', () => {
   assert.equal(detectTrackedSkill('create-site'), 'create-site');
   assert.equal(detectTrackedSkill('/power-pages:setup-auth'), 'setup-auth');
   assert.equal(detectTrackedSkill('power-pages:add-seo'), 'add-seo');
-  assert.equal(detectTrackedSkill('/power-pages:deploy-site'), null);
+  assert.equal(detectTrackedSkill('/power-pages:deploy-site'), 'deploy-site');
 });
 
 test('detectTrackedSkill recognizes slash command aliases without plugin prefix', () => {
@@ -23,9 +24,10 @@ test('detectTrackedSkill recognizes slash command aliases without plugin prefix'
   assert.equal(detectTrackedSkill('/setup-auth'), 'setup-auth');
   assert.equal(detectTrackedSkill('/add-server-logic'), 'add-server-logic');
   assert.equal(detectTrackedSkill('/add-cloud-flow'), 'add-cloud-flow');
+  assert.equal(detectTrackedSkill('/add-ai-webapi'), 'add-ai-webapi');
   assert.equal(detectTrackedSkill('/integrate-webapi'), 'integrate-webapi');
   assert.equal(detectTrackedSkill('/audit-permissions'), 'audit-permissions');
-  assert.equal(detectTrackedSkill('/deploy-site'), null);
+  assert.equal(detectTrackedSkill('/deploy-site'), 'deploy-site');
 });
 
 test('getTrackedSkillFromToolInput finds a tracked skill in common fields', () => {
@@ -39,13 +41,22 @@ test('getTrackedSkillFromToolInput finds a tracked skill in common fields', () =
     getTrackedSkillFromToolInput({ command: 'run /power-pages:integrate-webapi for this repo' }),
     'integrate-webapi'
   );
-  assert.equal(getTrackedSkillFromToolInput({ name: 'deploy-site' }), null);
+  assert.equal(getTrackedSkillFromToolInput({ name: 'deploy-site' }), 'deploy-site');
 });
 
-test('getValidatorScript returns validator paths only for command-backed skills', () => {
+test('getValidatorScript returns discovered validator paths when present', () => {
   assert.match(getValidatorScript('create-site'), /validate-site\.js$/);
   assert.match(getValidatorScript('add-server-logic'), /validate-serverlogic\.js$/);
+  assert.match(getValidatorScript('deploy-pipeline'), /validate-deploy-pipeline\.js$/);
+  assert.match(getValidatorScript('add-ai-webapi'), /validate-ai-webapi\.js$/);
+});
+
+test('getValidatorScript returns null for tracked skills without validators', () => {
+  assert.equal(detectTrackedSkill('deploy-site'), 'deploy-site');
+  assert.equal(detectTrackedSkill('diagnose-deployment'), 'diagnose-deployment');
   assert.equal(getValidatorScript('test-site'), null);
+  assert.equal(getValidatorScript('deploy-site'), null);
+  assert.equal(getValidatorScript('diagnose-deployment'), null);
   assert.equal(getValidatorScript('missing-skill'), null);
 });
 
@@ -77,24 +88,21 @@ test('force-link-environment is wired into TRACKED_SKILLS with its validator', (
   assert.match(getValidatorScript('force-link-environment'), /validate-force-link\.js$/);
 });
 
-test('hooks.json matchers fire for both Claude Code (Skill) and Copilot CLI (skill) tool names', () => {
-  // Claude Code invokes skills via a tool named `Skill`; Copilot CLI uses a
-  // tool named `skill` (lowercase). Both surfaces apply the matcher as an
-  // anchored regex (`^(?:matcher)$`) against the tool name. The matcher must
-  // therefore match BOTH casings, otherwise the PreToolUse hook never fires in
-  // Copilot CLI and `skill_started` telemetry is silently lost.
-  const hooksPath = path.join(__dirname, '..', '..', 'hooks', 'hooks.json');
-  const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+test('TRACKED_SKILLS is derived from every skill folder', () => {
+  // The `telemetry` skill is intentionally excluded from tracking so checking/
+  // toggling telemetry never self-emits (see EXCLUDED_FROM_TRACKING).
+  const skillFolders = fs
+    .readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((skillName) => fs.existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md')))
+    .filter((skillName) => skillName !== 'telemetry')
+    .sort();
 
-  for (const event of ['PreToolUse', 'PostToolUse']) {
-    const entries = hooks.hooks[event];
-    assert.ok(Array.isArray(entries) && entries.length > 0, `${event} must declare at least one hook`);
-    for (const entry of entries) {
-      assert.ok(entry.matcher, `${event} hook must declare a matcher`);
-      const anchored = new RegExp(`^(?:${entry.matcher})$`);
-      assert.ok(anchored.test('Skill'), `${event} matcher "${entry.matcher}" must match Claude Code's "Skill" tool`);
-      assert.ok(anchored.test('skill'), `${event} matcher "${entry.matcher}" must match Copilot CLI's "skill" tool`);
-    }
+  assert.deepEqual(Object.keys(TRACKED_SKILLS).sort(), skillFolders);
+  for (const skillName of skillFolders) {
+    assert.equal(detectTrackedSkill(`/power-pages:${skillName}`), skillName);
+    assert.equal(detectTrackedSkill(`/${skillName}`), skillName);
   }
 });
 
@@ -122,4 +130,21 @@ test('no SKILL.md declares its own hooks frontmatter (centralized PostToolUse on
     [],
     `These SKILL.md files declare hooks frontmatter — register the skill in TRACKED_SKILLS instead: ${offenders.join(', ')}`
   );
+});
+
+test('the telemetry skill is excluded from tracking (no self-emit)', () => {
+  assert.equal(TRACKED_SKILLS.telemetry, undefined);
+  assert.equal(detectTrackedSkill('/power-pages:telemetry'), null);
+  assert.equal(detectTrackedSkill('telemetry'), null);
+  assert.equal(getTrackedSkillFromToolInput({ skill: 'power-pages:telemetry' }), null);
+});
+
+test('Object.prototype keys are not mistaken for tracked skills', () => {
+  // TRACKED_SKILLS is a null-prototype map. With a plain {} these names would
+  // resolve to inherited functions on bracket access and emit bogus events.
+  assert.equal(detectTrackedSkill('toString'), null);
+  assert.equal(detectTrackedSkill('constructor'), null);
+  assert.equal(detectTrackedSkill('hasOwnProperty'), null);
+  assert.equal(detectTrackedSkill('__proto__'), null);
+  assert.equal(getTrackedSkillFromToolInput({ skill: 'toString' }), null);
 });

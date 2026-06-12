@@ -445,6 +445,14 @@ Store stages as `PP_STAGES` (array of `{ label, envUrl, envName, type }`). Dev i
 
 For each stage, populate `envName` from `ENV_LIST` (gathered in Phase 1 Step 5 via `pac env list --output json`). Match by URL origin (lowercase, trailing slash stripped, path/query ignored) and copy the entry's `DisplayName` (or `displayName`) into `envName`. When no match is found — usually because the user pasted a custom URL via "Other" — leave `envName` unset; the renderer falls back to showing the URL alone in the stage card. The renderer puts `envName` between the stage label and the URL (e.g. *Staging / **Supplier Portal Staging** / https://orgd6a9894f.crm5.dynamics.com/*) so reviewers recognize the env at a glance and the URL stays available as a one-click jump-to-env. Set `type: "source"` for the dev/source stage and `type: "target"` for every downstream stage so the renderer applies the active-stage styling correctly.
 
+<!-- gate: plan-alm:2.q4-host | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · plan-alm:2.q4-host):** Host environment selection — branches on `HOST_RESOLUTION.status` and surfaces the right menu (use-detected / pick from list / NoHost host-type / Sandbox confirm / CannotRedirect block / manual paste). Drives `HOST_ENV_URL` and `WILL_PROVISION_*` flags for the rest of plan-alm and ensure-pipelines-host. Uses `AskUserQuestion` per branch.
+>
+> **Trigger:** Phase 2 Q4 entry; `HOST_RESOLUTION` populated in Phase 1 step 12.
+> **Why we ask:** Auto-picking a host can provision a new Custom Host (`WILL_PROVISION_CUSTOM`) consuming an Azure capacity quota the user didn't intend; or pick the wrong env, sending pipelines through a foreign host. The downstream ensure-pipelines-host skill TRUSTS this answer and skips its own 3.C menu.
+> **Cancel leaves:** Nothing — no provisioning fired yet.
+
 **Q4 (host environment — branches on `HOST_RESOLUTION.status` from Phase 1 step 12):**
 
 This question consumes `HOST_RESOLUTION` populated by the new detect-only wrapper run in Phase 1 step 12. Each branch sets `HOST_ENV_URL` (which feeds the rest of plan-alm) and may also set the auxiliary flags `CHOSEN_ENV_URL`, `WILL_PROVISION_PLATFORM`, `WILL_PROVISION_CUSTOM`, `WILL_USE_PPAC`, `WILL_ENSURE_HOST`, and `USER_CHOSE_DEFER_TO_SETUP_PIPELINE`. Defaults: `HOST_ENV_URL = HOST_RESOLUTION.finalHostEnvUrl`, all flags `false` / null.

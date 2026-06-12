@@ -109,7 +109,15 @@ MUST use plain language only. Never use words like CSP, CORS, OWASP, hardening, 
 
 ### Default approach
 
-Analyze the site's current state and **recommend the single most relevant action**. Present the recommendation with a plain-language explanation of why. The user can accept or choose differently.
+<!-- gate: scan-site:3.action-choice | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · scan-site:3.action-choice):** Recommend an action based on the site's scan state (running, idle, has report, no report), then ask the user to accept or choose differently. Starting a new scan triggers a multi-minute backend run; using an existing report is free.
+>
+> **Trigger:** Phase 3 entry (interactive mode only — review mode bypasses to step 4).
+> **Why we ask:** Auto-starting a new scan wastes minutes if a recent report already answers the question; auto-using a stale report misses recent findings.
+> **Cancel leaves:** Nothing — no scan triggered, no report consumed.
+
+Analyze the site's current state and **recommend the single most relevant action** via `AskUserQuestion`:
 
 - Scan running, no completed report → recommend waiting for the running scan to finish.
 - Scan running, report exists → recommend showing the latest results while the new scan continues.
@@ -119,6 +127,8 @@ Analyze the site's current state and **recommend the single most relevant action
 If the site's state does not warrant a specific recommendation, do not force one — ask what the user wants to do.
 
 ### Option rules
+
+<!-- not-a-gate: meta-documentation describing how to structure `AskUserQuestion` options in this skill — not a literal call site. The actual prompt ("use existing report / run a fresh scan") fires dynamically in §3 Default approach. See approval-gates.md §6.24a + §6.27. -->
 
 When presenting options via `AskUserQuestion`:
 - Keep `label` to 1–5 words. Include `description` on every option.

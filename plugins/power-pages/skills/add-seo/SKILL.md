@@ -73,6 +73,8 @@ Build a list of all routes (e.g., `/`, `/about`, `/contact`, `/blog`).
 
 ### Actions
 
+<!-- not-a-gate: data-gathering — production URL + exclusion list shape the upcoming Phase 3 plan but don't write anything on their own -->
+
 Use `AskUserQuestion` to collect SEO preferences:
 
 #### Call 1
@@ -81,6 +83,8 @@ Use `AskUserQuestion` to collect SEO preferences:
 |----------|--------|---------|
 | What is the production URL for your site? (e.g., <https://contoso.powerappsportals.com>) | Site URL | *(free text — use single generic option so user types via "Other")* |
 | Which pages should be excluded from search engine indexing? | Exclusions | None — index all pages (Recommended), Admin/auth pages only, Let me specify |
+
+<!-- not-a-gate: data-gathering — meta description + OG tag choice shape the upcoming Phase 3 plan but don't write anything on their own -->
 
 #### Call 2
 
@@ -110,6 +114,14 @@ Present the SEO additions that will be made as a clear, inline summary:
 2. **sitemap.xml content** — all discovered routes with the production URL and priority assignments
 3. **Meta tags to add to index.html** — title, description, viewport, charset, Open Graph, Twitter Card
 4. **Favicon** — link tag and placeholder SVG
+
+<!-- gate: add-seo:3.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · add-seo:3.plan-approval):** Final sign-off on the SEO additions before any `robots.txt` / `sitemap.xml` / `index.html` write.
+>
+> **Trigger:** Phase 3 has presented the full plan inline (robots.txt, sitemap.xml, meta tags, favicon).
+> **Why we ask:** SEO assets land on disk with the wrong production URL, wrong exclusions, or unwanted OG tags — fixable but noisy in git history.
+> **Cancel leaves:** Nothing — no file writes yet.
 
 After presenting the plan, use `AskUserQuestion` to get approval:
 

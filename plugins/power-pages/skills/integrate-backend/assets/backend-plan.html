@@ -10,7 +10,7 @@
   --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
   --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020; --high:#ca5010; --high-bg:#ca50100a; --high-border:#ca501020;
   --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
-  --webapi:#0078d4; --serverlogic:#5c2d91; --cloudflow:#ca5010;
+  --webapi:#0078d4; --aiwebapi:#00b7c3; --serverlogic:#5c2d91; --cloudflow:#ca5010;
   --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
   --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
 }
@@ -39,12 +39,13 @@ h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px
 .section-desc code{color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:12px;}
 h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
 .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
-.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
 .stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;}
 .stat-card:nth-child(1)::after{background:var(--webapi);}
-.stat-card:nth-child(2)::after{background:var(--serverlogic);}
-.stat-card:nth-child(3)::after{background:var(--cloudflow);}
+.stat-card:nth-child(2)::after{background:var(--aiwebapi);}
+.stat-card:nth-child(3)::after{background:var(--serverlogic);}
+.stat-card:nth-child(4)::after{background:var(--cloudflow);}
 .stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;}
 .stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
@@ -60,6 +61,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .approach-chip .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
 .approach-webapi{background:#0078d40a;border:1px solid #0078d425;color:var(--webapi);}
 .approach-webapi .dot{background:var(--webapi);}
+.approach-aiwebapi{background:#00b7c30a;border:1px solid #00b7c325;color:var(--aiwebapi);}
+.approach-aiwebapi .dot{background:var(--aiwebapi);}
 .approach-serverlogic{background:#5c2d910a;border:1px solid #5c2d9125;color:var(--serverlogic);}
 .approach-serverlogic .dot{background:var(--serverlogic);}
 .approach-cloudflow{background:#ca50100a;border:1px solid #ca501025;color:var(--cloudflow);}
@@ -67,6 +70,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .mono{font-family:var(--mono);}
 .reason-box{font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);line-height:1.8;}
 .reason-webapi{border-left:3px solid var(--webapi);}
+.reason-aiwebapi{border-left:3px solid var(--aiwebapi);}
 .reason-serverlogic{border-left:3px solid var(--serverlogic);}
 .reason-cloudflow{border-left:3px solid var(--cloudflow);}
 .item-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;}
@@ -87,12 +91,17 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .concept-header{display:flex;align-items:center;gap:14px;padding:20px 22px 0;}
 .concept-icon-box{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;}
 .concept-icon-webapi{background:#0078d412;color:var(--webapi);}
+.concept-icon-aiwebapi{background:#00b7c312;color:var(--aiwebapi);}
 .concept-icon-serverlogic{background:#5c2d9112;color:var(--serverlogic);}
 .concept-icon-cloudflow{background:#ca501012;color:var(--cloudflow);}
 .concept-title{font-size:16px;font-weight:800;color:var(--text-bright);}
 .concept-subtitle{font-size:12px;color:var(--text-dim);margin-top:1px;}
 .concept-body{padding:16px 22px 20px;font-size:13px;color:var(--text);line-height:1.75;}
 .concept-body p{margin-bottom:10px;}
+.note-callout{margin:0 0 14px;padding:12px 14px;border-left:3px solid var(--high);background:var(--high-bg);border-radius:6px;font-size:12.5px;line-height:1.65;color:var(--text);}
+.note-callout strong{color:var(--text-bright);font-weight:700;}
+.note-callout p{margin:0;}
+.note-callout p + p{margin-top:6px;}
 .concept-when{background:var(--surface2);border-top:1px solid var(--border);padding:14px 22px;font-size:12px;line-height:1.7;}
 .concept-when strong{color:var(--text-bright);}
 .concept-when-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-top:6px;}
@@ -206,6 +215,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-num" style="color:var(--webapi)" id="statWebApi">0</div><div class="stat-label">Web API</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--aiwebapi)" id="statAiWebApi">0</div><div class="stat-label">AI Web API</div></div>
           <div class="stat-card"><div class="stat-num" style="color:var(--serverlogic)" id="statServerLogic">0</div><div class="stat-label">Server Logic</div></div>
           <div class="stat-card"><div class="stat-num" style="color:var(--cloudflow)" id="statCloudFlow">0</div><div class="stat-label">Cloud Flows</div></div>
         </div>
@@ -272,6 +282,26 @@ const CONCEPTS = [
     ]
   },
   {
+    id: 'aiwebapi',
+    icon: '&#10024;',
+    iconCls: 'concept-icon-aiwebapi',
+    title: 'AI Web API (preview)',
+    subtitle: 'Generative summaries & grounded search \u2014 preview',
+    body: '<div class="note-callout"><p><strong>Note.</strong> AI summarization APIs are a preview feature. Preview features aren\u2019t meant for production use and may have restricted functionality. These features are available before an official release so that customers can get early access and provide feedback.</p></div><p>The <strong>AI Web API</strong> is a specialization of the Web API for AI-augmented reads. It exposes two endpoints: <strong>Search Summary</strong> (grounded AI answer over the site\u2019s search index) and <strong>Data Summarization</strong> (AI summary of a single record or a collection of records). Microsoft Learn documents one ready-made Data Summarization recipe for a Copilot-style summary on the standard support-case (<code>incident</code>) detail page \u2014 use it verbatim if it fits your UX, or configure Data Summarization with your own columns and prompt for any other table.</p><p>Like regular Web API, it runs in the browser and uses the same cookie-based auth and CSRF token. It respects the same table permissions and column permissions \u2014 so once you\u2019ve wired Web API for a table, the AI endpoints can read the same data and add a generative pass on top. The output is a human-readable summary, not raw records.</p><p><strong>Read-only</strong>: neither endpoint mutates Dataverse, so the Secure Action Principle does not apply. <strong>Three-level admin gate</strong>: tenant PowerShell setting, Copilot Hub environment/site governance, and (for Search Summary) the site-level maker toggle must all allow it.</p>',
+    diagram: [
+      { label: 'Browser', value: 'Opens case detail page' },
+      { label: 'AI Web API', value: 'POST /_api/summarization/data/...' },
+      { label: 'Table Permissions', value: 'Same as Web API' },
+      { label: 'AI Summary', value: 'Rendered in UI card' }
+    ],
+    whenUse: ['Summary card on a detail page', 'Summary of a list of records', 'Suggested / related records on a page', 'AI-grounded site search with citations'],
+    whenAvoid: ['Operations that write data', 'Deterministic / exact data output', 'Data that isn\'t in Dataverse', 'Tenants without generative AI enabled'],
+    docs: [
+      { label: 'Search Summary API', url: 'https://learn.microsoft.com/power-pages/configure/search/generative-ai' },
+      { label: 'Data Summarization API', url: 'https://learn.microsoft.com/power-pages/configure/data-summarization-api' }
+    ]
+  },
+  {
     id: 'serverlogic',
     icon: '&#9881;',
     iconCls: 'concept-icon-serverlogic',
@@ -315,6 +345,7 @@ const CONCEPTS = [
 
 const APPROACH_META = {
   webapi: { label: 'Web API', color: 'var(--webapi)', cls: 'webapi' },
+  aiwebapi: { label: 'AI Web API', color: 'var(--aiwebapi)', cls: 'aiwebapi' },
   serverlogic: { label: 'Server Logic', color: 'var(--serverlogic)', cls: 'serverlogic' },
   cloudflow: { label: 'Cloud Flow', color: 'var(--cloudflow)', cls: 'cloudflow' },
 };
@@ -351,6 +382,12 @@ function implementBar(approach) {
       <span class="implement-label">Implement with:</span>
       <span class="implement-cmd">/integrate-webapi</span>
       <span class="implement-hint">Generates Web API service code + table permissions</span>
+    </div>`;
+  } else if (approach === 'aiwebapi') {
+    return `<div class="implement-bar">
+      <span class="implement-label">Implement with:</span>
+      <span class="implement-cmd">/add-ai-webapi</span>
+      <span class="implement-hint">Generates summarization service + Summarization/* site settings</span>
     </div>`;
   } else if (approach === 'serverlogic') {
     return `<div class="implement-bar">
@@ -400,10 +437,12 @@ conceptsContainer.innerHTML = CONCEPTS.map(c => {
 
 // --- Overview Tab ---
 const webApiCount = ITEMS.filter(i => i.approach === 'webapi').length;
+const aiWebApiCount = ITEMS.filter(i => i.approach === 'aiwebapi').length;
 const serverLogicCount = ITEMS.filter(i => i.approach === 'serverlogic').length;
 const cloudFlowCount = ITEMS.filter(i => i.approach === 'cloudflow').length;
 
 document.getElementById('statWebApi').textContent = webApiCount;
+document.getElementById('statAiWebApi').textContent = aiWebApiCount;
 document.getElementById('statServerLogic').textContent = serverLogicCount;
 document.getElementById('statCloudFlow').textContent = cloudFlowCount;
 document.getElementById('topbarCount').textContent =
@@ -457,6 +496,7 @@ const orderContainer = document.getElementById('orderContainer');
 const PHASE_META = [
   { approach: 'serverlogic', title: 'Server Logic', subtitle: 'Server-side validation and business rules', color: 'var(--serverlogic)' },
   { approach: 'webapi', title: 'Web API', subtitle: 'Browser-to-Dataverse CRUD operations', color: 'var(--webapi)' },
+  { approach: 'aiwebapi', title: 'AI Web API', subtitle: 'Generative summaries and grounded search', color: 'var(--aiwebapi)' },
   { approach: 'cloudflow', title: 'Cloud Flows', subtitle: 'Async notifications and background automation', color: 'var(--cloudflow)' },
 ];
 
@@ -522,6 +562,7 @@ orderContainer.innerHTML = phases.map((phase, phaseIdx) => {
 // --- Items Tab ---
 const itemParts = [];
 if (webApiCount) itemParts.push(webApiCount + ' Web API');
+if (aiWebApiCount) itemParts.push(aiWebApiCount + ' AI Web API');
 if (serverLogicCount) itemParts.push(serverLogicCount + ' Server Logic');
 if (cloudFlowCount) itemParts.push(cloudFlowCount + ' Cloud Flow');
 document.getElementById('itemsDesc').textContent =

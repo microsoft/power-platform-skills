@@ -327,41 +327,6 @@ test("disabled:true short-circuits BEFORE PAC / agent-info shellouts", () => {
   assert.equal(agentCalled, false, "agent-info must not be invoked when disabled");
 });
 
-test("POWER_PLATFORM_SKILLS_TELEMETRY=0 short-circuits BEFORE PAC / agent-info", () => {
-  const telemetryDir = mkTelemetryDir({
-    instrumentationKey: "x",
-    collectorUrl: "https://x",
-    eventStreamName: "PowerPagesPluginEvent",
-  });
-  const captured = {};
-  let pacCalled = false;
-  const prev = process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
-  process.env.POWER_PLATFORM_SKILLS_TELEMETRY = "0";
-  let result;
-  try {
-    result = emitSkillStartedFromPrompt("/power-pages:add-seo", {
-      pluginName: "power-pages",
-      pluginVersion: "1.2.3",
-      trackedSkills: TRACKED,
-      telemetryDir,
-      _emit: (e, o) => {
-        captured.event = e;
-        captured.spawnOpts = o;
-      },
-      _readPacAuth: () => {
-        pacCalled = true;
-        return null;
-      },
-    });
-  } finally {
-    if (prev === undefined) delete process.env.POWER_PLATFORM_SKILLS_TELEMETRY;
-    else process.env.POWER_PLATFORM_SKILLS_TELEMETRY = prev;
-  }
-  assert.deepEqual(result, { emitted: false, skillName: "add-seo" });
-  assert.equal(captured.event, undefined);
-  assert.equal(pacCalled, false, "PAC must not be invoked when env opt-out is set");
-});
-
 test("missing instrumentationKey short-circuits BEFORE PAC / agent-info", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "",

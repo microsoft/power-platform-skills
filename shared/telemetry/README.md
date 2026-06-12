@@ -1,8 +1,8 @@
 # Shared 1DS Telemetry Library
 
-Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin syncs a copy into its own tree via `sync-to-plugin.js`.
+Canonical source for 1DS telemetry used by plugins in this repo. Each adopting plugin **symlinks** this library into its own tree: `plugins/<plugin>/scripts/lib/telemetry/lib` is a symlink to `shared/telemetry/lib`, so there is a single source of truth and no copy to keep in sync.
 
-The repo-root copy under `shared/telemetry/` is **development-time only** — nothing here runs at user time. Only the synced copy under `plugins/<plugin>/scripts/lib/telemetry/` is wired into hooks.
+`shared/telemetry/lib` is the **only** copy of the library. The marketplace installer dereferences the per-plugin symlink into the installed plugin at install time, so the library ships without a per-plugin copy. Each plugin keeps its own real `ikey.json` next to the symlink.
 
 Zero npm dependencies. Node stdlib only.
 
@@ -10,21 +10,54 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous skill-run telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child posts to the configured collector URL; the hook that emitted the event returns before the POST happens.
+Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the org's telemetry region, then posts to that region's collector URL; the hook that emitted the event returns before the POST happens.
 
 ```
-hook (~5ms when disabled, ~3-5s when enabled)
+hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
   │
   └─ fireAndForget(event, opts)         ← shared/telemetry/lib/emit-spawn.js
        │
        └─ spawn(emit-dispatcher.js, detached)   ← runs in background
-            ├─ read ikey.json
-            ├─ kill switch (cfg.disabled) → exit
-            ├─ env opt-out (TELEMETRY=0) → exit
+            ├─ read ikey.json (null/unreadable → HARD OFF)
+            ├─ kill switch (cfg.disabled) → exit   ← HARD OFF: no local log, no POST
             ├─ sanitizeData (FIELD_TYPES allowlist)
-            ├─ build CS4.0 envelope
-            └─ HTTPS POST to collector_url
+            ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
+            ├─ user opt-out (config.json telemetry[plugin]="off") → exit (mirror written, no POST)
+            ├─ resolve region → iKey + collector_url   ← region-resolver (geo + cloud, cached)
+            ├─ iKey missing/placeholder → exit (mirror already written, no POST)
+            ├─ build CS4.0 envelope (same time + sanitized data)
+            └─ HTTPS POST to the resolved collector_url
 ```
+
+The local log is the on-disk **mirror** of what is (or would be) sent to Kusto:
+each line is `{time, name, data}` where `data` is the sanitized payload whose
+field names ARE the Kusto column names. It is written for **every** event that
+clears the repo `disabled` kill switch — irrespective of whether a real iKey is
+resolved **and** irrespective of the user opt-out. Only the repo
+`disabled: true` kill switch (or a missing/unreadable `ikey.json`) produces zero
+side effects.
+
+The per-plugin user opt-out (`config.json` `telemetry[<plugin>] === "off"`, set
+via `/<plugin>:telemetry off`) suppresses **transmission**, not the local
+diagnostic mirror — so an opted-out run still writes `events.jsonl` (and pays the
+same event-building cost as an enabled run), it just never POSTs.
+
+### Region routing
+
+The collector iKey is not hard-coded — it is resolved per event from the
+`regions` map in `ikey.json`:
+
+- The org's geo is fetched from the Artemis service (`artemis-service.js`) using
+  the `orgId`, combined with the cloud stamp (`POWER_PLATFORM_SKILLS_CLOUD`, from
+  `pac auth who`) to pick a routing region (`region-resolver.js`). Sovereign
+  clouds (Gov, High, Dod, Mooncake) short-circuit to their region by stamp.
+- Resolutions are cached per org in `~/.power-platform-skills/region-cache.json`
+  (`region-cache.js`) so the Artemis call happens at most once per TTL.
+- With no `orgId`, or when Artemis is unreachable, the dispatcher falls back to
+  `regions[default_region]`.
+- The `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` env vars
+  are **test seams only** — when set they bypass region resolution. Production
+  never sets them.
 
 ## What is sent
 
@@ -40,9 +73,9 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **PAC + agent (when available, otherwise omitted):**
 
-- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` also drives region resolution)
 - `pacCliVersion` — semver from `pac --version`
-- `aiAgentName`, `aiAgentVersion` — host AI agent detected via env. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION`. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever built-in detector matches.
+- `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
 **Per-event:**
 
@@ -51,17 +84,17 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 ## What is NEVER sent
 
-File paths, cwd, env vars (except the telemetry kill switch), site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
 
 ## Privacy posture
 
 - **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
-- **Opt out** via `POWER_PLATFORM_SKILLS_TELEMETRY=0` (env kill switch).
-- **Repo-side kill switch.** `ikey.json` carries a `disabled` flag. When `true`, every entry point — hooks and `emit-from-prompt` — short-circuits BEFORE any PAC shellout or process spawn. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
+- **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (`events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
+- **Repo-side kill switch (true hard-off).** `ikey.json` carries a `disabled` flag. When `true` (or when `ikey.json` is missing/unreadable), every entry point — hooks, `emit-from-prompt`, and the dispatcher — short-circuits BEFORE any PAC shellout or process spawn, so there is **no POST and no local log**. Ship `true` and flip to `false` only after the tenant-side Kusto stream and annotation are provisioned.
 
-The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects.
+The `disabled` flag is checked at every layer that could perform user-facing work: the pretool/posttool hooks and `emit-from-prompt.js`. A disabled plugin emits zero side effects. The per-plugin user opt-out, by contrast, is enforced inside the detached dispatcher AFTER the local mirror is written — so an opted-out run still produces `events.jsonl` (and incurs the same event-building cost as an enabled run) but never transmits.
 
 ---
 
@@ -69,19 +102,23 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 
 ```
 shared/telemetry/
-├─ ikey.json                 # template config (placeholder values)
-├─ sync-to-plugin.js         # copies lib/ + ikey.json into a plugin
+├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
 │  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
-│  ├─ emit-dispatcher.js     # detached child — kill switches, sanitize, POST
+│  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, region resolve, sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
-│  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId
+│  ├─ region-resolver.js     # geo (Artemis) + cloud stamp → routing region → iKey/collector
+│  ├─ region-cache.js        # per-org region cache in ~/.power-platform-skills/region-cache.json
+│  ├─ artemis-service.js     # fetches the org's geo + normalizes the cloud stamp
+│  ├─ user-config.js         # reads/writes the per-plugin telemetry opt-out in config.json
+│  ├─ telemetry-config.js    # CLI behind /<plugin>:telemetry on|off|status
+│  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId / cloud
 │  ├─ agent-info.js          # detects AI agent host + reads `pac --version`
 │  ├─ session.js             # per-process session UUID
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)
-│  └─ local-log.js           # appends events to ~/.power-platform-skills/events.jsonl when no real iKey is configured
+│  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/events.jsonl (irrespective of iKey), with 10 MB rotation
 └─ tests/                    # node:test coverage for every module above
 ```
 
@@ -91,30 +128,50 @@ shared/telemetry/
 
 These steps assume your plugin already lives under `plugins/<your-plugin>/` with a `.claude-plugin/plugin.json` and `hooks/hooks.json`.
 
-### 1. Sync the library
+### 1. Link the library
 
-From the repo root:
+Create a git symlink at `plugins/<your-plugin>/scripts/lib/telemetry/lib` pointing at the relative path to `shared/telemetry/lib`. From the `telemetry` directory that target is `../../../../../shared/telemetry/lib` (five levels up to the repo root).
+
+Create it as a mode-`120000` blob so it works on every checkout regardless of local symlink privileges (the same way the skill-workflow symlinks under `skills/*/` were made):
 
 ```bash
-node shared/telemetry/sync-to-plugin.js --target plugins/<your-plugin>
+# from the repo root
+TARGET=plugins/<your-plugin>/scripts/lib/telemetry
+mkdir -p "$TARGET"
+hash=$(printf '../../../../../shared/telemetry/lib' | git hash-object -w --stdin)
+git update-index --add --cacheinfo 120000,$hash,"$TARGET/lib"
+git checkout -- "$TARGET/lib"
 ```
 
-This copies `shared/telemetry/lib/*` and `shared/telemetry/ikey.json` into `plugins/<your-plugin>/scripts/lib/telemetry/`.
+Now `scripts/lib/telemetry/lib` resolves to the shared library — there is no copy to keep in sync.
 
 ### 2. Configure `ikey.json`
 
-Edit `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json`:
+Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder). Use the region-routing structure: `default_region` plus a `regions` map keyed by routing region, each with its own `instrumentation_key` and `collector_url`:
 
 ```json
 {
-  "instrumentationKey": "<your 1DS instrumentation key>",
-  "collector_url": "https://<region>-mobile.events.data.microsoft.com/OneCollector/1.0/",
   "event_stream_name": "<your Kusto stream / annotation name>",
-  "disabled": true
+  "disabled": true,
+  "default_region": "us",
+  "regions": {
+    "us": {
+      "instrumentation_key": "<1DS key for the US collector>",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "<1DS key for the EU collector>",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    }
+  }
 }
 ```
 
+Provision a region entry for every cloud/geo you ship to (`us`, `eu`, `gov`, `high`, `dod`, `mooncake`, `internal`). The dispatcher resolves which one to use at emit time and falls back to `regions[default_region]`.
+
 **Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and FieldNameMappings are provisioned. Flip to `false` in a separate PR once verified.
+
+**Posture rule:** the **committed** `ikey.json` must stay `disabled: true`. A working-tree `disabled: false` is a local experiment only — never commit it.
 
 ### 3. Register hooks
 
@@ -124,14 +181,14 @@ In `plugins/<your-plugin>/hooks/hooks.json`, register the three hook scripts tha
 - `run-skill-posttool-validation.js` — runs your validator on `PostToolUse(Skill)`
 - `run-user-prompt-telemetry.js` — emits `skill_started` on `UserPromptSubmit` when the prompt is a tracked `/plugin:skill` slash command
 
-These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list. Adapt the imports to your plugin's layout.
+These hooks must call out to your plugin's `scripts/lib/<plugin>-hook-utils.js` for the tracked-skill list, and pass `ikeyJsonPath` (the plugin's own `ikey.json`) into `fireAndForget` so the dispatcher reads the plugin's config rather than `shared/`'s placeholder. Adapt the imports to your plugin's layout.
 
 ### 4. Verify locally
 
-Run the synced test suite:
+Run the plugin's test suite:
 
 ```bash
-node --test plugins/<your-plugin>/scripts/tests/
+node --test plugins/<your-plugin>/scripts/tests/*.test.js
 ```
 
 Then invoke one of your tracked skills with `disabled: true` and confirm via Claude Code's hook logs that no telemetry-related work happens. With `disabled: false` and a real iKey, set `POWER_PLATFORM_SKILLS_FAKE_HTTPS=/tmp/probe.json` and verify the probe file is written with the expected envelope shape.
@@ -140,19 +197,11 @@ Then invoke one of your tracked skills with `disabled: true` and confirm via Cla
 
 ## Updating the shared library
 
-**DO NOT hand-edit** the synced copy under `plugins/<plugin>/scripts/lib/telemetry/lib/`. Edit `shared/telemetry/lib/` and re-run the sync:
+Edit `shared/telemetry/lib/` directly. Because each adopting plugin's `scripts/lib/telemetry/lib` is a **symlink** to this directory, the change is live for every plugin immediately — there is no copy to re-sync and nothing to propagate per-plugin.
 
-```bash
-node shared/telemetry/sync-to-plugin.js --target plugins/<plugin>
-```
+Each plugin's `ikey.json` is a separate real file (not symlinked), so editing the shared library never touches a plugin's provisioned key.
 
-The sync overwrites `ikey.json` with the placeholder template — restore your plugin's real config with:
-
-```bash
-git checkout plugins/<plugin>/scripts/lib/telemetry/ikey.json
-```
-
-If you change the wire-level shape (envelope, transport, allowlist), update every adopting plugin's synced copy in the same PR.
+If you change the wire-level shape (envelope, transport, allowlist), it applies to every adopting plugin at once — bump and validate accordingly.
 
 ## Strict allowlist
 
@@ -169,7 +218,8 @@ Every module exposes injectable test seams via `opts._xxx` properties so tests r
 - `pac-auth.js` — `opts._exec` swaps `execFileSync`
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
-- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file
-- `session.js` — `opts.configDir` redirects state to a temp directory
+- `region-resolver.js` — `opts._fetchGeo` swaps the Artemis call; `opts._cache` swaps the region cache
+- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file; `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` bypass region resolution
+- `session.js` — `_resetCache()` clears the per-process session-id cache between tests; `getSessionId(override)` accepts an explicit id (no filesystem state to redirect)
 
 Follow this pattern for any new module.

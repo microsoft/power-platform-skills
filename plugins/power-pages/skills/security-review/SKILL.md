@@ -94,6 +94,14 @@ The final HTML always lives at `<PROJECT_ROOT>/docs/security-review-<YYYY-MM-DD-
 
 ### 2.1 Ask the goal
 
+<!-- gate: security-review:2.1.goal | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · security-review:2.1.goal):** Capture the review goal — choice branches into one of three sub-skill sets (`access-config` / `release` / `monitor`).
+>
+> **Trigger:** Phase 2.1 entry, unless `$ARGUMENTS` already answers it.
+> **Why we ask:** Auto-picking `release` runs ALL sub-skills (slow; possibly hits scan/firewall endpoints unnecessarily); auto-picking the wrong goal mis-scopes the review.
+> **Cancel leaves:** Nothing — no sub-skills invoked yet.
+
 Ask the user with a single `AskUserQuestion` call. If the user's initial request already answers it, skip and continue.
 
 **Question — What to review?**
@@ -255,6 +263,14 @@ Open `<DOCS_PATH>` in the user's default browser.
 > Use `--skillName "SecurityReview"`.
 
 ### 5.3 In-chat summary
+
+<!-- gate: security-review:5.3.next-action | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · security-review:5.3.next-action):** Post-report next-action prompt — *"Walk me through the fixes / Re-run the review / Done for now"*. Drives whether remediation skills get invoked.
+>
+> **Trigger:** Phase 5.1 wrote the HTML report.
+> **Why we ask:** Auto-invoking remediation skills (`/manage-headers`, `/manage-firewall`, `/audit-permissions`) without the user reading the report; auto-re-running the review wastes time on a still-fresh result.
+> **Cancel leaves:** Nothing — the HTML report at `docs/security-review-<ts>.html` is the final artifact regardless.
 
 Show a short plain-language summary in the chat: counts of critical / warning / info findings, where the report lives. Then offer the next action with `AskUserQuestion`:
 

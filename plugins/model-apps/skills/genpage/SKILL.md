@@ -1,6 +1,6 @@
 ---
 name: genpage
-version: 2.1.0
+version: 2.2.0
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
@@ -66,6 +66,28 @@ Derive a short folder name from the user's requirements:
 2. Convert to kebab-case (e.g., "Candidate Tracker" → `candidate-tracker`)
 3. Create the folder: `mkdir -p <folder-name>`
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
+
+### Phase 0.5: Initialize Local-Dev Manifest
+
+Write `package.json` and `genpage.d.ts` into the working directory so the
+developer can `npm install` and get IntelliSense, type-checking, and "go to
+definition" in their editor. Versions come from
+`references/supported-dependencies.md` (single source of truth:
+`scripts/lib/supported-dependencies.js`).
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slug>
+```
+
+- `<kebab-slug>` is the same slug used for the working directory.
+- Add `--features charts,datepicker,timepicker` (comma-separated) only when
+  the requirements clearly call for them; otherwise omit and keep the
+  manifest lean.
+- The script is **idempotent** — it skips files that already exist. Pass
+  `--force` to overwrite (used in regeneration flows when versions drift).
+- Output is a JSON summary on stdout; pipe to stderr for visibility but do
+  not block the workflow if the script returns non-zero — the manifest is a
+  dev-ergonomics aid, not part of the deployed artifact.
 
 ### Phase 1: Plan
 
@@ -313,6 +335,14 @@ For each `.tsx` file produced, deploy to Power Apps.
 
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
+**Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
+
+```markdown
+## Phase 6 — Deploy
+- Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "<description>" --add-to-sitemap`
+- Result: page-id = <returned-id>, status = success
+```
+
 #### `--prompt` semantics
 
 - **First upload** (`--add-to-sitemap`, no `--page-id`): full page description
@@ -406,9 +436,32 @@ Options: **Yes, verify in browser** / **Skip verification**
 
 ### Phase 8: Summary
 
-Write a `workflow-log.md` file to the working directory summarizing the run:
-agents invoked, commands executed, decisions made, files produced. This log is
-useful for debugging and required by the eval harness.
+By Phase 8 the `workflow-log.md` should already contain Phase 0 through Phase 7
+sections written incrementally — the planner writes Phase 1 inside its agent
+context, you (the orchestrator) write Phase 0 / 0.5 / 3 / 4 / 6 / 6.5 / 7 as
+each runs, and the entity-builder and page-builder agents append their own
+Phase 2 / 5 sections when invoked.
+
+In Phase 8, append a final `## Phase 8 — Summary` section to the same file:
+
+```markdown
+## Phase 8 — Summary
+
+| Page | File | Entities | Status |
+|------|------|----------|--------|
+| <Name> | <file>.tsx | <entities or "mock data"> | Deployed |
+
+- App: <name> (<app-id>)
+- Entities created: <list, or "none">
+- Browser verification: <skipped | confirmed | failed: <reason>>
+```
+
+The log MUST contain command-level entries for every prereq / auth / question /
+upload / script invocation — not just outcome summaries. The eval harness greps
+the log for tokens like `node --version`, `pac auth list`, `AskUserQuestion`,
+`EnterPlanMode`, `--prompt`, `check-auth.js`, etc. A decision-only log
+(e.g., `Decision: new page` without the underlying `AskUserQuestion`) will
+fail Layer 1 assertions even when the agent's behavior was correct.
 
 Then present a final summary to the user:
 

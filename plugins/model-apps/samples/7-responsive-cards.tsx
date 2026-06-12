@@ -3,9 +3,9 @@ import { makeStyles, tokens, Button, Text, Caption1, Subtitle1, Body1, mergeClas
 import { MoreHorizontal20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-    container: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL, padding: tokens.spacingHorizontalM, width: '100%', boxSizing: 'border-box' },
-    cardsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: tokens.spacingVerticalL, width: '100%' },
-    card: { width: '100%', maxWidth: '480px', height: 'fit-content', cursor: 'pointer', transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out', '&:hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 }, '&:focus-visible': { outline: `2px solid ${tokens.colorBrandBackground}`, outlineOffset: '2px' } },
+    container: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL, padding: tokens.spacingHorizontalM, width: '100%', boxSizing: 'border-box', '@media (max-width: 768px)': { padding: tokens.spacingHorizontalS } },
+    cardsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: tokens.spacingVerticalL, width: '100%', '@media (max-width: 768px)': { gridTemplateColumns: '1fr', gap: tokens.spacingVerticalM } },
+    card: { width: '100%', maxWidth: '480px', height: 'fit-content', cursor: 'pointer', transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out', '&:hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 }, '&:focus-visible': { outline: `2px solid ${tokens.colorBrandBackground}`, outlineOffset: '2px' }, '@media (max-width: 768px)': { maxWidth: '100%' } },
     sectionHeader: { marginBottom: tokens.spacingVerticalM },
     sectionTitle: { marginBottom: tokens.spacingVerticalXS, display: 'block' },
     sectionDescription: { color: tokens.colorNeutralForeground2, marginBottom: tokens.spacingVerticalM, display: 'block' },
@@ -13,7 +13,6 @@ const useStyles = makeStyles({
     logo: { borderRadius: tokens.borderRadiusSmall, width: '48px', height: '48px', backgroundColor: tokens.colorNeutralBackground3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' },
     cardHeader: { margin: 0, fontWeight: tokens.fontWeightSemibold },
     cardCaption: { color: tokens.colorNeutralForeground3, display: 'block' },
-    '@media (max-width: 768px)': { container: { padding: tokens.spacingHorizontalS }, cardsGrid: { gridTemplateColumns: '1fr', gap: tokens.spacingVerticalM }, card: { maxWidth: '100%' } }
 });
 
 const SectionHeader: React.FC<{ title: string; description: string; titleId: string; descriptionId: string; }> = ({ title, description, titleId, descriptionId }) => {

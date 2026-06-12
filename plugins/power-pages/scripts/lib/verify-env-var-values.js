@@ -87,11 +87,31 @@ function parseArgs(argv) {
 }
 
 // Read EnvironmentVariables[] from a Microsoft-standard deployment-settings.json.
-// Supports two shapes that appear in the wild:
-//   - Top-level `EnvironmentVariables: [{ SchemaName, Value }, ...]` (single-stage file)
-//   - Per-stage `Stages: [{ Name, EnvironmentVariables: [...] }, ...]` (multi-stage file)
-// Returns `[{ schemaName, value }]` filtered to stageLabel when provided.
-function readSettingsFile(filePath, stageLabel) {
+// Supports three shapes that appear in the wild:
+//   1. Top-level `EnvironmentVariables: [{ SchemaName, Value }, ...]` (single-stage file)
+//   2. Per-stage array: `Stages: [{ Name, EnvironmentVariables: [...] }, ...]`
+//      (capital-S, used by some hand-authored files)
+//   3. Per-stage keyed object: `stages: { "<stage name>": { EnvironmentVariables: [...] } }`
+//      (lowercase-s, the actual schema emitted by configure-env-variables and
+//      consumed by Power Platform Pipelines — see schemas.microsoft.com/
+//      power-platform/deployment-settings/2024. Discovered as a real-world gap
+//      against the Citizens portal site, 2026-05-26.)
+//
+// Options:
+//   stageLabel       — narrows the result to a single stage's entries (matched
+//                      case-insensitively against `Name` for shape 2 or the
+//                      keyed-object's key for shape 3).
+//   preserveAllStages — when true, returns EVERY entry verbatim without
+//                      dedupe — critical for validators that must inspect
+//                      each stage's value independently. Default false
+//                      (matches the old single-source-of-truth semantics for
+//                      legacy callers like verify-env-var-values that report
+//                      a single value per schema).
+//
+// Returns `[{ schemaName, value, stageLabel }]`.
+// stageLabel is the stage name for shape 2/3 entries; null for shape 1.
+function readSettingsFile(filePath, stageLabel, options = {}) {
+  const preserveAllStages = options.preserveAllStages === true;
   let raw;
   try {
     raw = fs.readFileSync(filePath, 'utf8');
@@ -105,35 +125,85 @@ function readSettingsFile(filePath, stageLabel) {
     throw new Error(`--settingsFile ${filePath} is not valid JSON: ${err.message}`);
   }
 
-  // Per-stage shape
+  const lowerLabel = stageLabel ? stageLabel.toLowerCase() : null;
+
+  // Shape 2: per-stage array (`Stages: []`)
   if (Array.isArray(parsed.Stages)) {
-    if (!stageLabel) {
-      // No filter — flatten all stages
+    if (!lowerLabel) {
       const all = [];
       for (const stage of parsed.Stages) {
         if (Array.isArray(stage.EnvironmentVariables)) {
           for (const ev of stage.EnvironmentVariables) {
-            all.push({ schemaName: ev.SchemaName, value: ev.Value });
+            all.push({
+              schemaName: ev.SchemaName,
+              value: ev.Value,
+              stageLabel: stage.Name || null,
+            });
           }
         }
       }
-      return dedupeBySchemaName(all);
+      return preserveAllStages ? all : dedupeBySchemaName(all);
     }
     const stage = parsed.Stages.find(
-      (s) => (s.Name || '').toLowerCase() === stageLabel.toLowerCase()
+      (s) => (s.Name || '').toLowerCase() === lowerLabel
     );
     if (!stage || !Array.isArray(stage.EnvironmentVariables)) return [];
     return stage.EnvironmentVariables.map((ev) => ({
       schemaName: ev.SchemaName,
       value: ev.Value,
+      stageLabel: stage.Name || null,
     }));
   }
 
-  // Top-level shape
+  // Shape 3: per-stage keyed object (e.g. `stages: { "<name>": {...} }`).
+  // This is the schema emitted by configure-env-variables and the one
+  // Power Platform Pipelines actually accepts. Accept any common casing of
+  // the top-level key (`stages`, `Stages`, `STAGES`) so hand-authored files
+  // with mixed casing still resolve. (The shape 2 array check above only
+  // matches when `parsed.Stages` is an Array; if it's a plain object, this
+  // branch picks it up.)
+  const stagesObj =
+    parsed.stages || parsed.Stages || parsed.STAGES || null;
+  if (
+    stagesObj &&
+    typeof stagesObj === 'object' &&
+    !Array.isArray(stagesObj)
+  ) {
+    if (!lowerLabel) {
+      const all = [];
+      for (const [name, stage] of Object.entries(stagesObj)) {
+        if (stage && Array.isArray(stage.EnvironmentVariables)) {
+          for (const ev of stage.EnvironmentVariables) {
+            all.push({
+              schemaName: ev.SchemaName,
+              value: ev.Value,
+              stageLabel: name,
+            });
+          }
+        }
+      }
+      return preserveAllStages ? all : dedupeBySchemaName(all);
+    }
+    // Case-insensitive key match
+    const matchKey = Object.keys(stagesObj).find(
+      (k) => k.toLowerCase() === lowerLabel
+    );
+    if (!matchKey) return [];
+    const stage = stagesObj[matchKey];
+    if (!stage || !Array.isArray(stage.EnvironmentVariables)) return [];
+    return stage.EnvironmentVariables.map((ev) => ({
+      schemaName: ev.SchemaName,
+      value: ev.Value,
+      stageLabel: matchKey,
+    }));
+  }
+
+  // Shape 1: top-level `EnvironmentVariables: []` (single-stage file)
   if (Array.isArray(parsed.EnvironmentVariables)) {
     return parsed.EnvironmentVariables.map((ev) => ({
       schemaName: ev.SchemaName,
       value: ev.Value,
+      stageLabel: null,
     }));
   }
   return [];

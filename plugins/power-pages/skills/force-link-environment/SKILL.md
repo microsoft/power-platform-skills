@@ -88,8 +88,21 @@ Confirm the *"Using Force Link…"* section's current warnings before proceeding
 
 ## Phase 2 — Identify host + dev env
 
-<!-- not-a-gate: hostEnvUrl fallback prompt — data-gathering when --host arg + marker files all empty -->
-<!-- not-a-gate: dev env BAP GUID fallback prompt — data-gathering when --dev-env arg + pac env confirmation both unavailable -->
+<!-- gate: force-link-environment:2.host-url | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · force-link-environment:2.host-url):** Pick the target host environment URL when arg / marker resolution paths all came up empty. Fires only on the "no `--host` arg, no `last-host-check.json`, no `last-pipeline.json`" branch (step 4 below).
+>
+> **Trigger:** Phase 2 resolution order steps 1–3 all returned no value.
+> **Why we ask:** Auto-picking the wrong host runs `ManageEnvironmentStamp` against the wrong tenant and moves the stamp irreversibly without consent.
+> **Cancel leaves:** Nothing — no API call yet.
+
+<!-- gate: force-link-environment:2.dev-env | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · force-link-environment:2.dev-env):** Pick (or paste) the source dev env's BAP env GUID when `--dev-env` arg is absent and `pac env who` didn't confirm. Fires only on the "no arg + no confirmation" branch (step 3 below).
+>
+> **Trigger:** Phase 2 BAP-GUID resolution steps 1–2 all returned no value.
+> **Why we ask:** Auto-picking the wrong dev env relinks a different env to the new host — makers of the wrong env lose pipeline access.
+> **Cancel leaves:** Nothing — no API call yet.
 
 Resolution order for `hostEnvUrl`:
 1. `--host <url>` argument, if supplied.

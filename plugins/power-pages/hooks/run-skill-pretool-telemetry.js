@@ -78,9 +78,6 @@ function readStdin() {
 }
 
 (async () => {
-  // Fast-path opt-out: skip stdin read and every other side effect.
-  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") process.exit(0);
-
   const raw = await readStdin();
   let parsed;
   try {
@@ -92,9 +89,12 @@ function readStdin() {
   const skillName = hookUtils.getTrackedSkillFromToolInput(parsed.tool_input);
   if (!skillName) process.exit(0);
 
-  // Fast-path kill switch / unconfigured: gate BEFORE the pac shell-outs
-  // (`pac auth who` ~3s + `pac --version` ~2s) so disabled / opted-out
-  // hook invocations cost effectively nothing.
+  // Repo-side hard-off / unconfigured: gate BEFORE the pac shell-outs
+  // (`pac auth who` ~3s + `pac --version` ~2s) so a disabled or unconfigured
+  // plugin costs effectively nothing. The user opt-out is NOT a fast-path: the
+  // enriched event is still built and dispatched so the detached dispatcher can
+  // write the local diagnostic mirror; it reads the per-plugin config and skips
+  // the POST. (Opting out therefore costs the same as an enabled run.)
   const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey();
   if (disabled) process.exit(0);
   if (!defaultInstrumentationKey) process.exit(0);
@@ -144,6 +144,10 @@ function readStdin() {
         cloud: (pacAuth && pacAuth.cloud) || "",
         configDir,
         fakeProbe,
+        // Point the dispatcher at this plugin's real ikey.json (lib/ is a
+        // symlink to shared/, so its __dirname default would otherwise hit
+        // shared/'s placeholder).
+        ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
       }
     );
   } catch {

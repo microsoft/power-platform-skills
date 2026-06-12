@@ -59,12 +59,11 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   const skillName = detectSlashCommand(promptText, { pluginName, trackedSkills });
   if (!skillName) return { emitted: false, skillName: null };
 
-  // Fast-path kill switches: short-circuit BEFORE any PAC / agent-info
-  // shellouts (~3-5s combined) so a disabled plugin or opted-out user pays
-  // effectively no cost when a tracked slash command is detected.
-  if (process.env.POWER_PLATFORM_SKILLS_TELEMETRY === "0") {
-    return { emitted: false, skillName };
-  }
+  // Repo-side hard-off: short-circuit BEFORE any PAC / agent-info shellouts
+  // (~3-5s combined) so a disabled or half-provisioned plugin pays effectively
+  // no cost. The user opt-out is NOT checked here: the event is still built and
+  // dispatched so the detached dispatcher can write the local diagnostic mirror;
+  // the dispatcher reads the per-plugin config and skips the POST when opted out.
   const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey(telemetryDir);
   if (disabled) return { emitted: false, skillName };
   if (!defaultInstrumentationKey) return { emitted: false, skillName };

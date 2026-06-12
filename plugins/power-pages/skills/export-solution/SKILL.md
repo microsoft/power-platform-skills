@@ -129,10 +129,20 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 
 ### Phase 2 — Identify Solution
 
+<!-- gate: export-solution:2.identify | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:2.identify):** No `.solution-manifest.json` in project root — user must pick or paste a solution unique name before export proceeds. Fires only on the "not found" branch (step 3 below).
+>
+> **Trigger:** Phase 2 step 1 didn't find a manifest.
+> **Why we ask:** Auto-picking the wrong solution exports a managed zip that ships the wrong table/site/flow set to staging.
+> **Cancel leaves:** Nothing — no ExportSolutionAsync call yet.
+
 1. Look for `.solution-manifest.json` in project root (use `findProjectRoot` or `glob('**/.solution-manifest.json')`)
 2. If found: read `solution.uniqueName`, `solution.solutionId`, `environmentUrl`
    - Verify environment URLs match (warn if different — may be cross-environment export)
-3. If not found: ask user for solution unique name via `AskUserQuestion`
+3. If not found, use `AskUserQuestion` to pick the solution:
+   - Query Dataverse for available unmanaged solutions and present them as options
+   - Free-text fallback ("Other") for pasting the unique name directly
 4. Confirm solution exists in environment:
    ```
    GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{solutionName}'&$select=solutionid,uniquename,friendlyname,version,ismanaged
@@ -225,8 +235,17 @@ Invoke `AskUserQuestion` immediately — do NOT describe this choice as chat tex
 
 Use the answer to set `"Managed": true` or `"Managed": false` in the `ExportSolutionAsync` request body.
 
-Also ask (separate `AskUserQuestion`):
+<!-- gate: export-solution:3.overwrite | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · export-solution:3.overwrite):** Output directory and overwrite-vs-new-name decision for the produced zip. If an existing zip is detected at the target path, the prompt offers Overwrite / pick new name / cancel.
+>
+> **Trigger:** Phase 3 after Managed/Unmanaged is picked.
+> **Why we ask:** Auto-overwriting replaces a previous export that may have been hand-tested already.
+> **Cancel leaves:** Nothing — no zip written.
+
+Also ask via `AskUserQuestion`:
 - Output directory (default: current project root)
+- If a zip already exists at the resolved output path: *"Overwrite / Pick new name / Cancel"*
 
 ### Phase 4 — Trigger Async Export
 
