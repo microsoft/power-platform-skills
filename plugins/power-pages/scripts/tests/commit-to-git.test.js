@@ -21,7 +21,31 @@ require.cache[listPendingChangesPath] = {
   },
 };
 
-const { commitToGit } = require('../lib/commit-to-git');
+// Stub out detect-git-binding the same way so the solutionUniqueName
+// auto-resolve path (added 2026-06 to support env-bound contexts) can be
+// driven without a live Dataverse tenant. Each test sets `detectStub` to the
+// shape detectGitBinding would return for that scenario.
+const detectGitBindingPath = require.resolve('../lib/detect-git-binding');
+let detectStub = null;
+let detectCallCount = 0;
+require.cache[detectGitBindingPath] = {
+  id: detectGitBindingPath,
+  filename: detectGitBindingPath,
+  loaded: true,
+  exports: {
+    detectGitBinding: async () => {
+      detectCallCount += 1;
+      if (!detectStub) {
+        throw new Error('test forgot to set detectStub before calling commitToGit without solutionUniqueName');
+      }
+      return detectStub;
+    },
+    CONNECTION_TYPE: {},
+  },
+};
+function resetDetect() { detectStub = null; detectCallCount = 0; }
+
+const { commitToGit, resolveSolutionUniqueNameAuto } = require('../lib/commit-to-git');
 
 function createQueuedServer(responses) {
   const queue = [...responses];
@@ -43,18 +67,74 @@ function createQueuedServer(responses) {
 function serverUrl(s) { return `http://127.0.0.1:${s.port}`; }
 function closeAll(...servers) { return Promise.all(servers.map(s => new Promise(r => s.server.close(r)))); }
 
-test('commit-to-git: missing solutionUniqueName rejects', async () => {
+test('commit-to-git: omitted solutionUniqueName triggers auto-resolve via detect-git-binding', async () => {
+  // No detectStub set + no token → must reject in the auth-acquisition guard
+  // BEFORE making any network call (detectStub would throw if reached).
+  resetDetect();
+  await assert.rejects(
+    commitToGit({ envUrl: 'http://x', commitMessage: 'm' }),
+    /auth token could not be acquired/,
+  );
+  assert.equal(detectCallCount, 0, 'detectGitBinding must not be called when auth fails');
+});
+
+test('commit-to-git: auto-resolve errors when env-bound and NO solution has pending changes', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true,
+    bindingType: 'environment',
+    solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'SolA', solutionId: 'a', pendingChangesCount: 0 },
+      { uniqueName: 'SolB', solutionId: 'b', pendingChangesCount: 0 },
+    ],
+    multipleSolutionsBound: true,
+  };
   await assert.rejects(
     commitToGit({ envUrl: 'http://x', token: 't', commitMessage: 'm' }),
-    /--solutionUniqueName is required/,
+    /no.*pending changes|no bound solution/i,
+  );
+  assert.equal(detectCallCount, 1);
+});
+
+test('commit-to-git: auto-resolve errors when env-bound and MULTIPLE solutions have pending changes', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true,
+    bindingType: 'environment',
+    solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'SolA', solutionId: 'a', pendingChangesCount: 4 },
+      { uniqueName: 'SolB', solutionId: 'b', pendingChangesCount: 7 },
+    ],
+    multipleSolutionsBound: true,
+  };
+  await assert.rejects(
+    commitToGit({ envUrl: 'http://x', token: 't', commitMessage: 'm' }),
+    /SolA|SolB/,
+  );
+  await assert.rejects(
+    commitToGit({ envUrl: 'http://x', token: 't', commitMessage: 'm' }),
+    /Pass --solutionUniqueName explicitly/,
+  );
+});
+
+test('commit-to-git: auto-resolve errors when env is not bound to Git', async () => {
+  resetDetect();
+  detectStub = { bound: false, bindingType: null, solutionUniqueName: null, boundSolutions: [] };
+  await assert.rejects(
+    commitToGit({ envUrl: 'http://x', token: 't', commitMessage: 'm' }),
+    /not bound to Git|no.*bound solutions/i,
   );
 });
 
 test('commit-to-git: missing commitMessage rejects', async () => {
+  resetDetect();
   await assert.rejects(
     commitToGit({ envUrl: 'http://x', token: 't', solutionUniqueName: 's' }),
     /--commitMessage \(or --commitMessageFile\) is required/,
   );
+  assert.equal(detectCallCount, 0, 'detect must NOT be called when solutionUniqueName is supplied');
 });
 
 test('commit-to-git: missing envUrl rejects', async () => {
@@ -424,3 +504,147 @@ test('commit-to-git: --background --ticketFile honors the explicit path', async 
     fsT4.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// solutionUniqueName auto-resolve (env-bound support, added 2026-06)
+// ---------------------------------------------------------------------------
+
+test('commit-to-git: auto-resolves from solution-bound detect result', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true,
+    bindingType: 'solution',
+    solutionUniqueName: 'BoundSol',
+    boundSolutions: [{ uniqueName: 'BoundSol', solutionId: 'x', pendingChangesCount: 12 }],
+    multipleSolutionsBound: false,
+  };
+  const s = await createQueuedServer([
+    { status: 200, body: JSON.stringify({ CommitId: 'sha-auto-sol', Type: 1 }) },
+  ]);
+  const r = await commitToGit({
+    envUrl: serverUrl(s), token: 'tok',
+    commitMessage: 'feat: solution-bound auto',
+    skipPoll: true,
+  });
+  await closeAll(s);
+  assert.equal(r.committed, true);
+  assert.equal(r.commitId, 'sha-auto-sol');
+  assert.equal(r.solutionUniqueName, 'BoundSol');
+  assert.deepEqual(r.solutionAutoResolved, { value: 'BoundSol', reason: 'solution-bound' });
+  const body = JSON.parse(s.received[0].body);
+  assert.equal(body.SolutionUniqueName, 'BoundSol');
+  assert.equal(detectCallCount, 1);
+});
+
+test('commit-to-git: auto-resolves env-bound with exactly one pending solution', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true,
+    bindingType: 'environment',
+    solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'Quiet', solutionId: 'q', pendingChangesCount: 0 },
+      { uniqueName: 'Dirty', solutionId: 'd', pendingChangesCount: 5 },
+    ],
+    multipleSolutionsBound: true,
+  };
+  const s = await createQueuedServer([
+    { status: 200, body: JSON.stringify({ CommitId: 'sha-auto-env', Type: 1 }) },
+  ]);
+  const r = await commitToGit({
+    envUrl: serverUrl(s), token: 'tok',
+    commitMessage: 'feat: env-bound auto',
+    skipPoll: true,
+  });
+  await closeAll(s);
+  assert.equal(r.solutionUniqueName, 'Dirty');
+  assert.equal(r.solutionAutoResolved.value, 'Dirty');
+  assert.match(r.solutionAutoResolved.reason, /env-bound|single pending|1 pending/i);
+  const body = JSON.parse(s.received[0].body);
+  assert.equal(body.SolutionUniqueName, 'Dirty');
+});
+
+test('commit-to-git: explicit solutionUniqueName skips detect-git-binding entirely', async () => {
+  resetDetect();
+  // detectStub deliberately left null — calling detect would throw "test forgot to set"
+  const s = await createQueuedServer([
+    { status: 200, body: JSON.stringify({ CommitId: 'sha-explicit', Type: 1 }) },
+  ]);
+  const r = await commitToGit({
+    envUrl: serverUrl(s), token: 'tok',
+    solutionUniqueName: 'ExplicitSol',
+    commitMessage: 'feat: explicit',
+    skipPoll: true,
+  });
+  await closeAll(s);
+  assert.equal(r.solutionAutoResolved, null);
+  assert.equal(detectCallCount, 0, 'detect-git-binding MUST NOT be called when solutionUniqueName is provided');
+  const body = JSON.parse(s.received[0].body);
+  assert.equal(body.SolutionUniqueName, 'ExplicitSol');
+});
+
+test('resolveSolutionUniqueNameAuto: solution-bound branch', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true, bindingType: 'solution', solutionUniqueName: 'A',
+    boundSolutions: [{ uniqueName: 'A', solutionId: '1', pendingChangesCount: 3 }],
+  };
+  const r = await resolveSolutionUniqueNameAuto({ envUrl: 'http://x', token: 't' });
+  assert.equal(r.value, 'A');
+  assert.equal(r.reason, 'solution-bound');
+});
+
+test('resolveSolutionUniqueNameAuto: env-bound single-candidate branch', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true, bindingType: 'environment', solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'A', solutionId: '1', pendingChangesCount: 0 },
+      { uniqueName: 'B', solutionId: '2', pendingChangesCount: 9 },
+      { uniqueName: 'C', solutionId: '3', pendingChangesCount: null }, // failed per-solution query
+    ],
+  };
+  const r = await resolveSolutionUniqueNameAuto({ envUrl: 'http://x', token: 't' });
+  assert.equal(r.value, 'B');
+  assert.match(r.reason, /env-bound|pending/i);
+});
+
+test('resolveSolutionUniqueNameAuto: env-bound zero-candidate branch', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true, bindingType: 'environment', solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'A', solutionId: '1', pendingChangesCount: 0 },
+      { uniqueName: 'B', solutionId: '2', pendingChangesCount: 0 },
+    ],
+  };
+  await assert.rejects(
+    resolveSolutionUniqueNameAuto({ envUrl: 'http://x', token: 't' }),
+    /no.*pending|pending changes/i,
+  );
+});
+
+test('resolveSolutionUniqueNameAuto: env-bound multi-candidate branch lists names + counts', async () => {
+  resetDetect();
+  detectStub = {
+    bound: true, bindingType: 'environment', solutionUniqueName: null,
+    boundSolutions: [
+      { uniqueName: 'A', solutionId: '1', pendingChangesCount: 4 },
+      { uniqueName: 'B', solutionId: '2', pendingChangesCount: 7 },
+    ],
+  };
+  await assert.rejects(
+    resolveSolutionUniqueNameAuto({ envUrl: 'http://x', token: 't' }),
+    (e) => /A/.test(e.message) && /B/.test(e.message) && /4|7/.test(e.message),
+  );
+});
+
+test('resolveSolutionUniqueNameAuto: unbound env rejects', async () => {
+  resetDetect();
+  detectStub = { bound: false, bindingType: null, solutionUniqueName: null, boundSolutions: [] };
+  await assert.rejects(
+    resolveSolutionUniqueNameAuto({ envUrl: 'http://x', token: 't' }),
+    /not bound to Git|bound to Git/i,
+  );
+});
+

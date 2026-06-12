@@ -10,12 +10,28 @@
 //
 // CommitToGit is the ONLY action of the 5 that returns a non-204 response.
 //
+// The platform API ALWAYS requires SolutionUniqueName (regardless of whether
+// the env-side binding is solution-scoped or environment-scoped — an env-bound
+// context can have multiple solutions enabled for source control, and the
+// platform needs to know which one to push). When the caller omits
+// --solutionUniqueName the helper auto-resolves via detect-git-binding's
+// `boundSolutions[]` array:
+//   - bindingType === 'solution' AND detect.solutionUniqueName present → use it
+//   - exactly ONE boundSolutions[] entry has pendingChangesCount > 0    → use it
+//   - ZERO entries with pending                                         → error
+//   - TWO+ entries with pending                                         → error
+//                                                                         listing them
+// The auto-resolution outcome is surfaced in the output as
+// `solutionAutoResolved: { value, reason }` so callers (and the inner-loop
+// skill) can mention it to the user.
+//
 // Output (JSON to stdout):
 //   Success: {
 //     committed: true,
 //     commitId: "<git sha>",
 //     type: <int>,
 //     solutionUniqueName, commitMessage,
+//     solutionAutoResolved: { value, reason } | null,
 //     polled: { reached: true, attempts: N, elapsedMs: M, finalValue: { changesCount: 0 } } | null,
 //     calledAt: "<ISO>",
 //   }
@@ -24,7 +40,7 @@
 // Usage:
 //   node commit-to-git.js
 //       --envUrl              <url>
-//       --solutionUniqueName  <name>
+//       [--solutionUniqueName <name>]        // auto-resolved when omitted, see above
 //      (--commitMessage       "<message>"   |  --commitMessageFile <path>)
 //       [--workItemId         <number>]      // Adds "AB#<n>" footer if provided
 //       [--token              <dvToken>]
@@ -59,6 +75,7 @@ const path = require('node:path');
 const { getAuthToken, makeRequest, LONG_RUNNING_GIT_ACTION_TIMEOUT_MS } = require('./validation-helpers');
 const { listPendingChanges } = require('./list-pending-changes');
 const { pollGitOperation } = require('./poll-git-operation');
+const { detectGitBinding } = require('./detect-git-binding');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -89,6 +106,70 @@ function parseArgs(argv) {
 }
 
 /**
+ * Auto-resolves `solutionUniqueName` for a commit when the caller didn't pass
+ * one. The platform API needs the field even for env-bound contexts.
+ *
+ * Resolution order:
+ *   1. detect.solutionUniqueName (populated when bindingType === 'solution')
+ *   2. exactly ONE entry in detect.boundSolutions[] with pendingChangesCount > 0
+ *
+ * @param {object}        options
+ * @param {string}        options.envUrl
+ * @param {string}        options.token
+ * @returns {Promise<{value: string, reason: string}>}
+ * @throws  {Error} when the binding can't be detected, has 0 pending solutions,
+ *                  or has 2+ pending solutions (ambiguous → caller must pick).
+ */
+async function resolveSolutionUniqueNameAuto({ envUrl, token }) {
+  const detect = await detectGitBinding({ envUrl, token });
+  if (detect && detect.error) {
+    throw new Error(
+      `--solutionUniqueName was omitted and detect-git-binding failed: ${detect.error}. ` +
+      'Pass --solutionUniqueName explicitly.',
+    );
+  }
+  if (!detect || detect.bound === false) {
+    throw new Error(
+      '--solutionUniqueName was omitted and the environment is not bound to Git. ' +
+      'Run /power-pages:setup-git-integration first, or pass --solutionUniqueName explicitly.',
+    );
+  }
+
+  // Case 1: solution-bound — detect surfaces the single bound solution.
+  if (detect.bindingType === 'solution' && detect.solutionUniqueName) {
+    return { value: detect.solutionUniqueName, reason: 'solution-bound' };
+  }
+
+  // Case 2: env-bound — derive from boundSolutions[] pending counts.
+  const candidates = Array.isArray(detect.boundSolutions)
+    ? detect.boundSolutions.filter((s) => typeof s.pendingChangesCount === 'number' && s.pendingChangesCount > 0)
+    : [];
+
+  if (candidates.length === 1) {
+    return {
+      value: candidates[0].uniqueName,
+      reason: `env-bound: auto-selected the only solution with pending changes (${candidates[0].uniqueName}, ${candidates[0].pendingChangesCount} change(s))`,
+    };
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(
+      '--solutionUniqueName was omitted and no bound solution has pending changes. ' +
+      'There is nothing to commit. Run /power-pages:sync-from-git if Updates are pending.',
+    );
+  }
+
+  // 2+ candidates → ambiguous; caller must choose.
+  const listed = candidates
+    .map((s) => `${s.uniqueName} (${s.pendingChangesCount} change${s.pendingChangesCount === 1 ? '' : 's'})`)
+    .join(', ');
+  throw new Error(
+    `--solutionUniqueName was omitted but ${candidates.length} bound solutions have pending changes: ${listed}. ` +
+    'Pass --solutionUniqueName explicitly to choose one (each CommitToGit call pushes one solution at a time).',
+  );
+}
+
+/**
  * @param {object} options
  * @returns {Promise<object>}
  */
@@ -104,7 +185,6 @@ async function commitToGit({
   projectRoot = null,
 } = {}) {
   if (!envUrl) throw new Error('--envUrl is required');
-  if (!solutionUniqueName) throw new Error('--solutionUniqueName is required');
 
   // C-6: resolve commit message from inline arg OR file path. Mutually exclusive.
   if (commitMessage && commitMessageFile) {
@@ -137,6 +217,28 @@ async function commitToGit({
 
   if (pollBackoff !== 'linear' && pollBackoff !== 'exponential') {
     throw new Error(`--pollBackoff must be 'linear' or 'exponential' (got: ${pollBackoff})`);
+  }
+
+  // Resolve solutionUniqueName up-front. The platform API ALWAYS requires it
+  // (even for env-bound contexts — see header docstring). When the caller
+  // omits it, we auto-discover via detect-git-binding:
+  //   - solution-bound  → use detect.solutionUniqueName directly
+  //   - env-bound       → pick the single boundSolutions[] entry with
+  //                       pendingChangesCount > 0; error if 0 or 2+ candidates
+  // We do this AFTER the cheap input-validation above so caller-error paths
+  // never pay for an unnecessary detect-git-binding network round trip.
+  let solutionAutoResolved = null;
+  if (!solutionUniqueName) {
+    const tokForResolve = token || getAuthToken(envUrl);
+    if (!tokForResolve) {
+      throw new Error(
+        '--solutionUniqueName was omitted and an auth token could not be acquired ' +
+        'to auto-resolve it. Pass --solutionUniqueName explicitly or `az login` first.',
+      );
+    }
+    const resolved = await resolveSolutionUniqueNameAuto({ envUrl, token: tokForResolve });
+    solutionUniqueName = resolved.value;
+    solutionAutoResolved = { value: resolved.value, reason: resolved.reason };
   }
 
   const tok = token || getAuthToken(envUrl);
@@ -194,6 +296,7 @@ async function commitToGit({
     commitId,
     type,
     solutionUniqueName,
+    solutionAutoResolved,
     commitMessage,
     polled: null,
     calledAt: new Date().toISOString(),
@@ -413,4 +516,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { commitToGit, runBackgroundChild };
+module.exports = { commitToGit, runBackgroundChild, resolveSolutionUniqueNameAuto };
