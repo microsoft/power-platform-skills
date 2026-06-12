@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SDM→EDM Migration — Awaiting Approval — Phase 2</title>
+<title>SDM→EDM Migration — In Progress · Phase 4 of 4</title>
 <style>
 :root {
   --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
@@ -293,7 +293,7 @@ details[open] > summary { margin-bottom:6px; }
   </div>
   <div class="topbar-right">
     <span class="context-item"><span class="context-label">Site:</span> <span class="context-value">Contoso Portal</span></span><span class="context-item"><span class="context-label">Env:</span> <span class="context-value">Development</span></span><span class="context-item"><span class="context-label">Mode:</span> <span class="context-value">configurationData</span></span>
-    <span class="status-pill pending">Awaiting Approval — Phase 2</span>
+    <span class="status-pill in-progress">In Progress · Phase 4 of 4</span>
   </div>
 </div>
 
@@ -316,10 +316,10 @@ details[open] > summary { margin-bottom:6px; }
   </div>
 
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-num">44%</div><div class="stat-label">Overall</div></div>
-    <div class="stat-card"><div class="stat-num">7 / 16</div><div class="stat-label">Sub-steps</div></div>
-    <div class="stat-card"><div class="stat-num">0m 01s</div><div class="stat-label">Elapsed</div></div>
-    <div class="stat-card"><div class="stat-num">1 / 4</div><div class="stat-label">Phases done</div></div>
+    <div class="stat-card"><div class="stat-num">88%</div><div class="stat-label">Overall</div></div>
+    <div class="stat-card"><div class="stat-num">14 / 16</div><div class="stat-label">Sub-steps</div></div>
+    <div class="stat-card"><div class="stat-num">0m 52s</div><div class="stat-label">Elapsed</div></div>
+    <div class="stat-card"><div class="stat-num">3 / 4</div><div class="stat-label">Phases done</div></div>
   </div>
 
 <div class="card site-card">
@@ -339,20 +339,18 @@ details[open] > summary { margin-bottom:6px; }
   </table>
 </div>
 
-<div class="card confidence-card empty">
+<div class="card confidence-card mismatch">
   <div class="card-title">Migration totals</div>
-  <div class="empty-note">This card appears once the SDM snapshot is captured during configuration setup (after <code>pac pages download --modelVersion 1</code>). After Phase 4.1 runs, it shows <code>SDM total → EDM total</code> with a check mark when every record migrated. Per-category breakdown lives in the Pages &amp; Components tab.</div>
+  <div class="confidence-numbers">
+    <div class="confidence-num">276</div>
+    <div class="confidence-arrow">→</div>
+    <div class="confidence-num">269</div>
+    <div class="confidence-icon">⚠</div>
+  </div>
+  <div class="confidence-label">7 component difference — open Pages &amp; Components for the per-category breakdown.</div>
 </div>
 
-<div class="approval-banner">
-  <h3>Approve to start Phase 2: Configuration Migration &amp; Customization Remediation</h3>
-  <p>Phase 1 captured site context, dependencies, and the chosen mode (<code>configurationData</code> or <code>all</code>).</p>
-  <p>In <strong>Phase 2</strong>, the skill will run <code>pac pages migrate-datamodel</code> to move metadata into EDM tables, locate the auto-emitted customization report, and — if any <code>adx_*</code> customizations are flagged — download the site, run FetchXML/Liquid rewriters, generate augmented prompts, and ask for your explicit approval before <code>pac pages upload</code>.</p>
-  <p class="approval-instr"><strong>To approve and continue</strong>, respond in your Claude Code chat with:</p>
-  <div class="action-cmd">› Yes, proceed with Phase 2</div>
-  <p class="approval-instr"><strong>To cancel</strong>:</p>
-  <div class="action-cmd">› Cancel — I want to review more first</div>
-</div>
+
 </div>
 
 <div class="section" id="tab-plan">
@@ -384,7 +382,7 @@ details[open] > summary { margin-bottom:6px; }
           <div class="plan-phase-title">Configuration Migration &amp; Customization Remediation</div>
           <div class="plan-phase-meta">3 sub-steps</div>
         </div>
-        <div class="plan-phase-status pending">pending</div>
+        <div class="plan-phase-status completed">completed</div>
       </div>
       <div class="plan-phase-row">
         <div class="plan-phase-num">Phase 3</div>
@@ -392,7 +390,7 @@ details[open] > summary { margin-bottom:6px; }
           <div class="plan-phase-title">Migration Execution</div>
           <div class="plan-phase-meta">3 sub-steps</div>
         </div>
-        <div class="plan-phase-status pending">pending</div>
+        <div class="plan-phase-status completed">completed</div>
       </div>
       <div class="plan-phase-row">
         <div class="plan-phase-num">Phase 4</div>
@@ -400,7 +398,7 @@ details[open] > summary { margin-bottom:6px; }
           <div class="plan-phase-title">Post-Migration Validation</div>
           <div class="plan-phase-meta">3 sub-steps</div>
         </div>
-        <div class="plan-phase-status pending">pending</div>
+        <div class="plan-phase-status in-progress">in-progress</div>
       </div>
   </div>
 
@@ -427,10 +425,566 @@ details[open] > summary { margin-bottom:6px; }
 <div class="section" id="tab-pages">
   <h2>Pages &amp; Components</h2>
   <p class="section-desc">Side-by-side inventory of your site's components — captured before migration (SDM) and after (EDM) so you can verify every record made it across.</p>
-  <div class="card empty-card">
-    <div class="empty-icon">○</div>
-    <div class="empty-title">SDM snapshot not yet captured</div>
-    <div class="empty-body">This section populates after the SDM snapshot is captured during configuration setup (right after <code>pac pages download --modelVersion 1</code>). Each Power Pages component category then appears as a row with its SDM count and a placeholder for the EDM count that fills in after Phase 4.1.</div>
+
+  <div class="comp-summary partial">
+    <strong>20 of 21 categories matched ⚠</strong>
+    — 1 category needs attention. Mismatches are flagged <span class="status-x">✗</span> with the count delta; SDM-only categories (tags, websiteBindings) are <em>expected</em> to differ and are flagged <span class="status-warn">⚠ SDM-only</span>.
+  </div>
+
+  <div class="snapshot-meta">
+    <div class="kv-item"><div class="kv-label">SDM captured</div><div class="kv-value">2026-05-27 10:13:29</div></div>
+    <div class="kv-item"><div class="kv-label">EDM captured</div><div class="kv-value">2026-06-10 12:29:58</div></div>
+    <div class="kv-item"><div class="kv-label">SDM total</div><div class="kv-value">276</div></div>
+    <div class="kv-item"><div class="kv-label">EDM total</div><div class="kv-value">269</div></div>
+  </div>
+
+  <div class="cat-list">
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Ad Placements</div>
+          <div class="cat-desc">Page slots where ads can render.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">1</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Sidebar Bottom</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Sidebar Bottom</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Ads</div>
+          <div class="cat-desc">Banner ad records that surface via ad placements.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">1</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Placeholder</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Placeholder</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Basic Forms</div>
+          <div class="cat-desc">Entity Forms — single-record create/edit/read forms backed by a Dataverse table.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">1</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>simple contact us form</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>simple contact us form</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Content Snippets</div>
+          <div class="cat-desc">Reusable inline text blobs referenced by Liquid as {{ snippets[&quot;name&quot;] }}.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">95</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">95</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>About Footer · lang=en-US</li><li>Account/ChangeEmail/EmailLabel · lang=en-US</li><li>Account/ChangeEmail/PageCopy · lang=en-US</li><li>Account/ChangeLogin/PageCopy · lang=en-US</li><li>Account/ChangePassword/PageCopy · lang=en-US</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>About Footer · lang=en-US</li><li>Account/ChangeEmail/EmailLabel · lang=en-US</li><li>Account/ChangeEmail/PageCopy · lang=en-US</li><li>Account/ChangeLogin/PageCopy · lang=en-US</li><li>Account/ChangePassword/PageCopy · lang=en-US</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Page Templates</div>
+          <div class="cat-desc">Page layout definitions that webPages select from when rendering.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">5</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">5</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Access Denied</li><li>Default studio template</li><li>Full Page</li><li>Profile</li><li>Search</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Access Denied</li><li>Default studio template</li><li>Full Page</li><li>Profile</li><li>Search</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Polls</div>
+          <div class="cat-desc">Inline poll/voting widgets surfaced on webPages.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">4</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">4</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>True or False Question</li><li>Wireframe Development</li><li>Wireframe styles</li><li>Yes or No Question</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>True or False Question</li><li>Wireframe Development</li><li>Wireframe styles</li><li>Yes or No Question</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Publishing States</div>
+          <div class="cat-desc">Editorial states (Draft, Published, Inactive) attached to webPages and webFiles.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">2</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">2</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Draft</li><li>Published</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Draft</li><li>Published</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Site Markers</div>
+          <div class="cat-desc">Named anchors used by Liquid to reference specific pages by purpose (e.g. &quot;Home&quot;, &quot;404&quot;).</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">10</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">10</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Access Denied</li><li>Default Offline Page</li><li>Event Feedback</li><li>Home</li><li>Knowledge Base</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Access Denied</li><li>Default Offline Page</li><li>Event Feedback</li><li>Home</li><li>Knowledge Base</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Site Settings</div>
+          <div class="cat-desc">Key/value configuration toggles for the site (cache, authentication, telemetry, etc.).</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">50</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">50</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Authentication/LoginThrottling/IpAddressTimeoutTimeSpan</li><li>Authentication/LoginThrottling/MaxAttemptsTimeLimitTimeSpan</li><li>Authentication/LoginThrottling/MaxInvaildAttemptsFromIPAddress</li><li>Authentication/LoginTrackingEnabled</li><li>Authentication/OpenAuth/Facebook/AppId</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Authentication/LoginThrottling/IpAddressTimeoutTimeSpan</li><li>Authentication/LoginThrottling/MaxAttemptsTimeLimitTimeSpan</li><li>Authentication/LoginThrottling/MaxInvaildAttemptsFromIPAddress</li><li>Authentication/LoginTrackingEnabled</li><li>Authentication/OpenAuth/Facebook/AppId</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Table Permissions</div>
+          <div class="cat-desc">Row-level table permissions controlling Dataverse access from the portal.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">1</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Feedback</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Feedback</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Tags</div>
+          <div class="cat-desc">Editorial tags used to classify webPages — surfaced via SDM YAML only.</div>
+        </div>
+        <div class="comp-pill warn">
+        <span class="comp-num sdm">5</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">0</span><span class="comp-icon">⚠</span><span class="comp-meta">SDM-only</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>CRM</li><li>General</li><li>Microsoft</li><li>Technology</li><li>Windows Phone</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li class="record-empty">— no records —</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Url History</div>
+          <div class="cat-desc">Tracked URL renames so old URLs continue to 301 redirect to new ones.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">3</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">3</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li><li>{&quot;name&quot;:null,&quot;stateCode&quot;:null}</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Web Files</div>
+          <div class="cat-desc">Static assets uploaded into the site — images, CSS, JS, PDFs surfaced via notes attachments.</div>
+        </div>
+        <div class="comp-pill mismatch">
+        <span class="comp-num sdm">17</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">16</span><span class="comp-icon">✗</span><span class="comp-meta">-1</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Cat-PC.png · url=Cat-PC.png</li><li>Circle-1.png · url=Circle-1.png</li><li>Circle-2.png · url=Circle-2.png</li><li>Circle-3.png · url=Circle-3.png</li><li>Geometric-2.png · url=Geometric-2.png</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Cat-PC.png · url=Cat-PC.png</li><li>Circle-1.png · url=Circle-1.png</li><li>Circle-2.png · url=Circle-2.png</li><li>Circle-3.png · url=Circle-3.png</li><li>Geometric-2.png · url=Geometric-2.png</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Web Link Sets</div>
+          <div class="cat-desc">Named navigation menus referenced from Liquid (header, footer, sidebar links).</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">5</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">5</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Default · lang=en-US</li><li>Footer · lang=en-US</li><li>Primary Navigation · lang=en-US</li><li>Profile Navigation · lang=en-US</li><li>Secondary Navigation · lang=en-US</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Default · lang=en-US</li><li>Footer · lang=en-US</li><li>Primary Navigation · lang=en-US</li><li>Profile Navigation · lang=en-US</li><li>Secondary Navigation · lang=en-US</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Web Pages</div>
+          <div class="cat-desc">Site pages — each one is a route in your portal with a parent template, language, and partial URL.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">22</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">22</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Access Denied · url=access-denied · lang=en-US · (content)</li><li>Contact us · url=contact-us · lang=en-US · (content)</li><li>Default Offline Page · url=default-offline-page · lang=en-US · (content)</li><li>Home · url=/ · lang=en-US · (content)</li><li>migration demo check-deleted · url=migration-demo-check-deleted · lang=en-US · (content)</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Access Denied · url=access-denied · lang=en-US · (content)</li><li>Contact us · url=contact-us · lang=en-US · (content)</li><li>Default Offline Page · url=default-offline-page · lang=en-US · (content)</li><li>Home · url=/ · lang=en-US · (content)</li><li>migration demo check-deleted · url=migration-demo-check-deleted · lang=en-US · (content)</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Web Roles</div>
+          <div class="cat-desc">Authorization roles used by Web Page Access Rules and Table Permissions.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">3</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">3</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Administrators</li><li>Anonymous Users</li><li>Authenticated Users</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Administrators</li><li>Anonymous Users</li><li>Authenticated Users</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Web Templates</div>
+          <div class="cat-desc">Liquid templates that pages and components reuse to render dynamic content.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">45</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">45</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>100% Blank Page</li><li>Ad</li><li>Ad Template</li><li>Blank Page</li><li>Breadcrumbs</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>100% Blank Page</li><li>Ad</li><li>Ad Template</li><li>Blank Page</li><li>Breadcrumbs</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Webpage Rules</div>
+          <div class="cat-desc">Web Page Access Rules — who can read/edit each page based on Web Roles.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">2</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">2</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Grant Change to Administrators</li><li>Grant Change to Content</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Grant Change to Administrators</li><li>Grant Change to Content</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Website Accesses</div>
+          <div class="cat-desc">Website-level access permissions controlling preview-mode and admin operations.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">2</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">2</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Administrative permissions for Basic Portal</li><li>Preview permission for Basic Portal</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>Administrative permissions for Basic Portal</li><li>Preview permission for Basic Portal</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Website Bindings</div>
+          <div class="cat-desc">Custom hostname / portal bindings — represented differently in EDM, so a 0 count here is expected.</div>
+        </div>
+        <div class="comp-pill warn">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">0</span><span class="comp-icon">⚠</span><span class="comp-meta">SDM-only</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>Binding: site-k5s85.powerappsportals.com</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li class="record-empty">— no records —</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="cat-row">
+      <div class="cat-head">
+        <div class="cat-meta">
+          <div class="cat-name">Website Languages</div>
+          <div class="cat-desc">Languages enabled on the site, each with its own published localized content.</div>
+        </div>
+        <div class="comp-pill match">
+        <span class="comp-num sdm">1</span>
+        <span class="comp-arrow">→</span>
+        <span class="comp-num edm">1</span><span class="comp-icon">✓</span>
+      </div>
+      </div>
+      <details class="cat-records">
+        <summary>Show records (first 5 of each side)</summary>
+        <div class="records-two-col">
+          <div class="records-col">
+            <div class="records-col-label">SDM</div>
+            <ul class="cat-record-list"><li>English</li></ul>
+          </div>
+          <div class="records-col">
+            <div class="records-col-label">EDM</div>
+            <ul class="cat-record-list"><li>English</li></ul>
+          </div>
+        </div>
+      </details>
+    </div>
   </div>
 </div>
 
@@ -450,6 +1004,8 @@ details[open] > summary { margin-bottom:6px; }
       <div class="phase-status-label label-done">Completed</div>
     </div>
     <div class="sub-steps">
+      <details>
+        <summary>Show 7 completed sub-steps</summary>
       <div class="sub-step">
       <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
@@ -499,88 +1055,103 @@ details[open] > summary { margin-bottom:6px; }
         <div class="sub-step-output">Env: Development · mode=configurationData · 16 sub-steps total</div>
       </div>
     </div>
+      </details>
     </div>
   </div>
 <div class="phase-card">
     <div class="phase-header">
-      <div class="phase-status-icon status-pending">2</div>
+      <div class="phase-status-icon status-done">✓</div>
       <div class="phase-title">
         <h3>Phase 2: Configuration Migration &amp; Customization Remediation</h3>
-        <div class="phase-meta">3 sub-steps</div>
+        <div class="phase-meta">3 sub-steps · completed in 0m 49s</div>
       </div>
-      <div class="phase-status-label label-pending">Pending</div>
+      <div class="phase-status-label label-done">Completed</div>
     </div>
     <div class="sub-steps">
+      <details>
+        <summary>Show 3 completed sub-steps</summary>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">2.1 Migrate Metadata</div>
+        <div class="sub-step-label">2.1 Migrate Metadata</div>
+        <div class="sub-step-output">Metadata migration COMPLETED · mode=configurationData</div>
       </div>
     </div>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">2.2 Locate Customization Report</div>
+        <div class="sub-step-label">2.2 Locate Customization Report</div>
+        <div class="sub-step-output">CSV parsed: 16 findings (all logical-name accessors)</div>
       </div>
     </div>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">2.3 Remediate Customizations</div>
+        <div class="sub-step-label">2.3 Remediate Customizations</div>
+        <div class="sub-step-output">Auto-rewrites applied via apply-remediation.js · pac pages upload completed</div>
       </div>
     </div>
+      </details>
     </div>
   </div>
 <div class="phase-card">
     <div class="phase-header">
-      <div class="phase-status-icon status-pending">3</div>
+      <div class="phase-status-icon status-done">✓</div>
       <div class="phase-title">
         <h3>Phase 3: Migration Execution</h3>
-        <div class="phase-meta">3 sub-steps</div>
+        <div class="phase-meta">3 sub-steps · completed in 0m 00s</div>
       </div>
-      <div class="phase-status-label label-pending">Pending</div>
+      <div class="phase-status-label label-done">Completed</div>
     </div>
     <div class="sub-steps">
+      <details>
+        <summary>Show 3 completed sub-steps</summary>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">3.1 Migrate Transactional References</div>
+        <div class="sub-step-label">3.1 Migrate Transactional References</div>
+        <div class="sub-step-output">configurationDataReferences migration: Completed</div>
       </div>
     </div>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">3.2 Activate EDM (Update Data Model Version)</div>
+        <div class="sub-step-label">3.2 Activate EDM (Update Data Model Version)</div>
+        <div class="sub-step-output">EDM activation: --updateDataModelVersion done</div>
       </div>
     </div>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">3.3 Restart Site</div>
+        <div class="sub-step-label">3.3 Restart Site</div>
+        <div class="sub-step-output">Site restarted via portal admin</div>
       </div>
     </div>
+      </details>
     </div>
   </div>
 <div class="phase-card">
     <div class="phase-header">
-      <div class="phase-status-icon status-pending">4</div>
+      <div class="phase-status-icon status-progress">⏳</div>
       <div class="phase-title">
         <h3>Phase 4: Post-Migration Validation</h3>
-        <div class="phase-meta">3 sub-steps</div>
+        <div class="phase-meta">1 of 3 sub-steps complete · started 0m 00s ago</div>
       </div>
-      <div class="phase-status-label label-pending">Pending</div>
+      <div class="phase-status-label label-progress">In Progress</div>
     </div>
     <div class="sub-steps">
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon">✓</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">4.1 Data Diff Validation (SDM ↔ EDM)</div>
+        <div class="sub-step-label">4.1 Data Diff Validation (SDM ↔ EDM)</div>
+        <div class="sub-step-output">EDM snapshot captured (270 records). Diff: 275 SDM components migrated; tags+websiteBindings expected to be empty on EDM side; 1 webFiles record missing.</div>
       </div>
     </div>
       <div class="sub-step">
-      <div class="sub-step-icon pending">○</div>
+      <div class="sub-step-icon progress">●</div>
       <div class="sub-step-text">
-        <div class="sub-step-label pending">4.2 Runtime Smoke Test Recommendation (/test-site)</div>
+        <div class="sub-step-label">4.2 Runtime Smoke Test Recommendation (/test-site)</div>
+        <div class="sub-step-output">Awaiting /test-site recommendation review</div>
       </div>
     </div>
       <div class="sub-step">
@@ -594,14 +1165,16 @@ details[open] > summary { margin-bottom:6px; }
 
 <div class="card prompts-section">
   <h3>Augmented Prompts for Customer-Owned Code</h3>
-  <p class="prompts-blurb">The skill does not modify customer-owned plugin source or Dataverse schema directly. Instead, after step 2.1 has scanned your site for customizations, paste-ready prompts will appear here for you to take to fresh Claude Code sessions.</p>
-<div class="prompt-card pending">
+  <p class="prompts-blurb">Generated by step 2.1. The skill does not modify customer-owned plugin source or Dataverse schema directly — paste these prompts into fresh Claude Code sessions to drive that work.</p>
+<div class="prompt-card ready">
     <h4>🔌 Plugin Remediation Prompt</h4>
-    <div class="prompt-state">Not yet generated. Will appear after step 2.1 (Generate Customization Report) if any custom plugins are detected on adx_* entities.</div>
+    <p><strong>4 custom plugins</strong> on adx_* entities</p>
+    <div class="links"><a href="./plugin-remediation-prompt.txt">📄 plugin-remediation-prompt.txt</a></div>
   </div>
-<div class="prompt-card pending">
+<div class="prompt-card ready">
     <h4>🗂️ Data Model Extension Remediation Prompt</h4>
-    <div class="prompt-state">Not yet generated. Will appear after step 2.1 if any custom columns are detected on adx_* tables.</div>
+    <p><strong>28 custom columns across 7 adx_* tables</strong></p>
+    <div class="links"><a href="./dme-remediation-prompt.txt">📄 dme-remediation-prompt.txt</a></div>
   </div>
 </div>
 </div>
@@ -609,7 +1182,7 @@ details[open] > summary { margin-bottom:6px; }
 </div>
 
 <div class="footer">
-  Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-06-10 12:29:08 · Refresh in browser to see live updates
+  Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-06-10 12:29:59 · Refresh in browser to see live updates
 </div>
 
 <script>

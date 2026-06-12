@@ -251,6 +251,20 @@ details[open] > summary { margin-bottom:6px; }
 .rem-vscode-link:hover { color:var(--text-bright); }
 .rem-summary { margin:8px 14px; padding-left:18px; font-size:12px; color:var(--text-dim); line-height:1.6; }
 .rem-summary li { margin-bottom:2px; }
+.rem-import-btn { display:inline-flex; align-items:center; gap:12px; padding:12px 18px; margin-top:6px; background:var(--accent); color:#ffffff; text-decoration:none; border-radius:var(--radius-sm); box-shadow:var(--shadow-4); transition:background 0.15s; }
+.rem-import-btn:hover { background:#106ebe; box-shadow:var(--shadow-8); }
+.rem-import-icon { font-size:22px; line-height:1; opacity:0.95; }
+.rem-import-text { display:flex; flex-direction:column; }
+.rem-import-title { font-size:13.5px; font-weight:700; }
+.rem-import-sub { font-size:11px; opacity:0.85; margin-top:2px; }
+.rem-guide { margin-top:12px; padding:14px 16px; background:var(--info-bg); border:1px solid var(--info-border); border-radius:var(--radius-sm); font-size:12.5px; line-height:1.65; }
+.rem-guide-title { font-weight:700; color:var(--text-bright); margin-bottom:6px; font-size:12px; }
+.rem-guide-steps { margin:6px 0 8px 22px; padding:0; color:var(--text); }
+.rem-guide-steps li { margin-bottom:4px; }
+.rem-guide-steps strong { color:var(--text-bright); }
+.rem-guide-fallback { color:var(--text-dim); padding-top:8px; border-top:1px solid var(--info-border); margin-top:6px; }
+.rem-guide-fallback code { font-family:var(--mono); background:var(--surface); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.rem-files-heading { font-size:12px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin:18px 0 8px; }
 .rem-cli { margin:8px 14px 4px; padding:8px 12px; background:var(--surface); border:1px dashed var(--border); border-radius:var(--radius-sm); }
 .rem-cli-label { font-size:11px; color:var(--text-dim); margin-bottom:4px; }
 .rem-cli-cmd { display:block; font-family:var(--mono); font-size:11.5px; color:var(--text-bright); background:var(--surface3); padding:6px 10px; border-radius:3px; user-select:all; cursor:text; word-break:break-all; }
@@ -318,7 +332,7 @@ details[open] > summary { margin-bottom:6px; }
   <div class="stats-grid">
     <div class="stat-card"><div class="stat-num">56%</div><div class="stat-label">Overall</div></div>
     <div class="stat-card"><div class="stat-num">9 / 16</div><div class="stat-label">Sub-steps</div></div>
-    <div class="stat-card"><div class="stat-num">0m 02s</div><div class="stat-label">Elapsed</div></div>
+    <div class="stat-card"><div class="stat-num">4071m 56s</div><div class="stat-label">Elapsed</div></div>
     <div class="stat-card"><div class="stat-num">1 / 4</div><div class="stat-label">Phases done</div></div>
   </div>
 
@@ -335,7 +349,7 @@ details[open] > summary { margin-bottom:6px; }
       <tr><td>Migration mode</td><td>configurationData</td></tr>
       <tr><td>Site root</td><td>./mysite/contoso-portal/</td></tr>
       <tr><td>Output directory</td><td class="known">.\migration-reports</td></tr>
-    <tr><td>Skill started</td><td class="known">2026-06-10 12:29:07</td></tr>
+    <tr><td>Skill started</td><td class="known">2026-06-09 15:57:26</td></tr>
   </table>
 </div>
 
@@ -998,7 +1012,88 @@ details[open] > summary { margin-bottom:6px; }
   <h2>Migration &amp; Review</h2>
   <p class="section-desc">Per-phase sub-step progress, approval gates, and augmented prompts. This is the live view of what's happening.</p>
 
+<div class="card remediation-card">
+  <div class="card-title">Remediation Diff <span class="rem-card-subtitle">— review before approving upload</span></div>
+  <p class="rem-blurb">Auto-rewriters proposed changes to <strong>4 files</strong> (4 FetchXML · 1 Liquid, <span class="rem-added">+9</span> <span class="rem-removed">−5</span> lines). Files are written to <code>remediation-staged/</code> — your live site source is untouched until you approve.</p>
+  <div class="rem-meta">Staged at 2026-06-09 16:27:53</div>
 
+  <a class="rem-import-btn" href="vscode://microsoft-IsvExpTools.powerplatform-vscode/metadataDiffImport?filePath=.%5Cmigration-reports%5Cremediation-diff.json">
+      <span class="rem-import-icon">▣</span>
+      <span class="rem-import-text">
+        <span class="rem-import-title">Import in Power Pages Actions</span>
+        <span class="rem-import-sub">Opens this diff in the Power Pages VSCode extension</span>
+      </span>
+    </a>
+  <div class="rem-guide">
+      <div class="rem-guide-title">What happens when you click "Import in Power Pages Actions":</div>
+      <ol class="rem-guide-steps">
+        <li>VSCode pulls focus (if installed and the Power Platform extension is enabled).</li>
+        <li>The diff is imported into the <strong>Site Comparison</strong> section of the Power Pages Actions sidebar — look for an entry named after this site.</li>
+        <li><strong>Click each file in the imported tree</strong> to open VSCode's side-by-side diff editor. Imported diffs don't auto-open the editor; you have to expand the tree and click each row.</li>
+      </ol>
+      <div class="rem-guide-fallback">If the Power Platform extension isn't installed, or you'd rather skip the tree view, use the per-file links and <code>code --diff</code> commands inside each row below — they open the same VSCode diff editor directly.</div>
+    </div>
+
+  <h4 class="rem-files-heading">Per-file inline preview</h4>
+  <div class="rem-file-list">
+<details class="rem-file" id="rem-file-0">
+  <summary>
+    <span class="rem-file-path">basic-forms\contact-form.yml</span>
+    <span class="kind-badge fetchxml">FetchXML</span>
+    <span class="rem-stats"><span class="rem-added">+2</span> <span class="rem-removed">−1</span></span>
+    <a class="rem-vscode-link" href="vscode://file/C:/Users/ashwanikumar/AppData/Local/Temp/sample-regen-v7/remediation-staged/basic-forms/contact-form.yml" title="Open staged file in your local VSCode desktop app">Open staged file in VSCode</a>
+  </summary>
+  <ul class="rem-summary"><li>entity: adx_webrole → powerpagecomponent (type=11)</li></ul>
+  <div class="rem-cli">
+      <div class="rem-cli-label">For a side-by-side diff editor, run from a terminal:</div>
+      <code class="rem-cli-cmd">code --diff &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-site\basic-forms\contact-form.yml&quot; &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-regen-v7\remediation-staged\basic-forms\contact-form.yml&quot;</code>
+    </div>
+  <div class="diff-body"><div class="diff-hunk"><div class="diff-hunk-header">@@ -1,8 +1,9 @@</div><div class="diff-line context"><span class="diff-gutter">   1</span><span class="diff-gutter">   1</span><span class="diff-sym"> </span><span class="diff-text">adx_name: ContactForm</span></div><div class="diff-line context"><span class="diff-gutter">   2</span><span class="diff-gutter">   2</span><span class="diff-sym"> </span><span class="diff-text">query: |</span></div><div class="diff-line context"><span class="diff-gutter">   3</span><span class="diff-gutter">   3</span><span class="diff-sym"> </span><span class="diff-text">  &lt;fetch&gt;</span></div><div class="diff-line removed"><span class="diff-gutter">   4</span><span class="diff-gutter">    </span><span class="diff-sym">-</span><span class="diff-text">    &lt;entity name=&quot;adx_webrole&quot;&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   4</span><span class="diff-sym">+</span><span class="diff-text">    &lt;entity name=&quot;powerpagecomponent&quot;&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   5</span><span class="diff-gutter">   5</span><span class="diff-sym"> </span><span class="diff-text">      &lt;attribute name=&quot;adx_name&quot; /&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   6</span><span class="diff-sym">+</span><span class="diff-text">  &lt;filter type=&quot;and&quot;&gt;&lt;condition attribute=&quot;powerpagecomponenttype&quot; operator=&quot;eq&quot; value=&quot;11&quot; /&gt;&lt;/filter&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   6</span><span class="diff-gutter">   7</span><span class="diff-sym"> </span><span class="diff-text">    &lt;/entity&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   7</span><span class="diff-gutter">   8</span><span class="diff-sym"> </span><span class="diff-text">  &lt;/fetch&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   8</span><span class="diff-gutter">   9</span><span class="diff-sym"> </span><span class="diff-text"></span></div></div></div>
+</details>
+<details class="rem-file" id="rem-file-1">
+  <summary>
+    <span class="rem-file-path">basic-forms\role-form.yml</span>
+    <span class="kind-badge fetchxml">FetchXML</span>
+    <span class="rem-stats"><span class="rem-added">+2</span> <span class="rem-removed">−1</span></span>
+    <a class="rem-vscode-link" href="vscode://file/C:/Users/ashwanikumar/AppData/Local/Temp/sample-regen-v7/remediation-staged/basic-forms/role-form.yml" title="Open staged file in your local VSCode desktop app">Open staged file in VSCode</a>
+  </summary>
+  <ul class="rem-summary"><li>entity: adx_websiteaccess → powerpagecomponent (type=12)</li></ul>
+  <div class="rem-cli">
+      <div class="rem-cli-label">For a side-by-side diff editor, run from a terminal:</div>
+      <code class="rem-cli-cmd">code --diff &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-site\basic-forms\role-form.yml&quot; &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-regen-v7\remediation-staged\basic-forms\role-form.yml&quot;</code>
+    </div>
+  <div class="diff-body"><div class="diff-hunk"><div class="diff-hunk-header">@@ -1,8 +1,9 @@</div><div class="diff-line context"><span class="diff-gutter">   1</span><span class="diff-gutter">   1</span><span class="diff-sym"> </span><span class="diff-text">adx_name: RoleForm</span></div><div class="diff-line context"><span class="diff-gutter">   2</span><span class="diff-gutter">   2</span><span class="diff-sym"> </span><span class="diff-text">query: |</span></div><div class="diff-line context"><span class="diff-gutter">   3</span><span class="diff-gutter">   3</span><span class="diff-sym"> </span><span class="diff-text">  &lt;fetch&gt;</span></div><div class="diff-line removed"><span class="diff-gutter">   4</span><span class="diff-gutter">    </span><span class="diff-sym">-</span><span class="diff-text">    &lt;entity name=&quot;adx_websiteaccess&quot;&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   4</span><span class="diff-sym">+</span><span class="diff-text">    &lt;entity name=&quot;powerpagecomponent&quot;&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   5</span><span class="diff-gutter">   5</span><span class="diff-sym"> </span><span class="diff-text">      &lt;attribute name=&quot;adx_name&quot; /&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   6</span><span class="diff-sym">+</span><span class="diff-text">  &lt;filter type=&quot;and&quot;&gt;&lt;condition attribute=&quot;powerpagecomponenttype&quot; operator=&quot;eq&quot; value=&quot;12&quot; /&gt;&lt;/filter&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   6</span><span class="diff-gutter">   7</span><span class="diff-sym"> </span><span class="diff-text">    &lt;/entity&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   7</span><span class="diff-gutter">   8</span><span class="diff-sym"> </span><span class="diff-text">  &lt;/fetch&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   8</span><span class="diff-gutter">   9</span><span class="diff-sym"> </span><span class="diff-text"></span></div></div></div>
+</details>
+<details class="rem-file" id="rem-file-2">
+  <summary>
+    <span class="rem-file-path">web-templates\header.html</span>
+    <span class="kind-badge fetchxml">FetchXML</span><span class="kind-badge liquid">Liquid</span>
+    <span class="rem-stats"><span class="rem-added">+3</span> <span class="rem-removed">−2</span></span>
+    <a class="rem-vscode-link" href="vscode://file/C:/Users/ashwanikumar/AppData/Local/Temp/sample-regen-v7/remediation-staged/web-templates/header.html" title="Open staged file in your local VSCode desktop app">Open staged file in VSCode</a>
+  </summary>
+  <ul class="rem-summary"><li>entity: adx_weblinkset → powerpagecomponent (type=4)</li><li> → Replace entities[&#39;adx_weblinkset&#39;] with: weblinks[&#39;&lt;Web Link Set name&gt;&#39;]</li></ul>
+  <div class="rem-cli">
+      <div class="rem-cli-label">For a side-by-side diff editor, run from a terminal:</div>
+      <code class="rem-cli-cmd">code --diff &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-site\web-templates\header.html&quot; &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-regen-v7\remediation-staged\web-templates\header.html&quot;</code>
+    </div>
+  <div class="diff-body"><div class="diff-hunk"><div class="diff-hunk-header">@@ -1,11 +1,11 @@</div><div class="diff-line context"><span class="diff-gutter">   1</span><span class="diff-gutter">   1</span><span class="diff-sym"> </span><span class="diff-text">{% fetchxml weblinks %}</span></div><div class="diff-line context"><span class="diff-gutter">   2</span><span class="diff-gutter">   2</span><span class="diff-sym"> </span><span class="diff-text">&lt;fetch&gt;</span></div><div class="diff-line removed"><span class="diff-gutter">   3</span><span class="diff-gutter">    </span><span class="diff-sym">-</span><span class="diff-text">  &lt;entity name=&quot;adx_weblinkset&quot;&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   3</span><span class="diff-sym">+</span><span class="diff-text">  &lt;entity name=&quot;powerpagecomponent&quot;&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   4</span><span class="diff-gutter">   4</span><span class="diff-sym"> </span><span class="diff-text">    &lt;attribute name=&quot;adx_name&quot; /&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   5</span><span class="diff-gutter">   5</span><span class="diff-sym"> </span><span class="diff-text">    &lt;attribute name=&quot;adx_title&quot; /&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   6</span><span class="diff-gutter">   6</span><span class="diff-sym"> </span><span class="diff-text">    &lt;filter type=&quot;and&quot;&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   7</span><span class="diff-gutter">   7</span><span class="diff-sym"> </span><span class="diff-text">      &lt;condition attribute=&quot;adx_websiteid&quot; operator=&quot;eq&quot; value=&quot;{{ website.id }}&quot; /&gt;</span></div><div class="diff-line removed"><span class="diff-gutter">   8</span><span class="diff-gutter">    </span><span class="diff-sym">-</span><span class="diff-text">    &lt;/filter&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   8</span><span class="diff-sym">+</span><span class="diff-text">    &lt;condition attribute=&quot;powerpagecomponenttype&quot; operator=&quot;eq&quot; value=&quot;4&quot; /&gt;&lt;/filter&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   9</span><span class="diff-gutter">   9</span><span class="diff-sym"> </span><span class="diff-text">  &lt;/entity&gt;</span></div><div class="diff-line context"><span class="diff-gutter">  10</span><span class="diff-gutter">  10</span><span class="diff-sym"> </span><span class="diff-text">&lt;/fetch&gt;</span></div><div class="diff-line context"><span class="diff-gutter">  11</span><span class="diff-gutter">  11</span><span class="diff-sym"> </span><span class="diff-text">{% endfetchxml %}</span></div></div><div class="diff-hunk"><div class="diff-hunk-header">@@ -14,5 +14,6 @@</div><div class="diff-line context"><span class="diff-gutter">  14</span><span class="diff-gutter">  14</span><span class="diff-sym"> </span><span class="diff-text">    &lt;li&gt;{{ link.adx_name }}&lt;/li&gt;</span></div><div class="diff-line context"><span class="diff-gutter">  15</span><span class="diff-gutter">  15</span><span class="diff-sym"> </span><span class="diff-text">  {% endfor %}</span></div><div class="diff-line context"><span class="diff-gutter">  16</span><span class="diff-gutter">  16</span><span class="diff-sym"> </span><span class="diff-text">&lt;/ul&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">  17</span><span class="diff-sym">+</span><span class="diff-text">{%- comment -%} SDM→EDM SUGGESTION: Replace entities[&#39;adx_weblinkset&#39;] with: weblinks[&#39;&lt;Web Link Set name&gt;&#39;] {%- endcomment -%}</span></div><div class="diff-line context"><span class="diff-gutter">  17</span><span class="diff-gutter">  18</span><span class="diff-sym"> </span><span class="diff-text">{% assign primary_nav = entities[&#39;adx_weblinkset&#39;] %}</span></div><div class="diff-line context"><span class="diff-gutter">  18</span><span class="diff-gutter">  19</span><span class="diff-sym"> </span><span class="diff-text"></span></div></div></div>
+</details>
+<details class="rem-file" id="rem-file-3">
+  <summary>
+    <span class="rem-file-path">web-templates\login.html</span>
+    <span class="kind-badge fetchxml">FetchXML</span>
+    <span class="rem-stats"><span class="rem-added">+2</span> <span class="rem-removed">−1</span></span>
+    <a class="rem-vscode-link" href="vscode://file/C:/Users/ashwanikumar/AppData/Local/Temp/sample-regen-v7/remediation-staged/web-templates/login.html" title="Open staged file in your local VSCode desktop app">Open staged file in VSCode</a>
+  </summary>
+  <ul class="rem-summary"><li>entity: adx_webpage → powerpagecomponent (type=2)</li></ul>
+  <div class="rem-cli">
+      <div class="rem-cli-label">For a side-by-side diff editor, run from a terminal:</div>
+      <code class="rem-cli-cmd">code --diff &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-site\web-templates\login.html&quot; &quot;C:\Users\ashwanikumar\AppData\Local\Temp\sample-regen-v7\remediation-staged\web-templates\login.html&quot;</code>
+    </div>
+  <div class="diff-body"><div class="diff-hunk"><div class="diff-hunk-header">@@ -1,8 +1,9 @@</div><div class="diff-line context"><span class="diff-gutter">   1</span><span class="diff-gutter">   1</span><span class="diff-sym"> </span><span class="diff-text">{% fetchxml pages %}</span></div><div class="diff-line context"><span class="diff-gutter">   2</span><span class="diff-gutter">   2</span><span class="diff-sym"> </span><span class="diff-text">&lt;fetch&gt;</span></div><div class="diff-line removed"><span class="diff-gutter">   3</span><span class="diff-gutter">    </span><span class="diff-sym">-</span><span class="diff-text">  &lt;entity name=&quot;adx_webpage&quot;&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   3</span><span class="diff-sym">+</span><span class="diff-text">  &lt;entity name=&quot;powerpagecomponent&quot;&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   4</span><span class="diff-gutter">   4</span><span class="diff-sym"> </span><span class="diff-text">    &lt;attribute name=&quot;adx_name&quot; /&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   5</span><span class="diff-gutter">   5</span><span class="diff-sym"> </span><span class="diff-text">    &lt;attribute name=&quot;adx_partialurl&quot; /&gt;</span></div><div class="diff-line added"><span class="diff-gutter">    </span><span class="diff-gutter">   6</span><span class="diff-sym">+</span><span class="diff-text">  &lt;filter type=&quot;and&quot;&gt;&lt;condition attribute=&quot;powerpagecomponenttype&quot; operator=&quot;eq&quot; value=&quot;2&quot; /&gt;&lt;/filter&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   6</span><span class="diff-gutter">   7</span><span class="diff-sym"> </span><span class="diff-text">  &lt;/entity&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   7</span><span class="diff-gutter">   8</span><span class="diff-sym"> </span><span class="diff-text">&lt;/fetch&gt;</span></div><div class="diff-line context"><span class="diff-gutter">   8</span><span class="diff-gutter">   9</span><span class="diff-sym"> </span><span class="diff-text">{% endfetchxml %}</span></div></div></div>
+</details>
+  </div>
+</div>
 
 <div class="phase-card">
     <div class="phase-header">
@@ -1069,7 +1164,7 @@ details[open] > summary { margin-bottom:6px; }
       <div class="phase-status-icon status-progress">⏳</div>
       <div class="phase-title">
         <h3>Phase 2: Configuration Migration &amp; Customization Remediation</h3>
-        <div class="phase-meta">2 of 3 sub-steps complete · started 0m 00s ago</div>
+        <div class="phase-meta">2 of 3 sub-steps complete · started 4071m 54s ago</div>
       </div>
       <div class="phase-status-label label-progress">In Progress</div>
     </div>
@@ -1177,7 +1272,7 @@ details[open] > summary { margin-bottom:6px; }
 </div>
 
 <div class="footer">
-  Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-06-10 12:29:09 · Refresh in browser to see live updates
+  Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated 2026-06-12 11:49:22 · Refresh in browser to see live updates
 </div>
 
 <script>

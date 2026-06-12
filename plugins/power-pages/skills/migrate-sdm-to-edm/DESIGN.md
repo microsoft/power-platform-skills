@@ -136,15 +136,17 @@ cwd/
 │       ├── website.yml
 │       ├── web-templates/
 │       │   └── migration-check-demo/
-│       │       ├── Migration-Demo-check.webtemplate.source.html
-│       │       └── Migration-Demo-check.webtemplate.source.html.pre-edm.bak   ← backup
+│       │       └── Migration-Demo-check.webtemplate.source.html   ← untouched until user approves
 │       └── ...
 └── migration-reports/                 ← <OUTPUT_DIR> — all migration artifacts
     ├── SiteCustomization.csv          ← PAC writes here
     ├── customization-report.html      ← script writes here
     ├── skill-execution-report.html
-    ├── fetchxml-rewrites.diff
-    └── liquid-suggestions.diff
+    ├── remediation-staged/            ← rewriter-proposed files (mirrors <SITE_ROOT> layout)
+    │   └── web-templates/
+    │       └── migration-check-demo/
+    │           └── Migration-Demo-check.webtemplate.source.html
+    └── remediation-diff.json          ← structured per-file diff manifest
 ```
 
 **Scenario B — cwd IS the site** (`website.yml` directly in cwd):
@@ -181,9 +183,8 @@ Test-Path .\website.yml
 | `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
 | `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
 | `skill-execution-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
-| `fetchxml-rewrites.diff` | `generate-migration-reports.js --automate-fetchxml` | `<OUTPUT_DIR>` |
-| `liquid-suggestions.diff` | `generate-migration-reports.js --automate-liquid` | `<OUTPUT_DIR>` |
-| `<file>.pre-edm.bak` (per-file backups) | rewriter | Sibling of each modified file inside `<SITE_ROOT>` (in-place revert) |
+| `remediation-staged/<rel path>` (proposed file copies) | `generate-migration-reports.js --automate-fetchxml --automate-liquid` | `<OUTPUT_DIR>/remediation-staged/` (mirrors `<SITE_ROOT>` layout; live source untouched until apply step) |
+| `remediation-diff.json` (structured per-file diff manifest) | same script | `<OUTPUT_DIR>` (consumed by live report's Remediation Diff card and by `apply-remediation.js`) |
 
 ### CSV Location-column path handling
 
@@ -228,15 +229,24 @@ The customization report (step 2.1) categorizes findings into five types. step 2
 ```text
 1. Has cwd got the site downloaded?    Yes → confirm work is committed
                                        No  → pac pages download --path ./mysite
-2. Run --automate-fetchxml             → file-level regex rewrites + backups + diff
-3. Run --automate-liquid               → annotated suggestions + backups + diff
-4. Review diffs                        → user approves / cancels / edits further
-5. pac pages upload                    → push rewritten source back to Dataverse
-6. Show manual reminders               → DME per-table checklists, plugin recs, etc.
-7. Final readiness gate                → user confirms before step 3.1 (migration)
+2. Run --automate-fetchxml             → file-level regex rewrites staged to remediation-staged/
+3. Run --automate-liquid               → annotated suggestions staged to remediation-staged/
+                                          (merges on top of step 2 if the file overlaps)
+4. Script emits remediation-diff.json  → structured per-file manifest powering the Remediation Diff
+                                          card in the live execution report
+5. Review in live report               → user expands per-file hunks inline OR clicks "Open staged
+                                          file" to view in VSCode's diff editor
+6. User decides:
+   - Approve  → apply-remediation.js copies staged → live, deletes remediation-staged/
+                pac pages upload pushes the (now applied) source back to Dataverse
+   - Discard  → apply-remediation.js --discard nukes remediation-staged/, live source untouched
+   - Edit     → user hand-edits files in remediation-staged/; the report refreshes;
+                re-ask approval
+7. Show manual reminders               → DME per-table checklists, plugin recs, etc.
+8. Final readiness gate                → user confirms before step 3.1 (migration)
 ```
 
-The auto-rewriter is non-destructive: every modified file gets a `<file>.pre-edm.bak` sibling so the user can revert. Diffs (unified format) are written to `<output-dir>/fetchxml-rewrites.diff` and `liquid-suggestions.diff`.
+The auto-rewriter is non-destructive by construction: it never writes to `<SITE_ROOT>`. All proposed changes live under `<OUTPUT_DIR>/remediation-staged/` until the user explicitly approves. `apply-remediation.js` is the only script that touches `<SITE_ROOT>` after the user picks "Approve" — and even then only with `copyFileSync` from the staged copy, so a partial apply leaves the staged tree intact for re-runs.
 
 ### Per-finding categorization logic
 

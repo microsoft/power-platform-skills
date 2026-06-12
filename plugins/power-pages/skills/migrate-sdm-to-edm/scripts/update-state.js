@@ -97,11 +97,46 @@ function loadState(outputDir) {
   return JSON.parse(fs.readFileSync(p, 'utf-8'));
 }
 
+function loadSnapshotIfExists(outputDir, label) {
+  const p = path.join(outputDir, `${label}-snapshot.json`);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (e) {
+    // Don't fail the report write if a snapshot is malformed — just skip it.
+    console.warn(`Warning: could not parse ${label} snapshot at ${p}: ${e.message}`);
+    return null;
+  }
+}
+
+function loadRemediationDiffIfExists(outputDir) {
+  const p = path.join(outputDir, 'remediation-diff.json');
+  if (!fs.existsSync(p)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    // Inject the manifest's own absolute path so the renderer can build the
+    // PP-VSCode import URL (vscode://...metadataDiffImport?filePath=<this>).
+    data.manifestPath = path.resolve(p);
+    return data;
+  } catch (e) {
+    console.warn(`Warning: could not parse remediation-diff.json at ${p}: ${e.message}`);
+    return null;
+  }
+}
+
+function loadRenderOpts(outputDir) {
+  return {
+    sdmSnapshot: loadSnapshotIfExists(outputDir, 'sdm'),
+    edmSnapshot: loadSnapshotIfExists(outputDir, 'edm'),
+    remediationDiff: loadRemediationDiffIfExists(outputDir),
+  };
+}
+
 function persist(state, outputDir) {
   state.lastUpdatedAt = new Date().toISOString();
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(statePathFor(outputDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state), 'utf-8');
+  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
 }
 
 function cmdInit(args) {
@@ -112,7 +147,7 @@ function cmdInit(args) {
   const state = buildInitialState({ webSiteId, outputDir });
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(statePathFor(outputDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state), 'utf-8');
+  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
   console.log(`✓ Initialized ${statePathFor(outputDir)}`);
   console.log(`✓ Rendered    ${reportPathFor(outputDir)}`);
 }
@@ -287,7 +322,7 @@ function cmdRenderOnly(args) {
   const outputDir = args['output-dir'];
   if (!outputDir) throw new Error('--render-only requires --output-dir');
   const state = loadState(outputDir);
-  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state), 'utf-8');
+  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
   console.log(`✓ Re-rendered ${reportPathFor(outputDir)}`);
 }
 

@@ -109,7 +109,7 @@ const PHASE_2_TRACK_B = {
 // after refs migrate.
 const PHASE_3_TRACK_A = {
   id: 3,
-  title: 'Migration & Activation',
+  title: 'Migration Execution',
   subSteps: [
     // When mode=`all`, SKILL.md instructs the agent to mark 3.1 completed with
     // output "Skipped — refs already migrated in Phase 2.1 (mode=all)".
@@ -121,7 +121,7 @@ const PHASE_3_TRACK_A = {
 
 const PHASE_3_TRACK_B = {
   id: 3,
-  title: 'Migration, Remediation & Activation',
+  title: 'Migration Execution',
   subSteps: [
     { id: '3.1', label: 'Migrate Transactional References' },
     { id: '3.2', label: 'Locate Customization Report' },

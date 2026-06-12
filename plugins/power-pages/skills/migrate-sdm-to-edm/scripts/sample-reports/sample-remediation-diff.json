@@ -1,0 +1,403 @@
+{
+  "version": "1.0",
+  "extensionVersion": "migrate-sdm-to-edm-skill/1.0",
+  "exportedAt": "2026-06-09T10:57:53.798Z",
+  "environmentId": "0c5478c6-3a1a-eebb-9842-cdef12345678",
+  "environmentName": "Ashmigration",
+  "localWebsiteId": "076bf556-9ae6-ee11-a203-6045bdf0328e",
+  "localWebsiteName": "Contoso Portal",
+  "remoteWebsiteId": "076bf556-9ae6-ee11-a203-6045bdf0328e",
+  "remoteWebsiteName": "Contoso Portal",
+  "dataModelVersion": 1,
+  "generatedAt": "2026-06-09T10:57:53.799Z",
+  "siteRoot": ".\\mysite\\contoso-portal",
+  "stagedDir": ".\\migration-reports\\remediation-staged",
+  "note": "In PP-VSCode terms: localContent = live <SITE_ROOT> file (untouched); remoteContent = staged proposed file from the auto-rewriters. Importing this into PP-VSCode's \"Import Metadata Diff\" command will surface a \"current vs proposed\" diff editor.",
+  "files": [
+    {
+      "relativePath": "basic-forms\\contact-form.yml",
+      "kind": "fetchxml",
+      "status": "modified",
+      "linesAdded": 2,
+      "linesRemoved": 1,
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldCount": 8,
+          "newStart": 1,
+          "newCount": 9,
+          "lines": [
+            {
+              "type": "context",
+              "text": "adx_name: ContactForm",
+              "oldLine": 1,
+              "newLine": 1
+            },
+            {
+              "type": "context",
+              "text": "query: |",
+              "oldLine": 2,
+              "newLine": 2
+            },
+            {
+              "type": "context",
+              "text": "  <fetch>",
+              "oldLine": 3,
+              "newLine": 3
+            },
+            {
+              "type": "removed",
+              "text": "    <entity name=\"adx_webrole\">",
+              "oldLine": 4
+            },
+            {
+              "type": "added",
+              "text": "    <entity name=\"powerpagecomponent\">",
+              "newLine": 4
+            },
+            {
+              "type": "context",
+              "text": "      <attribute name=\"adx_name\" />",
+              "oldLine": 5,
+              "newLine": 5
+            },
+            {
+              "type": "added",
+              "text": "  <filter type=\"and\"><condition attribute=\"powerpagecomponenttype\" operator=\"eq\" value=\"11\" /></filter>",
+              "newLine": 6
+            },
+            {
+              "type": "context",
+              "text": "    </entity>",
+              "oldLine": 6,
+              "newLine": 7
+            },
+            {
+              "type": "context",
+              "text": "  </fetch>",
+              "oldLine": 7,
+              "newLine": 8
+            },
+            {
+              "type": "context",
+              "text": "",
+              "oldLine": 8,
+              "newLine": 9
+            }
+          ]
+        }
+      ],
+      "changeSummary": [
+        "entity: adx_webrole → powerpagecomponent (type=11)"
+      ],
+      "livePath": "mysite\\contoso-portal\\basic-forms\\contact-form.yml",
+      "stagedPath": "migration-reports\\remediation-staged\\basic-forms\\contact-form.yml",
+      "localContent": "YWR4X25hbWU6IENvbnRhY3RGb3JtCnF1ZXJ5OiB8CiAgPGZldGNoPgogICAgPGVudGl0eSBuYW1lPSJhZHhfd2Vicm9sZSI+CiAgICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X25hbWUiIC8+CiAgICA8L2VudGl0eT4KICA8L2ZldGNoPgo=",
+      "remoteContent": "YWR4X25hbWU6IENvbnRhY3RGb3JtCnF1ZXJ5OiB8CiAgPGZldGNoPgogICAgPGVudGl0eSBuYW1lPSJwb3dlcnBhZ2Vjb21wb25lbnQiPgogICAgICA8YXR0cmlidXRlIG5hbWU9ImFkeF9uYW1lIiAvPgogIDxmaWx0ZXIgdHlwZT0iYW5kIj48Y29uZGl0aW9uIGF0dHJpYnV0ZT0icG93ZXJwYWdlY29tcG9uZW50dHlwZSIgb3BlcmF0b3I9ImVxIiB2YWx1ZT0iMTEiIC8+PC9maWx0ZXI+CiAgICA8L2VudGl0eT4KICA8L2ZldGNoPgo="
+    },
+    {
+      "relativePath": "basic-forms\\role-form.yml",
+      "kind": "fetchxml",
+      "status": "modified",
+      "linesAdded": 2,
+      "linesRemoved": 1,
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldCount": 8,
+          "newStart": 1,
+          "newCount": 9,
+          "lines": [
+            {
+              "type": "context",
+              "text": "adx_name: RoleForm",
+              "oldLine": 1,
+              "newLine": 1
+            },
+            {
+              "type": "context",
+              "text": "query: |",
+              "oldLine": 2,
+              "newLine": 2
+            },
+            {
+              "type": "context",
+              "text": "  <fetch>",
+              "oldLine": 3,
+              "newLine": 3
+            },
+            {
+              "type": "removed",
+              "text": "    <entity name=\"adx_websiteaccess\">",
+              "oldLine": 4
+            },
+            {
+              "type": "added",
+              "text": "    <entity name=\"powerpagecomponent\">",
+              "newLine": 4
+            },
+            {
+              "type": "context",
+              "text": "      <attribute name=\"adx_name\" />",
+              "oldLine": 5,
+              "newLine": 5
+            },
+            {
+              "type": "added",
+              "text": "  <filter type=\"and\"><condition attribute=\"powerpagecomponenttype\" operator=\"eq\" value=\"12\" /></filter>",
+              "newLine": 6
+            },
+            {
+              "type": "context",
+              "text": "    </entity>",
+              "oldLine": 6,
+              "newLine": 7
+            },
+            {
+              "type": "context",
+              "text": "  </fetch>",
+              "oldLine": 7,
+              "newLine": 8
+            },
+            {
+              "type": "context",
+              "text": "",
+              "oldLine": 8,
+              "newLine": 9
+            }
+          ]
+        }
+      ],
+      "changeSummary": [
+        "entity: adx_websiteaccess → powerpagecomponent (type=12)"
+      ],
+      "livePath": "mysite\\contoso-portal\\basic-forms\\role-form.yml",
+      "stagedPath": "migration-reports\\remediation-staged\\basic-forms\\role-form.yml",
+      "localContent": "YWR4X25hbWU6IFJvbGVGb3JtCnF1ZXJ5OiB8CiAgPGZldGNoPgogICAgPGVudGl0eSBuYW1lPSJhZHhfd2Vic2l0ZWFjY2VzcyI+CiAgICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X25hbWUiIC8+CiAgICA8L2VudGl0eT4KICA8L2ZldGNoPgo=",
+      "remoteContent": "YWR4X25hbWU6IFJvbGVGb3JtCnF1ZXJ5OiB8CiAgPGZldGNoPgogICAgPGVudGl0eSBuYW1lPSJwb3dlcnBhZ2Vjb21wb25lbnQiPgogICAgICA8YXR0cmlidXRlIG5hbWU9ImFkeF9uYW1lIiAvPgogIDxmaWx0ZXIgdHlwZT0iYW5kIj48Y29uZGl0aW9uIGF0dHJpYnV0ZT0icG93ZXJwYWdlY29tcG9uZW50dHlwZSIgb3BlcmF0b3I9ImVxIiB2YWx1ZT0iMTIiIC8+PC9maWx0ZXI+CiAgICA8L2VudGl0eT4KICA8L2ZldGNoPgo="
+    },
+    {
+      "relativePath": "web-templates\\header.html",
+      "kind": "fetchxml+liquid",
+      "status": "modified",
+      "linesAdded": 3,
+      "linesRemoved": 2,
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldCount": 11,
+          "newStart": 1,
+          "newCount": 11,
+          "lines": [
+            {
+              "type": "context",
+              "text": "{% fetchxml weblinks %}",
+              "oldLine": 1,
+              "newLine": 1
+            },
+            {
+              "type": "context",
+              "text": "<fetch>",
+              "oldLine": 2,
+              "newLine": 2
+            },
+            {
+              "type": "removed",
+              "text": "  <entity name=\"adx_weblinkset\">",
+              "oldLine": 3
+            },
+            {
+              "type": "added",
+              "text": "  <entity name=\"powerpagecomponent\">",
+              "newLine": 3
+            },
+            {
+              "type": "context",
+              "text": "    <attribute name=\"adx_name\" />",
+              "oldLine": 4,
+              "newLine": 4
+            },
+            {
+              "type": "context",
+              "text": "    <attribute name=\"adx_title\" />",
+              "oldLine": 5,
+              "newLine": 5
+            },
+            {
+              "type": "context",
+              "text": "    <filter type=\"and\">",
+              "oldLine": 6,
+              "newLine": 6
+            },
+            {
+              "type": "context",
+              "text": "      <condition attribute=\"adx_websiteid\" operator=\"eq\" value=\"{{ website.id }}\" />",
+              "oldLine": 7,
+              "newLine": 7
+            },
+            {
+              "type": "removed",
+              "text": "    </filter>",
+              "oldLine": 8
+            },
+            {
+              "type": "added",
+              "text": "    <condition attribute=\"powerpagecomponenttype\" operator=\"eq\" value=\"4\" /></filter>",
+              "newLine": 8
+            },
+            {
+              "type": "context",
+              "text": "  </entity>",
+              "oldLine": 9,
+              "newLine": 9
+            },
+            {
+              "type": "context",
+              "text": "</fetch>",
+              "oldLine": 10,
+              "newLine": 10
+            },
+            {
+              "type": "context",
+              "text": "{% endfetchxml %}",
+              "oldLine": 11,
+              "newLine": 11
+            }
+          ]
+        },
+        {
+          "oldStart": 14,
+          "oldCount": 5,
+          "newStart": 14,
+          "newCount": 6,
+          "lines": [
+            {
+              "type": "context",
+              "text": "    <li>{{ link.adx_name }}</li>",
+              "oldLine": 14,
+              "newLine": 14
+            },
+            {
+              "type": "context",
+              "text": "  {% endfor %}",
+              "oldLine": 15,
+              "newLine": 15
+            },
+            {
+              "type": "context",
+              "text": "</ul>",
+              "oldLine": 16,
+              "newLine": 16
+            },
+            {
+              "type": "added",
+              "text": "{%- comment -%} SDM→EDM SUGGESTION: Replace entities['adx_weblinkset'] with: weblinks['<Web Link Set name>'] {%- endcomment -%}",
+              "newLine": 17
+            },
+            {
+              "type": "context",
+              "text": "{% assign primary_nav = entities['adx_weblinkset'] %}",
+              "oldLine": 17,
+              "newLine": 18
+            },
+            {
+              "type": "context",
+              "text": "",
+              "oldLine": 18,
+              "newLine": 19
+            }
+          ]
+        }
+      ],
+      "changeSummary": [
+        "entity: adx_weblinkset → powerpagecomponent (type=4)",
+        " → Replace entities['adx_weblinkset'] with: weblinks['<Web Link Set name>']"
+      ],
+      "livePath": "mysite\\contoso-portal\\web-templates\\header.html",
+      "stagedPath": "migration-reports\\remediation-staged\\web-templates\\header.html",
+      "localContent": "eyUgZmV0Y2h4bWwgd2VibGlua3MgJX0KPGZldGNoPgogIDxlbnRpdHkgbmFtZT0iYWR4X3dlYmxpbmtzZXQiPgogICAgPGF0dHJpYnV0ZSBuYW1lPSJhZHhfbmFtZSIgLz4KICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X3RpdGxlIiAvPgogICAgPGZpbHRlciB0eXBlPSJhbmQiPgogICAgICA8Y29uZGl0aW9uIGF0dHJpYnV0ZT0iYWR4X3dlYnNpdGVpZCIgb3BlcmF0b3I9ImVxIiB2YWx1ZT0ie3sgd2Vic2l0ZS5pZCB9fSIgLz4KICAgIDwvZmlsdGVyPgogIDwvZW50aXR5Pgo8L2ZldGNoPgp7JSBlbmRmZXRjaHhtbCAlfQo8dWwgY2xhc3M9Im5hdiI+CiAgeyUgZm9yIGxpbmsgaW4gd2VibGlua3MucmVzdWx0cy5lbnRpdGllcyAlfQogICAgPGxpPnt7IGxpbmsuYWR4X25hbWUgfX08L2xpPgogIHslIGVuZGZvciAlfQo8L3VsPgp7JSBhc3NpZ24gcHJpbWFyeV9uYXYgPSBlbnRpdGllc1snYWR4X3dlYmxpbmtzZXQnXSAlfQo=",
+      "remoteContent": "eyUgZmV0Y2h4bWwgd2VibGlua3MgJX0KPGZldGNoPgogIDxlbnRpdHkgbmFtZT0icG93ZXJwYWdlY29tcG9uZW50Ij4KICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X25hbWUiIC8+CiAgICA8YXR0cmlidXRlIG5hbWU9ImFkeF90aXRsZSIgLz4KICAgIDxmaWx0ZXIgdHlwZT0iYW5kIj4KICAgICAgPGNvbmRpdGlvbiBhdHRyaWJ1dGU9ImFkeF93ZWJzaXRlaWQiIG9wZXJhdG9yPSJlcSIgdmFsdWU9Int7IHdlYnNpdGUuaWQgfX0iIC8+CiAgICA8Y29uZGl0aW9uIGF0dHJpYnV0ZT0icG93ZXJwYWdlY29tcG9uZW50dHlwZSIgb3BlcmF0b3I9ImVxIiB2YWx1ZT0iNCIgLz48L2ZpbHRlcj4KICA8L2VudGl0eT4KPC9mZXRjaD4KeyUgZW5kZmV0Y2h4bWwgJX0KPHVsIGNsYXNzPSJuYXYiPgogIHslIGZvciBsaW5rIGluIHdlYmxpbmtzLnJlc3VsdHMuZW50aXRpZXMgJX0KICAgIDxsaT57eyBsaW5rLmFkeF9uYW1lIH19PC9saT4KICB7JSBlbmRmb3IgJX0KPC91bD4KeyUtIGNvbW1lbnQgLSV9IFNETeKGkkVETSBTVUdHRVNUSU9OOiBSZXBsYWNlIGVudGl0aWVzWydhZHhfd2VibGlua3NldCddIHdpdGg6IHdlYmxpbmtzWyc8V2ViIExpbmsgU2V0IG5hbWU+J10geyUtIGVuZGNvbW1lbnQgLSV9CnslIGFzc2lnbiBwcmltYXJ5X25hdiA9IGVudGl0aWVzWydhZHhfd2VibGlua3NldCddICV9Cg=="
+    },
+    {
+      "relativePath": "web-templates\\login.html",
+      "kind": "fetchxml",
+      "status": "modified",
+      "linesAdded": 2,
+      "linesRemoved": 1,
+      "hunks": [
+        {
+          "oldStart": 1,
+          "oldCount": 8,
+          "newStart": 1,
+          "newCount": 9,
+          "lines": [
+            {
+              "type": "context",
+              "text": "{% fetchxml pages %}",
+              "oldLine": 1,
+              "newLine": 1
+            },
+            {
+              "type": "context",
+              "text": "<fetch>",
+              "oldLine": 2,
+              "newLine": 2
+            },
+            {
+              "type": "removed",
+              "text": "  <entity name=\"adx_webpage\">",
+              "oldLine": 3
+            },
+            {
+              "type": "added",
+              "text": "  <entity name=\"powerpagecomponent\">",
+              "newLine": 3
+            },
+            {
+              "type": "context",
+              "text": "    <attribute name=\"adx_name\" />",
+              "oldLine": 4,
+              "newLine": 4
+            },
+            {
+              "type": "context",
+              "text": "    <attribute name=\"adx_partialurl\" />",
+              "oldLine": 5,
+              "newLine": 5
+            },
+            {
+              "type": "added",
+              "text": "  <filter type=\"and\"><condition attribute=\"powerpagecomponenttype\" operator=\"eq\" value=\"2\" /></filter>",
+              "newLine": 6
+            },
+            {
+              "type": "context",
+              "text": "  </entity>",
+              "oldLine": 6,
+              "newLine": 7
+            },
+            {
+              "type": "context",
+              "text": "</fetch>",
+              "oldLine": 7,
+              "newLine": 8
+            },
+            {
+              "type": "context",
+              "text": "{% endfetchxml %}",
+              "oldLine": 8,
+              "newLine": 9
+            }
+          ]
+        }
+      ],
+      "changeSummary": [
+        "entity: adx_webpage → powerpagecomponent (type=2)"
+      ],
+      "livePath": "mysite\\contoso-portal\\web-templates\\login.html",
+      "stagedPath": "migration-reports\\remediation-staged\\web-templates\\login.html",
+      "localContent": "eyUgZmV0Y2h4bWwgcGFnZXMgJX0KPGZldGNoPgogIDxlbnRpdHkgbmFtZT0iYWR4X3dlYnBhZ2UiPgogICAgPGF0dHJpYnV0ZSBuYW1lPSJhZHhfbmFtZSIgLz4KICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X3BhcnRpYWx1cmwiIC8+CiAgPC9lbnRpdHk+CjwvZmV0Y2g+CnslIGVuZGZldGNoeG1sICV9CnslIGZvciBwYWdlIGluIHBhZ2VzLnJlc3VsdHMuZW50aXRpZXMgJX0KICA8YSBocmVmPSJ7eyBwYWdlLmFkeF9wYXJ0aWFsdXJsIH19Ij57eyBwYWdlLmFkeF9uYW1lIH19PC9hPgp7JSBlbmRmb3IgJX0K",
+      "remoteContent": "eyUgZmV0Y2h4bWwgcGFnZXMgJX0KPGZldGNoPgogIDxlbnRpdHkgbmFtZT0icG93ZXJwYWdlY29tcG9uZW50Ij4KICAgIDxhdHRyaWJ1dGUgbmFtZT0iYWR4X25hbWUiIC8+CiAgICA8YXR0cmlidXRlIG5hbWU9ImFkeF9wYXJ0aWFsdXJsIiAvPgogIDxmaWx0ZXIgdHlwZT0iYW5kIj48Y29uZGl0aW9uIGF0dHJpYnV0ZT0icG93ZXJwYWdlY29tcG9uZW50dHlwZSIgb3BlcmF0b3I9ImVxIiB2YWx1ZT0iMiIgLz48L2ZpbHRlcj4KICA8L2VudGl0eT4KPC9mZXRjaD4KeyUgZW5kZmV0Y2h4bWwgJX0KeyUgZm9yIHBhZ2UgaW4gcGFnZXMucmVzdWx0cy5lbnRpdGllcyAlfQogIDxhIGhyZWY9Int7IHBhZ2UuYWR4X3BhcnRpYWx1cmwgfX0iPnt7IHBhZ2UuYWR4X25hbWUgfX08L2E+CnslIGVuZGZvciAlfQo="
+    }
+  ]
+}

@@ -1549,27 +1549,129 @@ function unifiedDiff(oldContent, newContent, filePath) {
 }
 
 /**
- * Backup a file by writing a `.pre-edm.bak` sibling if not already present.
+ * Structured diff used by `remediation-diff.json`. Walks the two line arrays
+ * in parallel (same algorithm as unifiedDiff) and groups adjacent changes
+ * into hunks with `CONTEXT_LINES` of surrounding context. Returns
+ * { linesAdded, linesRemoved, hunks: [...] } — hunks have the shape:
+ *   {
+ *     oldStart, oldCount, newStart, newCount,
+ *     lines: [ { type: 'context'|'added'|'removed', text, oldLine?, newLine? } ]
+ *   }
  */
-function backupFileOnce(filePath) {
-  const backupPath = `${filePath}.pre-edm.bak`;
-  if (!fs.existsSync(backupPath)) {
-    fs.copyFileSync(filePath, backupPath);
+const CONTEXT_LINES = 3;
+function structuredDiff(oldContent, newContent) {
+  const oldLines = oldContent.split('\n');
+  const newLines = newContent.split('\n');
+
+  // Build a tagged stream: 'context' | 'removed' | 'added'.
+  const stream = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      stream.push({ type: 'context', text: oldLines[i], oldLine: i + 1, newLine: j + 1 });
+      i++;
+      j++;
+    } else {
+      let oi = i;
+      let nj = j;
+      while (oi < oldLines.length && newLines.indexOf(oldLines[oi], j) === -1) oi++;
+      while (nj < newLines.length && oldLines.indexOf(newLines[nj], i) === -1) nj++;
+      for (let k = i; k < oi; k++) stream.push({ type: 'removed', text: oldLines[k], oldLine: k + 1 });
+      for (let k = j; k < nj; k++) stream.push({ type: 'added', text: newLines[k], newLine: k + 1 });
+      i = oi;
+      j = nj;
+    }
   }
-  return backupPath;
+
+  // Slice into hunks: a hunk is a run of non-context lines bracketed by
+  // up to CONTEXT_LINES of context on either side. Adjacent change runs
+  // within 2*CONTEXT_LINES of each other are merged.
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  for (const line of stream) {
+    if (line.type === 'added') linesAdded++;
+    else if (line.type === 'removed') linesRemoved++;
+  }
+
+  const hunks = [];
+  let k = 0;
+  while (k < stream.length) {
+    if (stream[k].type === 'context') {
+      k++;
+      continue;
+    }
+    // Found a change. Walk back for context.
+    const hunkStart = Math.max(0, k - CONTEXT_LINES);
+    let hunkEnd = k;
+    while (hunkEnd < stream.length) {
+      if (stream[hunkEnd].type !== 'context') {
+        hunkEnd++;
+        continue;
+      }
+      // Look ahead — if another change is within 2*CONTEXT_LINES, keep going.
+      let nextChange = -1;
+      for (let p = hunkEnd; p < Math.min(stream.length, hunkEnd + 2 * CONTEXT_LINES); p++) {
+        if (stream[p].type !== 'context') {
+          nextChange = p;
+          break;
+        }
+      }
+      if (nextChange === -1) break;
+      hunkEnd = nextChange;
+    }
+    const trailingEnd = Math.min(stream.length, hunkEnd + CONTEXT_LINES);
+    const slice = stream.slice(hunkStart, trailingEnd);
+
+    // Compute oldStart/newStart from first context-or-change line.
+    let oldStart = null;
+    let newStart = null;
+    let oldCount = 0;
+    let newCount = 0;
+    for (const line of slice) {
+      if (line.oldLine != null && oldStart == null) oldStart = line.oldLine;
+      if (line.newLine != null && newStart == null) newStart = line.newLine;
+      if (line.type === 'context') { oldCount++; newCount++; }
+      else if (line.type === 'removed') oldCount++;
+      else if (line.type === 'added') newCount++;
+    }
+
+    hunks.push({
+      oldStart: oldStart || 1,
+      oldCount,
+      newStart: newStart || 1,
+      newCount,
+      lines: slice,
+    });
+
+    k = trailingEnd;
+  }
+
+  return { linesAdded, linesRemoved, hunks };
 }
 
 /**
- * Run the FetchXML auto-rewriter against all .html and .yml files under sitePath.
+ * Materialize a staged copy of `live` at `stagedPath` (mkdir -p its parent).
+ */
+function writeStaged(stagedPath, content) {
+  fs.mkdirSync(path.dirname(stagedPath), { recursive: true });
+  fs.writeFileSync(stagedPath, content, 'utf-8');
+}
+
+/**
+ * Run the FetchXML auto-rewriter. Writes proposed files to
+ * `<outputDir>/remediation-staged/<relPath>`. Does NOT modify live files.
+ * Live source remains untouched until the apply-remediation step copies
+ * staged → live after explicit user approval.
  */
 function executeFetchXmlRewrites(sitePath, outputDir) {
   if (!fs.existsSync(sitePath)) {
     throw new Error(`Site path not found: ${sitePath}`);
   }
 
+  const stagedDir = path.join(outputDir, 'remediation-staged');
   const files = walkSiteDirectory(sitePath, ['.html', '.yml']);
-  const results = { filesScanned: 0, filesModified: 0, rewrites: [], skipped: [] };
-  const diffs = [];
+  const results = { filesScanned: 0, filesModified: 0, rewrites: [], skipped: [], diffEntries: [] };
 
   for (const file of files) {
     results.filesScanned++;
@@ -1578,36 +1680,45 @@ function executeFetchXmlRewrites(sitePath, outputDir) {
 
     const { newContent, changes, skipped } = rewriteFetchXmlInContent(content);
     if (changes.length > 0 && newContent !== content) {
-      const backup = backupFileOnce(file);
-      fs.writeFileSync(file, newContent, 'utf-8');
+      const relativePath = path.relative(sitePath, file);
+      const stagedPath = path.join(stagedDir, relativePath);
+      writeStaged(stagedPath, newContent);
+      const diff = structuredDiff(content, newContent);
       results.filesModified++;
-      results.rewrites.push({ file, backup, changes });
-      diffs.push(unifiedDiff(content, newContent, path.relative(sitePath, file)));
+      results.rewrites.push({ file, stagedPath, changes });
+      results.diffEntries.push({
+        relativePath,
+        kind: 'fetchxml',
+        status: 'modified',
+        linesAdded: diff.linesAdded,
+        linesRemoved: diff.linesRemoved,
+        hunks: diff.hunks,
+        changeSummary: changes.map((c) => `${c.tag}: ${c.entity} → powerpagecomponent (type=${c.typeValue})`),
+        livePath: file,
+        stagedPath,
+      });
     }
     if (skipped.length > 0) {
       results.skipped.push({ file, skipped });
     }
   }
 
-  // Write the consolidated diff file.
-  const diffPath = path.join(outputDir, 'fetchxml-rewrites.diff');
-  fs.writeFileSync(diffPath, diffs.join('\n'), 'utf-8');
-  results.diffPath = diffPath;
-
+  results.stagedDir = stagedDir;
   return results;
 }
 
 /**
- * Run the Liquid entities['adx_*'] semi-auto rewriter (annotate, don't overwrite).
+ * Run the Liquid entities['adx_*'] semi-auto rewriter. Writes annotated files
+ * to `<outputDir>/remediation-staged/<relPath>` — does NOT modify live files.
  */
 function executeLiquidRewrites(sitePath, outputDir) {
   if (!fs.existsSync(sitePath)) {
     throw new Error(`Site path not found: ${sitePath}`);
   }
 
+  const stagedDir = path.join(outputDir, 'remediation-staged');
   const files = walkSiteDirectory(sitePath, ['.html']);
-  const results = { filesScanned: 0, filesAnnotated: 0, suggestions: [] };
-  const diffs = [];
+  const results = { filesScanned: 0, filesAnnotated: 0, suggestions: [], diffEntries: [] };
 
   for (const file of files) {
     results.filesScanned++;
@@ -1616,19 +1727,116 @@ function executeLiquidRewrites(sitePath, outputDir) {
 
     const { newContent, suggestions } = annotateLiquidEntitiesInContent(content);
     if (suggestions.length > 0 && newContent !== content) {
-      const backup = backupFileOnce(file);
-      fs.writeFileSync(file, newContent, 'utf-8');
+      const relativePath = path.relative(sitePath, file);
+      const stagedPath = path.join(stagedDir, relativePath);
+      // FetchXML rewriter may already have staged this file — if so, diff the
+      // staged version against the Liquid output to preserve both passes.
+      const baseContent = fs.existsSync(stagedPath) ? fs.readFileSync(stagedPath, 'utf-8') : content;
+      const liquidOnly = annotateLiquidEntitiesInContent(baseContent);
+      const finalContent = liquidOnly.newContent !== baseContent ? liquidOnly.newContent : newContent;
+      writeStaged(stagedPath, finalContent);
+      const diff = structuredDiff(content, finalContent);
       results.filesAnnotated++;
-      results.suggestions.push({ file, backup, suggestions });
-      diffs.push(unifiedDiff(content, newContent, path.relative(sitePath, file)));
+      results.suggestions.push({ file, stagedPath, suggestions });
+      results.diffEntries.push({
+        relativePath,
+        kind: 'liquid',
+        status: 'modified',
+        linesAdded: diff.linesAdded,
+        linesRemoved: diff.linesRemoved,
+        hunks: diff.hunks,
+        changeSummary: suggestions.map((s) => `${s.original || s.match || ''} → ${s.suggestion || s.replacement || ''}`),
+        livePath: file,
+        stagedPath,
+      });
     }
   }
 
-  const diffPath = path.join(outputDir, 'liquid-suggestions.diff');
-  fs.writeFileSync(diffPath, diffs.join('\n'), 'utf-8');
-  results.diffPath = diffPath;
-
+  results.stagedDir = stagedDir;
   return results;
+}
+
+/**
+ * Read a file as base64. Returns null if the file is missing.
+ */
+function readBase64IfExists(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return fs.readFileSync(filePath).toString('base64');
+}
+
+/**
+ * Merge per-rewriter diff entries by relativePath and emit `remediation-diff.json`.
+ *
+ * The emitted JSON is **dual-format**: it carries our own structured fields
+ * (`kind`, `hunks`, `changeSummary`, `livePath`, `stagedPath`) used by the live
+ * report's Remediation Diff card, AND the fields required by the PP-VSCode
+ * extension's "Import Metadata Diff" command (`version`, `extensionVersion`,
+ * `exportedAt`, `environmentId/Name`, `localWebsiteId/Name`, `remoteWebsiteId/Name`,
+ * and `files[].localContent`/`.remoteContent` as base64).
+ *
+ * Semantic mapping for the PP-VSCode side:
+ *   - `localContent`  = the live `<SITE_ROOT>` file (untouched)
+ *   - `remoteContent` = the staged proposed file (what the rewriter wants to apply)
+ * so the PP-VSCode diff editor reads "local vs remote" as "current vs proposed."
+ */
+function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResults, meta) {
+  const fxEntries = (fetchXmlResults && fetchXmlResults.diffEntries) || [];
+  const lqEntries = (liquidResults && liquidResults.diffEntries) || [];
+
+  const byPath = new Map();
+  for (const e of fxEntries) byPath.set(e.relativePath, { ...e });
+  for (const e of lqEntries) {
+    const existing = byPath.get(e.relativePath);
+    if (existing) {
+      existing.kind = 'fetchxml+liquid';
+      existing.linesAdded = e.linesAdded;
+      existing.linesRemoved = e.linesRemoved;
+      existing.hunks = e.hunks;
+      existing.changeSummary = (existing.changeSummary || []).concat(e.changeSummary || []);
+    } else {
+      byPath.set(e.relativePath, { ...e });
+    }
+  }
+
+  const files = [...byPath.values()].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  if (files.length === 0) return null;
+
+  // Attach base64 file contents for PP-VSCode import compatibility.
+  for (const entry of files) {
+    entry.localContent = readBase64IfExists(entry.livePath);
+    entry.remoteContent = readBase64IfExists(entry.stagedPath);
+  }
+
+  const websiteId = (meta && meta.websiteId) || 'unknown';
+  const websiteName = (meta && meta.websiteName) || 'unknown';
+  const environmentId = (meta && meta.environmentId) || 'unknown';
+  const environmentName = (meta && meta.environmentName) || 'unknown';
+
+  const payload = {
+    // PP-VSCode importer required fields
+    version: '1.0',
+    extensionVersion: 'migrate-sdm-to-edm-skill/1.0',
+    exportedAt: new Date().toISOString(),
+    environmentId,
+    environmentName,
+    localWebsiteId: websiteId,
+    localWebsiteName: websiteName,
+    remoteWebsiteId: websiteId,
+    remoteWebsiteName: websiteName,
+    dataModelVersion: 1,
+
+    // Skill-specific context (ignored by PP-VSCode, used by our renderer)
+    generatedAt: new Date().toISOString(),
+    siteRoot: path.resolve(sitePath),
+    stagedDir: path.resolve(path.join(outputDir, 'remediation-staged')),
+    note: 'In PP-VSCode terms: localContent = live <SITE_ROOT> file (untouched); remoteContent = staged proposed file from the auto-rewriters. Importing this into PP-VSCode\'s "Import Metadata Diff" command will surface a "current vs proposed" diff editor.',
+
+    files,
+  };
+
+  const outPath = path.join(outputDir, 'remediation-diff.json');
+  fs.writeFileSync(outPath, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
+  return { outPath, fileCount: files.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -1824,16 +2032,17 @@ async function main() {
 
     // Run FetchXML auto-rewriter if requested
     let fetchXmlRewriteResults = null;
+    let sitePathUsed = null;
     if (args['automate-fetchxml']) {
       const sitePath = args['site-path'] || args['sitePath'];
       if (!sitePath) {
         console.error('Error: --site-path <path> is required with --automate-fetchxml. Point this at your `pac pages download` output directory.');
         process.exit(1);
       }
-      console.log(`Rewriting FetchXML in: ${sitePath}`);
+      sitePathUsed = sitePath;
+      console.log(`Rewriting FetchXML in: ${sitePath} → staging to remediation-staged/`);
       fetchXmlRewriteResults = executeFetchXmlRewrites(sitePath, args['output-dir']);
-      console.log(`✓ FetchXML: scanned ${fetchXmlRewriteResults.filesScanned} files, modified ${fetchXmlRewriteResults.filesModified}, skipped ${fetchXmlRewriteResults.skipped.length}`);
-      console.log(`  Diff: ${fetchXmlRewriteResults.diffPath}`);
+      console.log(`✓ FetchXML: scanned ${fetchXmlRewriteResults.filesScanned} files, staged ${fetchXmlRewriteResults.filesModified}, skipped ${fetchXmlRewriteResults.skipped.length}`);
     }
 
     // Run Liquid entities[''] semi-auto rewriter if requested
@@ -1844,10 +2053,26 @@ async function main() {
         console.error('Error: --site-path <path> is required with --automate-liquid. Point this at your `pac pages download` output directory.');
         process.exit(1);
       }
-      console.log(`Annotating Liquid entities[adx_*] usages in: ${sitePath}`);
+      sitePathUsed = sitePathUsed || sitePath;
+      console.log(`Annotating Liquid entities[adx_*] usages in: ${sitePath} → staging to remediation-staged/`);
       liquidRewriteResults = executeLiquidRewrites(sitePath, args['output-dir']);
-      console.log(`✓ Liquid: scanned ${liquidRewriteResults.filesScanned} files, annotated ${liquidRewriteResults.filesAnnotated}`);
-      console.log(`  Diff: ${liquidRewriteResults.diffPath}`);
+      console.log(`✓ Liquid: scanned ${liquidRewriteResults.filesScanned} files, staged ${liquidRewriteResults.filesAnnotated}`);
+    }
+
+    // Emit remediation-diff.json combining FetchXML + Liquid passes.
+    if (sitePathUsed && (fetchXmlRewriteResults || liquidRewriteResults)) {
+      const diffMeta = {
+        websiteId: args['website-id'],
+        websiteName: args['site-name'],
+        environmentId: args['environment-id'] || args['environmentId'] || null,
+        environmentName: args['environment-name'] || args['environmentName'] || null,
+      };
+      const diffOutcome = writeRemediationDiff(sitePathUsed, args['output-dir'], fetchXmlRewriteResults, liquidRewriteResults, diffMeta);
+      if (diffOutcome) {
+        console.log(`✓ Remediation diff: ${diffOutcome.outPath} (${diffOutcome.fileCount} file${diffOutcome.fileCount === 1 ? '' : 's'})`);
+      } else {
+        console.log('✓ No remediation diff to emit — auto-rewriters made zero modifications.');
+      }
     }
 
     // Generate augmented prompts for plugin and DME findings (customer-owned code

@@ -87,7 +87,7 @@ Surface that callout at these **7 checkpoints**:
 | 1 | After `--init` runs (end of step 1.2) | `skill-execution-report.html` (initialized state) |
 | 2 | End of Phase 1, before Phase 2 approval | `skill-execution-report.html` (shows full Phase 1 outcomes + plan for next phase) |
 | 3 | After step 2.2 (Track A) — customization CSV parsed | `customization-report.html` (findings catalog) |
-| 4 | Mid-step 2.3 (Track A) — after auto-rewrites, before upload approval | `fetchxml-rewrites.diff`, `liquid-suggestions.diff`, augmented prompt files |
+| 4 | Mid-step 2.3 (Track A) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
 | 5 | End of Phase 2, before Phase 3 approval | `skill-execution-report.html` (shows Phase 2 outcomes) |
 | 6 | End of Phase 3, before Phase 4 approval | `skill-execution-report.html` (shows EDM activation status) |
 | 7 | End of Phase 4 (data-diff produced) | `migration-data-diff.json` + `skill-execution-report.html` |
@@ -804,7 +804,7 @@ Output: `<OUTPUT_DIR>/sdm-snapshot.json` — Phase 4 will diff this against an E
 - **Zero customization findings**: skip steps 4–8, jump to step 9 (readiness gate).
 - **One or more findings**: proceed with auto-rewriters below.
 
-### 4. Run automated FetchXML rewrites
+### 4. Stage automated FetchXML rewrites
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
@@ -812,19 +812,22 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --site-path "<SITE_ROOT>" `
+  --environment-name "<ENV_NAME>" `
+  --environment-id "<ENV_ID>" `
   --automate-fetchxml `
   --output-dir "<OUTPUT_DIR>"
 ```
+
+> `--environment-name` and `--environment-id` are optional but recommended — they get written into `remediation-diff.json` so the file is valid for the PP-VSCode extension's "Import Metadata Diff" command. Source from step 1.1 (`pac auth list` / `pac org list`). If omitted, both default to `"unknown"`.
 
 Script behavior:
 
 - Walks `.html` and `.yml` files under `--site-path`
 - Finds each `<entity name='adx_X'>` block (in `{% fetchxml %}` Liquid tags and YAML `query:` fields)
 - Renames entity to `powerpagecomponent` and injects `<condition attribute='powerpagecomponenttype' operator='eq' value='<N>'/>` based on the component type map
-- Writes `<file>.pre-edm.bak` sibling before modifying each file
-- Produces a unified diff in `<output-dir>/fetchxml-rewrites.diff`
+- **Writes the proposed file to `<OUTPUT_DIR>/remediation-staged/<relative path>`.** The live `<SITE_ROOT>` is NOT modified — the staged copy is what step 8 applies after user approval.
 
-### 5. Run semi-automated Liquid `entities['adx_*']` rewrites
+### 5. Stage semi-automated Liquid `entities['adx_*']` rewrites
 
 ```powershell
 node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
@@ -832,6 +835,8 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --site-path "<SITE_ROOT>" `
+  --environment-name "<ENV_NAME>" `
+  --environment-id "<ENV_ID>" `
   --automate-liquid `
   --output-dir "<OUTPUT_DIR>"
 ```
@@ -841,6 +846,13 @@ Script behavior:
 - Walks `.html` files for `entities['adx_*']` and `entities["adx_*"]` patterns
 - For each match, looks up the suggested dedicated Liquid object (e.g., `entities['adx_weblinkset']` → `weblinks`)
 - **Inserts a suggested rewrite as a Liquid comment next to the original** — does NOT overwrite the original line. User decides what to keep.
+- **Writes the annotated file to `<OUTPUT_DIR>/remediation-staged/<relative path>`** (merging on top of the FetchXML pass if the same file was touched there).
+
+After both rewriters run, the script emits **`<OUTPUT_DIR>/remediation-diff.json`** — a **dual-format manifest** that serves two consumers:
+
+1. **The live execution report's Remediation Diff card** reads our structured fields (`files[].relativePath`, `kind: "fetchxml" | "liquid" | "fetchxml+liquid"`, `status: "modified"`, `linesAdded`, `linesRemoved`, `hunks[]`, `changeSummary[]`, `livePath`, `stagedPath`) to render one expandable row per touched file with inline hunks plus an "Open staged file" link.
+
+2. **The Power Pages VSCode extension's "Import Metadata Diff"** command reads PP-VSCode's required schema (`version: "1.0"`, `extensionVersion`, `exportedAt`, `environmentId`, `environmentName`, `localWebsiteId`/`Name`, `remoteWebsiteId`/`Name`, and `files[].localContent` / `.remoteContent` as base64). The PP-VSCode mapping: `localContent` = your live `<SITE_ROOT>` file (untouched), `remoteContent` = the staged proposed file — so PP-VSCode's "local vs remote" diff editor reads as "current vs proposed".
 
 ### 6. Generate augmented prompts for manual categories
 
@@ -853,7 +865,7 @@ The script in step 4/5 also emits:
 > **→ Update report (before asking for upload approval):**
 >
 > ```
-> --set-step 2.3 --status in-progress --output "Auto-rewrites complete · awaiting diff review"
+> --set-step 2.3 --status in-progress --output "Auto-rewrites staged · awaiting diff review"
 > --set-prompt plugin --status ready --path "<OUTPUT_DIR>/plugin-remediation-prompt.txt" --summary "<N> custom plugins on adx_* entities"
 > --set-prompt dme    --status ready --path "<OUTPUT_DIR>/dme-remediation-prompt.txt"    --summary "<N> custom columns across <T> adx_* tables"
 > --set-approval 2 in-phase
@@ -863,39 +875,52 @@ The script in step 4/5 also emits:
 
 ### 7. Review and approve changes
 
-> **📄 Checkpoint 4 — Tell the user about the diff and prompts.** Print all relevant paths in chat before asking for upload approval:
+> **📄 Checkpoint 4 — Tell the user where to review.** Print this in chat before asking for upload approval:
 >
 > ```
-> 📄 Auto-rewrites complete. Review these files before approving the upload:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\fetchxml-rewrites.diff
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\liquid-suggestions.diff
+> 📄 Auto-rewriters staged proposed changes. Review them in the live report:
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
+>
+> Open the "Migration & Review" tab — the Remediation Diff card shows one
+> expandable row per touched file with inline hunks. Click "Open staged file"
+> on any row to view it in VSCode.
+>
+> Augmented prompts (work in parallel, in separate Claude sessions):
 >    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\plugin-remediation-prompt.txt   (if plugin findings)
 >    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\dme-remediation-prompt.txt      (if DME findings)
 >
-> The live execution report also shows the diff summary:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\skill-execution-report.html
->
-> Review the diff and the augmented prompts. When ready, I'll ask for your approval to upload.
+> Your live site source under <SITE_ROOT> is UNTOUCHED — staged files live
+> under <OUTPUT_DIR>\remediation-staged\ and are only applied when you approve.
 > ```
-
-Then show the user:
-
-- Path to the diff file (`fetchxml-rewrites.diff`)
-- Path to the Liquid suggestions report
-- Path to all `*.pre-edm.bak` files (so they can revert if needed)
-- Paths to plugin / DME prompt files (for separate Claude sessions)
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Review the rewrites in `<diff-file>`. Approve and upload to Dataverse? | Approve Rewrites | Yes, upload now, No, cancel, Let me edit further first |
+| Review the Remediation Diff card in the live report. Apply the staged changes to your site source and upload to Dataverse? | Approve Rewrites | Yes — apply and upload, No — discard staged changes, Let me edit the staged files first |
 
-### 8. Upload approved changes back to Dataverse
+### 8. Apply staged changes and upload to Dataverse
 
-If approved:
+Branch on the user's answer:
+
+**Yes — apply and upload:** copy staged files over the live source, then upload.
 
 ```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+  --output-dir "<OUTPUT_DIR>" `
+  --site-root "<SITE_ROOT>"
+
 pac pages upload --path "<SITE_ROOT>" --modelVersion 1
 ```
+
+`apply-remediation.js` reads `remediation-diff.json`, copies each staged file over its live counterpart, and deletes the `remediation-staged/` directory on success. Pass `--dry-run` first if you want to print the planned copies without executing.
+
+**No — discard staged changes:** delete the staged tree and the diff manifest; live source remains untouched.
+
+```powershell
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+  --output-dir "<OUTPUT_DIR>" --discard
+```
+
+**Let me edit the staged files first:** the user hand-edits files under `<OUTPUT_DIR>\remediation-staged\` (changes preview live in the report on refresh). When done, re-ask the approval question.
 
 > **PAC CLI argument notes:**
 >
@@ -911,7 +936,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Configuration is migrated, customizations addressed (or knowingly deferred). Proceed to Phase 3 (Activation)? | Migration Readiness | Yes — proceed to activation, Defer manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
+| Configuration is migrated, customizations addressed (or knowingly deferred). Proceed to Phase 3 (Migration Execution)? | Migration Readiness | Yes — proceed to migration execution, Defer manual items and proceed (acknowledge risk), Pause skill — I'll finish manual fixes and re-run |
 
 - **Proceed**: continue to Phase 3.
 - **Defer manual items**: log the user's acknowledgment in the execution report and proceed.
@@ -1077,7 +1102,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ---
 
-## Phase 3: Migration & Activation (track-branched)
+## Phase 3: Migration Execution (track-branched)
 
 Phase 3 has **two different shapes** depending on the migration track. Track A is shorter (3 sub-steps) because customization remediation already happened in Phase 2.3. Track B is longer (5 sub-steps) because customizations get scanned and remediated here (Phase 2 for Track B was just metadata verification).
 
@@ -1339,17 +1364,21 @@ Same logic as Track A Phase 2.2 — glob `SiteCustomization*.csv` in `<OUTPUT_DI
    - **Pause skill**: halt cleanly; user fixes upstream and re-runs.
    - **Cancel**: halt cleanly.
 
-3. **Run FetchXML auto-rewriter** — same script as Track A Phase 2.3 step 4.
+3. **Stage FetchXML rewrites** — same script as Track A Phase 2.3 step 4 (writes proposed files to `remediation-staged/`).
 
-4. **Run Liquid semi-auto annotator** — same script as Track A Phase 2.3 step 5.
+4. **Stage Liquid annotations** — same script as Track A Phase 2.3 step 5 (writes annotated files to `remediation-staged/`).
 
 5. **Generate augmented prompts** — same as Track A Phase 2.3 step 6 (plugin + DME prompts surfaced for separate Claude sessions).
 
-6. **Review and approve** — same as Track A Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion for upload approval).
+6. **Review and approve** — same as Track A Phase 2.3 step 7 (`--set-approval 3 in-phase`, AskUserQuestion gates the apply+upload). Users review the **Remediation Diff** card in the live report.
 
-7. **Upload approved changes**:
+7. **Apply staged changes and upload** — same as Track A Phase 2.3 step 8 (`apply-remediation.js` copies staged → live, then `pac pages upload`). On "No — discard staged changes", run `apply-remediation.js --discard` and skip upload.
 
    ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+     --output-dir "<OUTPUT_DIR>" `
+     --site-root "<SITE_ROOT>"
+
    pac pages upload --path "<SITE_ROOT>" --modelVersion 1
    ```
 
@@ -1614,17 +1643,17 @@ Identical to Track A's step 3.3 — print restart instructions, wait for user co
 |-------|-------------|-------------|
 | Phase 1 | Site Discovery & Pre-checks | Setting up for migration |
 | Phase 2 | Configuration Setup | Setting up configuration (track-aware) |
-| Phase 3 | Migration & Activation | Executing migration and activating EDM |
+| Phase 3 | Migration Execution | Executing migration and activating EDM |
 | Phase 4 | Post-Migration Validation | Validating and completing migration |
 
 > **Track-aware naming for Phase 2 and Phase 3:** Both phases have different structures depending on the track derived in step 1.7. The live execution report shows the track-specific phase title and sub-step list:
 >
 > - **Track A** (mode = `configurationData` or `all`):
 >   - Phase 2 renders as "Configuration Migration & Customization Remediation" (3 sub-steps)
->   - Phase 3 renders as "Migration & Activation" (**3 sub-steps**: Migrate Refs → Activate EDM → Restart)
+>   - Phase 3 renders as "Migration Execution" (**3 sub-steps**: Migrate Refs → Activate EDM → Restart)
 > - **Track B** (mode = `configurationDataReferences`):
 >   - Phase 2 renders as "Setting Up Metadata" (3 sub-steps)
->   - Phase 3 renders as "Migration, Remediation & Activation" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
+>   - Phase 3 renders as "Migration Execution" (**5 sub-steps**: Migrate Refs → Locate Report → Remediate → Activate EDM → Restart)
 >
 > **Phase 4 has 3 sub-steps in both tracks**: Data Diff Validation → Runtime Smoke Test Recommendation (`/test-site`) → Final Status & Summary.
 >
