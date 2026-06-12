@@ -35,6 +35,38 @@ function runValidation(callback) {
 }
 
 /**
+ * Reads the .alm-deferred marker file if present in the project root.
+ * Users drop this marker when they explicitly defer ALM for a project /
+ * environment so skill-completion validators stop reporting "missing
+ * artifacts" — the artifacts aren't supposed to exist for this project.
+ *
+ * Recognized formats (any will do):
+ *   - Empty file (just the touch marker)
+ *   - Plain text — a one-line reason
+ *   - JSON — { deferredAt, deferredBy, reason, scope: "project"|"env:<name>" }
+ *
+ * Returns null when not found, or an object describing the deferral when
+ * present. Validators should call this before checking artifacts and
+ * silent-approve when it returns non-null.
+ *
+ * @param {string} projectRoot
+ * @returns {{ path: string, raw: string, info: object|null }|null}
+ */
+function readDeferralMarker(projectRoot) {
+  if (!projectRoot) return null;
+  const markerPath = path.join(projectRoot, '.alm-deferred');
+  if (!fs.existsSync(markerPath)) return null;
+  let raw = '';
+  try { raw = fs.readFileSync(markerPath, 'utf8'); } catch { /* keep raw='' */ }
+  let info = null;
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try { info = JSON.parse(trimmed); } catch { /* invalid JSON — treat as plain text */ }
+  }
+  return { path: markerPath, raw, info };
+}
+
+/**
  * Searches for a file or directory in `dir` and one level of subdirectories.
  * @param {string} dir - Starting directory
  * @param {string} target - Relative path to look for (e.g. 'powerpages.config.json')
@@ -213,6 +245,7 @@ module.exports = {
   approve,
   block,
   runValidation,
+  readDeferralMarker,
   findPath,
   findProjectRoot,
   findPowerPagesSiteDir,

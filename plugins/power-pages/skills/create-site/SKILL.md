@@ -35,6 +35,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 ## Live Preview Status Protocol
 
+<!-- not-a-gate: prose-only section — mentions of `AskUserQuestion` here describe the live-status protocol that wraps every real prompt in Phases 3/4/8; the actual gates are catalogued in §6.13 of references/approval-gates.md and marked at their call sites below -->
+
 While the scaffold loading screen is visible (from Phase 2.6 until the Home page itself is replaced in Phase 5), the loader polls `GET /scaffold-status.json` every 1.5 seconds. The `message` you write into `<PROJECT_ROOT>/public/scaffold-status.json` appears as the label under the progress bar, and `awaitingInput` controls the "waiting for your input" banner. The decorative spinner above the progress bar continues its built-in phrase cycle; keep the progress-bar label current so the loader still reflects what is actually happening.
 
 **Why this matters**: When the browser with the loader takes over the user's screen, a prompt in the terminal can sit unanswered for a long time because the user doesn't realize anything is waiting. The banner makes it obvious.
@@ -69,6 +71,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 **Goal**: Understand what site needs to be built and what problem it solves
 
 **Actions**:
+
+<!-- gate: create-site:1.purpose | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded. Fires only on the "site purpose unclear" branch (step 3 below).
+>
+> **Trigger:** Phase 1 when site purpose was not provided in `$ARGUMENTS`.
+> **Why we ask:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
+> **Cancel leaves:** Nothing — no scaffolding has started yet.
 
 1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
 2. If site purpose is clear from arguments:
@@ -217,6 +227,14 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 **Goal**: Determine what pages, components, and design elements the site needs — while the user previews the running scaffold
 
+<!-- gate: create-site:3.requirements | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:3.requirements):** Three sub-prompts (features multi-select, aesthetic, mood) — shape the Phase 4 plan and the Phase 5 implementation. Fires at step 2 of the action list below.
+>
+> **Trigger:** Phase 3 entry; scaffold loader is up.
+> **Why we ask:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
+> **Cancel leaves:** Nothing — scaffold loader files are throwaway artifacts replaced wholesale in Phase 5.
+
 **Actions**:
 
 1. **Raise the "awaiting input" banner** so the user notices the terminal prompt even while the browser loader is full-screen. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
@@ -241,10 +259,45 @@ Immediately after the dev server starts, verify the scaffold is working:
    > - "Partner Hub" + Internal → Document Library, Partner Directory, Deal Tracker, Notifications
    >
    > Always generate options that make sense for the specific site — never reuse a fixed list.
+   >
+   > **If you include an Authentication feature option**, describe it generically as "Login/signup for tracking application status" or similar. Do NOT mention a specific identity provider (e.g., "Entra ID", "SAML", "Google") in the feature description — the `/power-pages:setup-auth` skill will ask the user which provider they want.
 
-3. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
-4. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
-5. Analyze requirements and determine needed components. Present component plan to user as a table:
+3. **AI Component Planning** — Based on Phase 1 answers (site name, purpose, audience) and the feature selection above, propose which of the Power Pages generative-AI summarization APIs the site might use. The site itself does not depend on them — the page ships with reserved slots and runs without AI; `/add-ai-webapi` populates the slots later when the user is ready. Use `AskUserQuestion` with multi-select to let the user opt in:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which AI summarization features should the site have? (multi-select — each can be added later with `/add-ai-webapi`) | AI Summaries | *(generate 2-4 context-aware options plus "None for now")* |
+
+   > **Options are NOT hardcoded.** Infer relevant AI summary features from Phase 1 and the features picked above. Examples:
+   > - "HR Dashboard" + Leave Requests feature → "Data summarization for leave requests", "Search summary on the knowledge base"
+   > - "Contoso Portal" + Knowledge Base → "Search summary on site-wide search", "Data summarization for articles"
+   > - "Customer Self-Service" + Support Cases / Incidents → "Data summarization for support cases (Microsoft-shipped recipe)", "Data summarization for attached knowledge articles"
+   >
+   > Treat the standard `incident` table like any other Dataverse table — propose Data
+   > Summarization for it when the site handles support cases, but don't force the Microsoft-shipped
+   > recipe (`$select=description,title` + the portal-comments expand) unless that genuinely fits
+   > the user's UX. A custom case-like table or a different facet of the standard incident is a
+   > regular Data Summarization pick. Always include **None for now** so the user can defer. Do
+   > NOT integrate the APIs in this skill — only record the user's picks so Phase 4's plan can
+   > mention them and Phase 8 can suggest `/add-ai-webapi` as a recommended next step.
+   >
+   > Capture the selection in memory as `AI_SUMMARY_PICKS` — a list of one or more of: `search-summary`, `data-summarization`.
+
+4. **Map picks to target pages.** For each entry in `AI_SUMMARY_PICKS`, decide which page will carry the AI surface and store the mapping as `AI_SUMMARY_PLACEMENTS`. This is what Phase 4 shows the user and what Phase 5 reserves slots for. Use the feature selection from step 2 — and treat this mapping as an *input* to the page list Claude proposes in step 7: if a pick has no natural target page, add one to the plan so the summary has a home:
+
+   | Pick | Default target page | If no matching page is planned |
+   |------|--------------------|-------------------------------|
+   | `search-summary` | A search / search-results page (e.g., `SearchResults`, `Search`) | Add a search page to the plan so the summary has a home |
+   | `data-summarization` | The detail page of the table the user called out (e.g., `ProductDetail` for products, `CaseDetail` for support cases) — ask the user if ambiguous | Propose adding a detail page; if rejected, fall back to a list/dashboard page |
+
+   `AI_SUMMARY_PLACEMENTS` shape: one record per placement, e.g.
+   `[{ pick: "data-summarization", targetPage: "CaseDetail", marker: "POWERPAGES:AI-SLOT kind=data-summarization" }]`.
+
+   The `marker` string is the comment tag Phase 5 emits into the page source as a reserved anchor that `/add-ai-webapi` later finds. Keep the shape uniform — one marker per placement, always the same tag, so the follow-up skill's explore step can grep for them deterministically.
+
+5. Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
+7. Analyze requirements and determine needed components. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
 
    ```
    | Component Type      | Count | Details |
@@ -255,7 +308,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
-6. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
+8. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
 
    | CSS Variable | Description | Value |
    |-------------|-------------|-------|
@@ -279,6 +332,8 @@ Immediately after the dev server starts, verify the scaffold is working:
 ### 4.1 Read the Design Reference
 
 Read the design aesthetics reference: `${CLAUDE_PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Every field you populate below should be justified by the chosen aesthetic + mood from Phase 3.
+
+> **AI Readiness in the plan.** If `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty, reflect each placement in the matching `PAGES_DATA` entry's `description` or `content` — e.g., *"Reserved slot for an AI summary card; populated later by `/add-ai-webapi`. The page ships without AI."* This keeps the user's expectation honest: the site does not depend on generative-AI features being enabled on the tenant, and there is no "Run /add-ai-webapi" placeholder visible to end-users. If `AI_SUMMARY_PLACEMENTS` is empty, omit any AI references from the plan.
 
 ### 4.2 Build the Plan Data
 
@@ -342,6 +397,14 @@ Immediately after the user answers, `Write` the same file again with `"awaitingI
 
 ### 4.7 Ask for Approval
 
+<!-- gate: create-site:4.7.plan-approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:4.7.plan-approval):** Final sign-off on the rendered HTML plan before Phase 5 starts replacing the scaffold with real pages, components, and design tokens.
+>
+> **Trigger:** Phase 4.3 rendered `docs/create-site-plan.html`; Phase 4.4 opened it in the browser.
+> **Why we ask:** Phase 5 rewrites the entire scaffold (theme.css, Layout, Home page, components, routes) — undoing that touches every commit in the implementation phase.
+> **Cancel leaves:** Nothing destructive — the scaffold itself can be deleted with the project directory; no Dataverse / deploy fired.
+
 Use `AskUserQuestion`:
 
 | Question | Header | Options |
@@ -390,6 +453,24 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
 6. **Navigation** — Add links to the new Layout/Header component
 7. **Entry HTML** — Update `index.html` (or `Layout.astro` for Astro) to load the chosen Google Fonts instead of the scaffold's DM Sans + Outfit
+8. **Reserve AI summary slots** — only if `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty. For each placement, insert a single comment marker in the target page source at the intended insertion point. No visible placeholder UI, no stub components, no extra routes — just a grep-able anchor that `/add-ai-webapi` will later find and replace. Syntax depends on the framework:
+
+   | Framework | Marker syntax |
+   |-----------|--------------|
+   | React (JSX) | `{/* POWERPAGES:AI-SLOT kind=<pick> */}` inside the component's return JSX |
+   | Vue (SFC template) | `<!-- POWERPAGES:AI-SLOT kind=<pick> -->` inside `<template>` |
+   | Angular (HTML template) | `<!-- POWERPAGES:AI-SLOT kind=<pick> -->` inside the component template |
+   | Astro | `<!-- POWERPAGES:AI-SLOT kind=<pick> -->` inside the component's HTML |
+
+   Where `<pick>` is one of `search-summary`, `data-summarization` — verbatim from the placement record.
+
+   Placement within the page:
+
+   - **`data-summarization`** (record detail): directly after the page heading, above the detail content — this is where a Copilot-style summary card naturally reads in the reading order.
+   - **`data-summarization`** (list page): directly above the list / table, below the page heading and any filter bar.
+   - **`search-summary`**: directly above the search-results list, below the search input — the summary paragraph reads before the keyword hits.
+
+   One marker per placement, exactly as defined in the `marker` field of the `AI_SUMMARY_PLACEMENTS` record. Do NOT add stub components (`<CopilotSummaryCard />`, etc.), CSS classes, or empty `<aside>` elements — the slot is just a comment. The site must ship as if AI is not a consideration; the follow-up skill does the real work.
 
 **Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
 
@@ -540,6 +621,14 @@ Present a summary table to the user:
 
 **Goal**: Ensure the site meets user expectations and all pages work correctly
 
+<!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
+>
+> **Trigger:** Phase 7 has verified all pages render via Playwright.
+> **Why we ask:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
+> **Cancel leaves:** Nothing — site files stay as-is on disk.
+
 **Actions**:
 
 1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
@@ -569,6 +658,14 @@ Present a summary table to the user:
 
 > **This phase is MANDATORY. Do NOT end the session without asking about deployment.**
 
+<!-- gate: create-site:8.deploy | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 2 of the action list below.
+>
+> **Trigger:** Phase 8 entry; Phase 7 review approved.
+> **Why we ask:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
+> **Cancel leaves:** Nothing — site files stay on disk; no deploy fired.
+
 **Actions**:
 
 1. Record skill usage:
@@ -591,6 +688,7 @@ Present a summary table to the user:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
+   - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
 

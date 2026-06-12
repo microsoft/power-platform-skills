@@ -5,21 +5,20 @@ import { TimePicker } from "@fluentui/react-timepicker-compat";
 import { CheckmarkCircle20Filled, ErrorCircle20Filled } from "@fluentui/react-icons";
 
 const useStyles = makeStyles({
-    container: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXL, padding: tokens.spacingHorizontalM, maxWidth: "800px", margin: "0 auto", width: "100%", boxSizing: "border-box", height: '100%', overflowY: 'auto' },
-    formSection: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalL, padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1 },
+    container: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXL, padding: tokens.spacingHorizontalM, maxWidth: "800px", margin: "0 auto", width: "100%", boxSizing: "border-box", height: '100%', overflowY: 'auto', "@media (max-width: 768px)": { padding: tokens.spacingHorizontalS, gap: tokens.spacingVerticalL }, "@media (max-width: 480px)": { padding: tokens.spacingHorizontalXS } },
+    formSection: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalL, padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, "@media (max-width: 768px)": { padding: tokens.spacingHorizontalM }, "@media (max-width: 480px)": { padding: tokens.spacingHorizontalS } },
     sectionHeader: { marginBottom: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
     formGrid: { display: "grid", gridTemplateColumns: "1fr", gap: tokens.spacingVerticalL, width: "100%" },
-    twoColumnGrid: { gridTemplateColumns: "1fr 1fr", gap: tokens.spacingHorizontalL },
+    twoColumnGrid: { gridTemplateColumns: "1fr 1fr", gap: tokens.spacingHorizontalL, "@media (max-width: 768px)": { gridTemplateColumns: "1fr", gap: tokens.spacingVerticalL } },
     radioGroupContainer: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalS },
-    radioGroupHorizontal: { flexDirection: "row", flexWrap: "wrap", gap: tokens.spacingHorizontalL },
+    radioGroupHorizontal: { flexDirection: "row", flexWrap: "wrap", gap: tokens.spacingHorizontalL, "@media (max-width: 768px)": { flexDirection: "column", gap: tokens.spacingVerticalS } },
     sliderContainer: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXS, width: "100%" },
     sliderValue: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200, textAlign: "right" },
-    buttonGroup: { display: "flex", gap: tokens.spacingHorizontalM, justifyContent: "flex-end", alignItems: "center", marginTop: tokens.spacingVerticalL, paddingTop: tokens.spacingVerticalM, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
+    buttonGroup: { display: "flex", gap: tokens.spacingHorizontalM, justifyContent: "flex-end", alignItems: "center", marginTop: tokens.spacingVerticalL, paddingTop: tokens.spacingVerticalM, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, "@media (max-width: 768px)": { flexDirection: "column-reverse", gap: tokens.spacingVerticalS } },
     messageContainer: { marginBottom: tokens.spacingVerticalM },
     validationSummary: { padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorPaletteRedBackground1, border: `1px solid ${tokens.colorPaletteRedBorder1}` },
     comboboxListbox: { backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}` },
-    "@media (max-width: 768px)": { container: { padding: tokens.spacingHorizontalS, gap: tokens.spacingVerticalL }, formSection: { padding: tokens.spacingHorizontalM }, twoColumnGrid: { gridTemplateColumns: "1fr", gap: tokens.spacingVerticalL }, radioGroupHorizontal: { flexDirection: "column", gap: tokens.spacingVerticalS }, buttonGroup: { flexDirection: "column-reverse", gap: tokens.spacingVerticalS } },
-    "@media (max-width: 480px)": { container: { padding: tokens.spacingHorizontalXS }, formSection: { padding: tokens.spacingHorizontalS } }
+    datePicker: { width: "100%" }
 });
 
 interface FormData { textInput: string; textArea: string; comboboxValue: string; spinButtonValue: number; checkboxChecked: boolean; sliderValue: number; switchEnabled: boolean; radioSelection: string; email: string; phone: string; dateOfBirth: Date | null; preferredContactTime: string; }

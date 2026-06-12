@@ -12,4 +12,4 @@ model: sonnet
 
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-**Shared workflow: [report-issue-workflow.md](${CLAUDE_PLUGIN_ROOT}/../../shared/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that file.
+**Workflow: [report-issue-workflow.md](${CLAUDE_PLUGIN_ROOT}/skills/report-issue/report-issue-workflow.md)** — Read and follow all phases defined in that bundled file.

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
-// Validates that authentication and authorization code was created for a Power Pages code site.
-// Runs as a Stop hook to verify the setup-auth skill produced output.
+// Validates that authentication and authorization code was created for a
+// Power Pages code site. Runs as a PostToolUse:Skill hook (configured in
+// hooks/hooks.json) after the `Skill` tool fires for /power-pages:setup-auth.
+//
+// Because PostToolUse fires when the Skill tool LOADS (instructions are read
+// into context) rather than when the skill has FINISHED its work, this
+// validator gates on a finishing marker: the auth setup report HTML written
+// by the skill's final Phase 8.3.5. Until that report exists, the skill is
+// considered in-progress and validation silent-approves. This follows the
+// marker-file recommendation in plugins/power-pages/PLUGIN_DEVELOPMENT_GUIDE.md.
 
 const fs = require('fs');
 const path = require('path');
@@ -9,13 +17,19 @@ const { approve, block, runValidation, findProjectRoot } = require('../../../scr
 
 runValidation((cwd) => {
   const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) approve(); // Not a Power Pages project, skip
+  if (!projectRoot) return approve(); // Not a Power Pages project, skip
 
   // Check if any auth files exist — if none, this wasn't an auth session
   const authServiceExists = findAuthService(projectRoot);
   const typeDeclarationsExist = findTypeDeclarations(projectRoot);
 
-  if (!authServiceExists && !typeDeclarationsExist) approve();
+  if (!authServiceExists && !typeDeclarationsExist) return approve();
+
+  // Marker gate: silent-approve until the skill writes its finishing report.
+  // Without this gate, re-running setup-auth on a project that has stale auth
+  // files from a previous attempt would block the new run before it could
+  // overwrite them.
+  if (!hasFinishingMarker(projectRoot)) return approve();
 
   const errors = [];
 
@@ -42,12 +56,26 @@ runValidation((cwd) => {
     if (!content.includes('/_layout/tokenhtml') && !content.includes('fetchAntiForgeryToken')) {
       errors.push('Auth service missing anti-forgery token handling');
     }
+    // Verify provider configuration exists. The canonical pattern in
+    // authentication-reference.md is the AUTH_PROVIDERS array (even single-
+    // provider sites use a one-element array — see SKILL.md and the
+    // "Multiple Providers — Canonical AUTH_PROVIDERS Array Pattern" section
+    // of authentication-reference.md). AuthProviderConfig is the interface
+    // name and is also a valid marker (auth service must declare the type).
+    if (!content.includes('AUTH_PROVIDERS') && !content.includes('AuthProviderConfig')) {
+      errors.push('Auth service missing provider configuration — expected the AUTH_PROVIDERS array or AuthProviderConfig type. The canonical pattern is `export const AUTH_PROVIDERS: AuthProviderConfig[] = [...]` even when only one provider is configured.');
+    }
   }
 
-  // Check for authorization utilities
+  // Check for authorization utilities — only if auth service references role-checking
+  // (skip for "Login & Logout only" scope where authorization utils are not created)
   const authzUtils = findAuthorizationUtils(projectRoot);
-  if (!authzUtils) {
-    errors.push('Missing authorization utilities (src/utils/authorization.ts or equivalent)');
+  if (!authzUtils && authServiceExists) {
+    const authContent = fs.readFileSync(authServiceExists, 'utf8');
+    // Only flag missing authz utils if the auth service imports or references them
+    if (authContent.includes('authorization') || authContent.includes('hasRole') || authContent.includes('getUserRoles')) {
+      errors.push('Missing authorization utilities (src/utils/authorization.ts or equivalent)');
+    }
   }
 
   // Check for auth UI component
@@ -62,6 +90,22 @@ runValidation((cwd) => {
 
   approve();
 });
+
+function hasFinishingMarker(projectRoot) {
+  // The skill writes `docs/auth-setup-report.html` at the end of Phase 8.3.5.
+  // If the user already had a previous report there, the renderer date-suffixes
+  // the new one (auth-setup-report-2026-05-27.html). Treat any matching file
+  // in docs/ as evidence that the skill has completed at least one run.
+  const docsDir = path.join(projectRoot, 'docs');
+  if (!fs.existsSync(docsDir)) return false;
+  try {
+    return fs.readdirSync(docsDir).some((name) =>
+      /^auth-setup-report.*\.html$/.test(name)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function findAuthService(projectRoot) {
   const candidates = [

@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 15 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -75,7 +75,7 @@ Provisions a website record in your Power Platform environment so your site is a
 
 #### `/test-site`
 
-> "Test my deployed site at https://contoso.powerappsportals.com"
+> "Test my deployed site at <https://contoso.powerappsportals.com>"
 
 Runtime-tests a deployed, activated site using a real browser (via the bundled Playwright MCP). Crawls discoverable links, verifies pages render, captures network traffic for API calls, and produces a test report.
 
@@ -140,6 +140,22 @@ The skill first scans your codebase to find components using mock data, placehol
 - Existing components are refactored to use real API calls (mock data and placeholder fetches are replaced)
 - `.powerpages-site/table-permissions/` and `.powerpages-site/site-settings/` directories are populated for deployment
 
+#### `/add-ai-webapi`
+
+> "Add AI summaries to my site"
+
+Integrates Power Pages generative-AI summarization APIs into a Single Page Application (SPA) site: the **Search Summary API** (`/_api/search/v1.0/summary`) and the **Data Summarization API** (`/_api/summarization/data/v1.0/...`). Data Summarization can be configured for any record-detail or list page; Microsoft documents one ready-made recipe for a Copilot-style summary on a support-case detail page (`incident` table with `$select=description,title` and the portal-comments expand) — that recipe is available as a maker pick, not an automatic recommendation.
+
+The skill scans your code for search pages and record-detail / list pages and proposes which APIs to wire where. For any Data Summarization target that is missing its Web API prerequisites (Layer 1 `Webapi/<table>/*` settings, Layer 2 table permissions, or the shared `powerPagesApi.ts` client), the skill delegates to `/integrate-webapi` in an **AI-only read mode** — read-only permissions, minimal fields list (no primary key, only `_<col>_value` for lookups) — and to `/create-webroles` if no web role exists yet. Once Layer 1/2 is in place, the skill spawns the **AI Web API Integration** agent sequentially per target to create a single summarization service (`fetchSearchSummary`, `fetchDataSummary`) with correct CSRF handling, a framework-idiomatic wrapper, and real UI call sites. Finally, the **AI Web API Settings Architect** is invoked for Layer 3 to propose the `Summarization/Data/Enable` toggle and per-prompt `Summarization/prompt/<identifier>` settings.
+
+**What gets created:**
+
+- `src/services/aiSummaryService.ts` (or extended if it already exists) with raw `fetch` + both required CSRF headers
+- Framework-specific wrapper (React hook / Vue composable / Angular service)
+- Real call sites in the target page(s) with loading, error, and recommendation-button handling
+- `Summarization/Data/Enable` site setting and one `Summarization/prompt/<identifier>` per prompt
+- `Webapi/<table>/enabled` / `Webapi/<table>/fields`, read-only table permissions, and the shared `powerPagesApi.ts` client for the summarised tables and every `$expand` target (delegated to `/integrate-webapi`)
+
 #### `/add-server-logic`
 
 > "Move my pricing calculation out of the browser and onto the server"
@@ -195,6 +211,160 @@ Audits existing table permissions on a deployed or in-progress site by analyzing
 - Cross-references code usage, web roles, and Dataverse schema
 - Suggests concrete fixes for each issue
 
+#### `/scan-site`
+
+> "Scan my production site for vulnerabilities"
+
+Runs a security scan on a deployed Power Pages site, fetches the latest scan report, and produces a plain-language summary of vulnerabilities by severity.
+
+- Scans the live site's public surface for vulnerabilities
+- Fetches and explains the latest scan report
+- Surfaces issues grouped by severity
+
+#### `/manage-firewall`
+
+> "Block traffic from a specific country and add a rate limit to /login"
+
+Inspects and configures the web application firewall (WAF) in front of a Power Pages production site. Walks you through enabling protection and managing custom rules.
+
+- Lists current WAF state and recommends enabling protection when off
+- Adds, updates, or removes custom rules — IP blocks, country blocks, path blocks, rate limits
+- Protects pages from brute-force attempts and bot traffic
+
+#### `/manage-headers`
+
+> "Fix my CSP errors and harden cookie settings"
+
+Inspects and configures the security headers a Power Pages site sends to browsers — Content Security Policy, frame and clickjacking protection, cross-origin sharing, cookie behavior, and related site settings.
+
+- Identifies gaps in browser security headers
+- Walks through fixes for CSP, CORS, cookies, and embedding policy
+- Updates the corresponding site settings
+
+#### `/security-review`
+
+> "Do a full security review before we ship"
+
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
+
+- Orchestrates `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Consolidates findings into a single HTML report
+- Suitable for release-readiness or live-site monitoring
+
+### ALM and CI/CD
+
+#### `/plan-alm`
+
+> "Plan how to promote this site to staging and production"
+
+Orchestrator skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, generates a visual HTML plan, and after your approval executes the plan by calling the right ALM skills in sequence.
+
+- Detects project state (config, manifests, current environment)
+- Branched flow for Power Platform Pipelines or manual export/import
+- Generates `docs/alm-plan.html` for review and approval
+- Dispatches to `setup-solution`, `setup-pipeline`, `export-solution`, `deploy-pipeline`, or `import-solution`
+
+> [!TIP]
+> `/plan-alm` is the front door for any ALM intent. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
+
+#### `/setup-solution`
+
+> "Package my site into a solution for ALM"
+
+Creates a Dataverse publisher and solution, then adds Power Pages site components to the solution for ALM and deployment management.
+
+- Creates publisher and solution via OData API (with duplicate detection)
+- Adds website and web role components via `AddSolutionComponent`
+- Writes `.solution-manifest.json` for downstream skills
+- Publisher prefix is irreversible — requires explicit confirmation
+
+#### `/export-solution`
+
+> "Export the solution as a zip for deployment"
+
+Exports a Dataverse solution containing Power Pages site components as a zip file, ready for deployment to another environment.
+
+- Choose managed (locked for downstream environments) or unmanaged (editable)
+- Triggers `ExportSolutionAsync` and polls until complete
+- Bumps the solution version on every export so each zip is strictly increasing
+- Verifies the zip contains a valid `Solution.xml`
+
+#### `/import-solution`
+
+> "Import this solution zip into the staging environment"
+
+Imports a Dataverse solution zip into a target environment, with optional staged import for dependency checking before committing.
+
+- Optional `StageSolution` pre-flight to detect missing dependencies
+- `ImportSolutionAsync` with polling until complete
+- Writes `docs/alm/last-import.json` marker
+- Surfaces per-component import results
+
+#### `/setup-pipeline`
+
+> "Set up a Power Platform Pipeline for automated deployments"
+
+Sets up a Power Platform Pipeline for automated Power Pages deployments. Power Platform Pipelines is Microsoft's native CI/CD tool built into the platform — no external infrastructure required.
+
+- Auto-discovers host environment via `RetrieveSetting('DefaultCustomPipelinesHostEnvForTenant')`
+- Creates `deploymentenvironments`, `deploymentpipelines`, and `deploymentstages` records
+- GitHub Actions and Azure DevOps platforms show coming-soon guidance
+- Writes `docs/alm/last-pipeline.json` and `docs/pipeline-setup.md`
+
+#### `/deploy-pipeline`
+
+> "Deploy the site to staging via my pipeline"
+
+Triggers a Power Platform Pipeline deployment run for a Power Pages solution. Validates the package, optionally configures deployment settings, then deploys and polls for completion.
+
+- Pre-flight check on `blockedattachments` to proactively unblock `.js`/`.css` (saves a wasted ~60-min import)
+- `ValidatePackageAsync` before deploying surfaces validation issues early
+- Optional environment variable / connection reference overrides per stage
+- Final consent gate before the deploy actually fires
+
+#### `/ensure-pipelines-host`
+
+> "Make sure my tenant has a Power Platform Pipelines host"
+
+Ensures the tenant has a usable Power Platform Pipelines host environment before any pipeline operation runs. Detects host state via the same resolution order as the Power Apps UI; if no host is bound, provisions a new **Platform Host** (recommended, idempotent) or guides through a **Custom Host** install.
+
+- Detects host state from org-db setting, BAP env metadata, or default-custom-host setting
+- Idempotent Platform Host fast-path (~3–5 min)
+- Custom Host fast-path or manual PPAC install fallback
+- Writes a host-check artifact other ALM skills consume
+
+#### `/force-link-environment`
+
+> "This environment is already linked to another pipelines host — force-link it"
+
+Force-links a development or target environment to a Power Platform Pipelines host, overriding any existing association with a previous host. Calls the documented `ManageEnvironmentStamp` Dataverse action (the API behind the "Force Link" button in the Deployment Pipeline Configuration app).
+
+- Use when you hit "environment is already associated with another pipelines host"
+- Required explicit consent gate — destructive to the previous host (makers lose pipeline access)
+- Reversible by re-running from the previous host
+- Writes `docs/alm/last-force-link.json`
+
+#### `/configure-env-variables`
+
+> "Make these site settings environment-specific so they differ between dev and prod"
+
+Configures environment variables for Power Pages site settings to support ALM across environments. Creates environment variable definitions in Dataverse, guides you through linking site settings via the Power Pages Management app, adds the variables to the solution, and generates a `deployment-settings.json` file with per-stage override values.
+
+- Creates `environmentvariabledefinition` records (String or Secret type)
+- Generates `deployment-settings.json` ready for `deploy-pipeline` to consume
+- Routes credentials (ClientSecret, ConsumerKey, etc.) to Key Vault-backed secret env vars
+
+#### `/diagnose-deployment`
+
+> "My last deploy failed — figure out why"
+
+Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-matches against a known failure catalog, and optionally auto-fixes identified issues.
+
+- Re-runs `pac pages upload-code-site` in capture mode to surface upload errors
+- Queries recent Dataverse async operation failures
+- Pattern matches against `references/deployment-error-catalog.md`
+- Offers auto-fixes with explicit per-fix user confirmation
+
 ### Polish
 
 #### `/add-seo`
@@ -219,16 +389,29 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 - Attaches relevant file paths and environment info
 - Opens the issue in your browser for final review
 
+#### `/telemetry`
+
+> "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
+
+Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+
+- `/power-pages:telemetry status` — show the current setting
+- `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
+- `/power-pages:telemetry on` — resume sending telemetry
+- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+
 ## Agents
 
-The plugin includes 4 specialized agents that are spawned automatically by skills when needed:
+The plugin includes 6 specialized agents that are spawned automatically by skills when needed:
 
 | Agent | Purpose | Triggered by |
 |---|---|---|
 | **Data Model Architect** | Analyzes your site and proposes a Dataverse data model with an ER diagram | `/setup-datamodel` |
-| **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` |
-| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi`, `/audit-permissions` |
-| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` |
+| **Web API Integration** | Creates typed API client, services, and hooks for a Dataverse table | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, when it delegates) |
+| **Table Permissions** | Proposes table permissions (web roles, CRUD flags, scopes) with a visual Mermaid diagram | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode); `/audit-permissions` |
+| **Web API Settings** | Proposes Web API site settings with case-sensitive validated column names from Dataverse | `/integrate-webapi` (directly); `/add-ai-webapi` (transitively, in AI-only read mode) |
+| **AI Web API Integration** | Creates raw-`fetch` summarization service with CSRF, framework wrapper, and UI wiring | `/add-ai-webapi` |
+| **AI Web API Settings Architect** | Proposes `Summarization/Data/Enable` and maker-defined `Summarization/prompt/<identifier>` site settings | `/add-ai-webapi` |
 
 The Data Model Architect, Table Permissions, and Web API Settings agents are **read-only** — they analyze and propose but never create or modify resources directly. You review and approve their proposals before any changes are made.
 
@@ -246,21 +429,25 @@ The plugin ships with two MCP servers configured in `.mcp.json` — they start a
 A common end-to-end workflow looks like this:
 
 ```
-1.  /create-site        →  Scaffold + design + build pages
-2.  /deploy-site        →  Upload to Power Pages environment
-3.  /activate-site      →  Provision a public URL
-4.  /setup-datamodel    →  Create Dataverse tables
-5.  /add-sample-data    →  Populate tables with test records
-6.  /integrate-backend  →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
-7.  /create-webroles    →  Define access roles
-8.  /setup-auth         →  Add login/logout + role-based UI
-9.  /audit-permissions  →  Verify table permissions are safe
-10. /add-seo            →  Search engine optimization
-11. /deploy-site        →  Push final changes live
-12. /test-site          →  Runtime smoke test on the live URL
+1.  /create-site            →  Scaffold + design + build pages
+2.  /deploy-site            →  Upload to Power Pages environment
+3.  /activate-site          →  Provision a public URL
+4.  /setup-datamodel        →  Create Dataverse tables
+5.  /add-sample-data        →  Populate tables with test records
+6.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
+7.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
+8.  /create-webroles        →  Define access roles
+9.  /setup-auth             →  Add login/logout + role-based UI
+10. /audit-permissions      →  Verify table permissions are safe
+11. /add-seo                →  Search engine optimization
+12. /deploy-site            →  Push final changes live
+13. /test-site              →  Runtime smoke test on the live URL
+14. /security-review        →  Full security review (headers, firewall, scan, permissions)
+15. /plan-alm               →  Plan multi-environment promotion
+16. /deploy-pipeline        →  Promote through staging → production
 ```
 
-Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/report-issue` opens a pre-filled GitHub issue.
+Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
 ## Running Without Interruption
 
@@ -290,6 +477,10 @@ The plugin invokes multiple tools during a session. To reduce approval prompts:
 claude --dangerously-skip-permissions
 ```
 
+## ALM prompts you may see
+
+Several skills now ask about solution identity, orphan components, and pre-export completeness. These prompts catch a real class of bugs where Dataverse records silently stay behind in the `Default` solution. See **[`references/alm-prompts.md`](references/alm-prompts.md)** for a user-facing walkthrough of each prompt and how to respond.
+
 ## Documentation
 
 - [Power Pages AI Plugin Documentation](https://learn.microsoft.com/power-pages/configure/create-code-site-using-claude-code)
@@ -297,6 +488,7 @@ claude --dangerously-skip-permissions
 - [PAC CLI Reference](https://learn.microsoft.com/power-platform/developer/cli/reference/pages)
 - [Power Pages REST API](https://learn.microsoft.com/rest/api/power-platform/powerpages/websites)
 - [Dataverse Web API](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/overview)
+- [ALM prompts — user guide](references/alm-prompts.md)
 
 ## Testing validator scripts
 
@@ -313,6 +505,27 @@ node plugins/power-pages/scripts/validate-permissions-schema.js --projectRoot /p
 ```
 
 This Dataverse relationship check is intended for local validation only and should not be used in CI.
+
+## Telemetry & privacy
+
+This plugin sends **anonymous** usage telemetry by default to help Microsoft
+improve it. **No personal data is ever collected** — only things like skill name,
+plugin version, OS, and Node version. It never includes file paths, prompts, tool
+inputs, site names, URLs, credentials, usernames, or hostnames.
+
+**Turn it on or off (per-user, applies to every project):**
+
+```bash
+/power-pages:telemetry status   # show the current setting
+/power-pages:telemetry off      # stop sending telemetry
+/power-pages:telemetry on       # resume sending telemetry
+```
+
+When **off**, nothing leaves your machine. A local diagnostic copy of each event
+is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
+what would have been sent; delete it anytime. The setting is stored at
+`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
+so CI/headless environments can opt out by writing that file directly.
 
 ## License
 

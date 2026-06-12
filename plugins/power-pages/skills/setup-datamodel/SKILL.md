@@ -44,6 +44,14 @@ Guide the user through creating Dataverse tables, columns, and relationships for
 
 **Actions**:
 
+<!-- gate: setup-datamodel:2.source | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · setup-datamodel:2.source):** Decide whether the user uploads an existing ER diagram or the data-model-architect agent infers the model. Choice routes the rest of the skill into Path A vs Path B.
+>
+> **Trigger:** Entering Phase 2.
+> **Why we ask:** Auto-picking either path can run a multi-minute architect agent against the wrong intent (Path B) or skip Dataverse-existence checks (Path A).
+> **Cancel leaves:** Nothing — no Dataverse calls made yet.
+
 1. Ask the user how they want to define the data model using the `AskUserQuestion` tool:
 
    **Question**: "How would you like to define the data model for your site?"
@@ -136,6 +144,14 @@ Present the data model proposal directly to the user as a formatted message, inc
 - Which tables are new vs. modified vs. reused
 
 ### 4.2 Get User Approval
+
+<!-- gate: setup-datamodel:4.2.approval | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · setup-datamodel:4.2.approval):** Final sign-off on the data model proposal before any Dataverse write. Cancel here stops the skill with zero side effects.
+>
+> **Trigger:** Phase 4.1 rendered the proposal (tables, columns, relationships, ER diagram).
+> **Why we ask:** Tables and columns get created in Dataverse against the user's actual schema intent — column types and relationship cardinalities are awkward to undo.
+> **Cancel leaves:** Nothing — no `EntityDefinitions` POST yet, no `.datamodel-manifest.json` write.
 
 Use `AskUserQuestion` to get approval:
 

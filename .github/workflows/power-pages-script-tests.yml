@@ -1,3 +1,8 @@
+# Deliberately separate from `power-pages-alm-lint.yml`.
+# This workflow runs functional unit tests across ubuntu × windows × macos to
+# catch OS-specific regressions in Node scripts. Slow (~30s on macOS).
+# The sibling workflow runs fast policy enforcement on a single OS so red
+# checks for gate-marker / catalog drift surface before this matrix finishes.
 name: power-pages-script-tests
 
 on:

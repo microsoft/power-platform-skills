@@ -26,6 +26,10 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
 
   assert.equal(token, 'fake-token-value');
   assert.match(capturedCommand, /^az account get-access-token /);
-  assert.doesNotMatch(capturedCommand, /--allow-no-subscriptions/);
+  assert.doesNotMatch(
+    capturedCommand,
+    /--allow-no-subscriptions/,
+    'az account get-access-token rejects --allow-no-subscriptions on recent CLI versions; the helper must omit it.',
+  );
   assert.match(capturedCommand, /--resource "https:\/\/example\.crm\.dynamics\.com"/);
 });

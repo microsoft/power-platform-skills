@@ -72,6 +72,24 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 
 ---
 
+## Modal Dialog Covers the Designer / Blocks the Coding Agent
+
+**Symptom:** a generated page opens a dialog that overlays the whole designer — the
+backdrop covers the coding-agent panel on the left, and the user can't dismiss it or
+interact with the agent. Often reported as "a modal keeps appearing regardless of my
+actions."
+
+**Cause:** a Fluent `<Dialog>` with the default `modalType="modal"` and **no
+`mountNode`**. The preview shares the DOM with the designer (it is not a sandboxed
+iframe), so the dialog's portal + `position: fixed` backdrop mount to the designer's
+`document.body` and cover the entire tool.
+
+**Fix:** regenerate per `rules.md` → **Special Patterns > Dialogs and Overlays** (thread
+`mountNode` to every overlay, make the root a `contain: layout` containing block, default
+dialogs to `modalType="non-modal"`, no `100vh`/`100vw`, never nest `<Dialog>`s).
+
+---
+
 ## Playwright Browser Verification Issues
 
 - "Target page, context or browser has been closed" → retry the navigation; Playwright sessions can expire

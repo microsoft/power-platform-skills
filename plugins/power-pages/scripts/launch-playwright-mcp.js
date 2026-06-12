@@ -9,13 +9,30 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
 
-function buildMcpArgs(browser) {
+function quoteShellArg(value, platform = process.platform) {
+  const argument = String(value);
+
+  if (platform === 'win32') {
+    if (argument.includes('"')) {
+      throw new Error('Cannot quote an argument containing double quotes for cmd.exe.');
+    }
+
+    return `"${argument}"`;
+  }
+
+  return `'${argument.replace(/'/g, "'\\''")}'`;
+}
+
+function buildMcpArgs(browser, {
+  configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
+  platform = process.platform,
+} = {}) {
   return [
     '@playwright/mcp@latest',
     '--browser',
     browser,
     '--config',
-    path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
+    quoteShellArg(configPath, platform),
   ];
 }
 
@@ -33,4 +50,4 @@ if (require.main === module) {
   launch();
 }
 
-module.exports = { buildMcpArgs, launch };
+module.exports = { buildMcpArgs, launch, quoteShellArg };

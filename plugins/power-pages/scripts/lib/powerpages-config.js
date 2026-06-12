@@ -7,6 +7,25 @@ const WEB_ROLE_FILE_SUFFIX = '.webrole.yml';
 
 function parseYamlScalar(value) {
   const trimmed = value.trim();
+
+  // Unwrap quoted scalars BEFORE the bareword tests so that a value written
+  // as `"true"` (the literal 4-character string) is read back as a string,
+  // not coerced to the boolean true. Same for `"null"` / `"123"` etc. This
+  // is symmetric with the quoting strategy in create-site-setting.js, which
+  // wraps any value that would otherwise change meaning when read as YAML.
+
+  // Double-quoted: "...". YAML 1.2 supports many escape sequences; our writer
+  // only emits \\ and \", so we only unescape those.
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\([\\"])/g, '$1');
+  }
+
+  // Single-quoted: '...'. YAML 1.2 single-quoted strings escape '' for a
+  // literal single quote and otherwise pass through verbatim.
+  if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+
   if (trimmed === 'true') {
     return true;
   }

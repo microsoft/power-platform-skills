@@ -1,37 +1,60 @@
-const TRACKED_SKILLS = {
-  'activate-site': {
-    validatorScript: 'skills/activate-site/scripts/validate-activation.js',
-  },
-  'add-sample-data': {},
-  'add-seo': {
-    validatorScript: 'skills/add-seo/scripts/validate-seo.js',
-  },
-  'audit-permissions': {
-    validatorScript: 'skills/audit-permissions/scripts/validate-audit.js',
-  },
-  'create-site': {
-    validatorScript: 'skills/create-site/scripts/validate-site.js',
-  },
-  'create-webroles': {
-    validatorScript: 'skills/create-webroles/scripts/validate-webroles.js',
-  },
-  'add-cloud-flow': {
-    validatorScript: 'skills/add-cloud-flow/scripts/validate-cloudflow.js',
-  },
-  'add-server-logic': {
-    validatorScript: 'skills/add-server-logic/scripts/validate-serverlogic.js',
-  },
-  'integrate-webapi': {
-    validatorScript: 'skills/integrate-webapi/scripts/validate-webapi-integration.js',
-  },
-  'setup-auth': {
-    validatorScript: 'skills/setup-auth/scripts/validate-auth.js',
-  },
-  'setup-datamodel': {
-    validatorScript: 'skills/setup-datamodel/scripts/validate-datamodel.js',
-  },
-  'test-site': {},
-};
+const fs = require('fs');
+const path = require('path');
+
+const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+const SKILLS_DIR = path.join(PLUGIN_ROOT, 'skills');
+
+// Skills that must never emit usage telemetry about themselves. The telemetry
+// control skill is excluded so checking/toggling telemetry does not self-emit.
+const EXCLUDED_FROM_TRACKING = new Set(['telemetry']);
+
+function discoverValidatorScript(skillName) {
+  const scriptsDir = path.join(SKILLS_DIR, skillName, 'scripts');
+  if (!fs.existsSync(scriptsDir)) {
+    return null;
+  }
+
+  const validators = fs
+    .readdirSync(scriptsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^validate.*\.js$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+
+  if (validators.length === 0) {
+    return null;
+  }
+
+  return path.posix.join('skills', skillName, 'scripts', validators[0]);
+}
+
+function discoverTrackedSkills() {
+  // Null-prototype map: membership is tested via bracket access (TRACKED_SKILLS[name]),
+  // so a plain {} would make inherited keys like "toString"/"constructor"/"__proto__"
+  // test truthy and emit bogus skill names. A null-proto object has no such keys.
+  const trackedSkills = Object.create(null);
+
+  const entries = fs
+    .readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const entry of entries) {
+    const skillName = entry.name;
+    if (EXCLUDED_FROM_TRACKING.has(skillName)) {
+      continue;
+    }
+    if (!fs.existsSync(path.join(SKILLS_DIR, skillName, 'SKILL.md'))) {
+      continue;
+    }
+
+    const validatorScript = discoverValidatorScript(skillName);
+    trackedSkills[skillName] = validatorScript ? { validatorScript } : {};
+  }
+
+  return trackedSkills;
+}
+
+const TRACKED_SKILLS = discoverTrackedSkills();
 
 function detectTrackedSkill(value) {
   if (typeof value !== 'string') {

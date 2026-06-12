@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>__REPORT_NAME__ — __SITE_NAME__</title>
+<style>
+:root {
+  --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
+  --border:#e1dfdd; --border-light:#c8c6c4;
+  --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e;
+  --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+  --critical:#d13438; --critical-bg:#d134380a; --critical-border:#d1343825;
+  --warning:#ca5010; --warning-bg:#ca50100a; --warning-border:#ca501025;
+  --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1025;
+  --info:#0078d4; --info-bg:#0078d40a; --info-border:#0078d425;
+  --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b825;
+  --mono:'Cascadia Code','Consolas',monospace;
+  --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+  --radius:8px; --radius-sm:4px;
+  --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+  --shadow-8:0 3.2px 7.2px 0 rgba(0,0,0,0.132),0 0.6px 1.8px 0 rgba(0,0,0,0.108);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.topbar-left{display:flex;align-items:center;gap:14px;}
+.logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+.topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.layout{display:flex;min-height:calc(100vh - 61px);}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.nav-group-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);font-weight:700;padding:14px 22px 6px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;position:relative;}
+.nav-btn:hover{color:var(--text);background:var(--surface2);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn .nav-icon{font-size:14px;opacity:0.6;width:16px;text-align:center;}
+.nav-btn.active .nav-icon{opacity:0.95;}
+.nav-badge{position:absolute;right:14px;font-size:10px;font-family:var(--mono);padding:1px 6px;border-radius:8px;font-weight:700;}
+
+.content{flex:1;padding:32px 40px;max-width:1100px;}
+.section{display:none;}
+.section.active{display:block;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+.section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;}
+h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margin-bottom:12px;}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s;}
+.card:hover{box-shadow:var(--shadow-4);}
+
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;box-shadow:var(--shadow-4);}
+.stat-num{font-size:28px;font-weight:800;font-family:var(--mono);line-height:1;}
+.stat-label{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:6px;}
+
+.severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;}
+.severity-critical,.severity-high{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
+.severity-warning,.severity-medium{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
+.severity-info,.severity-low{color:var(--info);background:var(--info-bg);border:1px solid var(--info-border);}
+.severity-pass{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+
+.finding-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;transition:box-shadow 0.2s;}
+.finding-card:hover{box-shadow:var(--shadow-4);}
+.finding-header{display:flex;align-items:flex-start;gap:12px;padding:14px 18px;cursor:pointer;-webkit-user-select:none;user-select:none;}
+.finding-header:hover{background:var(--surface2);}
+.finding-title{font-size:14px;font-weight:600;color:var(--text-bright);flex:1;}
+.finding-tag{font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);font-family:var(--mono);}
+.finding-chevron{color:var(--text-dim);font-size:12px;transition:transform 0.2s;flex-shrink:0;margin-top:3px;}
+.finding-card.expanded .finding-chevron{transform:rotate(90deg);}
+.finding-body{display:none;padding:0 18px 14px;border-top:1px solid var(--border);}
+.finding-card.expanded .finding-body{display:block;animation:fadeIn 0.2s ease;}
+
+.field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.reasoning-block{background:var(--surface2);border-left:2px solid var(--accent);border-radius:var(--radius-sm);padding:10px 14px;margin-top:10px;font-size:12px;line-height:1.7;white-space:pre-wrap;}
+.fix-block{background:var(--pass-bg);border-left:2px solid var(--pass);border-radius:var(--radius-sm);padding:10px 14px;margin-top:8px;font-size:12px;line-height:1.7;}
+.fix-block strong{color:var(--pass);}
+
+.detail-table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0;}
+.detail-table th{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);padding:10px 12px;border-bottom:2px solid var(--border);}
+.detail-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;}
+.detail-table tr:last-child td{border-bottom:none;}
+.detail-table tr:hover td{background:var(--surface2);}
+
+.kv-list{display:grid;grid-template-columns:200px 1fr;gap:6px 14px;font-size:13px;}
+.kv-list dt{color:var(--text-dim);font-weight:600;}
+.kv-list dd{color:var(--text);}
+
+.glossary-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:10px;}
+.glossary-term{font-size:14px;font-weight:700;color:var(--text-bright);}
+.glossary-aka{font-size:12px;font-family:var(--mono);color:var(--text-dim);margin-left:6px;}
+.glossary-def{font-size:13px;color:var(--text);margin-top:6px;line-height:1.7;}
+
+.next-steps li{margin:8px 0;}
+.next-steps strong{color:var(--text-bright);}
+
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .content{padding:20px 16px;}
+  .stats-grid{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
+    <div>
+      <div class="topbar-title">__REPORT_NAME__</div>
+      <div class="topbar-sub">__SITE_NAME__ · Generated __GENERATED_AT__</div>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="content" id="contentRoot"></div>
+</div>
+
+<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+
+<script>
+const REPORT_NAME = "__REPORT_NAME__";
+const SITE_NAME = "__SITE_NAME__";
+const GOAL_LABEL = "__GOAL_LABEL__";
+const SCOPE_LABEL = "__SCOPE_LABEL__";
+const REVIEW_DATA = __REVIEW_DATA__;
+
+// REVIEW_DATA shape:
+//   {
+//     summary: "<plain-language summary>",
+//     totals: { critical, warning, info, pass },
+//     sections: [
+//       { id, label, description, findings: [...], details: { kind, ... } }
+//     ],
+//     nextSteps: [ "string" ],
+//     glossary: [ { term, aka?, definition } ]
+//   }
+
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// Like esc(), but renders newlines as <br> for multi-line details/fix text.
+function escMultiline(s) { return esc(s).replace(/\n/g, '<br>'); }
+function escAttr(s) { return String(s || '').replace(/[^a-zA-Z0-9_.-]/g, ''); }
+const sevLabel = (s) => ({ critical:'CRITICAL', high:'HIGH', warning:'WARNING', medium:'MEDIUM', info:'INFO', low:'LOW', pass:'PASSED' }[s] || (s ? s.toUpperCase() : ''));
+
+function findingHtml(f, idx) {
+  const id = escAttr(f.id || ('f' + idx));
+  const sev = escAttr(f.severity);
+  return '<div class="finding-card" id="finding-' + id + '">' +
+    '<div class="finding-header">' +
+      (f.severity ? '<span class="severity severity-' + sev + '">' + sevLabel(f.severity) + '</span>' : '') +
+      '<span class="finding-title">' + esc(f.title) + '</span>' +
+      (f.tag ? '<span class="finding-tag">' + esc(f.tag) + '</span>' : '') +
+      '<span class="finding-chevron">&#9654;</span>' +
+    '</div>' +
+    '<div class="finding-body">' +
+      (f.location ? '<div style="margin-top:10px;font-size:12px;"><span class="field-label">Location:</span> <code style="background:var(--surface2);padding:1px 5px;border-radius:3px;">' + esc(f.location) + '</code></div>' : '') +
+      (f.details ? '<div style="margin-top:10px;font-size:12px;line-height:1.7;">' + escMultiline(f.details) + '</div>' : '') +
+      (f.reasoning ? '<div style="margin-top:10px;"><div class="field-label">Why this matters</div><div class="reasoning-block">' + escMultiline(f.reasoning) + '</div></div>' : '') +
+      (f.fix ? '<div style="margin-top:8px;"><div class="field-label">Suggested Fix</div><div class="fix-block">' + escMultiline(f.fix) + '</div></div>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function detailsHtml(d) {
+  if (!d) return '';
+  if (d.kind === 'table' && Array.isArray(d.columns) && Array.isArray(d.rows)) {
+    let h = '<table class="detail-table"><thead><tr>';
+    d.columns.forEach((c) => h += '<th>' + esc(c) + '</th>');
+    h += '</tr></thead><tbody>';
+    d.rows.forEach((r) => { h += '<tr>' + r.map((cell) => '<td>' + (cell == null ? '' : esc(cell)) + '</td>').join('') + '</tr>'; });
+    h += '</tbody></table>';
+    return '<h3>' + esc(d.label || 'Details') + '</h3>' + h;
+  }
+  if (d.kind === 'kv' && Array.isArray(d.entries)) {
+    let h = '<div class="card"><dl class="kv-list">';
+    d.entries.forEach((e) => h += '<dt>' + esc(e.key) + '</dt><dd>' + esc(e.value) + '</dd>');
+    h += '</dl></div>';
+    return '<h3>' + esc(d.label || 'Details') + '</h3>' + h;
+  }
+  return '';
+}
+
+function sectionHtml(s) {
+  // Sort only when at least one finding has severity; otherwise preserve insertion order (inventory sections).
+  const order = { critical:0, high:0, warning:1, medium:1, info:2, low:2, pass:3 };
+  const findings = (s.findings || []).some(f => f.severity)
+    ? (s.findings || []).slice().sort((a, b) => (order[a.severity] ?? 99) - (order[b.severity] ?? 99))
+    : (s.findings || []);
+
+  let html = '<div class="section" id="tab-' + escAttr(s.id) + '">' +
+    '<h2>' + esc(s.label) + '</h2>' +
+    (s.description ? '<p class="section-desc">' + esc(s.description) + '</p>' : '') +
+    (findings.length ? findings.map(findingHtml).join('') : '<div class="card" style="color:var(--text-dim)">Nothing to report for this section.</div>') +
+    detailsHtml(s.details) +
+    '</div>';
+  return html;
+}
+
+// Stat-card metadata for every severity that may appear on findings.
+// Same precedence ordering used everywhere (critical → high → warning → medium → info → low → pass).
+const STAT_CARDS = [
+  { key: 'critical', label: 'Critical', color: 'var(--critical)' },
+  { key: 'high',     label: 'High',     color: 'var(--critical)' },
+  { key: 'warning',  label: 'Warning',  color: 'var(--warning)' },
+  { key: 'medium',   label: 'Medium',   color: 'var(--warning)' },
+  { key: 'info',     label: 'Info',     color: 'var(--info)' },
+  { key: 'low',      label: 'Low',      color: 'var(--info)' },
+  { key: 'pass',     label: 'Passed',   color: 'var(--pass)' },
+];
+// Severities that count as "issues" for the sidebar badge.
+const ISSUE_KEYS = new Set(['critical', 'high', 'warning', 'medium']);
+
+// Overview section
+function overviewHtml() {
+  const t = REVIEW_DATA.totals || {};
+  const cards = STAT_CARDS
+    .filter(c => (t[c.key] || 0) > 0)
+    .map(c => '<div class="stat-card"><div class="stat-num" style="color:' + c.color + '">' + (t[c.key] || 0) + '</div><div class="stat-label">' + c.label + '</div></div>')
+    .join('');
+  return '<div class="section active" id="tab-overview">' +
+    '<h2>' + esc(REPORT_NAME) + '</h2>' +
+    '<p class="section-desc">' + esc(GOAL_LABEL || '') + ' — ' + esc(SCOPE_LABEL) + '</p>' +
+    (cards ? '<div class="stats-grid">' + cards + '</div>' : '') +
+    '<h3>Summary</h3><div class="card" style="line-height:1.75;">' + esc(REVIEW_DATA.summary) + '</div>' +
+    (REVIEW_DATA.nextSteps && REVIEW_DATA.nextSteps.length ? ('<h3>Recommended next steps</h3><div class="card"><ol class="next-steps">' + REVIEW_DATA.nextSteps.map((n) => '<li>' + esc(n) + '</li>').join('') + '</ol></div>') : '') +
+  '</div>';
+}
+
+// Compose content + sidebar
+const content = [overviewHtml()];
+const navHtml = ['<div class="nav-group-label">Overview</div>'];
+navHtml.push('<button class="nav-btn active" data-tab="overview"><span class="nav-icon">●</span> Overview</button>');
+navHtml.push('<div class="nav-group-label">Sections</div>');
+
+(REVIEW_DATA.sections || []).forEach((s) => {
+  const issues = (s.findings || []).reduce((acc, f) => acc + (ISSUE_KEYS.has(f.severity) ? 1 : 0), 0);
+  navHtml.push('<button class="nav-btn" data-tab="' + escAttr(s.id) + '"><span class="nav-icon">' + esc(s.icon || '▦') + '</span> ' + esc(s.label) + (issues > 0 ? '<span class="nav-badge" style="background:var(--critical-bg);color:var(--critical);">' + issues + '</span>' : '') + '</button>');
+  content.push(sectionHtml(s));
+});
+
+document.getElementById('sidebar').innerHTML = navHtml.join('');
+document.getElementById('contentRoot').innerHTML = content.join('');
+
+document.querySelectorAll('.nav-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.section').forEach((s) => s.classList.remove('active'));
+    const target = document.getElementById('tab-' + escAttr(btn.dataset.tab));
+    if (target) target.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+});
+
+document.addEventListener('click', (e) => {
+  const header = e.target.closest('.finding-header');
+  if (header) { header.closest('.finding-card').classList.toggle('expanded'); }
+});
+</script>
+</body>
+</html>

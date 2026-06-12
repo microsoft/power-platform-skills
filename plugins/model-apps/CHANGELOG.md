@@ -2,6 +2,51 @@
 
 All notable changes to the **model-apps** plugin.
 
+## [Unreleased] — 2.2.0
+
+Local-dev ergonomics, sample coverage, and an automated eval suite with
+real and synthetic fixtures. Builds on v2.1; no breaking changes.
+
+### Added
+- **Phase 0.5 — local-dev manifest.** Working dirs now get `package.json`
+  and `genpage.d.ts` so `npm install` + editor IntelliSense work after
+  generation. Versions in `references/supported-dependencies.md`.
+- **Eval suite runners.** `run-layer-1.js` (workflow assertions) and
+  `run-layer-2.js` (code assertions) emit TAP v13. `EVAL_GUIDE.md` covers
+  types, tiers, capture flow.
+- **10 fixtures** under `evals/.../fixtures/` (6 synthetic + 4 real
+  captures; all green under the tightened v2.2 spec).
+- `scripts/capture-fixture.js` — copies `/genpage` working dirs into
+  fixtures and runs both layers.
+- `samples/11-kanban-with-dnd.tsx` — native HTML5 drag-and-drop sample.
+- `samples/12-dialog-form-overlay.tsx` + **Dialogs and Overlays** guidance
+  (rules.md rules 16–18 and Special Patterns section, plus a troubleshooting
+  entry): confine portalled Fluent surfaces (`Dialog`, `Popover`, `Menu`,
+  `Tooltip`, `Combobox`/`Dropdown`) to the page via `mountNode` +
+  `contain: layout`, default dialogs to `modalType="non-modal"`, and never nest
+  dialogs — so a modal can't escape the preview and cover the designer /
+  coding-agent panel.
+
+### Changed
+- Spec tightening so workflow-logs are command-verbatim and `pageInput`
+  destructure is required even on mock pages (planner, page-builder,
+  SKILL.md Phase 6 + Phase 8).
+- 8 runner regex relaxations to accept functionally-equivalent agent
+  patterns (typed `(window as any).Xrm` aliases, `pac solution list`,
+  local enum mapping, etc.) — no rule loosening.
+
+### Fixed
+- **Synthetic fixtures + sample 11 now follow Rule 11 (queryTable returns
+  DataTable, not an array).** 7 files were iterating `result` directly
+  (`setTasks(result)`, `result.map(...)`) instead of `result.rows`,
+  producing `X.map is not a function` at runtime. Fixed in
+  `samples/11-kanban-with-dnd.tsx` and 6 fixture `.tsx` files.
+  New Layer 2 assertion catches this pattern going forward: any Dataverse
+  file calling `dataApi.queryTable` must access `.rows` somewhere.
+
+### Tests
+- 215 passing across `scripts/tests/` + `evals/.../tests/`.
+
 ## 2.1.0 — 2026-05-13
 
 Replaces the Dataverse MCP server + Python SDK fallback with Node.js Web API
