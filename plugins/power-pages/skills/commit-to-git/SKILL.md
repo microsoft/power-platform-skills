@@ -1,21 +1,21 @@
 ---
 name: commit-to-git
 description: >-
-  Pushes all pending Changes from the Dataverse environment to the bound Azure DevOps
-  branch via the CommitToGit OData action. Runs pre-flight validation, gathers a commit
-  message, gets explicit consent, commits, polls until pending-changes count reaches zero,
-  verifies the CommitId appears in ADO, and offers to open a PR.
+  Pushes pending Dataverse changes to the bound Azure DevOps branch via the CommitToGit
+  OData action. Runs pre-flight validators, gathers a commit message, gets explicit
+  consent, commits, polls until pending-changes count reaches zero, verifies the CommitId
+  appears in ADO, and offers to open a PR.
   Writes docs/inner-loop/last-commit.json.
   Also supports a non-mutating --dry-run mode that runs ONLY the pre-flight validators
   (writes docs/inner-loop/last-validation.json + pre-commit-report.html) and exits before
-  any Dataverse mutation — use this when you want to know whether your pending changes
-  are commit-ready without actually committing.
+  any Dataverse mutation — use this to check whether pending changes are commit-ready
+  without committing.
   Use when asked: "commit to git", "push my changes to ADO", "commit to azure devops",
-  "push to the branch", "commit my canvas app changes", "save to git", "push to git",
+  "push to the branch", "save to git", "push to git",
   "commit pending changes", "run commit-to-git",
   "validate before commit", "check pending changes", "pre-flight check",
-  "will this commit work", "check for issues before pushing to git",
-  "dry run", "any blockers before I commit", "validate pending changes".
+  "will this commit work", "any blockers before I commit",
+  "dry run", "validate pending changes".
 user-invocable: true
 argument-hint: "Optional: commit message in quotes; --dry-run to validate without committing; --dry-run --json for CI stdout; --background to fire-and-forget"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, TaskList, AskUserQuestion
@@ -361,13 +361,18 @@ Steps:
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/commit-to-git.js" \
-       --envUrl         "<envUrl>" \
-       --commitMessage  "<message>"
+       --envUrl              "<envUrl>" \
+       --solutionUniqueName  "<solutionUniqueName from manifest>" \
+       --commitMessage       "<message>"
    ```
 
-   Pass `--solutionUniqueName "<name>"` only when the binding is solution-scoped (read from `.git-integration-manifest.json`).
+   The platform's `CommitToGit` action ALWAYS requires `SolutionUniqueName` in the request body — both solution-bound and env-bound contexts. For env-bound contexts, the manifest's `bindingType === 'environment'` means multiple solutions can be enabled for source control, so the helper needs to know which one to push.
 
-   Expected output: `{ ok: true, commitId: "<sha>", type: <int> }`.
+   - **Solution-bound:** read `solutionUniqueName` straight from the manifest and pass it.
+   - **Env-bound:** read from the manifest's `boundSolutions[]` (or `detect-git-binding`'s `boundSolutions[]`) — pick the one with `pendingChangesCount > 0` and pass it. If multiple solutions have pending changes, surface the list to the user and ask which to commit (each `CommitToGit` call is exactly one solution).
+   - **Omitting the flag:** the helper auto-resolves via `detect-git-binding`: it picks the solution-bound name when applicable, otherwise the single env-bound solution with pending changes. Auto-resolve errors clearly when 0 or 2+ candidates exist. Use this as a convenience only — the explicit form is clearer for users and for the post-run `last-commit.json` audit trail.
+
+   Expected output: `{ ok: true, commitId: "<sha>", type: <int>, solutionAutoResolved?: { value, reason } }`. The optional `solutionAutoResolved` field is populated only when `--solutionUniqueName` was omitted; surface its `reason` to the user so they know which solution the helper picked.
 
 **Output:** `commitId` (the ADO commit SHA returned by Dataverse).
 
