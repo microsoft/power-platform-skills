@@ -105,16 +105,23 @@ function loadResolver(dir) {
 module.exports = { loadResolver };
 ```
 
-## 6. Provisioning fast-gate (generic)
+## 6. Provisioning fast-gate (generic, via the resolver contract)
 
-The "skip the pac shellout when unprovisioned" optimization becomes generic. `emit-from-prompt.js` and the pretool hook:
+**Decision: keep the full fast-gate, made generic through `isProvisioned` (option i).** The "skip the ~3-5s pac shellout when telemetry can't send" optimization is preserved on both paths, but expressed through the resolver contract so no shared file reads the region shape.
+
+Both entry points (`emit-from-prompt.js` — shared, user-prompt path; and `run-skill-pretool-telemetry.js` — plugin, pretool path) do:
 
 - read only generic fields from `ikey.json` (`event_stream_name`, `disabled`, plus the raw `cfg`);
 - gate on `cfg.disabled` (unchanged hard-off);
-- then ask the resolver: `const provisioned = resolver?.isProvisioned ? resolver.isProvisioned(cfg) : !!cfg.instrumentationKey;`
-- if not provisioned → return without the pac shellout.
+- discover the resolver the same way the dispatcher does — `loadResolver(telemetryDir)` (convention: `resolver.js` beside `ikey.json`) — then:
+  `const provisioned = resolver?.isProvisioned ? resolver.isProvisioned(cfg) : !!cfg.instrumentationKey;`
+- if not provisioned → return **before** the pac shellout.
 
-Power-pages' `isProvisioned` checks "default-region key present", preserving today's behavior. A static-key plugin gets the `!!cfg.instrumentationKey` default. A plugin shipping `disabled: true` (the recommended pre-provisioning posture) is gated by `disabled` regardless.
+This keeps `emit-from-prompt.js` generic (it calls a contract method, never reads `cfg.regions`). Power-pages' `isProvisioned` checks "default-region key present", preserving today's behavior exactly. A static-key plugin gets the `!!cfg.instrumentationKey` default. A plugin shipping `disabled: true` (the recommended pre-provisioning posture) is gated by `disabled` regardless, so the resolver is never even consulted in that state.
+
+The pretool hook uses the **same** `isProvisioned` call (rather than its current inline region read) purely for DRY/consistency — it's plugin code, so this is a tidy-up, not a constraint.
+
+> Rejected alternative (option ii): gate on `disabled` only and drop the key-present sub-check from `emit-from-prompt`. Smaller diff, but on the user-prompt path it would waste ~3-5s in the transient `disabled:false`-but-unprovisioned window. Not worth the marginal savings since the file must change regardless.
 
 ## 7. File layout — before / after
 
@@ -232,3 +239,8 @@ Both keep `disabled` (kill switch) and `event_stream_name` (generic, read by cal
 - Discovery by **convention** only (`resolver.js` beside `ikey.json`); no resolver-path env var — tests drop a stub `resolver.js` beside the temp `ikey.json`. ✓
 - **Static-key fallback** kept as the zero-effort default. ✓
 - Resolution stays in the **background dispatcher**. ✓
+- Fast-gate kept and made generic via `isProvisioned` (**option i**); `emit-from-prompt.js` calls the contract, never reads the region shape; the pretool hook delegates to the same call for DRY. ✓
+
+## 14. Out of scope / follow-ups
+
+- **De-duplicate the two emit entry points.** `run-skill-pretool-telemetry.js` (inline) and `emit-from-prompt.js` (shared) both run gate → pac-auth → agent-info → build → `fireAndForget`. A shared `emitSkillStarted(fields, opts)` helper that both call would remove the duplication. Pre-existing structure; not folded into this change. Worth a separate cleanup PR.
