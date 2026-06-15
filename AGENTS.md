@@ -69,6 +69,8 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 
 Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
 
+Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic.
+
 Current adopters: `power-pages`. Others adopt on demand.
 
 ## Code Conventions

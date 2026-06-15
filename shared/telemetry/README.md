@@ -10,7 +10,7 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the org's telemetry region, then posts to that region's collector URL; the hook that emitted the event returns before the POST happens.
+Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -23,7 +23,7 @@ hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
             ├─ sanitizeData (FIELD_TYPES allowlist)
             ├─ appendLocal({time,name,data}) → events.jsonl   ← ALWAYS (the mirror)
             ├─ user opt-out (config.json telemetry[plugin]="off") → exit (mirror written, no POST)
-            ├─ resolve region → iKey + collector_url   ← region-resolver (geo + cloud, cached)
+            ├─ resolve destination → iKey + collector_url   ← resolver.js (plugin) or static key
             ├─ iKey missing/placeholder → exit (mirror already written, no POST)
             ├─ build CS4.0 envelope (same time + sanitized data)
             └─ HTTPS POST to the resolved collector_url
@@ -42,22 +42,28 @@ via `/<plugin>:telemetry off`) suppresses **transmission**, not the local
 diagnostic mirror — so an opted-out run still writes `events.jsonl` (and pays the
 same event-building cost as an enabled run), it just never POSTs.
 
-### Region routing
+### Custom routing (the resolver contract)
 
-The collector iKey is not hard-coded — it is resolved per event from the
-`regions` map in `ikey.json`:
+The destination iKey/collector is **not** hard-coded, and the shared library is
+routing-agnostic. A plugin may drop a `resolver.js` next to its `ikey.json` to
+own that decision:
 
-- The org's geo is fetched from the Artemis service (`artemis-service.js`) using
-  the `orgId`, combined with the cloud stamp (`POWER_PLATFORM_SKILLS_CLOUD`, from
-  `pac auth who`) to pick a routing region (`region-resolver.js`). Sovereign
-  clouds (Gov, High, Dod, Mooncake) short-circuit to their region by stamp.
-- Resolutions are cached per org in `~/.power-platform-skills/region-cache.json`
-  (`region-cache.js`) so the Artemis call happens at most once per TTL.
-- With no `orgId`, or when Artemis is unreachable, the dispatcher falls back to
-  `regions[default_region]`.
-- The `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` env vars
-  are **test seams only** — when set they bypass region resolution. Production
-  never sets them.
+```js
+module.exports = {
+  // async; may do network I/O (must cache). Returns { iKey, collectorUrl } or null.
+  async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
+  // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
+  isProvisioned(cfg) { return true; },
+};
+```
+
+The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
+and resolves the destination by precedence: env override (test seam) →
+`resolver.js` → static `instrumentationKey`/`collector_url` in `ikey.json` → none.
+The power-pages plugin ships a `resolver.js` that does Artemis geo + cloud-stamp
+region routing; that implementation lives entirely in
+`plugins/power-pages/scripts/lib/telemetry/region/` — the shared library knows
+nothing about it.
 
 ## What is sent
 
@@ -73,7 +79,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **PAC + agent (when available, otherwise omitted):**
 
-- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` also drives region resolution)
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` is passed to the plugin resolver — power-pages uses it for Artemis region routing)
 - `pacCliVersion` — semver from `pac --version`
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
@@ -106,11 +112,9 @@ shared/telemetry/
 ├─ lib/
 │  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
-│  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, region resolve, sanitize, POST
+│  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
-│  ├─ region-resolver.js     # geo (Artemis) + cloud stamp → routing region → iKey/collector
-│  ├─ region-cache.js        # per-org region cache in ~/.power-platform-skills/region-cache.json
-│  ├─ artemis-service.js     # fetches the org's geo + normalizes the cloud stamp
+│  ├─ resolver-loader.js     # discovers an optional plugin resolver.js next to ikey.json
 │  ├─ user-config.js         # reads/writes the per-plugin telemetry opt-out in config.json
 │  ├─ telemetry-config.js    # CLI behind /<plugin>:telemetry on|off|status
 │  ├─ pac-auth.js            # parses `pac auth who` for orgId / tenantId / cloud
@@ -147,31 +151,30 @@ Now `scripts/lib/telemetry/lib` resolves to the shared library — there is no c
 
 ### 2. Configure `ikey.json`
 
-Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder). Use the region-routing structure: `default_region` plus a `regions` map keyed by routing region, each with its own `instrumentation_key` and `collector_url`:
+Create `plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` — a **real file, not symlinked** (it carries this plugin's config, distinct from `shared/`'s placeholder).
+
+**Tier 1 — one static key (no routing).** Create a flat
+`plugins/<your-plugin>/scripts/lib/telemetry/ikey.json` (a real file, not symlinked):
 
 ```json
 {
+  "instrumentationKey": "<your 1DS instrumentation key>",
+  "collector_url": "https://<region>-mobile.events.data.microsoft.com/OneCollector/1.0/",
   "event_stream_name": "<your Kusto stream / annotation name>",
-  "disabled": true,
-  "default_region": "us",
-  "regions": {
-    "us": {
-      "instrumentation_key": "<1DS key for the US collector>",
-      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
-    },
-    "eu": {
-      "instrumentation_key": "<1DS key for the EU collector>",
-      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
-    }
-  }
+  "disabled": true
 }
 ```
 
-Provision a region entry for every cloud/geo you ship to (`us`, `eu`, `gov`, `high`, `dod`, `mooncake`, `internal`). The dispatcher resolves which one to use at emit time and falls back to `regions[default_region]`.
+No resolver needed — the dispatcher uses the static `instrumentationKey` / `collector_url`.
 
-**Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and FieldNameMappings are provisioned. Flip to `false` in a separate PR once verified.
+**Tier 2 — bring your own routing.** Shape `ikey.json` however your resolver wants,
+and drop a `resolver.js` next to it implementing `resolve()` (and optionally
+`isProvisioned()`). The dispatcher auto-discovers and calls it; the shared library
+is never touched. (Power-pages is the reference example: see
+`plugins/power-pages/scripts/lib/telemetry/resolver.js` + `region/`.)
 
-**Posture rule:** the **committed** `ikey.json` must stay `disabled: true`. A working-tree `disabled: false` is a local experiment only — never commit it.
+**Ship with `disabled: true`** until the tenant-side annotation, Kusto table, and
+FieldNameMappings are provisioned. The committed `ikey.json` must stay `disabled: true`.
 
 ### 3. Register hooks
 
@@ -218,8 +221,7 @@ Every module exposes injectable test seams via `opts._xxx` properties so tests r
 - `pac-auth.js` — `opts._exec` swaps `execFileSync`
 - `agent-info.js` — `opts._exec` swaps `execFileSync`
 - `emit-from-prompt.js` — `opts._emit`, `opts._readPacAuth`, `opts._readAgentInfo`
-- `region-resolver.js` — `opts._fetchGeo` swaps the Artemis call; `opts._cache` swaps the region cache
-- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file; `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` bypass region resolution
+- `emit-dispatcher.js` — `POWER_PLATFORM_SKILLS_FAKE_HTTPS` env var captures the would-be POST to a probe file; `POWER_PLATFORM_SKILLS_IKEY` / `POWER_PLATFORM_SKILLS_COLLECTOR` bypass resolver.js / static-key resolution
 - `session.js` — `_resetCache()` clears the per-process session-id cache between tests; `getSessionId(override)` accepts an explicit id (no filesystem state to redirect)
 
 Follow this pattern for any new module.
