@@ -1,0 +1,16 @@
+{
+  "name": "model-maker-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local MCP relay that drives the model-driven form designer via Playwright page.evaluate (no in-page socket; CSP-safe).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test ../tests/relay-*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright-core": "^1.47.0",
+    "zod": "^3.23.8"
+  }
+}
