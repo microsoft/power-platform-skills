@@ -46,7 +46,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Each plugin follows this structure:
 
 - `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
-- `.claude-plugin/plugin.json` — legacy mirror kept for existing subscriptions; keep it JSON-equivalent to `.plugin/plugin.json`
+- `.claude-plugin/plugin.json` — legacy symlink to `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
@@ -77,12 +77,12 @@ Current adopters: `power-pages`. Others adopt on demand.
 
 ## Legacy Marketplace Compatibility
 
-Keep the root `.claude-plugin/marketplace.json` and each plugin's
-`.claude-plugin/plugin.json` in sync with `marketplace.json` and
-`.plugin/plugin.json`. Existing marketplace subscriptions may still resolve the
-legacy paths during auto-update, so removing or drifting these files can force
-users to reinstall. Run `node scripts/validate-legacy-compatibility.js` after
-metadata changes.
+Keep the root `.claude-plugin/marketplace.json` compatible with
+`marketplace.json`, and keep each plugin's `.claude-plugin/plugin.json` as a
+symlink to `../.plugin/plugin.json`. Existing marketplace subscriptions may
+still resolve the legacy paths during auto-update, so removing or drifting these
+files can force users to reinstall. Run
+`node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions
 

@@ -206,9 +206,11 @@ power-platform-skills/
 ```
 
 The `.claude-plugin` files are compatibility shims for users who subscribed
-before the Open Plugins migration. Keep them in sync with the Open Plugins
-metadata so existing marketplace subscriptions can auto-update without requiring
-users to remove and reinstall the marketplace or plugins.
+before the Open Plugins migration. Per-plugin legacy manifests are symlinks to
+the Open Plugins manifests. The root legacy marketplace remains a separate shim
+because legacy clients expect plugin `source` paths relative to the repository
+root. Together, these let existing marketplace subscriptions auto-update without
+requiring users to remove and reinstall the marketplace or plugins.
 
 ## Documentation
 

@@ -31,6 +31,15 @@ function expectedLegacySource(pluginDirectory) {
   return `./${normalizeRelative(path.relative(ROOT, pluginDirectory))}`;
 }
 
+function assertSymlinkTarget(linkPath, expectedTarget) {
+  const stat = fs.lstatSync(linkPath);
+  assert.ok(stat.isSymbolicLink(), 'legacy plugin manifest must be a symlink');
+  assert.equal(
+    normalizeRelative(fs.readlinkSync(linkPath)),
+    normalizeRelative(expectedTarget)
+  );
+}
+
 const errors = [];
 
 function check(label, fn) {
@@ -77,6 +86,7 @@ if (errors.length === 0) {
 
     check(relativeLegacyManifestPath, () => {
       assert.ok(fs.existsSync(legacyManifestPath), 'missing legacy plugin manifest');
+      assertSymlinkTarget(legacyManifestPath, path.join('..', '.plugin', 'plugin.json'));
       assert.deepEqual(readJson(legacyManifestPath), readJson(openManifestPath));
     });
   }
