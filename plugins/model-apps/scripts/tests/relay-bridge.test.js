@@ -124,6 +124,52 @@ test('addField calls addFieldOnConfirm for a new field and returns ok', async ()
   });
 });
 
+test('listControls returns env controls compatible with a field (read-only)', async () => {
+  const calls = [];
+  const ccmd = (name, displayName, dataTypes) => ({
+    name,
+    displayName, // a plain string here; the bridge also tolerates a Loadable {value}
+    compatibleDataTypes: dataTypes,
+    isBound: () => true,
+    hasDatasetConfiguration: false,
+  });
+  const svc = fakeService({
+    Environment: { name: 'org-983a1' },
+    formFieldService: {
+      getEntityAttribute: (n) => (n === 'name' ? { name: 'name', dataType: 'String', dataTypeFormat: 'Text', formatName: 'Text' } : null),
+    },
+    FormModelService: {
+      customControlDiscoveryService: {
+        getAllCompatibleControlsMetadata: (env, seed, dataType, dataFormat, formatName) => {
+          calls.push([env, seed, dataType, dataFormat, formatName]);
+          return Promise.resolve(new Map([
+            ['MscrmControls.BusinessCard.BusinessCardControl', ccmd('MscrmControls.BusinessCard.BusinessCardControl', 'Business card reader', ['Text', 'Multiline'])],
+            ['Microsoft.RichTextEditor', ccmd('Microsoft.RichTextEditor', 'Rich Text Editor Control', ['Text', 'Multiline'])],
+          ]));
+        },
+      },
+    },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.listControls('name');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.field, 'name');
+    assert.strictEqual(r.result.count, 2);
+    assert.deepStrictEqual(r.result.controls.map((c) => c.displayName).sort(), ['Business card reader', 'Rich Text Editor Control']);
+    // the field's data type gates compatibility -> forwarded to the discovery service
+    assert.deepStrictEqual(calls[0], ['org-983a1', [], 'String', 'Text', 'Text']);
+  });
+});
+
+test('listControls errors cleanly when the discovery service is unavailable', async () => {
+  const svc = fakeService(); // no FormModelService.customControlDiscoveryService
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.listControls('name');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error.code, 'no-discovery');
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();

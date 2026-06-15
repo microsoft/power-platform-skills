@@ -6,6 +6,7 @@
 //   - status()                              -> readiness + how the handle was acquired
 //   - inspect()                             -> live form: sections (+ ids) and available unused fields
 //   - addField(fieldName, sectionId, force) -> add a table field to a section via the designer's own command
+//   - listControls(fieldName)               -> (READ-ONLY) custom controls (PCF/AI Builder) the env offers for a field
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -167,7 +168,90 @@
       });
   }
 
-  var api = { status: status, inspect: inspect, addField: addField };
+  // Read a Loadable<string> (the designer wraps localized display names); tolerate
+  // a plain string or {value}/{getValue()} shapes across builds.
+  function readLoadable(l) {
+    if (l == null) return undefined;
+    if (typeof l === 'string') return l;
+    if (typeof l.value !== 'undefined') return l.value;
+    if (typeof l.getValue === 'function') { try { return l.getValue(); } catch (e) { /* ignore */ } }
+    return undefined;
+  }
+
+  // Resolve a field's EntityAttribute. It carries dataType/dataTypeFormat/formatName,
+  // which gate which controls are compatible with the field.
+  function getFieldAttr(svc, name) {
+    var ffs = svc.formFieldService;
+    if (!ffs) return null;
+    try { if (ffs.getEntityAttribute) { var f = ffs.getEntityAttribute(name); if (f) return f; } } catch (e) { /* ignore */ }
+    try {
+      var model = ffs.getModel && ffs.getModel();
+      if (model && model.getEntityAttributeByName) { var g = model.getEntityAttributeByName(name); if (g) return g; }
+      var attrs = (model && model.attributes) || [];
+      for (var i = 0; i < attrs.length; i++) if (attrs[i].name === name) return attrs[i];
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  // READ-ONLY discovery: list the custom controls (PCF / AI Builder, e.g. "Business
+  // card reader") the environment offers for a field. Mirrors
+  // CustomControlService.getControls via the discovery service that hangs off
+  // FormModelService -- reachable from the same handle we already hold.
+  //
+  // Passing [] as the seed returns the WHITELISTED (first-party) controls
+  // compatible with the field's data type -- i.e. the default component-picker
+  // list. Previously-imported, non-whitelisted PCF would need the in-product seed
+  // (cached + form ControlDescriptions); that's a reason the first-party facade is
+  // the robust path for the setter (see the Phase-2 notes in the poc plan).
+  function listControls(fieldName) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+
+    var discovery, env;
+    try {
+      discovery = svc.FormModelService && svc.FormModelService.customControlDiscoveryService;
+      env = svc.Environment && svc.Environment.name;
+    } catch (e) { /* ignore */ }
+    if (!discovery || typeof discovery.getAllCompatibleControlsMetadata !== 'function') {
+      return Promise.resolve({ ok: false, error: { code: 'no-discovery', message: 'customControlDiscoveryService unavailable' } });
+    }
+
+    var field = null;
+    if (fieldName) {
+      field = getFieldAttr(svc, fieldName);
+      if (!field) return Promise.resolve({ ok: false, error: { code: 'no-field', message: fieldName + ' not found on entity' } });
+    }
+    var dataType = field ? field.dataType : undefined;
+    var dataTypeFormat = field ? field.dataTypeFormat : undefined;
+    var formatName = field ? field.formatName : undefined;
+
+    return Promise.resolve()
+      .then(function () { return discovery.getAllCompatibleControlsMetadata(env, [], dataType, dataTypeFormat, formatName, false); })
+      .then(function (map) {
+        var controls = [];
+        var add = function (ccmd, key) {
+          if (!ccmd) return;
+          controls.push({
+            name: ccmd.name || key,
+            displayName: readLoadable(ccmd.displayName) || ccmd.displayNameKey || ccmd.manifestName || ccmd.name || key,
+            compatibleDataTypes: ccmd.compatibleDataTypes,
+            isBound: typeof ccmd.isBound === 'function' ? !!ccmd.isBound() : undefined,
+            hasDataset: !!ccmd.hasDatasetConfiguration,
+          });
+        };
+        if (map && typeof map.forEach === 'function') {
+          map.forEach(function (v, k) { add(v, k); }); // Map -> (value, key)
+        } else if (map && typeof map === 'object') {
+          var keys = Object.keys(map);
+          for (var i = 0; i < keys.length; i++) add(map[keys[i]], keys[i]);
+        }
+        return { ok: true, result: { field: fieldName || null, dataType: dataType, count: controls.length, controls: controls } };
+      })
+      .catch(function (e) { return { ok: false, error: { code: 'discovery-error', message: String((e && e.message) || e) } }; });
+  }
+
+  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls };
 
   var w = getWin();
   if (w && typeof w === 'object') w.__mmBridge = api;

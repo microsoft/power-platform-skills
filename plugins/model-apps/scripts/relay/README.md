@@ -9,8 +9,8 @@ tab via `page.evaluate` round-trips (CSP-safe — the designer's CSP blocks an
 in-page `ws://127.0.0.1` socket, so there is no socket). The injected
 [`bridge.js`](./bridge.js) acquires the live `FormDesignerService` (via the
 first-party `window.__formDesignerApi` export if present, else a duck-typed
-React-fiber walk) and exposes `status` / `inspect` / `addField` on
-`window.__mmBridge`.
+React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
+on `window.__mmBridge`.
 
 ## Tools
 
@@ -74,6 +74,19 @@ npm run smoke      # opens the form, inspects, adds the field (no save), screens
 
 The MCP relay (`designer_open`/`form_inspect`/`form_addField`) is the shipping
 product path; `smoke.js` is the regression/acceptance harness for the same code.
+
+**3. Read-only control discovery probe (`probe-controls.js`).** Calls only the
+read-only `listControls` bridge method — **mutates nothing**. Lists the custom
+controls (PCF / AI Builder, e.g. *Business card reader*) the env offers for a
+field, with their control ids. This is Phase 2.1 (custom controls; the
+`form_*` MCP tool wiring + the setter are Phase 2.2+ — see the POC plan):
+
+```bash
+MM_FORM_URL='https://make.test.powerapps.com/e/.../form/edit/<formId>?...' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+MM_PROBE_FIELD=name,description,none \
+npm run probe
+```
 
 ## Notes
 

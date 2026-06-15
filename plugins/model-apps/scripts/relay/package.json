@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "smoke": "node smoke.js",
+    "probe": "node probe-controls.js",
     "mcp-smoke": "node mcp-smoke.js",
     "test": "node --test ../tests/relay-*.test.js"
   },
