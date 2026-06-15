@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { resolve, mapToRegion } = require("../lib/region-resolver");
+const { resolve, mapToRegion } = require("../lib/telemetry/region/region-resolver");
 
 const REGIONS = {
   internal: { instrumentation_key: "ik-int", collector_url: "https://int/" },

@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { read, write, TTL_MS } = require("../lib/region-cache");
+const { read, write, TTL_MS } = require("../lib/telemetry/region/region-cache");
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-rc-"));

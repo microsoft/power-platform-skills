@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
 const { FIELD_TYPES, pick } = require("./events");
-const { resolve: resolveRegion } = require("./region-resolver");
+const { loadResolver } = require("./resolver-loader");
 const { isTransmissionOptedOut } = require("./user-config");
 
 function exitSilently() {
@@ -22,7 +22,7 @@ const FAKE_PROBE = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 const CONFIG_DIR_ENV = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
 const CLOUD_ENV = process.env.POWER_PLATFORM_SKILLS_CLOUD || "";
 // Override env vars — TEST seams only. Production resolves the iKey/collector
-// via the regions map in ikey.json (see region-resolver) and never sets these.
+// via the plugin resolver / static config in ikey.json and never sets these.
 const IKEY_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_IKEY || "";
 const COLLECTOR_OVERRIDE = process.env.POWER_PLATFORM_SKILLS_COLLECTOR || "";
 
@@ -122,6 +122,7 @@ function writeLocalLog(record) {
 // mirror is written. cfg is reused for region resolution in the stdin handler.
 const cfg = readIkeyConfig();
 if (isDisabledByConfig(cfg)) exitSilently();
+const resolver = loadResolver(path.dirname(ikeyJsonPath()));
 
 // ---- Read stdin ------------------------------------------------------------
 let raw = "";
@@ -154,21 +155,27 @@ process.stdin.on("end", async () => {
   const pluginName = event && event.data && event.data.pluginName;
   if (isUserOptedOut(pluginName)) return exitSilently();
 
-  // Resolve the iKey + collector for this org's region. Override env vars take
-  // precedence (test seam); production resolves via the regions map in cfg.
+  // Resolve the destination iKey + collector. Precedence: env override (test
+  // seam) → plugin resolver.js (region/tenant/etc., owned by the plugin) →
+  // static single-key config in ikey.json → none. The shared dispatcher knows
+  // nothing about regions; the plugin's resolver.js owns that.
   let iKey = IKEY_OVERRIDE;
   let collectorUrl = COLLECTOR_OVERRIDE;
   if (!iKey || !collectorUrl) {
-    const resolved = await resolveRegion({
-      orgId: (event.data && event.data.orgId) || "",
-      cloud: CLOUD_ENV,
-      regionsMap: cfg.regions || {},
-      defaultRegion: cfg.default_region || "us",
-      configDir: CONFIG_DIR_ENV || undefined,
-    });
-    if (resolved) {
-      iKey = iKey || resolved.iKey || "";
-      collectorUrl = collectorUrl || resolved.collectorUrl || "";
+    if (resolver && typeof resolver.resolve === "function") {
+      const resolved = await resolver.resolve({
+        event,
+        cfg,
+        cloud: CLOUD_ENV,
+        configDir: CONFIG_DIR_ENV || undefined,
+      });
+      if (resolved) {
+        iKey = iKey || resolved.iKey || "";
+        collectorUrl = collectorUrl || resolved.collectorUrl || "";
+      }
+    } else {
+      iKey = iKey || cfg.instrumentationKey || "";
+      collectorUrl = collectorUrl || cfg.collector_url || "";
     }
   }
 

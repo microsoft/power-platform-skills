@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { fetchGeo, urlFor } = require("../lib/artemis-service");
+const { fetchGeo, urlFor } = require("../lib/telemetry/region/artemis-service");
 
 const orgId = "c7809087-d9b8-4a00-a78a-a4b901caa23f";
 

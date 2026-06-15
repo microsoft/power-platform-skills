@@ -73,6 +73,20 @@ test("hook emits PagesPluginEvent with top-level fields for tracked slash comman
       },
     })
   );
+  // The dispatcher discovers region routing via a resolver.js next to ikey.json.
+  // Mirror the shipped plugin layout by dropping one beside the temp config that
+  // re-exports the real region resolver from scripts/lib/telemetry/resolver.js.
+  const shippedResolver = path.join(
+    PLUGIN_ROOT,
+    "scripts",
+    "lib",
+    "telemetry",
+    "resolver.js"
+  );
+  fs.writeFileSync(
+    path.join(configDir, "resolver.js"),
+    `module.exports = require(${JSON.stringify(shippedResolver)});\n`
+  );
 
   const { status } = runHook({
     prompt: "/power-pages:add-seo",

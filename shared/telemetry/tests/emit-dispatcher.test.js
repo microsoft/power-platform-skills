@@ -395,47 +395,24 @@ test("local mirror records the same data + time that gets POSTed to Kusto", () =
   assert.equal(local.iKey, undefined, "local mirror omits envelope-only iKey");
 });
 
-// ---- Region routing -------------------------------------------------------
-// Production resolves the iKey/collector from the regions map in ikey.json via
-// the org's geo (Artemis) + cloud stamp, with a cache in front. These tests
-// exercise that path with the override env vars unset.
+// ---- iKey/collector resolution (generic seam) -----------------------------
 
-test("dispatcher uses regions[default_region] when no cache and no Artemis", () => {
+test("dispatcher uses static instrumentationKey/collector_url when no resolver is present", () => {
+  // mkEnabledIkey writes a flat ikey.json (instrumentationKey + collector_url)
+  // and there is no resolver.js beside it → the static fallback is used.
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
-  const ikeyPath = path.join(tmp, "ikey.json");
-  fs.writeFileSync(
-    ikeyPath,
-    JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
-      disabled: false,
-      default_region: "us",
-      regions: {
-        us: { instrumentation_key: "ikeyusdefault32charsaaaaaaaaaaaaaa", collector_url: "https://example.invalid/OneCollector/1.0/" },
-        eu: { instrumentation_key: "ikeyeucached32charsaaaaaaaaaaaaaa", collector_url: "https://eu.invalid/OneCollector/1.0/" },
-      },
-    })
-  );
-  // No region-cache.json → cache miss → Artemis call fails on example.invalid → fall back to default_region (us).
   const { status } = runDispatcher({
-    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info", orgId: "11111111-1111-1111-1111-111111111111" } },
-    env: {
-      configDir: tmp,
-      iKey: "",
-      collectorUrl: "",
-      fakeProbe: probePath,
-      ikeyJsonPath: ikeyPath,
-      cloud: "Public",
-    },
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath },
   });
   assert.equal(status, 0);
-  assert.ok(fs.existsSync(probePath), "probe should have been written using default region");
+  assert.ok(fs.existsSync(probePath), "static-key config must POST");
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-  // Use x-apikey (full iKey, not the split prefix) so the assertion is unambiguous.
-  assert.equal(probe.headers["x-apikey"], "ikeyusdefault32charsaaaaaaaaaaaaaa");
+  assert.equal(probe.headers["x-apikey"], "placeholder");
 });
 
-test("dispatcher uses cached region entry when cache hit", () => {
+test("dispatcher uses an injected resolver.js to pick iKey/collector", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const ikeyPath = path.join(tmp, "ikey.json");
@@ -446,66 +423,51 @@ test("dispatcher uses cached region entry when cache hit", () => {
       disabled: false,
       default_region: "us",
       regions: {
-        us: { instrumentation_key: "ikeyusdefault32charsaaaaaaaaaaaaaa", collector_url: "https://us.invalid/OneCollector/1.0/" },
-        eu: { instrumentation_key: "ikeyeucached32charsaaaaaaaaaaaaaa", collector_url: "https://eu.invalid/OneCollector/1.0/" },
+        us: {
+          instrumentation_key: "ikeyusresolved",
+          collector_url: "https://example.invalid/OneCollector/1.0/",
+        },
       },
     })
   );
-  // Seed cache with EU.
+  // resolver.js beside ikey.json — discovered by convention.
   fs.writeFileSync(
-    path.join(tmp, "region-cache.json"),
-    JSON.stringify({
-      "11111111-1111-1111-1111-111111111111": {
-        region: "eu",
-        iKey: "ikeyeucached32charsaaaaaaaaaaaaaa",
-        collectorUrl: "https://eu.invalid/OneCollector/1.0/",
-        expiresAt: Date.now() + 60_000,
-      },
-    })
-  );
-  const { status } = runDispatcher({
-    event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info", orgId: "11111111-1111-1111-1111-111111111111" } },
-    env: {
-      configDir: tmp,
-      iKey: "",
-      collectorUrl: "",
-      fakeProbe: probePath,
-      ikeyJsonPath: ikeyPath,
-      cloud: "Public",
-    },
-  });
-  assert.equal(status, 0);
-  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-  assert.equal(probe.headers["x-apikey"], "ikeyeucached32charsaaaaaaaaaaaaaa");
-});
-
-test("dispatcher with no orgId in event uses default_region", () => {
-  const tmp = mkTmp();
-  const probePath = path.join(tmp, "probe.json");
-  const ikeyPath = path.join(tmp, "ikey.json");
-  fs.writeFileSync(
-    ikeyPath,
-    JSON.stringify({
-      event_stream_name: "PagesPluginEvent",
-      disabled: false,
-      default_region: "us",
-      regions: {
-        us: { instrumentation_key: "ikeyusnoorg32charsaaaaaaaaaaaaaaaaa", collector_url: "https://us.invalid/OneCollector/1.0/" },
-      },
-    })
+    path.join(tmp, "resolver.js"),
+    "module.exports = {" +
+      "async resolve({ cfg }) {" +
+      "  const e = cfg.regions[cfg.default_region];" +
+      "  return { iKey: e.instrumentation_key, collectorUrl: e.collector_url };" +
+      "}," +
+      "isProvisioned: () => true };"
   );
   const { status } = runDispatcher({
     event: { name: "PagesPluginEvent", data: { eventName: "skill_started", eventType: "Trace", severity: "Info" } },
-    env: {
-      configDir: tmp,
-      iKey: "",
-      collectorUrl: "",
-      fakeProbe: probePath,
-      ikeyJsonPath: ikeyPath,
-      cloud: "",
-    },
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
   });
   assert.equal(status, 0);
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
-  assert.equal(probe.headers["x-apikey"], "ikeyusnoorg32charsaaaaaaaaaaaaaaaaa");
+  assert.equal(probe.headers["x-apikey"], "ikeyusresolved");
+});
+
+test("dispatcher writes the mirror but does NOT POST when neither resolver nor static key resolves", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  // Region-shaped but unprovisioned: no static instrumentationKey, no resolver.js.
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+      default_region: "us",
+      regions: { us: { collector_url: "https://x" } },
+    })
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "no key resolved → no POST");
+  assert.ok(fs.existsSync(path.join(tmp, "events.jsonl")), "local mirror still written");
 });
