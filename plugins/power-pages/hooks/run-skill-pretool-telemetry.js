@@ -40,13 +40,19 @@ function readPluginVersion() {
 }
 
 function readIkey() {
+  // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
+  // ikey.json so tests can flip disabled/region state without mutating the
+  // checked-in config file. Mirrors emit-dispatcher.js / emit-from-prompt.js.
+  const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  const ikeyPath =
+    override && override.trim()
+      ? override
+      : path.join(TELEMETRY_DIR, "ikey.json");
   try {
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
-    );
-    return { cfg, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
+    const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
+    return { cfg, ikeyPath, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return { cfg: null, eventStreamName: "", disabled: false };
+    return { cfg: null, ikeyPath, eventStreamName: "", disabled: false };
   }
 }
 
@@ -85,13 +91,20 @@ function readStdin() {
   // enriched event is still built and dispatched so the detached dispatcher can
   // write the local diagnostic mirror; it reads the per-plugin config and skips
   // the POST. (Opting out therefore costs the same as an enabled run.)
-  const { cfg, eventStreamName, disabled } = readIkey();
+  const { cfg, ikeyPath, eventStreamName, disabled } = readIkey();
   if (disabled) process.exit(0);
-  const resolver = resolverLoader.loadResolver(TELEMETRY_DIR);
-  const provisioned =
-    resolver && typeof resolver.isProvisioned === "function"
-      ? resolver.isProvisioned(cfg)
-      : !!(cfg && cfg.instrumentationKey);
+  const resolver = resolverLoader.loadResolver(path.dirname(ikeyPath));
+  let provisioned;
+  try {
+    provisioned =
+      resolver && typeof resolver.isProvisioned === "function"
+        ? resolver.isProvisioned(cfg)
+        : !!(cfg && cfg.instrumentationKey);
+  } catch {
+    // A plugin resolver threw — treat as not provisioned so a bad resolver
+    // can't crash the pretool hook and impact the tool run (fail closed).
+    provisioned = false;
+  }
   if (!provisioned) process.exit(0);
 
   const correlation_id = crypto.randomUUID();
@@ -139,10 +152,11 @@ function readStdin() {
         cloud: (pacAuth && pacAuth.cloud) || "",
         configDir,
         fakeProbe,
-        // Point the dispatcher at this plugin's real ikey.json (lib/ is a
-        // symlink to shared/, so its __dirname default would otherwise hit
-        // shared/'s placeholder).
-        ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
+        // Point the dispatcher at the same ikey.json readIkey() used — the
+        // override seam when set, otherwise this plugin's real config. (lib/ is
+        // a symlink to shared/, so the dispatcher's __dirname default would
+        // otherwise hit shared/'s placeholder.)
+        ikeyJsonPath: ikeyPath,
       }
     );
   } catch {

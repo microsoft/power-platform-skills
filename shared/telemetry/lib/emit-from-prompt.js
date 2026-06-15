@@ -17,8 +17,14 @@ function readIkey(telemetryDir) {
   // Test/override seam: POWER_PLATFORM_SKILLS_IKEY_JSON points at an alternate
   // ikey.json so tests don't have to mutate the checked-in config file.
   const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
-  const ikeyPath =
-    override && override.trim() ? override : path.join(telemetryDir, "ikey.json");
+  const overridePath = override && override.trim() ? override : "";
+  // Guard a missing/invalid telemetryDir (a caller bug this fail-closed helper
+  // must tolerate): with no override there is no path to read, so return the
+  // unreadable shape instead of letting path.join throw out of the library.
+  if (!overridePath && (typeof telemetryDir !== "string" || !telemetryDir)) {
+    return { cfg: null, dir: "", ikeyPath: "", eventStreamName: "", disabled: false };
+  }
+  const ikeyPath = overridePath || path.join(telemetryDir, "ikey.json");
   const dir = path.dirname(ikeyPath);
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
@@ -60,10 +66,17 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   // Provisioning fast-gate (generic): a plugin resolver decides "is there a key
   // worth paying the pac shellout for?"; default is "static key present".
   const resolver = loadResolver(dir);
-  const provisioned =
-    resolver && typeof resolver.isProvisioned === "function"
-      ? resolver.isProvisioned(cfg)
-      : !!(cfg && cfg.instrumentationKey);
+  let provisioned;
+  try {
+    provisioned =
+      resolver && typeof resolver.isProvisioned === "function"
+        ? resolver.isProvisioned(cfg)
+        : !!(cfg && cfg.instrumentationKey);
+  } catch {
+    // A plugin-provided resolver threw (or assumed cfg non-null) — treat as not
+    // provisioned so a bad resolver can't break prompt handling (fail closed).
+    provisioned = false;
+  }
   if (!provisioned) return { emitted: false, skillName };
 
   const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;

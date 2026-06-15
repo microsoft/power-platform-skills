@@ -164,12 +164,22 @@ process.stdin.on("end", async () => {
   let collectorUrl = COLLECTOR_OVERRIDE;
   if (!iKey || !collectorUrl) {
     if (resolver && typeof resolver.resolve === "function") {
-      const resolved = await resolver.resolve({
-        event,
-        cfg,
-        cloud: CLOUD_ENV,
-        configDir: CONFIG_DIR_ENV || undefined,
-      });
+      let resolved = null;
+      try {
+        resolved = await resolver.resolve({
+          event,
+          cfg,
+          cloud: CLOUD_ENV,
+          configDir: CONFIG_DIR_ENV || undefined,
+        });
+      } catch {
+        // A plugin resolver threw/rejected — continue with no resolution rather
+        // than letting the global unhandledRejection handler exit. The local
+        // mirror was already written above; with no key the POST is simply
+        // skipped (keyMissing below), so a transient resolver failure degrades
+        // to "no transmission" instead of suppressing everything by crashing.
+        resolved = null;
+      }
       if (resolved) {
         iKey = iKey || resolved.iKey || "";
         collectorUrl = collectorUrl || resolved.collectorUrl || "";
