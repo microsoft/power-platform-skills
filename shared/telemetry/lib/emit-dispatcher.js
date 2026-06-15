@@ -119,7 +119,8 @@ function writeLocalLog(record) {
 // The `disabled` repo config (and an unreadable config) is the one true
 // hard-off: no local log, no POST. The per-plugin user opt-out is NOT checked
 // here — it suppresses transmission only, and is applied below AFTER the local
-// mirror is written. cfg is reused for region resolution in the stdin handler.
+// mirror is written. cfg is reused for resolver context + static fallback in
+// the stdin handler.
 const cfg = readIkeyConfig();
 if (isDisabledByConfig(cfg)) exitSilently();
 const resolver = loadResolver(path.dirname(ikeyJsonPath()));
