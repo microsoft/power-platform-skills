@@ -50,7 +50,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 
@@ -157,7 +157,7 @@ async function checkAdoFolderExists(options = {}) {
       'Pass just the folder name, e.g. "solutions" (NOT "solutions/sub" or "/solutions").');
   }
 
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return failure(null, tokenResult.error);
   const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;

@@ -41,7 +41,7 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 // Reasonable git tag name regex: starts with letter/digit/v, allows
 // letters/digits/. / _ / - / / , length 1-100. Rejects whitespace, control
@@ -94,7 +94,7 @@ async function createTag({
   if (!commitSha) throw new Error('--commitSha is required');
   let resolvedToken = token;
   if (!pat) {
-    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
     if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
     resolvedToken = tokenResult.token;
   }

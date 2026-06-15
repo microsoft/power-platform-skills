@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { listAdoRepos, API_VERSION } = require('../lib/list-ado-repos');
@@ -21,7 +23,7 @@ test('required-arg validation: --project missing', async () => {
   assert.equal(r.ok, false); assert.match(r.error, /project/);
 });
 test('required-arg validation: --token missing', async () => {
-  const r = await listAdoRepos({ organization: 'o', project: 'p' });
+  const r = await withNoAdoAcquire(() => listAdoRepos({ organization: 'o', project: 'p' }));
   assert.equal(r.ok, false); assert.match(r.error, /token/);
 });
 

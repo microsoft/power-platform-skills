@@ -146,20 +146,15 @@ The helper calls `PullChangesFromGit` with `AdditionalParameters.DeleteDeletedCo
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-git-binding.js" --envUrl "<envUrl>" --solutionUniqueName "<solutionUniqueName>"
    ```
 
-2. Get an ADO token without printing it:
+2. Read the ADO branch head. The helper self-acquires an ADO-scoped Entra token in-process via `az` when no explicit token is supplied; no token file is created.
+
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --writeToFile "docs/inner-loop/.ado-token"
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-list-commits.js" --organization "<organization>" --project "<project>" --repository "<repository>" --branch "<branch>" --top 1
    ```
 
-3. Read the ADO branch head:
-
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-list-commits.js" --organization "<organization>" --project "<project>" --repository "<repository>" --branch "<branch>" --top 1 --tokenFile "docs/inner-loop/.ado-token"
-   ```
-
-4. Verify `binding.branchSyncedCommitId == commits[0].commitId` case-insensitively. A successful pull must also have `updates.count === 0`.
-5. Resolve the marker path through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/inner-loop-paths.js` with key `lastSync`; do not inline the path in code. Write `last-sync.json`:
+3. Verify `binding.branchSyncedCommitId == commits[0].commitId` case-insensitively. A successful pull must also have `updates.count === 0`.
+4. Resolve the marker path through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/inner-loop-paths.js` with key `lastSync`; do not inline the path in code. Write `last-sync.json`:
 
    ```json
    {
@@ -184,7 +179,7 @@ The helper calls `PullChangesFromGit` with `AdditionalParameters.DeleteDeletedCo
 
    Use `status: "already-up-to-date"` for the Step 2 no-op path. Use `status: "failed"` if Updates remain, the ADO head cannot be read, or parity does not verify; include a concise `failureReason`.
 
-6. Write a per-run trace through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/write-run-trace.js`. Include structured, pre-redacted fields only: `skill: "git-sync"`, `mode: "pull"`, phase timings, gate decisions, helper names and exit codes, mutation result, final counts, `branchSyncedCommitId`, `adoHeadCommitId`, `status`, and marker version. Never include raw helper stdout, Dataverse tokens, or ADO tokens.
+5. Write a per-run trace through `${CLAUDE_PLUGIN_ROOT}/scripts/lib/write-run-trace.js`. Include structured, pre-redacted fields only: `skill: "git-sync"`, `mode: "pull"`, phase timings, gate decisions, helper names and exit codes, mutation result, final counts, `branchSyncedCommitId`, `adoHeadCommitId`, `status`, and marker version. Never include raw helper stdout, Dataverse tokens, or ADO tokens.
 
 ## Error handling
 

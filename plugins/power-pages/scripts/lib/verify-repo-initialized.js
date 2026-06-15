@@ -31,7 +31,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -55,7 +55,7 @@ async function verifyRepoInitialized({ organization, project, repository, token,
   if (!project) return { error: '--project is required' };
   if (!repository) return { error: '--repository is required' };
 
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return { error: tokenResult.error };
 
   const { header: authHeader } = buildAuthHeader(tokenResult.token);

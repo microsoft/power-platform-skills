@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -30,7 +32,7 @@ test('ado-get-pr: missing args reject', async () => {
   await assert.rejects(getPullRequest({ organization: 'o', repository: 'r', pullRequestId: 1, pat: 'P' }), /project/);
   await assert.rejects(getPullRequest({ organization: 'o', project: 'p', pullRequestId: 1, pat: 'P' }), /repository/);
   await assert.rejects(getPullRequest({ organization: 'o', project: 'p', repository: 'r', pat: 'P' }), /pullRequestId/);
-  await assert.rejects(getPullRequest({ organization: 'o', project: 'p', repository: 'r', pullRequestId: 1 }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => getPullRequest({ organization: 'o', project: 'p', repository: 'r', pullRequestId: 1 })), /pat or --token/);
 });
 
 test('ado-get-pr: happy path returns flattened summary', async () => {

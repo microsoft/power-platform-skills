@@ -18,7 +18,7 @@ Every helper error surfaced to a user MUST be a single line carrying three thing
 > **verb** (what was attempted) + **cause** (HTTP/Dataverse code or concrete reason) + **action** (what the user can do next)
 
 Examples:
-- ✅ `No ADO token provided. Pass --token <bearer>, --tokenFile <path>, or set ADO_TOKEN.`
+- ✅ `No ADO token available. Run az login, pass --token <bearer>, set ADO_TOKEN, or unset POWERPAGES_NO_ADO_ACQUIRE.`
 - ✅ `Solution lookup HTTP 404 — verify --solutionUniqueName 'X' exists in this env.`
 - ❌ `TypeError: Cannot read properties of undefined (reading 'token')` (raw stack trace)
 
@@ -26,13 +26,15 @@ Helper output contract: return `{ ok: false, error, statusCode? , hint? }` (or t
 
 ## 3. ADO token resolution (B4)
 
-ADO helpers accept a token from three sources, resolved by `scripts/lib/resolve-ado-token.js` in this priority order:
+ADO helpers resolve tokens through `scripts/lib/resolve-ado-token.js`. The default path is in-process self-acquisition: when no explicit token is supplied, helpers mint an ADO-scoped Entra token via `az` and use it directly in the Authorization header. ADO tokens are never written to disk, printed, or placed on a command line.
+
+Explicit inputs remain available for CI and controlled environments, in this priority order:
 
 1. explicit `--token <bearer>`
-2. `--tokenFile <path>` — a raw-token file **or** the `get-ado-token.js --writeToFile` JSON envelope `{ token, ... }`
-3. `ADO_TOKEN` environment variable
+2. `ADO_TOKEN` environment variable
+3. `--tokenFile <path>` — legacy compatibility only; do not introduce new token-file flows
 
-`--tokenFile` always points at the JSON envelope written by `get-ado-token.js --writeToFile`; never print the resolved token.
+Locked-down or CI environments can set `POWERPAGES_NO_ADO_ACQUIRE=1` to disable self-acquisition and require an explicit token.
 
 ## 4. Artifact paths and `--project-root` (B2)
 
@@ -40,9 +42,9 @@ Helpers that write under `docs/inner-loop/` MUST resolve the project root via `r
 
 **Deprecation runway:** when `--project-root` is omitted, helpers currently emit a one-line `[DEPRECATION WARN]` and fall back to a cwd-based guess. This fallback becomes a **hard error after 2026-07-13** (`RUNWAY_HARD_ERROR_DATE`). Always pass `--project-root` to avoid polluting an unintended ancestor.
 
-## 5. Token-file permissions (N6)
+## 5. ADO token persistence
 
-`get-ado-token.js --writeToFile` writes the token envelope as owner-only: chmod `0o600` on POSIX, and on Windows it strips ACL inheritance via `icacls` and grants only the current user + SYSTEM. Never write a token to a world/group-readable location.
+ADO tokens are never written to disk. Do not create token files, cache ADO JWTs under `docs/inner-loop/`, print raw token values, or pass acquired tokens on command lines. Helpers should self-acquire in-process by default or accept explicit CI-provided tokens.
 
 ## 6. Deterministic, testable helpers
 

@@ -32,7 +32,7 @@ model: opus
 ## Global invariants
 
 1. **No hidden Dataverse mutations.** Phases 6 and 7 always gate before `ConnectToGit`, `DisconnectFromGit`, `switch-branch.js`, or solution enable/commit follow-ups.
-2. **Never print ADO JWTs.** Always use `get-ado-token.js --writeToFile "docs/inner-loop/.ado-token"`; read the token from the file only at helper call-time and never show file contents.
+2. **Never persist ADO JWTs.** ADO helpers acquire an ADO-scoped Entra token in-process via `az` when no explicit token is supplied; the token is never written to disk, printed, or placed on a command line. Require the user's `az login` session to be current. Locked-down or CI environments can set `POWERPAGES_NO_ADO_ACQUIRE=1` so helpers fail instead of attempting interactive acquisition.
 3. **Use deterministic helpers.** Do not inline Dataverse or ADO REST calls when a helper exists.
 4. **Folder values are names, not paths.** Reject `/`, `\`, leading/trailing slash, and whitespace-only. Do not silently sanitize trailing slashes; re-prompt with the helper text.
 5. **Plan and final consent gates always fire.** Headless mode removes discovery prompts only, never safety prompts.
@@ -87,7 +87,7 @@ Steps:
 
 1. Detect the code-site context via `detect-project-context.js`; use `powerpages-config.js` to read `powerpages.config.json` when present. Capture `siteName`, `websiteRecordId`, `environmentUrl`, and `.solution-manifest.json` metadata.
 
-2. **First-run preamble (N1).** When this is a first run — no `.git-integration-manifest.json`, `binding.bound === false`, and no pending changes — render a short orientation (≤6 lines) before any prompt, unless `--no-intro` was passed:
+2. **First-run preamble (N1).** When this is a first run — no `docs/inner-loop/.git-integration-manifest.json`, `binding.bound === false`, and no pending changes — render a short orientation (≤6 lines) before any prompt, unless `--no-intro` was passed:
    > **git-configure** wires this Dataverse environment to an Azure DevOps Git repo so your solutions are source-controlled.
    > You'll choose: which environment, env-vs-solution binding, and the ADO org/project/repo/branch/folder.
    > I'll run preflights first (auth, Managed Env, BYOK, license, same-tenant, ADO permissions) and always ask before any change.
@@ -122,7 +122,7 @@ Steps:
 > |---|---|---|
 > | `{projectRoot}` looks like a pac-managed Power Pages site. Writing run artifacts there can disturb pac. Where should inner-loop artifacts live? | Artifact path | Use a sibling folder `{projectRoot}/../{solution}-inner-loop` (recommended), Use `{projectRoot}/docs/inner-loop` anyway, Specify another path |
 >
-> Persist the chosen root into `.git-integration-manifest.json` as `artifactRoot` so later inner-loop skills don't re-ask. Default (non-pac-managed roots) needs no prompt.
+> Persist the chosen root into `docs/inner-loop/.git-integration-manifest.json` as `artifactRoot` so later inner-loop skills don't re-ask. The `docs/inner-loop/` folder is auto-gitignored fail-closed. Default (non-pac-managed roots) needs no prompt.
 
 5. Compare explicit `<envUrl>` with `pac env who --json` `OrgUrl` when both exist. Normalize case and trailing slash only.
 
@@ -137,7 +137,7 @@ Steps:
 
 6. Run `detect-git-binding.js` for env binding and, when a solution is known, for that solution.
 
-   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth with `reconcile-manifest.js` (see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md`). A stale manifest (e.g. after the ADO branch was deleted or the binding was torn down in the maker portal) must not be trusted silently.
+   **Manifest reconcile (B3).** Compare the local `docs/inner-loop/.git-integration-manifest.json` against this server truth with `reconcile-manifest.js` (see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md`). A stale manifest (e.g. after the ADO branch was deleted or the binding was torn down in the maker portal) must not be trusted silently.
 
 <!-- gate: git-configure:1.manifest-stale | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-configure:1.manifest-stale):** Fires when `reconcileManifest({ manifest, serverBinding })` returns `aligned:false`. Surface `AskUserQuestion` using the helper's `options` as choices:
@@ -173,11 +173,7 @@ Steps:
 Steps:
 
 1. Verify PAC and Azure CLI authentication. Use plain `az login` guidance if missing; mention `az login --allow-no-subscriptions` only as a fallback for subscription-less accounts.
-2. Mint the ADO token without exposing it:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --writeToFile "docs/inner-loop/.ado-token"
-```
+2. Ensure Azure CLI authentication is current for ADO helper self-acquisition. The pre-check helpers acquire an ADO-scoped Entra token in-process via `az` when invoked; no token file is created or passed.
 
 3. Verify Managed Environment with `verify-managed-env.js`. **(O5)** If `enabled:false` (`protectionLevel:"Basic"`) **and** the binding is solution-scoped, do not raise a scary warning — print a one-line reassurance and continue: *"Managed Env: Basic — solution binding is HAR-confirmed OK on Basic. No action needed."* Only fire the warning gate below when env binding is intended (env binding on Basic is the genuinely risky combination).
 
@@ -213,7 +209,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/get-ado-token.js" --writeToFile "docs/in
 >
 > Warn-not-block; show `hint` verbatim.
 
-7. **Same-tenant ADO check (required).** The ADO org's Entra tenant must match the Dataverse env's tenant. This check is deferred until `<org>` is known: when Phase 4 selects org, re-run `get-ado-token.js --verifyTenant --organization <org> --writeToFile "docs/inner-loop/.ado-token"`. A tenant mismatch is a hard stop via the gate below — it must run before any Phase 7 mutation.
+7. **Same-tenant ADO check (required).** The ADO org's Entra tenant must match the Dataverse env's tenant. This check is deferred until `<org>` is known: when Phase 4 selects org, run `get-ado-token.js --verifyTenant --organization <org>`. Stdout is masked and no token is persisted. A tenant mismatch is a hard stop via the gate below — it must run before any Phase 7 mutation.
 
 <!-- gate: git-configure:2.cross-tenant-block | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-configure:2.cross-tenant-block):** HARD STOP. Fires when `get-ado-token.js --verifyTenant` reports the ADO org's tenant differs from the env's tenant. Cross-tenant Git authorship cannot be audited correctly (commits are authored by the platform service identity, not the human user — see `references/inner-loop-empirical-findings.md` §26) and is blocked by policy. Surface `AskUserQuestion`:
@@ -478,7 +474,7 @@ Execution details:
 
 ## Phase 8 — Verify Round-Trip + Update Manifest + Write Marker
 
-**Goal:** Independently verify the result, update `.git-integration-manifest.json`, and write `last-git-configure.json` through the new path helper.
+**Goal:** Independently verify the result, update `docs/inner-loop/.git-integration-manifest.json`, and write `last-git-configure.json` through the new path helper.
 
 Steps:
 
@@ -504,7 +500,7 @@ Steps:
 
    If the result is `{ stable:false, trend:"increasing" }`, tell the user: *"Server is still ingesting components — wait until the count stabilises before running `/power-pages:git-sync --commit`. Current: `{finalCount}`."* Always report the **stable** `finalCount` (not the early count) in the Phase 8 summary.
 5. For setup/env, verify the placeholder env-level commit (`sourcecontrolbranchconfigurations.branchsyncedcommitid` non-null when available) and report that zero solutions are staged until Phase 9 enables them.
-6. Update `.git-integration-manifest.json` at project root. For bound states, write canonical binding fields. For switch, update branch and `lastVerifiedAt`; leave `lastCommitSha` unchanged. For disconnect, mark the manifest disconnected or remove only the binding fields according to the existing manifest convention; never fabricate a bound state.
+6. Update the single Git-integration manifest at `docs/inner-loop/.git-integration-manifest.json` through the manifest path helper. Do not write a project-root or env-root duplicate. For bound states, write canonical binding fields. For switch, update branch and `lastVerifiedAt`; leave `lastCommitSha` unchanged. For disconnect, mark the manifest disconnected or remove only the binding fields according to the existing manifest convention; never fabricate a bound state. The `docs/inner-loop/` folder is auto-gitignored fail-closed.
 7. Write the run marker with `gitConfigurePath(root, 'lastGitConfigure')`. Include `skill:"git-configure"`, `mode`, status, envUrl, oldBinding, newBinding, warnings, marker version, and timestamps.
 8. **Write a per-run trace (N5).** Call `write-run-trace.js` with the structured run record (mode, phase timings, gate decisions, mutations, finalState). Traces are append-only history under `docs/inner-loop/git-configure-traces/<UTC-iso>.json` with 30-day / 100-file retention. NEVER pass raw helper stdout or any token value — the helper redacts to an allow-list, but callers must supply structured fields only.
 9. **Final summary (O3 + O6).** For bound states, print the ADO browse URL **inline in the success message** (single clickable line) with `path=/<rootFolder>/<gitFolder>` so the user lands in the Dataverse-managed folder, not repo root. When the manifest's `lastCommitSha === null` (the user is seeing the post-bind state for the first time), also print the 3-commit explainer inline so they don't panic: *"You may see up to 3 commits in ADO — a placeholder commit, a README commit, and your first real commit. This is normal for a fresh binding."*
@@ -625,7 +621,7 @@ Every legacy gate maps to one catalogued `git-configure` gate:
 
 Non-gate legacy safety checks also preserved:
 
-- ADO token file pattern prevents JWT exposure.
+- In-process ADO token acquisition prevents JWT exposure and persistence.
 - PAC/env URL match check prevents wrong-env mutation.
 - Env-bound vs solution-bound mutual exclusion remains enforced.
 - Unmanaged/system solution filtering remains enforced.
@@ -644,7 +640,7 @@ Non-gate legacy safety checks also preserved:
 
 | Artifact | Location | Modes | Purpose |
 |---|---|---|---|
-| `.git-integration-manifest.json` | project root | setup, switch, rebind, disconnect | Load-bearing current binding manifest. |
+| `docs/inner-loop/.git-integration-manifest.json` | `docs/inner-loop/` (auto-gitignored) | setup, switch, rebind, disconnect | Load-bearing current binding manifest; single local-only copy. |
 | `last-git-configure.json` | `gitConfigurePath(root, 'lastGitConfigure')` | mutating modes | Skill-run marker for validator and routing. |
 | `.git-configure-plan-data.json` | `gitConfigurePath(root, 'gitConfigurePlanData')` | all modes except early prereq fail | Audit copy of the approved plan. |
 

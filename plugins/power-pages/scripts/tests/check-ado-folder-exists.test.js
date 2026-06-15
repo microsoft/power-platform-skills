@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 // Offline DI-driven tests for check-ado-folder-exists.js. The helper is the
 // pre-bind safety check that git-configure Phase 4 (folder-occupied gate,
 // git-configure:4.folder-occupied) runs in the solution-binding flow — its
@@ -77,7 +79,7 @@ test('required-arg validation: --branch missing', async () => {
 });
 
 test('required-arg validation: --token missing', async () => {
-  const r = await checkAdoFolderExists({ organization: 'o', project: 'p', repository: 'r', gitFolder: 'f', branch: 'b' });
+  const r = await withNoAdoAcquire(() => checkAdoFolderExists({ organization: 'o', project: 'p', repository: 'r', gitFolder: 'f', branch: 'b' }));
   assert.equal(r.ok, false); assert.match(r.error, /token/);
 });
 

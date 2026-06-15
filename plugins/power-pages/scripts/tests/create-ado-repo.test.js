@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createAdoRepo, API_VERSION } = require('../lib/create-ado-repo');
@@ -16,7 +18,7 @@ test('required-arg validation: --organization missing', async () => { const r=aw
 test('required-arg validation: --project missing', async () => { const r=await createAdoRepo({ organization:'o', projectId:'pid', name:'r', token:'t' }); assert.equal(r.ok,false); assert.match(r.error,/project/); });
 test('required-arg validation: --projectId missing', async () => { const r=await createAdoRepo({ organization:'o', project:'p', name:'r', token:'t' }); assert.equal(r.ok,false); assert.match(r.error,/projectId/); });
 test('required-arg validation: --name missing', async () => { const r=await createAdoRepo({ organization:'o', project:'p', projectId:'pid', token:'t' }); assert.equal(r.ok,false); assert.match(r.error,/name/); });
-test('required-arg validation: --token missing', async () => { const r=await createAdoRepo({ organization:'o', project:'p', projectId:'pid', name:'r' }); assert.equal(r.ok,false); assert.match(r.error,/token/); });
+test('required-arg validation: --token missing', async () => { const r=await withNoAdoAcquire(() => createAdoRepo({ organization:'o', project:'p', projectId:'pid', name:'r' })); assert.equal(r.ok,false); assert.match(r.error,/token/); });
 
 // ===== happy path =====
 

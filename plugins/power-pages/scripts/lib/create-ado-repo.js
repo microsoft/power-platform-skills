@@ -18,7 +18,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 
@@ -51,7 +51,7 @@ async function createAdoRepo(options = {}) {
   if (!project) return failure(null, '--project is required');
   if (!projectId) return failure(null, '--projectId is required');
   if (!name) return failure(null, '--name is required');
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return failure(null, tokenResult.error);
   const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const url = `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_apis/git/repositories?api-version=${API_VERSION}`;

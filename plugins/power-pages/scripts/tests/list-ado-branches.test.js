@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -35,7 +37,7 @@ test('list-ado-branches: missing args reject', async () => {
   await assert.rejects(listAdoBranches({ project: 'p', repository: 'r', pat: 'P' }), /organization/);
   await assert.rejects(listAdoBranches({ organization: 'o', repository: 'r', pat: 'P' }), /project/);
   await assert.rejects(listAdoBranches({ organization: 'o', project: 'p', pat: 'P' }), /repository/);
-  await assert.rejects(listAdoBranches({ organization: 'o', project: 'p', repository: 'r' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => listAdoBranches({ organization: 'o', project: 'p', repository: 'r' })), /pat or --token/);
 });
 
 test('list-ado-branches: happy path returns sorted short names', async () => {

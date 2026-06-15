@@ -8,10 +8,12 @@ const os = require('os');
 
 const {
   INNER_LOOP_DIR,
+  INNER_LOOP_GITIGNORE,
   FILE_NAMES,
   innerLoopDir,
   innerLoopPath,
   ensureInnerLoopDir,
+  ensureInnerLoopGitignore,
   gitIntegrationManifestPath,
   requireProjectRoot,
   RUNWAY_HARD_ERROR_DATE,
@@ -132,17 +134,53 @@ test('every FILE_NAMES entry resolves via innerLoopPath without error', () => {
   }
 });
 
-test('gitIntegrationManifestPath returns project-root manifest (NOT under docs/inner-loop/)', () => {
+test('gitIntegrationManifestPath returns the manifest UNDER docs/inner-loop/ (single self-protecting location)', () => {
   const root = path.join(path.sep, 'tmp', 'project');
-  const expected = path.join(root, '.git-integration-manifest.json');
+  const expected = path.join(root, 'docs', 'inner-loop', '.git-integration-manifest.json');
   assert.equal(gitIntegrationManifestPath(root), expected);
-  // Must NOT live under docs/inner-loop/ — see file header rationale.
-  assert.ok(!gitIntegrationManifestPath(root).includes('inner-loop'));
+  // Must live under docs/inner-loop/ so it is covered by the fail-closed .gitignore.
+  assert.ok(gitIntegrationManifestPath(root).includes(path.join('docs', 'inner-loop')));
 });
 
 test('gitIntegrationManifestPath throws when projectRoot is missing', () => {
   assert.throws(() => gitIntegrationManifestPath(undefined), /projectRoot is required/);
   assert.throws(() => gitIntegrationManifestPath(''), /projectRoot is required/);
+});
+
+// ===== fail-closed .gitignore (source-control hygiene) =====
+
+test('INNER_LOOP_GITIGNORE ignores everything except itself (fail-closed)', () => {
+  const lines = INNER_LOOP_GITIGNORE.split('\n').filter((l) => l && !l.startsWith('#'));
+  assert.ok(lines.includes('*'), 'must ignore everything with "*"');
+  assert.ok(lines.includes('!.gitignore'), 'must re-include the .gitignore itself');
+});
+
+test('ensureInnerLoopDir drops the fail-closed .gitignore into docs/inner-loop/', (t) => {
+  const root = makeTmp(t);
+  ensureInnerLoopDir(root);
+  const gi = path.join(root, 'docs', 'inner-loop', '.gitignore');
+  assert.ok(fs.existsSync(gi), '.gitignore must be written');
+  assert.equal(fs.readFileSync(gi, 'utf8'), INNER_LOOP_GITIGNORE);
+});
+
+test('ensureInnerLoopGitignore is idempotent and repairs drifted content', (t) => {
+  const root = makeTmp(t);
+  ensureInnerLoopGitignore(root);
+  const gi = path.join(root, 'docs', 'inner-loop', '.gitignore');
+  // Drift it, then re-run — it should be repaired back to the canonical content.
+  fs.writeFileSync(gi, 'stale\n');
+  ensureInnerLoopGitignore(root);
+  assert.equal(fs.readFileSync(gi, 'utf8'), INNER_LOOP_GITIGNORE);
+});
+
+test('the relocated manifest is covered by the fail-closed .gitignore', (t) => {
+  const root = makeTmp(t);
+  ensureInnerLoopDir(root);
+  // The manifest path is inside the folder the .gitignore blankets with "*".
+  const manifest = gitIntegrationManifestPath(root);
+  const gi = path.join(root, 'docs', 'inner-loop', '.gitignore');
+  assert.ok(manifest.startsWith(path.dirname(gi)),
+    'manifest must live in the gitignored inner-loop folder');
 });
 
 // ===== requireProjectRoot (B2) =====

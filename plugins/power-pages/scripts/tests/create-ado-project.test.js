@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createAdoProject, AGILE_PROCESS_TEMPLATE_ID, DEFAULT_MAX_POLL_ATTEMPTS } = require('../lib/create-ado-project');
@@ -24,7 +26,7 @@ test('required-arg validation: --name missing', async () => {
   assert.equal(r.ok, false); assert.match(r.error, /name/);
 });
 test('required-arg validation: --token missing', async () => {
-  const r = await createAdoProject({ organization:'o', name:'p' });
+  const r = await withNoAdoAcquire(() => createAdoProject({ organization:'o', name:'p' }));
   assert.equal(r.ok, false); assert.match(r.error, /token/);
 });
 

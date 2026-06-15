@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -49,7 +51,7 @@ test('ado-create-tag: missing args reject', async () => {
   await assert.rejects(createTag({ organization: 'o', project: 'p', name: 'v1', commitSha: 'a'.repeat(40), pat: 'P' }), /repository/);
   await assert.rejects(createTag({ organization: 'o', project: 'p', repository: 'r', commitSha: 'a'.repeat(40), pat: 'P' }), /name/);
   await assert.rejects(createTag({ organization: 'o', project: 'p', repository: 'r', name: 'v1', pat: 'P' }), /commitSha/);
-  await assert.rejects(createTag({ organization: 'o', project: 'p', repository: 'r', name: 'v1', commitSha: 'a'.repeat(40) }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => createTag({ organization: 'o', project: 'p', repository: 'r', name: 'v1', commitSha: 'a'.repeat(40) })), /pat or --token/);
 });
 
 test('ado-create-tag: rejects invalid tag names with a clear error', async () => {

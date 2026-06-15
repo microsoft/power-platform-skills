@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -30,7 +32,7 @@ test('ado-get-branch-policies: missing args reject', async () => {
   await assert.rejects(getBranchPolicies({ organization: 'o', repositoryId: 'guid', branch: 'main', pat: 'P' }), /project/);
   await assert.rejects(getBranchPolicies({ organization: 'o', project: 'p', branch: 'main', pat: 'P' }), /repositoryId/);
   await assert.rejects(getBranchPolicies({ organization: 'o', project: 'p', repositoryId: 'guid', pat: 'P' }), /branch/);
-  await assert.rejects(getBranchPolicies({ organization: 'o', project: 'p', repositoryId: 'guid', branch: 'main' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => getBranchPolicies({ organization: 'o', project: 'p', repositoryId: 'guid', branch: 'main' })), /pat or --token/);
 });
 
 test('ado-get-branch-policies: happy path parses blocking + non-blocking policies', async () => {

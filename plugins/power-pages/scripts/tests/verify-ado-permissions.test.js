@@ -69,15 +69,20 @@ test('returns error when --repository is missing', async () => {
 });
 
 test('returns error with PAT instructions when no token is available', async () => {
-  // Remove ADO_TOKEN env var for the duration of this test.
+  // Remove ADO_TOKEN env var and disable self-acquire for the duration of this test.
   const saved = process.env.ADO_TOKEN;
+  const savedNoAcquire = process.env.POWERPAGES_NO_ADO_ACQUIRE;
   delete process.env.ADO_TOKEN;
+  process.env.POWERPAGES_NO_ADO_ACQUIRE = '1';
   try {
     const result = await verifyAdoPermissions({ organization: 'o', project: 'p', repository: 'r' });
     assert.ok(result.error, 'should surface a token-missing error');
     assert.match(result.error, /token|PAT/i);
   } finally {
     if (saved !== undefined) process.env.ADO_TOKEN = saved;
+    else delete process.env.ADO_TOKEN;
+    if (savedNoAcquire !== undefined) process.env.POWERPAGES_NO_ADO_ACQUIRE = savedNoAcquire;
+    else delete process.env.POWERPAGES_NO_ADO_ACQUIRE;
   }
 });
 

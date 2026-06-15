@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -17,7 +19,7 @@ test('API_VERSION is stable 7.1 and GUID_RE accepts GUIDs', () => {
 // ===== argument validation =====
 
 test('required-arg validation: --token missing', async () => {
-  const r = await listAdoOrgs({});
+  const r = await withNoAdoAcquire(() => listAdoOrgs({}));
   assert.equal(r.ok, false);
   assert.equal(r.statusCode, null);
   assert.match(r.error, /token/i);

@@ -155,6 +155,8 @@ For small mid-cycle changes (one file, one snippet, one site setting) that previ
 
 ### Dataverse Git inner-loop routing
 
+- **Inner-loop security state** — ADO tokens are minted in-process by helpers and NEVER persisted: no token files, no stdout token values, and no acquired tokens on command lines. `docs/inner-loop/` is auto-gitignored fail-closed (`*` plus `!.gitignore`). The Git-integration manifest lives at `docs/inner-loop/.git-integration-manifest.json` as the single local-only copy; do not create a top-level duplicate.
+
 Run `/power-pages:git-configure` to bind a Power Pages environment or solution to Azure DevOps Git. The skill auto-detects whether the current request is setup, switch-branch, rebind, or disconnect based on the current Dataverse binding and the user's intent. Route requests like "connect this env to ADO", "bind this solution", "change branches", "move this binding to another repo", or "disconnect Git" to `git-configure`; it handles the binding-strategy choice, choice-centric ADO coordinate pickers, preflight checks, and workspace-clean protection internally.
 
 For daily sync state, route Dirty / pending Changes to `/power-pages:git-sync --dry-run` (or `/power-pages:git-sync --commit` for an explicit commit), Stale / incoming Updates to `/power-pages:git-sync --pull`, Mixed to `/power-pages:git-sync`, and Conflicted to `/power-pages:git-sync`. The merged skill handles pull-then-commit ordering and conflict gates.

@@ -38,7 +38,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 const EMPTY_REPO_OLD_OBJECT_ID = '0000000000000000000000000000000000000000';
 // MUST be a stable api-version (no `-preview.N` suffix). The Pushes endpoint
@@ -142,7 +142,7 @@ async function initAdoRepo(options = {}) {
   if (!project) return { ok: false, error: '--project is required' };
   if (!repository) return { ok: false, error: '--repository is required' };
   if (!branch) return { ok: false, error: '--branch is required' };
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return { ok: false, error: tokenResult.error };
 
   const { header: authHeader } = buildAuthHeader(tokenResult.token);

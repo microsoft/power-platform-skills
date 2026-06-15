@@ -48,6 +48,7 @@ const { verifyAdoPermissions } = require('../../lib/verify-ado-permissions');
 const { verifyRepoInitialized } = require('../../lib/verify-repo-initialized');
 const { detectGitConfigureMode, VALID_MODES } = require('../../lib/detect-git-configure-mode');
 const { ensureGitConfigureDir, gitConfigurePath } = require('../../lib/git-configure-paths');
+const { gitIntegrationManifestPath } = require('../../lib/inner-loop-paths');
 
 const integrationEnabled = process.env.RUN_INTEGRATION === '1';
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -424,7 +425,7 @@ function writeMutationArtifacts(cfg, extra) {
 
   fs.writeFileSync(gitConfigurePath(cfg.projectRoot, 'lastGitConfigure'), JSON.stringify(marker, null, 2));
 
-  const manifestPath = path.join(cfg.projectRoot, '.git-integration-manifest.json');
+  const manifestPath = gitIntegrationManifestPath(cfg.projectRoot);
   const manifest = {
     bound: extra.disconnected ? false : true,
     bindingType: cfg.bindingType,

@@ -14,7 +14,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 const PROFILE_ENDPOINT = `https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=${API_VERSION}`;
@@ -64,7 +64,7 @@ function hintForStatus(statusCode, step) {
 async function listAdoOrgs(options = {}) {
   const { token, tokenFile } = options;
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return failure(null, tokenResult.error);
 
   const { header: authHeader } = buildAuthHeader(tokenResult.token);

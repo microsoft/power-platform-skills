@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -38,7 +40,7 @@ test('ado-create-pr: missing required args reject', async () => {
   await assert.rejects(createPullRequest({ organization: 'o', project: 'p', repository: 'r', targetBranch: 't', title: 'x', pat: 'p' }), /sourceBranch/);
   await assert.rejects(createPullRequest({ organization: 'o', project: 'p', repository: 'r', sourceBranch: 's', title: 'x', pat: 'p' }), /targetBranch/);
   await assert.rejects(createPullRequest({ organization: 'o', project: 'p', repository: 'r', sourceBranch: 's', targetBranch: 't', pat: 'p' }), /title/);
-  await assert.rejects(createPullRequest({ organization: 'o', project: 'p', repository: 'r', sourceBranch: 's', targetBranch: 't', title: 'x' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => createPullRequest({ organization: 'o', project: 'p', repository: 'r', sourceBranch: 's', targetBranch: 't', title: 'x' })), /pat or --token/);
 });
 
 test('ado-create-pr: happy path creates PR with full payload', async () => {

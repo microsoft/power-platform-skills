@@ -28,7 +28,7 @@
 // Usage:
 //   node run-prevalidators.js
 //     --pending-file <path>                 # required: snapshot from list-pending-changes.js
-//     [--manifest <path>]                   # default: <projectRoot>/.git-integration-manifest.json
+//     [--manifest <path>]                   # default: <projectRoot>/docs/inner-loop/.git-integration-manifest.json
 //     [--envUrl <url>] [--token <bearer>]
 //     [--solutionUniqueName <name>]         # taken from manifest if absent
 //     [--format json|junit|sarif|text]      # default: json (and always writes last-validation.json + pre-commit-report.html)

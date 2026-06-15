@@ -1,6 +1,6 @@
 # Manifest Contract — `.git-integration-manifest.json`
 
-The `.git-integration-manifest.json` file at the project root is the local record of an environment's Git binding. Every inner-loop skill reads it in Phase 1. Because it is local, it can drift from server truth — this document defines the contract and the reconciliation every skill must perform.
+The `docs/inner-loop/.git-integration-manifest.json` file is the single local record of an environment's Git binding. Every inner-loop skill reads it in Phase 1 through the manifest path helper. The folder is auto-gitignored fail-closed, so the manifest is local-only state and must not have a project-root or env-root duplicate. Because it is local, it can drift from server truth — this document defines the contract and the reconciliation every skill must perform.
 
 ## Fields
 
@@ -13,7 +13,7 @@ The `.git-integration-manifest.json` file at the project root is the local recor
 | `gitFolder` / `rootFolder` | Folder inside the repo that Dataverse writes to. |
 | `solutionUniqueName` | Bound solution (solution binding only). |
 | `gitIntegrationId` | Server-side binding id; the strongest identity signal. |
-| `artifactRoot` *(optional)* | Where inner-loop artifacts are written (added by `git-configure` U5 when the project root is a pac-managed site). |
+| `artifactRoot` *(optional)* | Where inner-loop artifacts are written (added by `git-configure` U5 when the selected artifact root differs from the default). |
 | `lastCommitSha` *(optional)* | Last commit pushed by `commit-to-git`. |
 | `lastVerifiedAt` | Timestamp of the last successful round-trip verify. |
 
@@ -25,7 +25,7 @@ A stale manifest is a silent-drift footgun: the local file can say `bound:true` 
 
 Every inner-loop skill MUST, in Phase 1:
 
-1. Read the local manifest (tolerate missing/!malformed → treat as `{}`).
+1. Read the local manifest from `docs/inner-loop/.git-integration-manifest.json` (tolerate missing/!malformed → treat as `{}`).
 2. Call `detect-git-binding.js` for server truth.
 3. Call `reconcileManifest({ manifest, serverBinding })` from `scripts/lib/reconcile-manifest.js`.
 4. If `aligned === false`, surface the divergence and let the user choose a remediation from `options`:

@@ -18,7 +18,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 const AGILE_PROCESS_TEMPLATE_ID = '6b724908-ef14-45cf-84f8-768b5384da45';
@@ -55,7 +55,7 @@ async function createAdoProject(options = {}) {
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
   if (!organization) return failure(null, '--organization is required');
   if (!name) return failure(null, '--name is required');
-  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
   if (!tokenResult.ok) return failure(null, tokenResult.error);
   const pollIntervalMs = Number.isFinite(Number(options.pollIntervalMs)) ? Number(options.pollIntervalMs) : DEFAULT_POLL_INTERVAL_MS;
   const maxPollAttempts = Number.isFinite(Number(options.maxPollAttempts)) ? Number(options.maxPollAttempts) : DEFAULT_MAX_POLL_ATTEMPTS;

@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -29,7 +31,7 @@ test('ado-get-default-branch: missing args reject', async () => {
   await assert.rejects(getDefaultBranch({ project: 'p', repository: 'r', pat: 'P' }), /organization/);
   await assert.rejects(getDefaultBranch({ organization: 'o', repository: 'r', pat: 'P' }), /project/);
   await assert.rejects(getDefaultBranch({ organization: 'o', project: 'p', pat: 'P' }), /repository/);
-  await assert.rejects(getDefaultBranch({ organization: 'o', project: 'p', repository: 'r' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => getDefaultBranch({ organization: 'o', project: 'p', repository: 'r' })), /pat or --token/);
 });
 
 test('ado-get-default-branch: happy path returns short branch name + GUID', async () => {

@@ -36,6 +36,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { ensureInnerLoopGitignore } = require('./inner-loop-paths');
 
 const GIT_CONFIGURE_DIR = 'docs/inner-loop';
 
@@ -83,8 +84,11 @@ function gitConfigurePath(projectRoot, key) {
 }
 
 /**
- * Creates `<projectRoot>/docs/inner-loop/` if it doesn't exist. Idempotent.
- * Callers should invoke this once before any write to a git-configure artifact.
+ * Creates `<projectRoot>/docs/inner-loop/` if it doesn't exist, and ensures the
+ * fail-closed `.gitignore` is present (shared with inner-loop-paths.js so the
+ * folder is self-protecting regardless of which skill creates it first).
+ * Idempotent. Callers should invoke this once before any write to a
+ * git-configure artifact.
  *
  * @param {string} projectRoot
  * @returns {string} The absolute git-configure dir path
@@ -92,6 +96,7 @@ function gitConfigurePath(projectRoot, key) {
 function ensureGitConfigureDir(projectRoot) {
   const dir = gitConfigureDir(projectRoot);
   fs.mkdirSync(dir, { recursive: true });
+  ensureInnerLoopGitignore(projectRoot);
   return dir;
 }
 

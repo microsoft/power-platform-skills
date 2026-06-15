@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { listAdoFolders, API_VERSION, isEmptyRepo404 } = require('../lib/list-ado-folders');
@@ -28,7 +30,7 @@ test('required-arg validation: --repository missing', async () => {
   assert.equal(r.ok, false); assert.match(r.error, /repository/);
 });
 test('required-arg validation: --token missing', async () => {
-  const r = await listAdoFolders({ organization:'o', project:'p', repository:'r' });
+  const r = await withNoAdoAcquire(() => listAdoFolders({ organization:'o', project:'p', repository:'r' }));
   assert.equal(r.ok, false); assert.match(r.error, /token/);
 });
 

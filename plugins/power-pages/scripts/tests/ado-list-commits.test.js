@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -35,7 +37,7 @@ test('ado-list-commits: missing args reject', async () => {
   await assert.rejects(listCommits({ organization: 'o', repository: 'r', branch: 'b', pat: 'P' }), /project/);
   await assert.rejects(listCommits({ organization: 'o', project: 'p', branch: 'b', pat: 'P' }), /repository/);
   await assert.rejects(listCommits({ organization: 'o', project: 'p', repository: 'r', pat: 'P' }), /branch/);
-  await assert.rejects(listCommits({ organization: 'o', project: 'p', repository: 'r', branch: 'b' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => listCommits({ organization: 'o', project: 'p', repository: 'r', branch: 'b' })), /pat or --token/);
 });
 
 test('ado-list-commits: happy path with full commit list', async () => {

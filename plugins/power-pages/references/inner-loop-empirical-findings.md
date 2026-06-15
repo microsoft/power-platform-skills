@@ -96,8 +96,8 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 - ADO REST calls from the pre-check helpers (`verify-repo-initialized.js`, `verify-ado-permissions.js`, `ado-list-commits.js`, and the newer `init-ado-repo.js`) need *some* `Authorization` header on `dev.azure.com`. ADO accepts both `Basic <base64(:PAT)>` and `Bearer <JWT>`. `buildAuthHeader` in `verify-ado-permissions.js` auto-detects which shape was passed by dot-counting (<2 dots → PAT, exactly 2 → JWT).
 
 **Current state (2026-07):**
-- `git-configure` **no longer collects a PAT at all.** Phase 1 step 0 runs `scripts/lib/get-ado-token.js`, which shells `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the immutable, tenant-invariant ADO Entra app id documented at <https://learn.microsoft.com/azure/devops/integrate/get-started/authentication/entra>). The skill caches the resulting JWT as `adoToken` and passes it to all four pre-check helpers via `--token`.
-- Phase 2 step 1 re-runs `get-ado-token.js --verifyTenant --organization <org>` once the org is known and hard-blocks on `tenantMismatch:true`.
+- `git-configure` **no longer collects a PAT at all.** Each ADO pre-check helper acquires its own ADO-scoped Entra token in-process via `az` (`resolveAdoTokenOrAcquire`, backed by `acquire-ado-token.js`) when no explicit token is supplied. The token is never cached to disk or passed on a command line.
+- The tenant check still runs `get-ado-token.js --verifyTenant --organization <org>` once the org is known; stdout is masked and the skill hard-blocks on `tenantMismatch:true`.
 - The pre-check helpers retain PAT support unchanged. Other inner-loop paths (`git-configure` explicit-token modes, `open-pr`, `diagnose-git-integration`) still take `--token <PAT>` from the caller — useful for cross-tenant scenarios that the Entra-OAuth path can't service, and for CI / SP flows where minting a token via `az` isn't viable.
 
 **Action for new inner-loop skills:**

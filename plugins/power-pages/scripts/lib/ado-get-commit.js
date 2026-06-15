@@ -41,7 +41,7 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
-const { resolveAdoToken } = require('./resolve-ado-token');
+const { resolveAdoTokenOrAcquire } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -74,7 +74,7 @@ async function getCommit({
   if (!commitId) throw new Error('--commitId is required');
   let resolvedToken = token;
   if (!pat) {
-    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
     if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
     resolvedToken = tokenResult.token;
   }

@@ -44,7 +44,7 @@ function makeProject(t, { marker, manifest, writeValidationMarker } = {}) {
   }
   if (manifest !== undefined) {
     fs.writeFileSync(
-      path.join(tmpDir, '.git-integration-manifest.json'),
+      path.join(innerLoopDir, '.git-integration-manifest.json'),
       typeof manifest === 'string' ? manifest : JSON.stringify(manifest),
     );
   }

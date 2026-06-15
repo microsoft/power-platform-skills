@@ -91,7 +91,7 @@ function crossCheckManifest(marker, manifestPath) {
   // All other modes: manifest MUST exist after the run.
   if (!manifestExists) {
     return (
-      'Skill reports success but .git-integration-manifest.json is missing at the project root. ' +
+      'Skill reports success but .git-integration-manifest.json is missing from docs/inner-loop/. ' +
       `${mode} mode must write the manifest so subsequent inner-loop skills can detect the binding.`
     );
   }

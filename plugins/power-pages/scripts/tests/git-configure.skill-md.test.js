@@ -16,7 +16,7 @@ function readSkill() {
 }
 
 function parseFrontmatter(markdown) {
-  assert.ok(markdown.startsWith('---\n'), 'SKILL.md must start with YAML frontmatter');
+  assert.ok(/^\uFEFF?---\r?\n/.test(markdown), 'SKILL.md must start with YAML frontmatter');
 
   const closeIndex = markdown.indexOf('\n---', 4);
   assert.ok(closeIndex > -1, 'frontmatter must have a closing --- line');

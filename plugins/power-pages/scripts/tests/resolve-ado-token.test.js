@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { resolveAdoToken } = require('../lib/resolve-ado-token');
+const { resolveAdoToken, resolveAdoTokenOrAcquire } = require('../lib/resolve-ado-token');
 
 // ===== resolution order =====
 
@@ -103,3 +103,60 @@ test('round-trips a real on-disk JSON envelope', (t) => {
   assert.equal(r.ok, true);
   assert.equal(r.token, 'disk-jwt');
 });
+
+// ===== resolveAdoTokenOrAcquire (in-process credential minting) =====
+
+test('resolveAdoTokenOrAcquire: explicit token wins, acquire is never called', () => {
+  let acquireCalls = 0;
+  const r = resolveAdoTokenOrAcquire({
+    token: 'explicit',
+    env: {},
+    _acquireImpl: () => { acquireCalls++; return { ok: true, token: 'az' }; },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.token, 'explicit');
+  assert.equal(r.source, 'token');
+  assert.equal(acquireCalls, 0);
+});
+
+test('resolveAdoTokenOrAcquire: ADO_TOKEN env wins over acquire', () => {
+  let acquireCalls = 0;
+  const r = resolveAdoTokenOrAcquire({
+    env: { ADO_TOKEN: 'env-bearer' },
+    _acquireImpl: () => { acquireCalls++; return { ok: true, token: 'az' }; },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.token, 'env-bearer');
+  assert.equal(acquireCalls, 0);
+});
+
+test('resolveAdoTokenOrAcquire: falls back to in-process acquire when nothing is supplied', () => {
+  const r = resolveAdoTokenOrAcquire({
+    env: {},
+    _acquireImpl: () => ({ ok: true, token: 'minted-jwt', source: 'az:acquire' }),
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.token, 'minted-jwt');
+  assert.equal(r.source, 'az:acquire');
+});
+
+test('resolveAdoTokenOrAcquire: surfaces the az error when acquire fails', () => {
+  const r = resolveAdoTokenOrAcquire({
+    env: {},
+    _acquireImpl: () => ({ ok: false, error: "Run 'az login' first." }),
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /az login/i);
+});
+
+test('resolveAdoTokenOrAcquire: POWERPAGES_NO_ADO_ACQUIRE=1 disables acquire (kill switch)', () => {
+  let acquireCalls = 0;
+  const r = resolveAdoTokenOrAcquire({
+    env: { POWERPAGES_NO_ADO_ACQUIRE: '1' },
+    _acquireImpl: () => { acquireCalls++; return { ok: true, token: 'az' }; },
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /No ADO token provided/);
+  assert.equal(acquireCalls, 0, 'acquire must not be called when the kill switch is set');
+});
+

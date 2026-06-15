@@ -34,7 +34,7 @@ Azure DevOps is currently the **only supported Git provider** (`GitProvider = 0`
 | ADO **repo exists AND is initialized** | `GET .../repos/{repo}` (200 + `defaultBranch` populated). **Empty repos return 200 with `defaultBranch=null` — must reject.** | `verify-repo-initialized.js` catches this; `git-configure` then offers a one-tap consent gate that auto-creates the first README commit via `init-ado-repo.js` (idempotent — re-running against an initialized repo is a no-op). |
 | User has **Contribute** permission on the repo | Try a no-op operation, or check `/_apis/permissions/{namespaceId}/...` | Surface ADO permission URL; cannot auto-grant. `init-ado-repo.js` surfaces this exact remediation on 403. |
 | User has an ADO **Basic license** (not Stakeholder) | `GET .../graph/users/{descriptor}` | Stakeholders cannot push commits — escalate to ADO admin |
-| **Auth to `dev.azure.com` for the pre-checks** | `scripts/lib/get-ado-token.js` mints an ADO-scoped Microsoft Entra JWT via `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the well-known, tenant-invariant ADO Entra app id). `buildAuthHeader` in `verify-ado-permissions.js` auto-detects PAT vs JWT and emits the correct header. | `git-configure` runs `get-ado-token.js --writeToFile docs/inner-loop/.ado-token` in Phase 1 step 0 (and re-runs with `--verifyTenant --organization <org>` once the org is known). `--writeToFile` writes a 0o600 JSON bundle to disk and returns `tokenSha256` (no raw JWT in stdout). On failure, the helper surfaces `az login` / `az login --tenant <guid>` hints. Cross-tenant scenarios are not supported by this skill's Entra-OAuth path; use the explicit-token fallback when a PAT or CI/SP token is required. |
+| **Auth to `dev.azure.com` for the pre-checks** | ADO helpers mint an ADO-scoped Microsoft Entra JWT in-process via `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the well-known, tenant-invariant ADO Entra app id) when no explicit token is supplied. `buildAuthHeader` in `verify-ado-permissions.js` auto-detects PAT vs JWT and emits the correct header. | Nothing is written to disk: helpers use the acquired token directly in the Authorization header and never print it or pass it on a command line. `get-ado-token.js` is used for the tenant cross-check only (`--verifyTenant --organization <org>`), and its stdout is masked. On failure, helpers surface `az login` / `az login --tenant <guid>` hints. Cross-tenant scenarios are not supported by this skill's Entra-OAuth path; use the explicit-token fallback when a PAT or CI/SP token is required. |
 
 > ⚠️ **Cryptic-error footgun.** An uninitialized repo fails ~30 min into the Connect flow with *"Failed to retrieve default branch"*. `verify-repo-initialized.js` catches this in <1 sec; `init-ado-repo.js` fixes it in the same skill run with one consent.
 
@@ -81,26 +81,21 @@ These cannot be auto-checked end-to-end; the skill should surface them as a one-
 ## 6. Quick prerequisite-check pseudocode
 
 ```
-node scripts/lib/get-ado-token.js --writeToFile "docs/inner-loop/.ado-token" [--verifyTenant --organization <o>]
-  → stdout: { ok: true, tokenFile: "<abs path>", tokenSha256: "<hex>", tokenType: "OAuth", tenantId, expiresOn, tenantMismatch: false }
-  → file:   { token: "<jwt>", tokenType: "OAuth", tenantId, expiresOn, adoOrgTenantId, tenantMismatch } (mode 0o600 on POSIX)
-  // git-configure runs this in Phase 1 step 0 (no --verifyTenant — org unknown),
-  // and re-run it once the org is known (with --verifyTenant --organization <org>). --writeToFile MUST always be passed
-  // from agent-driven contexts so the raw JWT never enters stdout / session event logs. Hard-blocks on tenantMismatch:true.
-  // Downstream helpers read the token from the file at call-time (e.g. via shell expansion
-  // `--token "$(jq -r .token docs/inner-loop/.ado-token)"`) so it never lands in tool-call arguments either.
-  //
-  // For back-compat, calling get-ado-token.js WITHOUT --writeToFile/--mask still emits the token to stdout — only
-  // pre-2026-06-11 scripts should rely on that path; all new SKILL.md callers MUST use --writeToFile.
+node scripts/lib/get-ado-token.js --verifyTenant --organization <o>
+  → stdout: { ok: true, tokenType: "OAuth", tenantId, expiresOn, tenantMismatch: false, token: "***" }
+  // git-configure runs this once the org is known and hard-blocks on tenantMismatch:true.
+  // ADO REST helpers such as verify-repo-initialized.js and verify-ado-permissions.js self-acquire
+  // their own ADO-scoped Entra token in-process via az when no explicit token is supplied.
+  // ADO tokens are never written to disk, printed to stdout, or passed on command lines.
 
 node scripts/lib/verify-managed-env.js --envUrl <url>
   → { managedEnv: true, sysAdmin: true, byok: false }
 
-node scripts/lib/verify-repo-initialized.js --organization <o> --project <p> --repository <r> --token <adoToken>
+node scripts/lib/verify-repo-initialized.js --organization <o> --project <p> --repository <r>
   → { initialized: true, defaultBranch: "main" }
   // initialized:false → git-configure calls init-ado-repo.js after a one-tap consent gate.
 
-node scripts/lib/verify-ado-permissions.js --organization <o> --project <p> --repository <r> --token <adoToken>
+node scripts/lib/verify-ado-permissions.js --organization <o> --project <p> --repository <r>
   → { contribute: true, basicLicense: true }
   // buildAuthHeader auto-detects: <2 dots in --token → Basic <base64(:PAT)>; exactly 2 dots → Bearer <JWT>.
 ```

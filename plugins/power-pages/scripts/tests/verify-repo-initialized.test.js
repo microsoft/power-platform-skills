@@ -28,13 +28,18 @@ test('returns error when --repository is missing', async () => {
 
 test('returns error when no token is available (no --token arg + no ADO_TOKEN env)', async () => {
   const saved = process.env.ADO_TOKEN;
+  const savedNoAcquire = process.env.POWERPAGES_NO_ADO_ACQUIRE;
   delete process.env.ADO_TOKEN;
+  process.env.POWERPAGES_NO_ADO_ACQUIRE = '1';
   try {
     const r = await verifyRepoInitialized({ organization: 'o', project: 'p', repository: 'r' });
     assert.ok(r.error);
     assert.match(r.error, /token|ADO_TOKEN/i);
   } finally {
     if (saved !== undefined) process.env.ADO_TOKEN = saved;
+    else delete process.env.ADO_TOKEN;
+    if (savedNoAcquire !== undefined) process.env.POWERPAGES_NO_ADO_ACQUIRE = savedNoAcquire;
+    else delete process.env.POWERPAGES_NO_ADO_ACQUIRE;
   }
 });
 

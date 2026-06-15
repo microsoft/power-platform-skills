@@ -388,7 +388,7 @@ The `last-validation.json` dry-run contract is a CI and orchestration surface. K
 | `skill-metrics.jsonl` | `innerLoopPath(<projectRoot>, 'skillMetricsJsonl')` | dry-run and real commit | Append-only run metrics via `append-skill-metric.js`. |
 | `pending-commit-ticket.json` | `innerLoopPath(<projectRoot>, 'pendingCommitTicket')` | `--background` only | Foreground ticket for detached poller. |
 | Per-run trace | `${CLAUDE_PLUGIN_ROOT}/scripts/lib/write-run-trace.js` | real commit / background as available | Append-only structured trace of gates, helper calls, mutation, verification, and final state. |
-| `.git-integration-manifest.json` | project root manifest | real commit | Update `lastCommitSha` after a successful commit ID is returned. |
+| `docs/inner-loop/.git-integration-manifest.json` | local-only manifest under auto-gitignored `docs/inner-loop/` | real commit | Update `lastCommitSha` after a successful commit ID is returned. |
 
 ## Gate IDs used
 

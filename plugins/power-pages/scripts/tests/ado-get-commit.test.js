@@ -1,5 +1,7 @@
 'use strict';
 
+const { withNoAdoAcquire } = require('./ado-test-helpers');
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -30,7 +32,7 @@ test('ado-get-commit: missing args reject', async () => {
   await assert.rejects(getCommit({ organization: 'o', repository: 'r', commitId: 'abc1234', pat: 'P' }), /project/);
   await assert.rejects(getCommit({ organization: 'o', project: 'p', commitId: 'abc1234', pat: 'P' }), /repository/);
   await assert.rejects(getCommit({ organization: 'o', project: 'p', repository: 'r', pat: 'P' }), /commitId/);
-  await assert.rejects(getCommit({ organization: 'o', project: 'p', repository: 'r', commitId: 'abc1234' }), /pat or --token/);
+  await assert.rejects(withNoAdoAcquire(() => getCommit({ organization: 'o', project: 'p', repository: 'r', commitId: 'abc1234' })), /pat or --token/);
 });
 
 test('ado-get-commit: rejects non-hex / too-short SHAs', async () => {
