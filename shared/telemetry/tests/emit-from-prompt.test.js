@@ -298,7 +298,7 @@ test("does not throw when ikey.json is missing", () => {
       _readPacAuth: () => null,
     })
   );
-  // Missing ikey.json → cfg is null → gate not provisioned → no emit.
+  // Missing ikey.json → unreadable config fails CLOSED (disabled) → no emit.
   assert.equal(captured.event, undefined);
 });
 

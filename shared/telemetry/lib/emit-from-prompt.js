@@ -19,10 +19,10 @@ function readIkey(telemetryDir) {
   const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
   const overridePath = override && override.trim() ? override : "";
   // Guard a missing/invalid telemetryDir (a caller bug this fail-closed helper
-  // must tolerate): with no override there is no path to read, so return the
-  // unreadable shape instead of letting path.join throw out of the library.
+  // must tolerate): with no override there is no config to read, so fail CLOSED
+  // (disabled: true) instead of letting path.join throw out of the library.
   if (!overridePath && (typeof telemetryDir !== "string" || !telemetryDir)) {
-    return { cfg: null, dir: "", ikeyPath: "", eventStreamName: "", disabled: false };
+    return { cfg: null, dir: "", ikeyPath: "", eventStreamName: "", disabled: true };
   }
   const ikeyPath = overridePath || path.join(telemetryDir, "ikey.json");
   const dir = path.dirname(ikeyPath);
@@ -30,7 +30,10 @@ function readIkey(telemetryDir) {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return { cfg, dir, ikeyPath, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return { cfg: null, dir, ikeyPath, eventStreamName: "", disabled: false };
+    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching
+    // emit-dispatcher.js's isDisabledByConfig(). If we can't read the config we
+    // cannot confirm emission is authorized, so suppress.
+    return { cfg: null, dir, ikeyPath, eventStreamName: "", disabled: true };
   }
 }
 

@@ -52,7 +52,10 @@ function readIkey() {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return { cfg, ikeyPath, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return { cfg: null, ikeyPath, eventStreamName: "", disabled: false };
+    // ikey.json missing/unreadable → fail CLOSED (disabled: true), matching the
+    // dispatcher's kill-switch semantics so a missing/corrupt config can't be
+    // bypassed into an emit attempt.
+    return { cfg: null, ikeyPath, eventStreamName: "", disabled: true };
   }
 }
 
