@@ -399,9 +399,9 @@ Steps:
 
 ---
 
-## Phase 6 — Render Plan + Plan Gate
+## Phase 6 — Render Plan + Single Consent Gate
 
-**Goal:** Persist plan data and get plan approval before mutation consent.
+**Goal:** Persist plan data, render a concise text plan, and get a SINGLE mode-appropriate consent before mutation. There is no separate "plan approval" + "final consent" double-prompt — Phase 6's gate IS the final consent.
 
 Steps:
 
@@ -412,51 +412,43 @@ Steps:
    - Switch: disconnect from `{oldBranch}` and reconnect to `{newBranch}` with other fields unchanged.
    - Rebind: disconnect current binding and reconnect to new `{org}/{project}/{repo}/{branch}/{folder}`.
    - Disconnect: remove current Git binding and clear/update local manifest.
-3. Show reversibility and blast radius.
+3. Show reversibility and blast radius alongside the plan text.
+4. Fire ONE gate appropriate to the mode (the gates below are mutually exclusive — exactly one fires per run). On the "Change a field" option, loop back to Phase 3 for binding type or Phase 4 for ADO coordinates, depending on what changed. Cancellation in any of these gates leaves nothing — no Dataverse mutation has happened.
 
-<!-- gate: git-configure:6.plan | category=plan | cancel-leaves=nothing -->
-> 🚦 **Gate (plan · git-configure:6.plan):** Surface `AskUserQuestion`:
+<!-- gate: git-configure:6.consent-setup | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · git-configure:6.consent-setup):** Setup and switch-branch modes only. Single consent — combines plan review and execute. Surface `AskUserQuestion`:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | Review the Git configuration plan above. Proceed to final consent? | Git configure plan | Yes — proceed to consent, Change a field, Cancel |
+> | Execute `{mode}` on `{envHost}` now? Plan above. | Git configure consent | Execute now, Change a field, Cancel |
 >
-> `Change a field` loops back to Phase 3 for binding type or Phase 4 for ADO coordinates, depending on what changed. Cancellation leaves nothing.
+> On "Execute now", proceed directly to Phase 7 dispatch (`connect-to-git.js` / `connect-solution-to-git.js` / `switch-branch.js`).
 
-**Output:** The plan is approved and written.
+<!-- gate: git-configure:6.consent-disconnect | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · git-configure:6.consent-disconnect):** Disconnect mode only. Single consent — combines plan review and execute. Surface `AskUserQuestion`:
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | Disconnect Git from `{envHost}`? This removes the current binding to `{org}/{project}/{repo}@{branch}` and drops the Source-control connection until setup/rebind runs again. | Disconnect Git | Disconnect now, Change a field, Cancel |
+>
+> On "Disconnect now", proceed directly to Phase 7 dispatch (`disconnect-from-git.js`).
+
+<!-- gate: git-configure:6.consent-rebind | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · git-configure:6.consent-rebind):** Rebind mode only. Single consent — combines plan review and execute. Surface `AskUserQuestion`:
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | Rebind Git on `{envHost}` from `{oldOrg}/{oldRepo}@{oldBranch}` to `{org}/{project}/{repo}@{branch}`? This disconnects the current binding and reconnects to the new coordinates; if reconnect fails after disconnect, the env may be left disconnected. | Rebind Git | Rebind now, Change a field, Cancel |
+>
+> On "Rebind now", proceed directly to Phase 7 dispatch (disconnect then reconnect).
+
+**Output:** The plan is written and a single consent has been recorded.
 
 ---
 
-## Phase 7 — Final Consent + Execute
+## Phase 7 — Execute
 
-**Goal:** Get final consent and dispatch to the correct low-level helper.
-
-<!-- gate: git-configure:7.consent | category=consent | cancel-leaves=nothing -->
-> 🚦 **Gate (consent · git-configure:7.consent):** Fires for setup and switch-branch. Surface `AskUserQuestion`:
->
-> | Question | Header | Options |
-> |---|---|---|
-> | Final consent — execute `{mode}` on `{envHost}` now? | Final consent | Execute now, Cancel |
->
-> For setup/env call `connect-to-git.js`. For setup/solution call `connect-solution-to-git.js`. For switch-branch call `switch-branch.js`.
-
-<!-- gate: git-configure:7.disconnect-consent | category=consent | cancel-leaves=nothing -->
-> 🚦 **Gate (consent · git-configure:7.disconnect-consent):** Disconnect mode only. A plain choice-selection consent (no typed phrase). Surface `AskUserQuestion`:
->
-> | Question | Header | Options |
-> |---|---|---|
-> | Disconnect Git from `{envHost}`? This removes the current binding to `{org}/{project}/{repo}@{branch}` and drops the Source-control connection until setup/rebind runs again. | Disconnect Git | Disconnect now, Cancel |
->
-> On "Disconnect now", call `disconnect-from-git.js`. Cancellation leaves the binding unchanged.
-
-<!-- gate: git-configure:7.rebind-consent | category=consent | cancel-leaves=nothing -->
-> 🚦 **Gate (consent · git-configure:7.rebind-consent):** Rebind mode only. A plain choice-selection consent (no typed phrase). Surface `AskUserQuestion`:
->
-> | Question | Header | Options |
-> |---|---|---|
-> | Rebind Git on `{envHost}` from `{oldOrg}/{oldRepo}@{oldBranch}` to `{org}/{project}/{repo}@{branch}`? This disconnects the current binding and reconnects to the new coordinates; if reconnect fails after disconnect, the env may be left disconnected. | Rebind Git | Rebind now, Cancel |
->
-> On "Rebind now", proceed to execution (disconnect then reconnect). Cancellation leaves the current binding unchanged.
+**Goal:** Dispatch to the correct low-level helper. No gates fire in Phase 7 — the single consent in Phase 6 is the only mutation prompt.
 
 Execution details:
 
@@ -609,10 +601,9 @@ Every legacy gate maps to one catalogued `git-configure` gate:
 | `connect-solution-to-git:3.folder-occupied` | `git-configure:4.folder-occupied` | Solution-binding folder occupancy. |
 | `connect-solution-to-git:3.shared-object-overlap` | `git-configure:4.shared-object-overlap` | Hard-block remediation loop preserved. |
 | `branch-switch:2.workspace-dirty` | `git-configure:5.workspace-dirty` | Extended to rebind/disconnect; deleted-branch exception preserved. |
-| `setup-git-integration:4.plan`, `connect-solution-to-git:4.plan`, `branch-switch:4.plan` | `git-configure:6.plan` | Unified plan gate. |
-| `setup-git-integration:5.consent`, `connect-solution-to-git:5.consent`, `branch-switch:5.consent` | `git-configure:7.consent` | Unified immediate pre-mutation consent. |
-| New disconnect surface | `git-configure:7.disconnect-consent` | New choice-selection consent gate. |
-| New rebind surface | `git-configure:7.rebind-consent` | New choice-selection consent gate. |
+| `setup-git-integration:4.plan`+`5.consent`, `connect-solution-to-git:4.plan`+`5.consent`, `branch-switch:4.plan`+`5.consent` | `git-configure:6.consent-setup` | Plan-render and pre-mutation consent merged into one prompt for setup/switch — closes the double-consent UX bug. |
+| New disconnect surface | `git-configure:6.consent-disconnect` | Single plan-and-consent gate for disconnect (no typed phrase, no separate plan prompt). |
+| New rebind surface | `git-configure:6.consent-rebind` | Single plan-and-consent gate for rebind (no typed phrase, no separate plan prompt). |
 | `setup-git-integration:9.enable-approach` | `git-configure:9.enable-approach` | Env-bind enable approach preserved. |
 | `setup-git-integration:9.enable-solution` | `git-configure:9.enable-solution` | Per-solution loop preserved. |
 | `setup-git-integration:10.commit-approach` | `git-configure:9.commit-approach` | Phase renumbered into merged Phase 9. |
@@ -654,8 +645,8 @@ Non-gate legacy safety checks also preserved:
 | Explain binding strategy | Explaining binding strategy | Setup mode only; show two-layer explainer and choose env vs solution. |
 | Gather ADO coordinates | Gathering ADO coordinates | Choice-centric org/project/repo/branch/folder pickers fetched live (Add new + Cancel); no auto-select. |
 | Verify workspace clean | Verifying workspace clean | Switch/rebind/disconnect only; block on Changes/Updates/Conflicts. |
-| Render plan | Rendering plan | Write plan data and surface plan gate. |
-| Execute configuration | Executing configuration | Final consent then dispatch to connect, switch, rebind, or disconnect helper. |
+| Render plan + consent | Rendering plan and getting consent | Write plan data and fire ONE mode-appropriate consent gate (setup/switch, disconnect, or rebind). |
+| Execute configuration | Executing configuration | Dispatch to connect, switch, rebind, or disconnect helper (no gates). |
 | Verify and write markers | Verifying configuration | Re-query binding, update manifest, write marker. |
 | Run follow-up | Running follow-up | Enable/commit loops, sync suggestion, commit suggestion, or disconnect confirmation. |
 | Final route | Finalising | Final gate and skill tracking. |
@@ -672,8 +663,8 @@ Non-gate legacy safety checks also preserved:
 8. Phase 3: two-layer explainer and binding choice (`git-configure:3.two-layer-explainer`, `git-configure:3.binding-type`).
 9. Phase 4: create project/repo, folder co-existence, folder occupancy, shared-object overlap.
 10. Phase 5: workspace dirty hard stop.
-11. Phase 6: plan approval.
-12. Phase 7: final consent (setup/switch) or disconnect/rebind consent, then execution.
+11. Phase 6: single mode-appropriate consent — `git-configure:6.consent-setup` (setup/switch) OR `git-configure:6.consent-disconnect` OR `git-configure:6.consent-rebind`. Plan-render is rolled into the same prompt; Phase 7 has no gates.
+12. Phase 7: pure execution and partial-failure reporting (no gates).
 13. Phase 9: env-bind solution enable and initial commit loops.
 14. Phase 10: final routing.
 
