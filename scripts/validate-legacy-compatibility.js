@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Validates that legacy .claude-plugin manifests stay in sync with the
- * Open Plugins metadata. These files allow existing marketplace subscriptions
- * to auto-update without requiring users to remove and reinstall the marketplace.
+ * Validates that legacy .claude-plugin manifests symlink to the Open Plugins
+ * metadata. These symlinks allow existing marketplace subscriptions to
+ * auto-update without requiring users to remove and reinstall the marketplace.
  */
 
 const fs = require('fs');
@@ -52,6 +52,7 @@ function check(label, fn) {
 
 check('legacy marketplace manifest', () => {
   assert.ok(fs.existsSync(LEGACY_MARKETPLACE_PATH), 'missing .claude-plugin/marketplace.json');
+  assertSymlinkTarget(LEGACY_MARKETPLACE_PATH, path.join('..', 'marketplace.json'));
 });
 
 if (errors.length === 0) {
@@ -76,6 +77,7 @@ if (errors.length === 0) {
       assert.ok(legacyPlugin, 'missing from .claude-plugin/marketplace.json');
       assert.equal(legacyPlugin.source, expectedLegacySource(pluginDirectory));
       assert.equal(legacyPlugin.description, plugin.description);
+      assert.equal(legacyPlugin.category, 'development');
       assert.deepEqual(legacyPlugin.tags || [], plugin.keywords || []);
     });
 

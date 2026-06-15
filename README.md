@@ -205,11 +205,11 @@ power-platform-skills/
 └── README.md
 ```
 
-The `.claude-plugin` files are compatibility shims for users who subscribed
-before the Open Plugins migration. Per-plugin legacy manifests are symlinks to
-the Open Plugins manifests. The root legacy marketplace remains a separate shim
-because legacy clients expect plugin `source` paths relative to the repository
-root. Together, these let existing marketplace subscriptions auto-update without
+The `.claude-plugin` files are compatibility symlinks for users who subscribed
+before the Open Plugins migration. The root legacy marketplace points to
+`../marketplace.json`, and per-plugin legacy manifests point to
+`../.plugin/plugin.json`. The shared marketplace uses repository-root-relative
+plugin `source` paths so existing subscriptions can auto-update without
 requiring users to remove and reinstall the marketplace or plugins.
 
 ## Documentation

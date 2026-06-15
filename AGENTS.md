@@ -11,7 +11,7 @@ A **plugin marketplace** for Power Platform development by Microsoft. The Open P
 ```
 power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
-├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
+├── .claude-plugin/           # Legacy symlinks for existing subscriptions
 │   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
@@ -77,11 +77,13 @@ Current adopters: `power-pages`. Others adopt on demand.
 
 ## Legacy Marketplace Compatibility
 
-Keep the root `.claude-plugin/marketplace.json` compatible with
-`marketplace.json`, and keep each plugin's `.claude-plugin/plugin.json` as a
-symlink to `../.plugin/plugin.json`. Existing marketplace subscriptions may
-still resolve the legacy paths during auto-update, so removing or drifting these
-files can force users to reinstall. Run
+Keep the root `.claude-plugin/marketplace.json` as a symlink to
+`../marketplace.json`, and keep each plugin's `.claude-plugin/plugin.json` as a
+symlink to `../.plugin/plugin.json`. The shared root marketplace must stay
+dual-compatible: use repository-root-relative plugin `source` paths and preserve
+legacy `category`/`tags` fields alongside Open Plugins metadata. Existing
+marketplace subscriptions may still resolve the legacy paths during auto-update,
+so removing or drifting these files can force users to reinstall. Run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
 ## Code Conventions
