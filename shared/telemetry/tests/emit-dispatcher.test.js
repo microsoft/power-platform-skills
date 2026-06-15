@@ -449,6 +449,36 @@ test("dispatcher uses an injected resolver.js to pick iKey/collector", () => {
   assert.equal(probe.headers["x-apikey"], "ikeyusresolved");
 });
 
+test("dispatcher falls back to the static key when a resolver resolves to nothing", () => {
+  // Documented precedence is resolver → static → none. A resolver present but
+  // returning null/undefined must NOT suppress a configured static key.
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "static-ikey-32-chars-minimum-aaaaaaaaaaaa",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "PagesPluginEvent",
+      disabled: false,
+    })
+  );
+  // resolver.js that always resolves to nothing (no region matched).
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = { async resolve() { return null; }, isProvisioned: () => true };"
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  assert.ok(fs.existsSync(probePath), "resolver→null must fall back to the static key and POST");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  assert.equal(probe.headers["x-apikey"], "static-ikey-32-chars-minimum-aaaaaaaaaaaa");
+});
+
 test("dispatcher writes the mirror but does NOT POST when neither resolver nor static key resolves", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");

@@ -175,19 +175,22 @@ process.stdin.on("end", async () => {
       } catch {
         // A plugin resolver threw/rejected — continue with no resolution rather
         // than letting the global unhandledRejection handler exit. The local
-        // mirror was already written above; with no key the POST is simply
-        // skipped (keyMissing below), so a transient resolver failure degrades
-        // to "no transmission" instead of suppressing everything by crashing.
+        // mirror was already written above; the static fallback below still
+        // runs, so a transient resolver failure degrades to the configured
+        // static key (or "no transmission") instead of crashing.
         resolved = null;
       }
       if (resolved) {
         iKey = iKey || resolved.iKey || "";
         collectorUrl = collectorUrl || resolved.collectorUrl || "";
       }
-    } else {
-      iKey = iKey || cfg.instrumentationKey || "";
-      collectorUrl = collectorUrl || cfg.collector_url || "";
     }
+    // Static fallback — documented precedence is resolver → static → none, so
+    // this runs whether or not a resolver was present. A resolver that returns
+    // nothing (or threw) still falls through to a configured static key rather
+    // than silently disabling transmission.
+    iKey = iKey || cfg.instrumentationKey || "";
+    collectorUrl = collectorUrl || cfg.collector_url || "";
   }
 
   // Placeholder / unprovisioned mode → local mirror already written; no POST.

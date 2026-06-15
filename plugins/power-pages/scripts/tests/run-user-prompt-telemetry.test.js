@@ -33,7 +33,11 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
     },
-    timeout: 10_000,
+    // The enabled path shells out to `pac auth who` + `pac --version`, each
+    // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
+    // a 10s spawn timeout sits right on the cold-start cost and flakes when pac
+    // is installed. Match the hook budget so the integration path is reliable.
+    timeout: 30_000,
   });
 }
 

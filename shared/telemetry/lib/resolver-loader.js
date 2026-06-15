@@ -13,7 +13,11 @@ const path = require("node:path");
 function loadResolver(dir) {
   if (!dir) return null;
   try {
-    return require(path.join(dir, "resolver.js"));
+    // path.resolve (not path.join): require() treats a non-"./"-prefixed
+    // relative path as a module ID and searches node_modules. A relative `dir`
+    // (e.g. from a relative POWER_PLATFORM_SKILLS_IKEY_JSON override) would then
+    // miss the intended resolver.js. Resolve to an absolute path first.
+    return require(path.resolve(dir, "resolver.js"));
   } catch {
     return null;
   }
