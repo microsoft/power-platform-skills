@@ -82,6 +82,16 @@ function httpsGet(url) {
   });
 }
 
+function parseMarketplaceManifest(raw) {
+  const manifest = JSON.parse(raw);
+  if (manifest.name !== MARKETPLACE_NAME) {
+    throw new Error(
+      `manifest name is '${manifest.name || "(missing)"}', expected '${MARKETPLACE_NAME}'`
+    );
+  }
+  return manifest;
+}
+
 // ── Auto-update ──────────────────────────────────────────────
 // The CLI's `marketplace add` does not set autoUpdate — patch it manually.
 // `getMarketplaces` extracts the marketplaces object from the config root.
@@ -116,22 +126,26 @@ async function loadMarketplace() {
     path.join(".plugin", "marketplace.json"),
     path.join(".claude-plugin", "marketplace.json"),
   ];
+  const errors = [];
 
   for (const root of roots) {
     for (const relativePath of marketplacePaths) {
       const filePath = path.join(root, relativePath);
       if (fs.existsSync(filePath)) {
-        return JSON.parse(fs.readFileSync(filePath, "utf8"));
+        try {
+          return parseMarketplaceManifest(fs.readFileSync(filePath, "utf8"));
+        } catch (err) {
+          errors.push(`${filePath}: ${err.message}`);
+        }
       }
     }
   }
 
   info("Fetching marketplace manifest from GitHub...");
-  const errors = [];
   for (const relativePath of ["marketplace.json", ".plugin/marketplace.json", ".claude-plugin/marketplace.json"]) {
     try {
       const raw = await httpsGet(`${GITHUB_RAW}/${relativePath}`);
-      return JSON.parse(raw);
+      return parseMarketplaceManifest(raw);
     } catch (err) {
       errors.push(`${relativePath}: ${err.message}`);
     }
