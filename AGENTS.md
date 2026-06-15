@@ -11,10 +11,14 @@ A **plugin marketplace** for Power Platform development by Microsoft. The Open P
 ```
 power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
+├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
+│   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
 │       ├── .plugin/
 │       │   └── plugin.json   # Plugin manifest
+│       ├── .claude-plugin/
+│       │   └── plugin.json   # Legacy manifest mirror
 │       ├── AGENTS.md         # Plugin-specific development guidelines
 │       ├── agents/           # Agent persona files
 │       ├── commands/         # Command entry points
@@ -42,6 +46,7 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Each plugin follows this structure:
 
 - `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
+- `.claude-plugin/plugin.json` — legacy mirror kept for existing subscriptions; keep it JSON-equivalent to `.plugin/plugin.json`
 - `.mcp.json` — MCP server configuration (optional)
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
@@ -69,6 +74,15 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
 
 Current adopters: `power-pages`. Others adopt on demand.
+
+## Legacy Marketplace Compatibility
+
+Keep the root `.claude-plugin/marketplace.json` and each plugin's
+`.claude-plugin/plugin.json` in sync with `marketplace.json` and
+`.plugin/plugin.json`. Existing marketplace subscriptions may still resolve the
+legacy paths during auto-update, so removing or drifting these files can force
+users to reinstall. Run `node scripts/validate-legacy-compatibility.js` after
+metadata changes.
 
 ## Code Conventions
 

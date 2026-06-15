@@ -22,5 +22,8 @@ jobs:
             - name: validate-kebab-case-plugin-names
               run: node scripts/validate-plugin-names.js
 
+            - name: validate-legacy-compatibility
+              run: node scripts/validate-legacy-compatibility.js
+
             - name: validate-skill-descriptions
               run: node scripts/validate-skill-descriptions.js

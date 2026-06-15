@@ -164,11 +164,15 @@ See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilo
 ```text
 power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all plugins)
+├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
+│   └── marketplace.json
 ├── .claude/
 │   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
 ├── plugins/
 │   ├── power-pages/          # Power Pages plugin
 │   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── .claude-plugin/   # Legacy manifest mirror
 │   │   │   └── plugin.json
 │   │   ├── commands/
 │   │   ├── shared/
@@ -200,6 +204,11 @@ power-platform-skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
+
+The `.claude-plugin` files are compatibility shims for users who subscribed
+before the Open Plugins migration. Keep them in sync with the Open Plugins
+metadata so existing marketplace subscriptions can auto-update without requiring
+users to remove and reinstall the marketplace or plugins.
 
 ## Documentation
 

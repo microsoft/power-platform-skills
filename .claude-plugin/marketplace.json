@@ -4,16 +4,15 @@
         "name": "Microsoft"
     },
     "metadata": {
-        "pluginRoot": "./plugins"
+        "description": "Plugins for Power Platform development with Claude Code and GitHub Copilot"
     },
     "plugins": [
         {
             "name": "power-pages",
-            "source": "./power-pages/",
+            "source": "./plugins/power-pages",
             "description": "Power Pages development and management plugin for Claude Code and GitHub Copilot",
-            "version": "2.1.0",
-            "license": "MIT",
-            "keywords": [
+            "category": "development",
+            "tags": [
                 "power platform",
                 "power pages",
                 "microsoft power platform",
@@ -22,11 +21,10 @@
         },
         {
             "name": "model-apps",
-            "source": "./model-apps/",
+            "source": "./plugins/model-apps",
             "description": "Build and deploy generative pages for Power Apps model-driven apps",
-            "version": "2.2.0",
-            "license": "MIT",
-            "keywords": [
+            "category": "development",
+            "tags": [
                 "power platform",
                 "power apps",
                 "model-driven apps",
@@ -37,11 +35,10 @@
         },
         {
             "name": "mcp-apps",
-            "source": "./mcp-apps/",
+            "source": "./plugins/mcp-apps",
             "description": "Generate MCP App widgets for MCP tools",
-            "version": "1.0.0",
-            "license": "MIT",
-            "keywords": [
+            "category": "development",
+            "tags": [
                 "mcp",
                 "mcp-apps",
                 "widget",
@@ -51,11 +48,10 @@
         },
         {
             "name": "canvas-apps",
-            "source": "./canvas-apps/",
+            "source": "./plugins/canvas-apps",
             "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server",
-            "version": "2.1.0",
-            "license": "MIT",
-            "keywords": [
+            "category": "development",
+            "tags": [
                 "power platform",
                 "power apps",
                 "canvas apps",
@@ -67,11 +63,10 @@
         },
         {
             "name": "code-apps-preview",
-            "source": "./code-apps/",
+            "source": "./plugins/code-apps",
             "description": "Build and deploy Power Apps code apps using React, Vite, and Power Platform connectors",
-            "version": "1.0.0",
-            "license": "MIT",
-            "keywords": [
+            "category": "development",
+            "tags": [
                 "power platform",
                 "power apps",
                 "code apps",
