@@ -174,7 +174,7 @@ describe('validate-diagnose-git-integration', () => {
 
   it('approves with mode "describe-symptoms"', () => {
     const dir = path.join(tmp, 'describe');
-    makeProject(dir, { ...GOOD_MARKER, mode: 'describe-symptoms', symptomInput: 'commit-to-git failed, binding looks wrong' });
+    makeProject(dir, { ...GOOD_MARKER, mode: 'describe-symptoms', symptomInput: 'git-sync failed, binding looks wrong' });
     const r = run(dir);
     assert.equal(r.status, 0, r.stderr);
   });

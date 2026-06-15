@@ -27,11 +27,11 @@ Rolls the bound Azure DevOps branch back to a previous commit SHA by force-updat
 
 ## Overview
 
-Unlike `/power-pages:revert-workspace` (which only affects the local Dataverse env), this skill affects every other environment bound to the same branch. The next time a teammate's env runs `sync-from-git`, they will pull the older HEAD; if they had local Changes built on top of the now-lost commits, the platform will surface those as Conflicts on the next refresh.
+Unlike `/power-pages:revert-workspace` (which only affects the local Dataverse env), this skill affects every other environment bound to the same branch. The next time a teammate's env runs `git-sync --pull`, they will pull the older HEAD; if they had local Changes built on top of the now-lost commits, the platform will surface those as Conflicts on the next refresh.
 
 The skill enumerates recent commits, has the user pick a target SHA, shows an impact analysis ("Will affect N other envs bound to this branch"), and then demands a typed-confirmation phrase that includes the target SHA to prevent accidental rollback to the wrong commit.
 
-> 🛈 **Safer alternative — ADO PR-revert (HAR-confirmed 2026-06).** Where this skill performs a destructive force-update (history-rewriting), ADO's *Commits → ⋯ → Revert* creates a **new commit that undoes the bad one** via an auto-generated PR, leaving history intact. One observed run: reverting an in-flight commit produced a revert PR on a `<sha>-revert-from-main` branch, which merged cleanly into `main` as a new commit on top. Recommend that path when (a) the branch is shared with teammates whose envs are bound to it, or (b) the bad commit is older than a few commits back. Use THIS skill only when history-rewrite is genuinely needed (e.g. accidentally committed secrets). Downstream `sync-from-git` runs will face the [§18 Remove-vs-Delete dialog](../../references/inner-loop-empirical-findings.md#18--pullchangesfromgit-deletion-prompts-pick-remove-from-solution-not-delete-from-environment-for-systemstandard-components-2026-06) — recommend the SOFT path (no `--hard-delete`) for the first reconciliation pull.
+> 🛈 **Safer alternative — ADO PR-revert (HAR-confirmed 2026-06).** Where this skill performs a destructive force-update (history-rewriting), ADO's *Commits → ⋯ → Revert* creates a **new commit that undoes the bad one** via an auto-generated PR, leaving history intact. One observed run: reverting an in-flight commit produced a revert PR on a `<sha>-revert-from-main` branch, which merged cleanly into `main` as a new commit on top. Recommend that path when (a) the branch is shared with teammates whose envs are bound to it, or (b) the bad commit is older than a few commits back. Use THIS skill only when history-rewrite is genuinely needed (e.g. accidentally committed secrets). Downstream `git-sync --pull` runs will face the [§18 Remove-vs-Delete dialog](../../references/inner-loop-empirical-findings.md#18--pullchangesfromgit-deletion-prompts-pick-remove-from-solution-not-delete-from-environment-for-systemstandard-components-2026-06) — recommend the SOFT path (no `--hard-delete`) for the first reconciliation pull.
 
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/git-integration-api-patterns.md` §11 (ADO branch-ref force-update payload + concurrency check)
@@ -166,7 +166,7 @@ Steps:
        • …
 
      Impact:        ~{affectedEnvs} other env(s) bound to this branch will see
-                    the older HEAD on their next sync-from-git. Any local
+                    the older HEAD on their next git-sync pull. Any local
                     Changes built on top of the discarded commits will surface
                     as Conflicts.
 
@@ -296,7 +296,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | Branch `{branch}` reset to `{targetShaShort}`. ~{affectedEnvs} other env(s) are bound to this branch — they need to `/power-pages:sync-from-git` to pick up the older HEAD. Notify the team? | Branch revert complete — communicate | Done — I'll tell my team to sync-from-git, Run /power-pages:sync-from-git on this env now (it's also affected), Exit |
+   | Branch `{branch}` reset to `{targetShaShort}`. ~{affectedEnvs} other env(s) are bound to this branch — they need to `/power-pages:git-sync --pull` to pick up the older HEAD. Notify the team? | Branch revert complete — communicate | Done — I'll tell my team to run git-sync --pull, Run /power-pages:git-sync --pull on this env now (it's also affected), Exit |
 
 ### Record Skill Usage
 

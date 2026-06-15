@@ -293,7 +293,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
    # Expect HTTP 204
    ```
 2. **Workarounds (apply ONE):**
-   - **Preferred — Use traditional ALM for the pull direction.** From the source env, run `/power-pages:export-solution`. Move the zip to the target env. Run `/power-pages:import-solution`. This entirely sidesteps `PullChangesFromGit`. Git integration's commit direction (`/power-pages:commit-to-git`) still works for snapshotting changes to ADO; only the cross-env pull is replaced.
+   - **Preferred — Use traditional ALM for the pull direction.** From the source env, run `/power-pages:export-solution`. Move the zip to the target env. Run `/power-pages:import-solution`. This entirely sidesteps `PullChangesFromGit`. Git integration's commit direction (`/power-pages:git-sync --commit`) still works for snapshotting changes to ADO; only the cross-env pull is replaced.
    - **Use Maker Portal Source Control "Update from Git" per-component.** Some component types succeed under the portal's per-component path. Open `https://make.powerapps.com/environments/{envId}/solutions/{solutionId}/source-control?tab=Updates`, select non-type-10429 components individually, and click Update. Type-10429 rows will still fail one at a time.
    - **Split the solution.** Move type-10429 components into a separate unbound solution (e.g., `<solutionUniqueName>_SitePages`) and leave only non-type-10429 components (forms, views, web roles) in the git-bound `<solutionUniqueName>`. The git-bound half then pulls cleanly. The unbound half must be deployed via export/import.
 3. **Permanent fix:** Open a Microsoft Support ticket. Include:
@@ -303,7 +303,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
    - A note that `PublishAllXml`, `RefreshChangesFromGit`, and disconnecting+reconnecting to git all do NOT clear the condition.
    - The histogram of failing-solution component types (the count of `componenttype = 10429` rows is the critical signal).
    - Tag the ticket as "Power Platform Pipelines / Git Integration / SourceControl plugin metadata resolver".
-4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The commit-to-git half of the loop (`/power-pages:commit-to-git`, `/power-pages:open-pr`, `/power-pages:git-configure` switch mode) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
+4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The git-sync commit half of the loop (`/power-pages:git-sync --commit`, `/power-pages:open-pr`, `/power-pages:git-configure` switch mode) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
 
 ---
 
@@ -438,7 +438,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
    - Click **Connect to Git** → reselect the same organization / project / repo / branch / root folder path → click **Save**. The portal will run the OAuth consent + initial sync (creates one tracking commit via `SourceControlInitialSyncPlugin`).
    - Try **Pull** again. The fresh cache should resolve cleanly.
 3. **Disconnect-and-reconnect (if push count > 0):**
-   - Commit env-side changes FIRST via `/power-pages:commit-to-git` (the commit half of the loop is independent of the pull half — it usually works).
+   - Commit env-side changes FIRST via `/power-pages:git-sync --commit` (the commit half of the loop is independent of the pull half — it usually works).
    - If commit-to-git is also blocked (e.g., by IL-010 conflicts), fall through to step 4.
 4. **Bypass git pull entirely (always-safe fallback):**
    - From the source env, run `/power-pages:export-solution` to get a managed/unmanaged zip.
@@ -473,10 +473,10 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 **Fix procedure:**
 
-1. **Enumerate every orphan** via `validate-no-orphan-source-control-rows.js` (run as part of `/power-pages:commit-to-git --dry-run`). The output names every row's `sourcecontrolcomponentid` plus `componentpath` for context. This is faster than letting `CommitToGit` surface them one at a time.
+1. **Enumerate every orphan** via `validate-no-orphan-source-control-rows.js` (run as part of `/power-pages:git-sync --dry-run`). The output names every row's `sourcecontrolcomponentid` plus `componentpath` for context. This is faster than letting `CommitToGit` surface them one at a time.
 2. **In Maker Portal → Source control → Changes**: for each row reported, click **Discard**. Confirm. The portal call hits a privileged plugin path the public OData layer can't reach.
 3. **Optional belt-and-suspenders:** call `RefreshChangesFromGit` after the last Discard, then re-run `validate-no-orphan-source-control-rows.js` to confirm `@odata.count == 0`. (Note: `RefreshChangesFromGit` alone does NOT clear orphans — it only re-syncs the Updates side.)
-4. **Retry `CommitToGit`.** A successful pre-flight validator pass is necessary but not sufficient; a parallel IL-010 (conflicts) or IL-009 (shared components) can still block. Run the full `/power-pages:commit-to-git --dry-run` skill end-to-end.
+4. **Retry `CommitToGit`.** A successful pre-flight validator pass is necessary but not sufficient; a parallel IL-010 (conflicts) or IL-009 (shared components) can still block. Run the full `/power-pages:git-sync --dry-run` skill end-to-end.
 5. **If Discard fails** (rare; happens when the orphan row's solution itself is mid-disconnect): fall back to `Disconnect from Git → Connect to Git` to wipe the source-control workspace and start fresh. Note that this drops all pending push-direction changes, so commit them first if possible.
 
 **Relationship to other patterns:** IL-019 (orphan push rows blocking commit) and IL-018 (orphan payload cache blocking pull) are sibling cache-orphan failures on the same source-control plugin. IL-019 surfaces on the push path (commit); IL-018 surfaces on the pull path. Distinct queries / fixes; do not conflate.

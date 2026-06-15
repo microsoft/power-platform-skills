@@ -2,7 +2,7 @@
 
 // Integration test — exercises the 5 pre-commit pre-flight validators in
 // realistic combinations to prove each blocker hard-stops the commit at
-// commit-to-git --dry-run pre-flight time, and that warning-class issues advance with
+// git-sync --dry-run pre-flight time, and that warning-class issues advance with
 // a 'warnings' status (not 'blocked').
 //
 // The 5 validators (architecture doc §5.3) are:
@@ -19,8 +19,8 @@
 //   2. Calls the validator function(s) directly.
 //   3. Asserts the validator's verdict matches expectation.
 //   4. Builds the `last-validation.json` marker the way the
-//      commit-to-git --dry-run path writes it.
-//   5. Spawns validate-commit-to-git.js and asserts exit code
+//      git-sync --dry-run path writes it.
+//   5. Spawns validate-git-sync.js and asserts exit code
 //      (0 = approve, 2 = block).
 //
 // This is the last of the 5 architecture-mandated integration tests.
@@ -50,8 +50,8 @@ const {
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
 const VALIDATION_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'commit-to-git', 'scripts',
-  'validate-commit-to-git.js',
+  PLUGIN_ROOT, 'skills', 'git-sync', 'scripts',
+  'validate-git-sync.js',
 );
 
 function mkTempProject() {
@@ -76,13 +76,13 @@ function runValidator(scriptPath, cwd) {
 }
 
 /**
- * Build the marker file the commit-to-git --dry-run path writes after
+ * Build the marker file the git-sync --dry-run path writes after
  * running all 5 pre-flight validators. The status field is derived from
  * the per-validator results — blocked > warnings > passed > clean.
  */
 function buildValidationMarker({ status, results, blockers = [] }) {
   return {
-    skill: 'CommitToGit',
+    skill: 'git-sync',
     validatedAt: new Date().toISOString(),
     envUrl: 'https://contoso.crm.dynamics.com',
     status,
@@ -391,7 +391,7 @@ test('integration pre-commit blockers: marker with unknown status → validator 
   const projectRoot = mkTempProject();
   try {
     const marker = {
-      skill: 'CommitToGit',
+      skill: 'git-sync',
       validatedAt: new Date().toISOString(),
       envUrl: 'https://contoso.crm.dynamics.com',
       status: 'totally-bogus',

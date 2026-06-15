@@ -78,8 +78,8 @@ When using both PAC and Git integration in the same project:
 | 2. `npm run build` | Build outside the agent so failures surface early |
 | 3. `/power-pages:deploy-site` (runs `pac pages upload-code-site`) | Uploads the build to Dataverse |
 | 4. `plan-inner-loop` → expect `Dirty` now | Confirm the upload landed |
-| 5. `/power-pages:commit-to-git --dry-run` | Pre-flight check (file sizes, supported types) |
-| 6. `/power-pages:commit-to-git` with a meaningful message | Captures *what* was deployed in Git audit trail |
+| 5. `/power-pages:git-sync --dry-run` | Pre-flight check (file sizes, supported types) |
+| 6. `/power-pages:git-sync --commit` with a meaningful message | Captures *what* was deployed in Git audit trail |
 | 7. (Optional) `/power-pages:open-pr` | Code review of the upload before it merges to `main` |
 
 This is the **same number of total commands** as the manual workflow today, but each step is automated, verified, and recoverable.

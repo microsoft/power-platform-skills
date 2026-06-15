@@ -122,11 +122,11 @@ test('render-inner-loop-plan: Dirty state with items in changes table', () => {
   assert.match(html, /mspp_webpage/);
   assert.match(html, /class="badge add"/);
   assert.match(html, /class="badge mod"/);
-  // post-VPC-merge: render now suggests commit-to-git --dry-run for pre-flight
-  assert.match(html, /commit-to-git --dry-run/);
+  // git-sync now owns commit pre-flight routing.
+  assert.match(html, /git-sync --dry-run/);
 });
 
-test('render-inner-loop-plan: Stale state shows sync-from-git', () => {
+test('render-inner-loop-plan: Stale state shows git-sync --pull', () => {
   const html = render(loadTemplate(), {
     siteName: 'X', generatedAt: 'T', state: 'Stale',
     binding: { bound: true, branch: 'main' },
@@ -138,12 +138,12 @@ test('render-inner-loop-plan: Stale state shows sync-from-git', () => {
     prereqs: {},
     flags: {},
   });
-  assert.match(html, /sync-from-git/);
+  assert.match(html, /git-sync --pull/);
   assert.match(html, /class="plan-status stale"/);
   assert.match(html, /Incoming updates \(1\)/);
 });
 
-test('render-inner-loop-plan: Conflicted state shows resolve-conflicts', () => {
+test('render-inner-loop-plan: Conflicted state shows git-sync', () => {
   const html = render(loadTemplate(), {
     siteName: 'X', generatedAt: 'T', state: 'Conflicted',
     binding: { bound: true, branch: 'main' },
@@ -155,13 +155,13 @@ test('render-inner-loop-plan: Conflicted state shows resolve-conflicts', () => {
     prereqs: {},
     flags: {},
   });
-  assert.match(html, /resolve-conflicts/);
+  assert.match(html, /git-sync/);
   assert.match(html, /class="plan-status conflicted"/);
   assert.match(html, /Conflicts \(1\)/);
   assert.match(html, /concurrent edit by alice/);
 });
 
-test('render-inner-loop-plan: Mixed state shows both commands', () => {
+test('render-inner-loop-plan: Mixed state shows git-sync', () => {
   const html = render(loadTemplate(), {
     siteName: 'X', generatedAt: 'T', state: 'Mixed',
     binding: { bound: true },
@@ -172,7 +172,7 @@ test('render-inner-loop-plan: Mixed state shows both commands', () => {
     flags: {},
   });
   assert.match(html, /class="plan-status mixed"/);
-  assert.match(html, /sync-from-git.+commit-to-git/i);
+  assert.match(html, /git-sync/i);
 });
 
 test('render-inner-loop-plan: unknown state falls back to Broken', () => {

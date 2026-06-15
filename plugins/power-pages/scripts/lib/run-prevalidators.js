@@ -359,7 +359,7 @@ function computeDelta(current, priorPath) {
 function emitText(report) {
   const badge = report.status === 'blocked' ? '✗ BLOCKED' : (report.status === 'warnings' ? '⚠ WARNINGS' : '✓ PASSED');
   const lines = [
-    `[commit-to-git --dry-run] ${badge}`,
+    `[git-sync --dry-run] ${badge}`,
     `  Validators:    ${report.validatorTimings ? Object.keys(report.validatorTimings).length : '?'} run`,
     `  Blockers:      ${report.blockers.length}`,
     `  Warnings:      ${report.warnings.length}`,
@@ -383,7 +383,7 @@ function xmlEscape(s) {
 function emitJUnit(report) {
   const ts = report.generatedAt;
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-  xml += `<testsuites name="commit-to-git-dry-run" tests="${report.blockers.length + report.warnings.length + report.infos.length}" failures="${report.blockers.length}" time="${(report.elapsedMs / 1000).toFixed(3)}" timestamp="${ts}">\n`;
+  xml += `<testsuites name="git-sync-dry-run" tests="${report.blockers.length + report.warnings.length + report.infos.length}" failures="${report.blockers.length}" time="${(report.elapsedMs / 1000).toFixed(3)}" timestamp="${ts}">\n`;
   for (const v of report.perValidator) {
     const findings = [
       ...(v.blocking || []).map((f) => ({ ...f, severity: 'blocker' })),
@@ -439,7 +439,7 @@ function emitSarif(report) {
     runs: [{
       tool: {
         driver: {
-          name: 'commit-to-git-dry-run',
+          name: 'git-sync-dry-run',
           informationUri: 'https://github.com/microsoft/power-platform-skills',
           rules: [...rules.values()],
         },
@@ -721,7 +721,7 @@ async function runPrevalidators(rawArgs = {}) {
     : null;
 
   const report = {
-    skill: 'commit-to-git',
+    skill: 'git-sync',
     mode: 'dry-run',
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -745,7 +745,7 @@ async function runPrevalidators(rawArgs = {}) {
   };
 
   // Preserve lastCommittedSolutionVersion if the prior file had one (the
-  // commit-to-git skill updates it post-commit).
+  // git-sync commit flow updates it post-commit).
   if (fs.existsSync(lastValidationPath)) {
     try {
       const prior = JSON.parse(fs.readFileSync(lastValidationPath, 'utf8'));

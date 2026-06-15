@@ -1,6 +1,6 @@
 'use strict';
 
-// Integration test — exercises the `commit-to-git --dry-run` happy path
+// Integration test — exercises the `git-sync --dry-run` happy path
 // post-VPC-merge (per X-10):
 //
 //   1. listPendingChanges (HTTP) gets the items
@@ -9,7 +9,7 @@
 //      or "passed") AND a human-readable `pre-commit-report.html`
 //   4. Skill DOES NOT call `CommitToGit` — no mutation of the live env
 //   5. Skill DOES NOT write `last-commit.json`
-//   6. The PostToolUse `validate-commit-to-git.js` hook reads
+//   6. The PostToolUse `validate-git-sync.js` hook reads
 //      `last-validation.json` and approves the dry-run statuses
 //
 // This test simulates the skill's behaviour with a hand-written marker
@@ -31,7 +31,7 @@ const { listPendingChanges } = require('../../lib/list-pending-changes');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
 const COMMIT_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'commit-to-git', 'scripts', 'validate-commit-to-git.js',
+  PLUGIN_ROOT, 'skills', 'git-sync', 'scripts', 'validate-git-sync.js',
 );
 
 function mkTempProject() {
@@ -60,7 +60,7 @@ function writeMarker(projectRoot, filename, payload) {
   fs.writeFileSync(p, JSON.stringify(payload, null, 2));
 }
 
-test('integration commit-to-git --dry-run: writes last-validation + report, NO mutation, hook approves', async () => {
+test('integration git-sync --dry-run: writes last-validation + report, NO mutation, hook approves', async () => {
   const projectRoot = mkTempProject();
   const FAKE_SOLUTION_ID = '00000000-aaaa-bbbb-cccc-000000000099';
 
@@ -105,7 +105,7 @@ test('integration commit-to-git --dry-run: writes last-validation + report, NO m
     // Phase 3: dry-run validator orchestrator would run and find nothing.
     // Skill writes the dry-run marker AND the HTML report.
     writeMarker(projectRoot, 'last-validation.json', {
-      skill: 'CommitToGit',
+      skill: 'git-sync',
       validatedAt: '2025-01-01T01:00:00Z',
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -151,7 +151,7 @@ test('integration commit-to-git --dry-run: writes last-validation + report, NO m
     //     dry-run marker present, it accepts dry-run-passed and exits 0.
     const valRes = runValidator(COMMIT_VALIDATOR, projectRoot);
     assert.equal(valRes.status, 0,
-      `validate-commit-to-git should approve dry-run-passed; stderr=${valRes.stderr}`);
+      `validate-git-sync should approve dry-run-passed; stderr=${valRes.stderr}`);
   } finally {
     await mock.close();
     cleanup(projectRoot);

@@ -1,7 +1,6 @@
 'use strict';
 
-// Integration test — exercises the FULL sync cycle the `sync-from-git` and
-// `resolve-conflicts` skills run in concert:
+// Integration test — exercises the FULL sync cycle the `git-sync` pull and conflict flows run in concert:
 //
 //   1. refreshChangesFromGit (HTTP)   — ask Dataverse to query ADO
 //   2. listIncomingUpdates / listConflicts (HTTP) — read populated tabs
@@ -29,11 +28,8 @@ const { resolveConflictAccept } = require('../../lib/resolve-conflict-accept');
 const { pullChangesFromGit } = require('../../lib/pull-changes-from-git');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
-const SYNC_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'sync-from-git', 'scripts', 'validate-sync-from-git.js',
-);
-const CONFLICTS_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'resolve-conflicts', 'scripts', 'validate-resolve-conflicts.js',
+const GIT_SYNC_VALIDATOR = path.join(
+  PLUGIN_ROOT, 'skills', 'git-sync', 'scripts', 'validate-git-sync.js',
 );
 
 function mkTempProject() {
@@ -118,7 +114,7 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
   ]);
 
   try {
-    // === sync-from-git Phase 2: refresh ===
+    // === git-sync pull flow Phase 2: refresh ===
     const refresh = await refreshChangesFromGit({
       envUrl: mock.baseUrl, token: 'fake-tok', solutionUniqueName: 'IntSol',
     });
@@ -137,7 +133,7 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
     assert.equal(conflicts.count, 1);
     assert.equal(conflicts.items[0].componentName, 'Header');
 
-    // === resolve-conflicts: resolve the single conflict ===
+    // === git-sync conflict flow: resolve the single conflict ===
     const decision = await resolveConflictKeep({
       envUrl: mock.baseUrl, token: 'fake-tok',
       conflictId: conflicts.items[0].conflictId,
@@ -147,7 +143,7 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
     assert.equal(decision.outcome, 'keep-environment');
 
     writeMarker(projectRoot, 'last-conflict-resolution.json', {
-      skill: 'resolve-conflicts',
+      skill: 'git-sync',
       resolvedAt: decision.calledAt,
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -158,9 +154,9 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
       decisions: [{ conflictId: decision.conflictId, outcome: decision.outcome }],
     });
 
-    const conflictsVal = runValidator(CONFLICTS_VALIDATOR, projectRoot);
+    const conflictsVal = runValidator(GIT_SYNC_VALIDATOR, projectRoot);
     assert.equal(conflictsVal.status, 0,
-      `resolve-conflicts validator should approve; stderr=${conflictsVal.stderr}`);
+      `git-sync validator should approve; stderr=${conflictsVal.stderr}`);
 
     // === Phase 4 recheck — conflicts cleared ===
     const reCheck = await listConflicts({
@@ -168,7 +164,7 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
     });
     assert.equal(reCheck.count, 0, 'conflicts must be cleared before pull');
 
-    // === sync-from-git Phase 4: pull ===
+    // === git-sync pull flow Phase 4: pull ===
     const pull = await pullChangesFromGit({
       envUrl: mock.baseUrl, token: 'fake-tok',
       solutionUniqueName: 'IntSol',
@@ -180,7 +176,7 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
     assert.equal(pullCalls, 1, 'pull POSTed once');
 
     writeMarker(projectRoot, 'last-sync.json', {
-      skill: 'sync-from-git',
+      skill: 'git-sync',
       syncedAt: pull.calledAt,
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -189,9 +185,9 @@ test('integration sync-flow: refresh → resolve 1 conflict (keep) → pull → 
       polled: pull.polled,
     });
 
-    const syncVal = runValidator(SYNC_VALIDATOR, projectRoot);
+    const syncVal = runValidator(GIT_SYNC_VALIDATOR, projectRoot);
     assert.equal(syncVal.status, 0,
-      `sync-from-git validator should approve; stderr=${syncVal.stderr}`);
+      `git-sync validator should approve; stderr=${syncVal.stderr}`);
   } finally {
     await mock.close();
     cleanup(projectRoot);
@@ -231,7 +227,7 @@ test('integration sync-flow: nothing incoming → already-up-to-date short-circu
 
     // Skill SHORT-CIRCUITS pull when nothing is incoming.
     writeMarker(projectRoot, 'last-sync.json', {
-      skill: 'sync-from-git',
+      skill: 'git-sync',
       syncedAt: '2025-01-01T00:00:00Z',
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -239,7 +235,7 @@ test('integration sync-flow: nothing incoming → already-up-to-date short-circu
       updatesPulled: 0,
     });
 
-    const syncVal = runValidator(SYNC_VALIDATOR, projectRoot);
+    const syncVal = runValidator(GIT_SYNC_VALIDATOR, projectRoot);
     assert.equal(syncVal.status, 0, `validator should approve; stderr=${syncVal.stderr}`);
     assert.equal(pullCalls, 0, 'pull must NOT have been called when nothing incoming');
   } finally {
@@ -288,7 +284,7 @@ test('integration sync-flow: resolve-accept on conflict, then validator approves
     assert.equal(decision.outcome, 'accept-incoming');
 
     writeMarker(projectRoot, 'last-conflict-resolution.json', {
-      skill: 'resolve-conflicts',
+      skill: 'git-sync',
       resolvedAt: decision.calledAt,
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -299,7 +295,7 @@ test('integration sync-flow: resolve-accept on conflict, then validator approves
       decisions: [{ conflictId: decision.conflictId, outcome: decision.outcome }],
     });
 
-    const cVal = runValidator(CONFLICTS_VALIDATOR, projectRoot);
+    const cVal = runValidator(GIT_SYNC_VALIDATOR, projectRoot);
     assert.equal(cVal.status, 0, `validator should approve; stderr=${cVal.stderr}`);
 
     const reCheck = await listConflicts({
@@ -312,17 +308,17 @@ test('integration sync-flow: resolve-accept on conflict, then validator approves
   }
 });
 
-test('integration sync-flow: sync-validator BLOCKS when status=failed', () => {
+test('integration sync-flow: git-sync validator BLOCKS when status=failed', () => {
   const projectRoot = mkTempProject();
   try {
     writeMarker(projectRoot, 'last-sync.json', {
-      skill: 'sync-from-git',
+      skill: 'git-sync',
       syncedAt: '2025-01-01T00:00:00Z',
       envUrl: 'http://x',
       status: 'failed',
       error: 'PullChangesFromGit returned 500',
     });
-    const r = runValidator(SYNC_VALIDATOR, projectRoot);
+    const r = runValidator(GIT_SYNC_VALIDATOR, projectRoot);
     assert.equal(r.status, 2, `validator must block on status=failed; stderr=${r.stderr}`);
     assert.match(r.stderr, /status=failed/);
   } finally {

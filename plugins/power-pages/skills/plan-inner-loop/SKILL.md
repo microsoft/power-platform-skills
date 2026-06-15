@@ -28,7 +28,7 @@ This is the **front door** to the 12-skill Inner Dev Loop family. When the user 
 **When to invoke directly vs. this orchestrator:**
 
 - **Run `plan-inner-loop` first when** intent is ambiguous, the user is mid-flow and asking "now what", or a long time has passed since the last skill ran.
-- **Skip it when** the user explicitly named a downstream skill (e.g. *"run sync-from-git"*, *"just commit my changes"*) — those are direct invocations; honor them.
+- **Skip it when** the user explicitly named a downstream skill (e.g. *"run git-sync --pull"*, *"just commit my changes"*) — those are direct invocations; honor them.
 
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md` (state classification + skill dispatch table)
@@ -124,7 +124,7 @@ Steps:
 
    > 🛈 **Multi-solution-bound envs (HAR-confirmed 2026-06).** When an env has 2+ Git-bound solutions (each `solutions` row with `enabledforsourcecontrolintegration eq true`), the helper now enumerates them all in `boundSolutions: [{ uniqueName, solutionId, pendingChangesCount, sourceControlSyncStatus }]` and sets `multipleSolutionsBound: true`. When called **without** `--solutionUniqueName` on such an env, the top-level `pendingChangesCount` is the **direct env-wide count** of `sourcecontrolcomponents?$filter=iscommitted eq false` (NO partitionid filter — matches `list-pending-changes` without a `--solutionUniqueName` filter, so the two helpers agree on identical mocked data — verified by regression test in `scripts/tests/detect-git-binding.test.js`). The top-level `nonCommittedRootCount` is the **SUM** of per-solution counts across `boundSolutions[]`. These two fields agree when every pending row belongs to an `enabledforsourcecontrolintegration=true` solution, but they **diverge when stale rows from disconnected solutions still exist** (live evidence 2026-06-11: `pendingChangesCount=344`, `nonCommittedRootCount=2`). The top-level `gitFolder` / `branchSyncedCommitId` etc. reflect whichever solution Dataverse returned first (arbitrary — use `boundSolutions[]` for per-solution detail). `cleanState` is derived from `pendingChangesCount`, so "Clean" means there are zero unflushed rows of any kind. When `multipleSolutionsBound === true`, surface per-solution state to the user in the Phase 5 plan render (one row per `boundSolutions[i]`), and when the user picks one to act on in Phase 6, re-invoke the helper with `--solutionUniqueName <name>` so the top-level fields reflect that solution. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §13.
 
-   > 🛈 **Stale branchconfig rows (HAR-confirmed 2026-06-11; E10).** The helper now reconciles every `sourcecontrolbranchconfigurations` row against the `boundSolutions[]` enumeration via the `partitionid` column. Rows whose non-zero `partitionid` doesn't match any `enabledforsourcecontrolintegration=true` solution are surfaced in `staleBranchConfigs: [{ partitionId, rootFolderPath, branchName, reason }]`. When `staleBranchConfigs.length > 0`, render a warning in the Phase 5 plan: *"N orphan sourcecontrolbranchconfigurations rows detected — these are leftovers from disconnected solutions and often correlate with the `0x80040217 sourcecontrolcomponentpayload missing` failure mode that blocks `commit-to-git`. Run `disconnect-from-git --solutionUniqueName <stale>` (if a name is recoverable) or use maker-portal Disconnect to clean them up."* See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §25.
+   > 🛈 **Stale branchconfig rows (HAR-confirmed 2026-06-11; E10).** The helper now reconciles every `sourcecontrolbranchconfigurations` row against the `boundSolutions[]` enumeration via the `partitionid` column. Rows whose non-zero `partitionid` doesn't match any `enabledforsourcecontrolintegration=true` solution are surfaced in `staleBranchConfigs: [{ partitionId, rootFolderPath, branchName, reason }]`. When `staleBranchConfigs.length > 0`, render a warning in the Phase 5 plan: *"N orphan sourcecontrolbranchconfigurations rows detected — these are leftovers from disconnected solutions and often correlate with the `0x80040217 sourcecontrolcomponentpayload missing` failure mode that blocks the `git-sync` commit flow. Run `disconnect-from-git --solutionUniqueName <stale>` (if a name is recoverable) or use maker-portal Disconnect to clean them up."* See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §25.
 
 2. Cross-check `.git-integration-manifest.json`:
 
@@ -178,10 +178,10 @@ Steps:
 
    - `Disconnected` → not bound to any repo
    - `Clean`        → bound, 0 Changes, 0 Updates, 0 Conflicts
-   - `Dirty`        → bound, Changes > 0, 0 Updates, 0 Conflicts → next skill = `commit-to-git`
-   - `Stale`        → bound, 0 Changes, Updates > 0, 0 Conflicts → next skill = `sync-from-git`
+   - `Dirty`        → bound, Changes > 0, 0 Updates, 0 Conflicts → next skill = `git-sync --dry-run` (then `git-sync --commit`)
+   - `Stale`        → bound, 0 Changes, Updates > 0, 0 Conflicts → next skill = `git-sync --pull`
    - `Mixed`        → bound, Changes > 0 AND Updates > 0, 0 Conflicts → ambiguous; ask user (Phase 5 gate)
-   - `Conflicted`   → Conflicts > 0 → next skill = `resolve-conflicts`
+   - `Conflicted`   → Conflicts > 0 → next skill = `git-sync`
    - `Broken`       → drift or persistent API failures (already handled in Phase 2)
 
    Save the classification to `planData.state`.
@@ -243,10 +243,10 @@ Steps:
    |---|---|---|
    | `Disconnected` | `/power-pages:git-configure` | `/power-pages:git-configure --binding=solution` |
    | `Clean`        | (no action — env is in sync)         | `/power-pages:git-configure --mode=switch-branch`, `/power-pages:open-pr` |
-   | `Dirty`        | `/power-pages:commit-to-git --dry-run` then `/power-pages:commit-to-git` | `/power-pages:revert-workspace` |
-   | `Stale`        | `/power-pages:sync-from-git`         | — |
-   | `Mixed`        | depends on user choice (gate below)  | — |
-   | `Conflicted`   | `/power-pages:resolve-conflicts`     | `/power-pages:revert-workspace`, `/power-pages:sync-from-git` (with conflict handling) |
+   | `Dirty`        | `/power-pages:git-sync --dry-run` (alt `/power-pages:git-sync --commit`) | `/power-pages:revert-workspace` |
+   | `Stale`        | `/power-pages:git-sync --pull`        | — |
+   | `Mixed`        | `/power-pages:git-sync` (handles pull-then-commit ordering) | — |
+   | `Conflicted`   | `/power-pages:git-sync` (detects + gates conflicts) | `/power-pages:revert-workspace` |
    | `Broken`       | `/power-pages:diagnose-git-integration` | — |
 
 2. Mixed-state branching. When `planData.state === 'Mixed'`, the maker has both local changes AND incoming updates with no conflicts. Either order works but produces different end states (pulling first means committing a merged tree; committing first means a separate ADO commit followed by a sync). Surface this explicitly:

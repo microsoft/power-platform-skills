@@ -69,7 +69,7 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 - `git-configure` setup and solution-binding paths must:
   - Wait for `sourcecontrolsyncstatus` to reach `3` (initial component staging done).
   - Count `sourcecontrolcomponents` with `iscommitted=false` → that's the post-bind pending-push count.
-  - Tell the user: *"Folder seeded with SHA `<placeholder>`. N components are now staged as pending Changes. Next step: `/power-pages:commit-to-git` to push them as the real initial commit."*
+  - Tell the user: *"Folder seeded with SHA `<placeholder>`. N components are now staged as pending Changes. Next step: `/power-pages:git-sync --commit` to push them as the real initial commit."*
   - Print the full ADO URL with `&path=/<rootFolder>/<gitFolder>` so they can see the (initially empty) folder.
 - `commit-to-git` must treat *"fresh bind with staged components"* as the normal first-run case, not as an edge case. Phase 1's "nothing to commit" exit must only fire when `iscommitted=false` count is actually 0.
 
@@ -471,7 +471,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind or swit
 - The eventual commit/pull is a **normal** commit/pull on top of the conflict point — no special "merge commit" semantics, no two-parent ancestry; just a flat linear commit recording the winning value.
 
 **Action:**
-- `resolve-conflicts` Phase 7 hand-back message must explicitly state the remaining work, not declare overall success: *"Resolved M conflicts. **Resolution alone does NOT push to git or pull to env.** Items resolved with Keep-Existing have moved to pending Changes — run `/power-pages:commit-to-git` to push them. Items resolved with Accept-Incoming have moved to pending Updates — run `/power-pages:sync-from-git` to pull them."*
+- `git-sync` conflict-flow hand-back message must explicitly state the remaining work, not declare overall success: *"Resolved M conflicts. **Resolution alone does NOT push to git or pull to env.** Items resolved with Keep-Existing have moved to pending Changes — run `/power-pages:git-sync --commit` to push them. Items resolved with Accept-Incoming have moved to pending Updates — run `/power-pages:git-sync --pull` to pull them."*
 - The `last-conflict-resolution.json` marker should include `pendingCommit: N` and `pendingPull: M` counts (sourced from `list-conflicts.js` re-query) so downstream skills can route automatically.
 - `sync-from-git` Phase 4 (post-resolve-conflicts return path) must check both counts after the resolve sub-skill returns: if any Changes were created by Keep-Existing decisions, surface a follow-up prompt offering `commit-to-git` BEFORE proceeding with the pull half.
 
@@ -492,7 +492,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind or swit
 **Action:**
 - `sync-from-git` Phase 2 must call `RefreshChangesFromGit` (or equivalent helper) BEFORE asserting `conflicts.count` — relying on a stale env-side view would miss conflicts entirely.
 - `resolve-conflicts` Phase 1 binding-check must run a fresh `RefreshChangesFromGit` before `list-conflicts.js`; if the skill is called directly without `sync-from-git` having just run, the conflict roster may be stale.
-- User-facing error messages from `commit-to-git` and `sync-from-git` that mention "conflicts detected" should hint *"Run `Check for updates` (or `/power-pages:sync-from-git`) — Refresh alone does not detect cross-side conflicts."*
+- User-facing error messages from the `git-sync` commit and pull flows that mention "conflicts detected" should hint *"Run `Check for updates` (or `/power-pages:git-sync --pull`) — Refresh alone does not detect cross-side conflicts."*
 
 ---
 

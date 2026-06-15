@@ -60,28 +60,20 @@ const TRACKED_SKILLS = {
   'test-site': {},
 
   // ───── Inner Dev Loop skills (Dataverse Git integration) ─────
-  // 9-skill family that automates the Connect-to-Git workflow. Validators
-  // live alongside each skill and write markers to `docs/inner-loop/`.
-  // `git-configure` handles setup, switch-branch, rebind, disconnect, and
-  // validate modes through a single merged validator.
+  // Family that automates the Connect-to-Git workflow. Validators live
+  // alongside each skill and write markers to `docs/inner-loop/`.
+  // `git-configure` handles setup, switch-branch, rebind, and disconnect modes.
+  // `git-sync` is the merged per-cycle skill (commit + pull + resolve-conflicts)
+  // — one mode-aware validator accepts last-commit.json / last-validation.json
+  // (dry-run) / last-sync.json / last-conflict-resolution.json markers.
   'plan-inner-loop': {
     validatorScript: 'skills/plan-inner-loop/scripts/validate-plan-inner-loop.js',
   },
   'git-configure': {
     validatorScript: 'skills/git-configure/scripts/validate-git-configure.js',
   },
-  // NOTE: 'validate-pending-changes' was folded into 'commit-to-git --dry-run'.
-  // The merged validator (skills/commit-to-git/scripts/validate-commit-to-git.js)
-  // accepts BOTH last-commit.json (real-commit) AND last-validation.json
-  // (dry-run) markers — see references/approval-gates.md §6A.7.
-  'commit-to-git': {
-    validatorScript: 'skills/commit-to-git/scripts/validate-commit-to-git.js',
-  },
-  'sync-from-git': {
-    validatorScript: 'skills/sync-from-git/scripts/validate-sync-from-git.js',
-  },
-  'resolve-conflicts': {
-    validatorScript: 'skills/resolve-conflicts/scripts/validate-resolve-conflicts.js',
+  'git-sync': {
+    validatorScript: 'skills/git-sync/scripts/validate-git-sync.js',
   },
   'revert-workspace': {
     validatorScript: 'skills/revert-workspace/scripts/validate-revert-workspace.js',

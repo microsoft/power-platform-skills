@@ -771,13 +771,11 @@ test('ALM_SKILLS export includes the 12 documented ALM skills', () => {
   }
 });
 
-test('INNER_LOOP_SKILLS export includes the 9 Inner Dev Loop skills', () => {
+test('INNER_LOOP_SKILLS export includes the 7 Inner Dev Loop skills', () => {
   const required = [
     'plan-inner-loop',
     'git-configure',
-    'commit-to-git',
-    'sync-from-git',
-    'resolve-conflicts',
+    'git-sync',
     'revert-workspace',
     'revert-branch',
     'open-pr',

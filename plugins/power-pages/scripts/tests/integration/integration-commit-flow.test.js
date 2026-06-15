@@ -1,7 +1,7 @@
 'use strict';
 
 // Integration test — exercises the FULL pre-commit + commit + verify cycle
-// the merged `commit-to-git` skill runs (post-VPC merge):
+// the merged `git-sync` commit flow runs (post-VPC merge):
 //
 //   1. listPendingChanges (HTTP) gets the items
 //   2. validateFileSizes + validateSupportedObjectTypes inspect them
@@ -9,7 +9,7 @@
 //      embeds findings into `last-commit.json` (real-commit path)
 //   4. commitToGit (HTTP + polled HTTP) commits and waits for count→0
 //   5. Skill writes `last-commit.json` marker
-//   6. PostToolUse `validate-commit-to-git.js` reads the marker and approves
+//   6. PostToolUse `validate-git-sync.js` reads the marker and approves
 //      (it accepts BOTH dry-run statuses on last-validation.json AND the
 //      `succeeded` status on last-commit.json — per X-4 / D2).
 //
@@ -32,7 +32,7 @@ const { commitToGit } = require('../../lib/commit-to-git');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..', '..');
 const COMMIT_VALIDATOR = path.join(
-  PLUGIN_ROOT, 'skills', 'commit-to-git', 'scripts', 'validate-commit-to-git.js',
+  PLUGIN_ROOT, 'skills', 'git-sync', 'scripts', 'validate-git-sync.js',
 );
 
 function mkTempProject() {
@@ -104,7 +104,7 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
   ]);
 
   try {
-    // === Phase 1 (commit-to-git dry-run path): read changes + run pre-flight ===
+    // === Phase 1 (git-sync dry-run path): read changes + run pre-flight ===
     const pending = await listPendingChanges({
       envUrl: mock.baseUrl, token: 'fake-tok', solutionUniqueName: 'IntSol',
     });
@@ -122,9 +122,9 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
     assert.equal(types.unsupported.length, 0);
 
     // Dry-run path writes last-validation.json. After the X-4 merge, the
-    // commit-to-git validator accepts dry-run statuses on this marker.
+    // git-sync validator accepts dry-run statuses on this marker.
     writeMarker(projectRoot, 'last-validation.json', {
-      skill: 'CommitToGit',
+      skill: 'git-sync',
       validatedAt: '2025-01-01T01:00:00Z',
       envUrl: mock.baseUrl,
       status: 'dry-run-passed',
@@ -133,9 +133,9 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
 
     const dryRunVal = runValidator(COMMIT_VALIDATOR, projectRoot);
     assert.equal(dryRunVal.status, 0,
-      `validate-commit-to-git should approve a dry-run-passed marker; stderr=${dryRunVal.stderr}`);
+      `validate-git-sync should approve a dry-run-passed marker; stderr=${dryRunVal.stderr}`);
 
-    // === Phase 2 (commit-to-git real-commit path): commit + poll ===
+    // === Phase 2 (git-sync real-commit path): commit + poll ===
     const commit = await commitToGit({
       envUrl: mock.baseUrl, token: 'fake-tok',
       solutionUniqueName: 'IntSol',
@@ -149,7 +149,7 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
     assert.equal(commit.polled.finalValue.changesCount, 0);
 
     writeMarker(projectRoot, 'last-commit.json', {
-      skill: 'commit-to-git',
+      skill: 'git-sync',
       committedAt: commit.calledAt,
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -161,7 +161,7 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
 
     const commitVal = runValidator(COMMIT_VALIDATOR, projectRoot);
     assert.equal(commitVal.status, 0,
-      `commit-to-git validator should approve; stderr=${commitVal.stderr}`);
+      `git-sync validator should approve; stderr=${commitVal.stderr}`);
 
     // Sanity: pendingCalls should be at least 2 (pre-commit read + 1 poll read).
     assert.ok(pendingCalls >= 2, `expected ≥2 listPendingChanges HTTP hits, got ${pendingCalls}`);
@@ -171,7 +171,7 @@ test('integration commit-flow: validate clean → commit → polled to 0 → val
   }
 });
 
-test('integration commit-flow: 17 MB file blocks at commit-to-git --dry-run pre-flight and validator hard-fails', async () => {
+test('integration commit-flow: 17 MB file blocks at git-sync --dry-run pre-flight and validator hard-fails', async () => {
   const projectRoot = mkTempProject();
 
   // One file with raw size = 18 MB. Base64-encoded ≈ 24 MB → blocks at 17 MB cap.
@@ -210,7 +210,7 @@ test('integration commit-flow: 17 MB file blocks at commit-to-git --dry-run pre-
     assert.ok(typeof sizes.ok === 'boolean', 'validator returns ok flag');
 
     writeMarker(projectRoot, 'last-validation.json', {
-      skill: 'CommitToGit',
+      skill: 'git-sync',
       validatedAt: '2025-01-01T01:00:00Z',
       envUrl: mock.baseUrl,
       status: 'dry-run-blocked',
@@ -228,7 +228,7 @@ test('integration commit-flow: 17 MB file blocks at commit-to-git --dry-run pre-
     // correctly surfaced the findings; the HOOK should not double-block.)
     const valRes = runValidator(COMMIT_VALIDATOR, projectRoot);
     assert.equal(valRes.status, 0,
-      `validate-commit-to-git should approve a dry-run-blocked marker (recognised status); stderr=${valRes.stderr}`);
+      `validate-git-sync should approve a dry-run-blocked marker (recognised status); stderr=${valRes.stderr}`);
   } finally {
     await mock.close();
     cleanup(projectRoot);
@@ -278,7 +278,7 @@ test('integration commit-flow: commit poll-timeout writes pollWarning but commit
     // Skill would still write a marker, with status=succeeded but include
     // pollWarning so users can see it. Validator approves either way.
     writeMarker(projectRoot, 'last-commit.json', {
-      skill: 'commit-to-git',
+      skill: 'git-sync',
       committedAt: commit.calledAt,
       envUrl: mock.baseUrl,
       solutionUniqueName: 'IntSol',
@@ -301,7 +301,7 @@ test('integration commit-flow: commit-validator BLOCKS when marker is missing co
   const projectRoot = mkTempProject();
   try {
     writeMarker(projectRoot, 'last-commit.json', {
-      skill: 'commit-to-git',
+      skill: 'git-sync',
       committedAt: '2025-01-01T00:00:00Z',
       envUrl: 'http://x',
       solutionUniqueName: 'IntSol',

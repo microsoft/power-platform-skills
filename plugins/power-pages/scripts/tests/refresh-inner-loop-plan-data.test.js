@@ -72,7 +72,7 @@ test('classifyState: Connected & Clean when everything is zero', () => {
 test('returns ok:false / plan-not-found when no plan file exists', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refresh-noplan-'));
   try {
-    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'plan-not-found');
   } finally { cleanup(dir); }
@@ -83,7 +83,7 @@ test('returns ok:false / plan-unparseable when plan file is malformed', async ()
   try {
     fs.mkdirSync(path.join(dir, 'docs', 'inner-loop'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'docs', 'inner-loop', 'inner-loop-plan.json'), '{not json');
-    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'plan-unparseable');
   } finally { cleanup(dir); }
@@ -109,9 +109,7 @@ test('PHASES set covers the long-lived inner-loop refresh phases plus finalize',
   // the handler map alongside the test.
   const expected = [
     'git-configure',
-    'commit-to-git',
-    'sync-from-git',
-    'resolve-conflicts',
+    'git-sync',
     'revert-workspace',
     'revert-branch',
     'open-pr',
@@ -172,7 +170,7 @@ test('git-configure setup: records solution binding metadata', async () => {
   } finally { cleanup(dir); }
 });
 
-test('commit-to-git: ingests last-commit.json, zeros pendingCounts.changes, re-classifies state', async () => {
+test('git-sync commit flow: ingests last-commit.json, zeros pendingCounts.changes, re-classifies state', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment', repository: 'r', branch: 'main' },
@@ -186,7 +184,7 @@ test('commit-to-git: ingests last-commit.json, zeros pendingCounts.changes, re-c
     committedAt: '2026-05-01T11:30:00.000Z',
   });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.lastCommit.commitId, 'abc123def');
     assert.equal(plan.pendingCounts.changes, 0);
@@ -194,7 +192,7 @@ test('commit-to-git: ingests last-commit.json, zeros pendingCounts.changes, re-c
   } finally { cleanup(dir); }
 });
 
-test('commit-to-git: if updates were pending pre-commit, state goes to Stale (not Connected & Clean)', async () => {
+test('git-sync commit flow: if updates were pending pre-commit, state goes to Stale (not Connected & Clean)', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment', repository: 'r', branch: 'main' },
@@ -203,12 +201,12 @@ test('commit-to-git: if updates were pending pre-commit, state goes to Stale (no
   });
   writeMarker(dir, 'last-commit.json', { commitId: 'abc', message: 'x' });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     assert.equal(readPlan(dir).state, 'Stale');
   } finally { cleanup(dir); }
 });
 
-test('sync-from-git: zeros pendingCounts.updates, honours conflictsAfter from marker', async () => {
+test('git-sync pull flow: zeros pendingCounts.updates, honours conflictsAfter from marker', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -221,7 +219,7 @@ test('sync-from-git: zeros pendingCounts.updates, honours conflictsAfter from ma
     conflictsAfter: 2, // pull surfaced 2 conflicts
   });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'sync-from-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.pendingCounts.updates, 0);
     assert.equal(plan.pendingCounts.conflicts, 2);
@@ -229,7 +227,7 @@ test('sync-from-git: zeros pendingCounts.updates, honours conflictsAfter from ma
   } finally { cleanup(dir); }
 });
 
-test('sync-from-git without conflictsAfter: preserves existing conflicts count, just zeros updates', async () => {
+test('git-sync pull flow without conflictsAfter: preserves existing conflicts count, just zeros updates', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -238,14 +236,14 @@ test('sync-from-git without conflictsAfter: preserves existing conflicts count, 
   });
   writeMarker(dir, 'last-sync.json', { pulledCommits: 1 }); // no conflictsAfter
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'sync-from-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.pendingCounts.updates, 0);
     assert.equal(plan.pendingCounts.conflicts, 1, 'pre-existing conflicts must be preserved');
   } finally { cleanup(dir); }
 });
 
-test('resolve-conflicts: zeros pendingCounts.conflicts, re-classifies state', async () => {
+test('git-sync conflict flow: zeros pendingCounts.conflicts, re-classifies state', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -257,14 +255,14 @@ test('resolve-conflicts: zeros pendingCounts.conflicts, re-classifies state', as
     resolvedAt: '2026-05-01T13:00:00.000Z',
   });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'resolve-conflicts' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.pendingCounts.conflicts, 0);
     assert.equal(plan.state, 'Dirty', 'changes=2 remain → Dirty');
   } finally { cleanup(dir); }
 });
 
-test('commit-to-git (dry-run mode, X-5 merge): ingests last-validation.json and does NOT zero pendingCounts when last-commit.json absent', async () => {
+test('git-sync dry-run mode: ingests last-validation.json and does NOT zero pendingCounts when last-commit.json absent', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -273,7 +271,7 @@ test('commit-to-git (dry-run mode, X-5 merge): ingests last-validation.json and 
   });
   writeMarker(dir, 'last-validation.json', { status: 'dry-run-passed', issues: 0, validatedAt: 'x' });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.lastValidation.issues, 0);
     assert.equal(plan.lastValidation.status, 'dry-run-passed');
@@ -283,7 +281,7 @@ test('commit-to-git (dry-run mode, X-5 merge): ingests last-validation.json and 
   } finally { cleanup(dir); }
 });
 
-test('commit-to-git (real-commit mode): both markers present — ingests lastCommit, zeros pendingCounts.changes, AND surfaces lastValidation', async () => {
+test('git-sync real-commit mode: both markers present — ingests lastCommit, zeros pendingCounts.changes, AND surfaces lastValidation', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment' },
@@ -291,12 +289,12 @@ test('commit-to-git (real-commit mode): both markers present — ingests lastCom
     state: 'Dirty',
   });
   writeMarker(dir, 'last-commit.json', {
-    skill: 'commit-to-git', committedAt: 'x', envUrl: 'y', commitMessage: 'm', status: 'succeeded',
+    skill: 'git-sync', committedAt: 'x', envUrl: 'y', commitMessage: 'm', status: 'succeeded',
     commitId: 'sha', branch: 'main',
   });
   writeMarker(dir, 'last-validation.json', { status: 'dry-run-passed', issues: 0 });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     const plan = readPlan(dir);
     assert.equal(plan.lastCommit.commitId, 'sha');
     assert.equal(plan.lastValidation.status, 'dry-run-passed');
@@ -366,7 +364,7 @@ test('revert-branch: records marker but does NOT change pendingCounts (env still
     const plan = readPlan(dir);
     assert.equal(plan.lastBranchRevert.revertedCommit, 'abc123');
     assert.deepEqual(plan.pendingCounts, { changes: 0, updates: 0, conflicts: 0 },
-      'revert-branch leaves the env counts alone — sync-from-git will surface them later');
+      'revert-branch leaves the env counts alone — git-sync --pull will surface them later');
   } finally { cleanup(dir); }
 });
 
@@ -427,11 +425,11 @@ test('state-only mode: skips marker read, just re-classifies from current counts
   });
   // No marker file written.
   try {
-    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git', stateOnly: true });
+    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync', stateOnly: true });
     assert.equal(r.ok, true);
     const plan = readPlan(dir);
     assert.equal(plan.state, 'Stale', 'state should be re-derived from counts');
-    assert.equal(plan.pendingCounts.changes, 0, 'state-only must NOT zero out counts (commit handler skipped)');
+    assert.equal(plan.pendingCounts.changes, 0, 'state-only must NOT zero out counts (git-sync handler skipped)');
   } finally { cleanup(dir); }
 });
 
@@ -443,7 +441,7 @@ test('missing marker is a silent no-op for that phase (X-5 merge: handler no lon
     state: 'Dirty',
   });
   try {
-    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'commit-to-git' });
+    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-sync' });
     assert.equal(r.ok, true);
     const plan = readPlan(dir);
     // Post-X-5: without a last-commit.json marker, the handler has no evidence

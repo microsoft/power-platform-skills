@@ -14,10 +14,10 @@ Every Power Pages dev env that has touched Connect-to-Git is in **exactly one** 
 |---|---|---|---|
 | **Disconnected** | `null` | n/a | `git-configure` |
 | **Connected & Clean** | binding object | `0 / 0 / 0`. **NB:** A freshly-bound env enters this state automatically — Connect-to-Git creates the initial commit via `SourceControlInitialSyncPlugin`, so you do NOT see Dirty after a fresh bind. See `inner-loop-empirical-findings.md` §3. | Idle; user may edit |
-| **Dirty** | binding object | `>0 / 0 / 0` | `commit-to-git` (use `--dry-run` for a non-mutating pre-flight) |
-| **Stale** | binding object | `0 / >0 / 0` | `sync-from-git` |
-| **Mixed** | binding object | `>0 / >0 / 0` | `commit-to-git` first OR `sync-from-git` first — user's choice (gate) |
-| **Conflicted** | binding object | `* / * / >0` | `resolve-conflicts` (then continue) |
+| **Dirty** | binding object | `>0 / 0 / 0` | `git-sync --dry-run` (alt `git-sync --commit`) |
+| **Stale** | binding object | `0 / >0 / 0` | `git-sync --pull` |
+| **Mixed** | binding object | `>0 / >0 / 0` | `git-sync` (handles pull-then-commit ordering) |
+| **Conflicted** | binding object | `* / * / >0` | `git-sync` (detects + gates conflicts, then continues) |
 
 Plus one error state:
 
@@ -61,10 +61,10 @@ Plus one error state:
    │      │  (if conflicts    │◄──── refresh detects conflicts
    │      │   detected)       │              │
    │      └────────┬─────────┘              │
-   │               │ resolve-conflicts      │
+   │               │ git-sync conflict flow │
    │               ▼                        │
    │       (back to Dirty / Stale            │
-   │        / Mixed, then on to commit/pull) │
+   │        / Mixed, then git-sync continues)│
    │                                         │
    └─────────────────────────────────────────┘
 

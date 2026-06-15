@@ -520,7 +520,9 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.4 `commit-to-git` (projected 6 calls + 1 not-a-gate)
+### 6A.4 ~~`commit-to-git`~~ — **MERGED INTO `git-sync` commit flow**
+
+Historical gate mapping retained for traceability. New routing uses `git-sync` (`--dry-run` for pre-flight, `--commit` for commit-only) and the canonical gates are listed in §6A.7.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -537,7 +539,9 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.5 `sync-from-git` (projected 5 calls)
+### 6A.5 ~~`sync-from-git`~~ — **MERGED INTO `git-sync` pull flow**
+
+Historical gate mapping retained for traceability. New routing uses `git-sync --pull`; canonical gates are listed in §6A.7.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -551,7 +555,9 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.6 `resolve-conflicts` (projected 3 calls — bundled per `conflict-resolution-patterns.md` §5)
+### 6A.6 ~~`resolve-conflicts`~~ — **MERGED INTO `git-sync` conflict flow**
+
+Historical gate mapping retained for traceability. New routing uses `git-sync`, which detects and gates conflicts before commit/pull; canonical gates are listed in §6A.7.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -562,18 +568,44 @@ Same shape as §6. Phase numbers reference the SKILL.md as the 12 inner-loop ski
 
 ---
 
-### 6A.7 ~~`validate-pending-changes`~~ — **MERGED INTO `commit-to-git --dry-run`** (per VPC merge / D4)
+### 6A.7 `git-sync` (merged per-cycle sync — 17 gates)
 
-The `validate-pending-changes` skill was folded into `commit-to-git` as a `--dry-run` mode. The two gates previously listed here are now satisfied by `commit-to-git`'s existing pre-flight gates (per design decision D4 — reuse the existing `commit-to-git:3.pre-flight-*` IDs in dry-run mode rather than introduce new VPC-named gates):
+The active gate definitions live in `skills/git-sync/SKILL.md` plus `skills/git-sync/references/changes-reference.md`, `update-reference.md`, and `conflict-reference.md`. This catalog entry is the canonical lint target for the merged commit, pull, and conflict flows.
 
-- `validate-pending-changes:1.no-binding` → `commit-to-git:1.no-binding`
-- `validate-pending-changes:6.warnings-only` → `commit-to-git:3.pre-flight-warnings`
-
-See §6A.3 (`commit-to-git`) for the canonical gate inventory.
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `git-sync:1.no-binding` | gate | intent | 1 | No binding — *"Run git-configure / cancel"* | nothing |
+| `git-sync:1.manifest-stale` | gate | intent | 1 | `reconcileManifest` returned `aligned:false` — choose helper option or cancel. | nothing |
+| `git-sync:2.conflicts` | gate | plan | 2 | Conflicts > 0 before commit/pull — *"Resolve conflicts now / cancel"* | nothing |
+| `git-sync:3.mixed-order` | gate | plan | 3 | Mixed state (Changes + Updates) — *"Pull then commit / Commit then pull / cancel"* | nothing |
+| `git-sync:changes.auto-fix-blocked-attachments` | gate | plan | changes | Pre-flight found blocked JS/CSS attachment settings that can be auto-fixed. | nothing |
+| `git-sync:changes.pre-flight-blockers` | gate | plan | changes | Commit pre-flight found blockers. | nothing |
+| `git-sync:changes.pre-flight-warnings` | gate | plan | changes | Commit pre-flight found warnings only. | nothing |
+| `git-sync:changes.plan` | gate | plan | changes | Commit plan rendered: components and config-vs-churn summary. | nothing |
+| `git-sync:changes.consent` | gate | consent | changes | Final consent before `CommitToGit`. | nothing |
+| `git-sync:update.plan` | gate | plan | update | Pull plan rendered: incoming updates and deletion summary. | nothing |
+| `git-sync:update.hard-delete` | gate | consent | update | User opted into destructive `DeleteDeletedComponents: true`. | nothing |
+| `git-sync:update.consent` | gate | consent | update | Final consent before `PullChangesFromGit`. | nothing |
+| `git-sync:2.conflict-decisions` | gate | progress | conflict | Per-conflict or bundled Keep/Accept decisions. | partial-decisions |
+| `git-sync:2.conflict-fallback` | gate | consent | conflict | Standard conflict resolution cannot proceed safely. | no-changes |
+| `git-sync:final.open-pr` | gate | final | final | Commit landed — *"Open PR now / not now"*. | nothing |
+| `git-sync:final.tag-offer` | gate | final | final | Commit landed and tag offer is available. | nothing |
+| `git-sync:final` | gate | final | final | Sync complete — route to PR, another git-sync run, or done. | nothing |
 
 ---
 
-### 6A.8 `branch-switch` (projected 4 calls + 1 not-a-gate)
+### 6A.8 ~~`validate-pending-changes`~~ — **MERGED INTO `git-sync --dry-run`** (per VPC merge / D4)
+
+The `validate-pending-changes` skill was folded into the git-sync commit flow as a `--dry-run` mode. The two gates previously listed here are now satisfied by `git-sync`'s pre-flight gates (per design decision D4 — reuse the merged commit-flow IDs in dry-run mode rather than introduce new VPC-named gates):
+
+- `validate-pending-changes:1.no-binding` → `git-sync:1.no-binding`
+- `validate-pending-changes:6.warnings-only` → `git-sync:changes.pre-flight-warnings`
+
+See §6A.7 (`git-sync`) for the canonical gate inventory.
+
+---
+
+### 6A.9 `branch-switch` (projected 4 calls + 1 not-a-gate)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -586,7 +618,7 @@ See §6A.3 (`commit-to-git`) for the canonical gate inventory.
 
 ---
 
-### 6A.9 `revert-workspace` (projected 4 calls — typed-confirmation pattern)
+### 6A.10 `revert-workspace` (projected 4 calls — typed-confirmation pattern)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -597,7 +629,7 @@ See §6A.3 (`commit-to-git`) for the canonical gate inventory.
 
 ---
 
-### 6A.10 `revert-branch` (projected 4 calls — typed-confirmation, blast-radius warning)
+### 6A.11 `revert-branch` (projected 4 calls — typed-confirmation, blast-radius warning)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -609,7 +641,7 @@ See §6A.3 (`commit-to-git`) for the canonical gate inventory.
 
 ---
 
-### 6A.11 `open-pr` (projected 5 calls + 2 not-a-gate)
+### 6A.12 `open-pr` (projected 5 calls + 2 not-a-gate)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -624,7 +656,7 @@ See §6A.3 (`commit-to-git`) for the canonical gate inventory.
 
 ---
 
-### 6A.12 `diagnose-git-integration` (projected 3 gates — loop-style auto-fix mirrors `diagnose-deployment`)
+### 6A.13 `diagnose-git-integration` (projected 3 gates — loop-style auto-fix mirrors `diagnose-deployment`)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -636,7 +668,7 @@ Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers a
 
 ---
 
-### 6A.13 `git-configure` (merged Git configuration front door — 29 gates)
+### 6A.14 `git-configure` (merged Git configuration front door — 29 gates)
 
 > **Transitional preservation note.** Replaces §6B (setup-git-integration), §6C (connect-solution-to-git), §6F (branch-switch). Those sections remain in this catalog until the three legacy skills are removed in the same PR (todo `gc-delete-legacy`), so the inner-loop docs keep cross-referencing existing gate IDs during the transition.
 
@@ -660,7 +692,7 @@ Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers a
 | `git-configure:4.folder-coexists` | gate | consent | 4 | Env-binding only; selected existing folder is non-empty. | Folder `/{folder}/` already exists in `{repo}` and contains content. Dataverse will write env-bound solution files into that folder. | Use this folder; Go back and pick another loops to folder selection. | nothing |
 | `git-configure:4.folder-occupied` | gate | consent | 4 | Solution-binding only; `check-ado-folder-exists.js` reports `itemCount > 0`. | Folder `/{gitFolder}/` on `{branch}` already contains `{itemCount}` item(s). `ConnectToGit` will co-locate Dataverse-managed files there. | Pick a different gitFolder; Pick a different repo; Proceed anyway and preserve `preBindFolderOccupancy` in plan data; Cancel. | nothing |
 | `git-configure:4.shared-object-overlap` | gate | plan | 4 | Solution-binding only; HARD BLOCK when target solution shares components with already-bound solution(s). | Solution `{name}` shares `{count}` component(s) with already-bound solution(s) `{otherNames}`. The first `CommitToGit` will fail until overlap is removed. How should this be resolved? | Remove shared components from `{name}`; Remove them from `{otherNames}`. Either removal calls `remove-solution-component.js` for every component and re-queries until zero overlap. Cancel. Do not proceed unresolved. | nothing |
-| `git-configure:5.workspace-dirty` | gate | intent | 5 | Switch-branch, rebind, or disconnect when Changes/Updates/Conflicts are non-zero. | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Run `/power-pages:commit-to-git`; Run `/power-pages:sync-from-git`; Run `/power-pages:revert-workspace`; Run `/power-pages:resolve-conflicts`; Cancel. Do not proceed unless counts are zero or deleted-source-branch recovery exception applies. | nothing |
+| `git-configure:5.workspace-dirty` | gate | intent | 5 | Switch-branch, rebind, or disconnect when Changes/Updates/Conflicts are non-zero. | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Run `/power-pages:git-sync --commit`; Run `/power-pages:git-sync --pull`; Run `/power-pages:revert-workspace`; Run `/power-pages:git-sync`; Cancel. Do not proceed unless counts are zero or deleted-source-branch recovery exception applies. | nothing |
 | `git-configure:6.plan` | gate | plan | 6 | Git configuration plan has been rendered and plan data written. | Review the Git configuration plan above. Proceed to final consent? | Yes — proceed to consent; Change a field loops back to Phase 3 for binding type or Phase 4 for ADO coordinates, depending on what changed; Cancel. | nothing |
 | `git-configure:7.consent` | gate | consent | 7 | Setup and switch-branch. | Final consent — execute `{mode}` on `{envHost}` now? | Execute now calls `connect-to-git.js` for setup/env, `connect-solution-to-git.js` for setup/solution, or `switch-branch.js` for switch-branch; Cancel. | nothing |
 | `git-configure:7.disconnect-consent` | gate | consent | 7 | Disconnect mode only. Plain choice-selection consent (no typed phrase). | Disconnect Git from `{envHost}`? This removes the current binding to `{org}/{project}/{repo}@{branch}` and drops the Source-control connection until setup/rebind runs again. | Disconnect now calls `disconnect-from-git.js`; Cancel leaves the binding unchanged. | nothing |
@@ -670,7 +702,7 @@ Same loop-style pattern as `diagnose-deployment:6.auto-fix`. One marker covers a
 | `git-configure:9.enable-solution` | gate | consent | 9 | Env-bind only; PER LOOP ITERATION for each candidate in individual-pick loop. | Enable solution `{uniqueName}` (`{friendlyName}` v`{version}`) for source control? | Enable this one calls `enable-solution-source-control.js --poll`; Skip this one. Consent for one solution does not cover the next; continue on per-solution failure and summarize. | nothing |
 | `git-configure:9.commit-approach` | gate | plan | 9 | Env-bind follow-up after one or more solutions were enabled. | `{enabledCount}` solution(s) were enabled and have staged Changes. Push initial commits now? | Commit all with default messages loops all enabled solutions; Commit one-by-one fires `git-configure:9.commit-solution`; Skip. | nothing |
 | `git-configure:9.commit-solution` | gate | consent | 9 | Env-bind only; PER LOOP ITERATION for each enabled solution in one-by-one loop. | Commit initial pending Changes for solution `{uniqueName}` now? Default message: `Initial source-control commit for {uniqueName}`. | Commit now with default message; Commit with custom message (data-gathering, validate non-empty and <=250 chars); Skip this one. Call `commit-to-git.js` directly and continue on per-solution failures. | nothing |
-| `git-configure:10.final` | gate | final | 10 | Final routing based on mode/result. | Surface next-action options based on mode/result. | Env binding with commits: Open ADO folder, Open PR now, Enable more solutions, Done. Env binding without commits: Run `/power-pages:commit-to-git` per solution, Enable solutions, Open ADO folder, Done. Solution binding: Run `/power-pages:commit-to-git` now, Run `/power-pages:sync-from-git` first, Review maker portal Changes, Done. Switch branch: Run `/power-pages:sync-from-git` now, Open ADO branch, Done. Rebind: Run `/power-pages:sync-from-git` now, Open ADO folder, Done. Disconnect: Run setup mode again, Done. | nothing |
+| `git-configure:10.final` | gate | final | 10 | Final routing based on mode/result. | Surface next-action options based on mode/result. | Env binding with commits: Open ADO folder, Open PR now, Enable more solutions, Done. Env binding without commits: Run `/power-pages:git-sync --commit` per solution, Enable solutions, Open ADO folder, Done. Solution binding: Run `/power-pages:git-sync --commit` now, Run `/power-pages:git-sync --pull` first, Review maker portal Changes, Done. Switch branch: Run `/power-pages:git-sync --pull` now, Open ADO branch, Done. Rebind: Run `/power-pages:git-sync --pull` now, Open ADO folder, Done. Disconnect: Run setup mode again, Done. | nothing |
 
 ---
 ## 7. How to add a new gate

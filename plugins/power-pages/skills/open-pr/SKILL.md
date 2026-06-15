@@ -24,9 +24,9 @@ Opens an Azure DevOps pull request from the bound branch to a target branch (def
 
 ## Overview
 
-`commit-to-git` already pushed your work to the bound branch; this skill is the next step — surfacing those commits for review. The auto-generated description summarises *what* the commits did in Power Pages terms (web templates, web pages, site settings, etc.) rather than dumping raw commit messages, so reviewers don't need to read solution XML.
+The `git-sync` commit flow already pushed your work to the bound branch; this skill is the next step — surfacing those commits for review. The auto-generated description summarises *what* the commits did in Power Pages terms (web templates, web pages, site settings, etc.) rather than dumping raw commit messages, so reviewers don't need to read solution XML.
 
-This skill is the typical exit point of the inner-loop daily cycle. After the PR merges (manually in ADO — v1 does not include a `merge-pr` skill), teammates run `/power-pages:sync-from-git` to pick up the merged content.
+This skill is the typical exit point of the inner-loop daily cycle. After the PR merges (manually in ADO — v1 does not include a `merge-pr` skill), teammates run `/power-pages:git-sync --pull` to pick up the merged content.
 
 > 🛈 **PR file diff is often `<<` maker-portal Changes count (HAR-confirmed 2026-06).** A 44-Change → 1-commit → 1-file-diff PR is normal, not a partial commit. Environment-side dedupe means many "Changes" re-serialize to bit-identical YAML and produce no file-level diff. Phase 1's nothing-to-PR gate uses commit count (not file count) — a 1-commit / 0-file PR is still valid. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §19.
 
@@ -106,7 +106,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | Branch `{sourceBranch}` has no commits ahead of `{targetBranch}` — there's nothing to put in a PR. | Nothing to PR | Run /power-pages:commit-to-git first (push pending changes), Pick a different target branch, Exit |
+   | Branch `{sourceBranch}` has no commits ahead of `{targetBranch}` — there's nothing to put in a PR. | Nothing to PR | Run /power-pages:git-sync --commit first (push pending changes), Pick a different target branch, Exit |
 
    *(Note: if the source/target detection is unreliable on the chosen helper, default `targetBranch` to `main` and surface the count as best-effort; do not block PR creation when the count cannot be computed.)*
 

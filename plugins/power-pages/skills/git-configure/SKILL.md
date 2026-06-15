@@ -395,7 +395,7 @@ Steps:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Workspace not clean | Run /power-pages:commit-to-git, Run /power-pages:sync-from-git, Run /power-pages:revert-workspace, Run /power-pages:resolve-conflicts, Cancel |
+> | Git configuration requires a clean workspace, but found Changes=`{C}`, Updates=`{U}`, Conflicts=`{X}`. Continuing would discard in-flight state. | Workspace not clean | Run /power-pages:git-sync --commit, Run /power-pages:git-sync --pull, Run /power-pages:revert-workspace, Run /power-pages:git-sync, Cancel |
 >
 > Do not proceed past Phase 5 unless all three counts are zero or the deleted-source-branch recovery exception applies. Cancellation leaves nothing.
 
@@ -502,7 +502,7 @@ Steps:
         --envUrl "<envUrl>" --solutionUniqueName "<name>" --until-stable
    ```
 
-   If the result is `{ stable:false, trend:"increasing" }`, tell the user: *"Server is still ingesting components — wait until the count stabilises before running `/power-pages:commit-to-git`. Current: `{finalCount}`."* Always report the **stable** `finalCount` (not the early count) in the Phase 8 summary.
+   If the result is `{ stable:false, trend:"increasing" }`, tell the user: *"Server is still ingesting components — wait until the count stabilises before running `/power-pages:git-sync --commit`. Current: `{finalCount}`."* Always report the **stable** `finalCount` (not the early count) in the Phase 8 summary.
 5. For setup/env, verify the placeholder env-level commit (`sourcecontrolbranchconfigurations.branchsyncedcommitid` non-null when available) and report that zero solutions are staged until Phase 9 enables them.
 6. Update `.git-integration-manifest.json` at project root. For bound states, write canonical binding fields. For switch, update branch and `lastVerifiedAt`; leave `lastCommitSha` unchanged. For disconnect, mark the manifest disconnected or remove only the binding fields according to the existing manifest convention; never fabricate a bound state.
 7. Write the run marker with `gitConfigurePath(root, 'lastGitConfigure')`. Include `skill:"git-configure"`, `mode`, status, envUrl, oldBinding, newBinding, warnings, marker version, and timestamps.
@@ -563,8 +563,8 @@ Run only when Phase 9 enabled at least one solution.
 
 ### Other mode follow-ups
 
-- **Solution binding:** report pending Changes and ask in Phase 10 whether to run `/power-pages:commit-to-git` now. Explain that `ConnectToGit` creates at most a placeholder Readme commit; the real content commit requires `commit-to-git`. Preserve the observed `newCommitCreated` behavior from the legacy solution-binding skill.
-- **Switch branch:** report that the binding points to the new branch but environment content may still reflect the old branch. Recommend `/power-pages:sync-from-git` in Phase 10.
+- **Solution binding:** report pending Changes and ask in Phase 10 whether to run `/power-pages:git-sync --commit` now. Explain that `ConnectToGit` creates at most a placeholder Readme commit; the real content commit requires `git-sync --commit`. Preserve the observed `newCommitCreated` behavior from the legacy solution-binding skill.
+- **Switch branch:** report that the binding points to the new branch but environment content may still reflect the old branch. Recommend `/power-pages:git-sync --pull` in Phase 10.
 - **Disconnect:** re-run `detect-git-binding.js` and state clearly that the env or solution is unbound. Recommend setup mode if the user wants to connect again.
 
 **Output:** Mode-specific follow-up work is completed or routed.
@@ -581,10 +581,10 @@ Run only when Phase 9 enabled at least one solution.
 > | Result | Options |
 > |---|---|
 > | Env binding with commits | Open ADO folder, Open PR now, Enable more solutions, Done |
-> | Env binding without commits | Run /power-pages:commit-to-git per solution, Enable solutions, Open ADO folder, Done |
-> | Solution binding | Run /power-pages:commit-to-git now, Run /power-pages:sync-from-git first, Review maker portal Changes, Done |
-> | Switch branch | Run /power-pages:sync-from-git now, Open ADO branch, Done |
-> | Rebind | Run /power-pages:sync-from-git now, Open ADO folder, Done |
+> | Env binding without commits | Run /power-pages:git-sync --commit per solution, Enable solutions, Open ADO folder, Done |
+> | Solution binding | Run /power-pages:git-sync --commit now, Run /power-pages:git-sync --pull first, Review maker portal Changes, Done |
+> | Switch branch | Run /power-pages:git-sync --pull now, Open ADO branch, Done |
+> | Rebind | Run /power-pages:git-sync --pull now, Open ADO folder, Done |
 > | Disconnect | Run setup mode again, Done |
 
 Record skill usage via `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md` with skill name `GitConfigure`.

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
 // Refreshes docs/inner-loop/inner-loop-plan.json with post-run state from
-// the marker files written by inner-loop skills (git-configure,
-// commit-to-git, sync-from-git, resolve-conflicts,
+// the marker files written by inner-loop skills (git-configure, git-sync,
 // revert-workspace, revert-branch, open-pr, diagnose-git-integration).
 //
 // plan-inner-loop writes the plan file once at orchestration start, reflecting
@@ -17,8 +16,7 @@
 // Usage:
 //   node refresh-inner-loop-plan-data.js
 //     --projectRoot <path>
-//     --phase <git-configure|commit-to-git|sync-from-git
-//             |resolve-conflicts|revert-workspace
+//     --phase <git-configure|git-sync|revert-workspace
 //             |revert-branch|open-pr|diagnose|finalize>
 //     [--state-only]      only flip PLAN_STATUS / step status (skip marker read)
 //
@@ -26,17 +24,13 @@
 //   git-configure:
 //     - binding from last-git-configure.json
 //     - state -> "Connected & Clean" (assumes a fresh bind has no pending work)
-//   commit-to-git:
+//   git-sync:
 //     - lastCommit from last-commit.json (sha, message, components)
-//     - pendingCounts.changes -> 0 (post-commit invariant)
-//     - state recomputed from updates/conflicts counts
-//   sync-from-git:
+//     - lastValidation from last-validation.json (dry-run pre-flight)
 //     - lastSync from last-sync.json (pulled updates list)
-//     - pendingCounts.updates -> 0 (post-pull invariant)
-//     - state recomputed
-//   resolve-conflicts:
 //     - lastConflictResolution from last-conflict-resolution.json
-//     - pendingCounts.conflicts -> 0 (post-resolve invariant)
+//     - pendingCounts updated only for marker-backed mutations
+//     - state recomputed from the remaining counts
 //   revert-workspace:
 //     - pendingCounts.changes -> 0
 //     - state -> "Connected & Clean" (if updates/conflicts are also 0) else Stale/Conflicted
@@ -66,9 +60,7 @@ const { gitConfigurePath } = require('./git-configure-paths');
 
 const PHASES = new Set([
   'git-configure',
-  'commit-to-git',
-  'sync-from-git',
-  'resolve-conflicts',
+  'git-sync',
   'revert-workspace',
   'revert-branch',
   'open-pr',
@@ -157,37 +149,31 @@ const HANDLERS = {
     planData.pendingCounts = { changes: 0, updates: 0, conflicts: 0 };
     planData.state = classifyState(planData.binding, planData.pendingCounts);
   },
-  'commit-to-git': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastCommit');
-    if (marker) planData.lastCommit = marker;
-    // Per X-5 (VPC merge): commit-to-git --dry-run writes last-validation.json
-    // and last-commit.json is absent. Pull that marker too so the orchestrator
-    // continues to surface validation findings even when no real commit
-    // happened in this phase.
+  'git-sync': (planData, projectRoot) => {
+    const commit = readJsonMarker(projectRoot, 'lastCommit');
+    if (commit) planData.lastCommit = commit;
+
+    // git-sync --dry-run writes last-validation.json without mutating Dataverse.
+    // Surface it, but only zero Changes when a real commit marker exists.
     const validation = readJsonMarker(projectRoot, 'lastValidation');
     if (validation) planData.lastValidation = validation;
+
+    const sync = readJsonMarker(projectRoot, 'lastSync');
+    if (sync) planData.lastSync = sync;
+
+    const conflict = readJsonMarker(projectRoot, 'lastConflictResolution');
+    if (conflict) planData.lastConflictResolution = conflict;
+
     ensureCountsShape(planData);
-    // Only drop pending changes to 0 on a real-commit run. A dry-run leaves
-    // the count untouched.
-    if (marker) planData.pendingCounts.changes = 0;
-    planData.state = classifyState(planData.binding, planData.pendingCounts);
-  },
-  'sync-from-git': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastSync');
-    if (marker) planData.lastSync = marker;
-    ensureCountsShape(planData);
-    planData.pendingCounts.updates = 0;
-    // Pull might have surfaced new conflicts before completing; trust the marker if it says so.
-    if (marker && typeof marker.conflictsAfter === 'number') {
-      planData.pendingCounts.conflicts = marker.conflictsAfter;
+    if (commit) planData.pendingCounts.changes = 0;
+    if (sync) {
+      planData.pendingCounts.updates = 0;
+      // Pull might surface new conflicts before completing; trust the marker if it says so.
+      if (typeof sync.conflictsAfter === 'number') {
+        planData.pendingCounts.conflicts = sync.conflictsAfter;
+      }
     }
-    planData.state = classifyState(planData.binding, planData.pendingCounts);
-  },
-  'resolve-conflicts': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastConflictResolution');
-    if (marker) planData.lastConflictResolution = marker;
-    ensureCountsShape(planData);
-    planData.pendingCounts.conflicts = 0;
+    if (conflict) planData.pendingCounts.conflicts = 0;
     planData.state = classifyState(planData.binding, planData.pendingCounts);
   },
   'revert-workspace': (planData, projectRoot) => {

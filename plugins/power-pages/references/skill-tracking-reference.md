@@ -56,9 +56,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 | plan-inner-loop | PlanInnerLoop | Site/AI/Skills/PlanInnerLoop |
 | git-configure | GitConfigure | Site/AI/Skills/GitConfigure |
-| commit-to-git | CommitToGit | Site/AI/Skills/CommitToGit |
-| sync-from-git | SyncFromGit | Site/AI/Skills/SyncFromGit |
-| resolve-conflicts | ResolveConflicts | Site/AI/Skills/ResolveConflicts |
+| git-sync | GitSync | Site/AI/Skills/GitSync |
 | revert-workspace | RevertWorkspace | Site/AI/Skills/RevertWorkspace |
 | revert-branch | RevertBranch | Site/AI/Skills/RevertBranch |
 | open-pr | OpenPr | Site/AI/Skills/OpenPr |

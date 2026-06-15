@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 39 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 36 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -351,7 +351,7 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 ### Inner Dev Loop (Dataverse Git integration)
 
-A 10-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: configure Dataverse Git binding, commit pending changes back to a branch, pull teammates' changes in, resolve conflicts, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
+A 7-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: configure Dataverse Git binding, run the per-cycle git-sync loop, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
 
 #### `/plan-inner-loop`
 
@@ -365,28 +365,19 @@ Read-only orchestrator that detects current binding + pending changes + incoming
 
 Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, or validates without mutation.
 
-#### `/commit-to-git`
+#### `/git-sync`
 
-> "Push my changes to ADO" — or, with `--dry-run`, "will my next commit work?"
+> "Sync my Dataverse Git workspace" — push Changes, pull Updates, or resolve Conflicts
 
-Calls `CommitToGit` against the bound branch. Runs 14 pre-flight validators (17 MB file-size cap, unsupported object types, large Canvas Apps, PCF binary duplication, dependency integrity, orphan source-control rows, action=3 conflicts, shared components, default-solution binding, version-bump, IsCustomizable=false, blocked attachments, publisher-prefix consistency, total payload size), polls until the env's pending-changes count reaches zero, verifies the SHA in ADO, and offers to open a PR or tag the commit.
+Unified per-cycle inner-loop skill. Detects Changes / Updates / Conflicts, renders one readable config-vs-bundle-churn summary, previews incoming updates, explains conflicts semantically, then runs the right flow with gates: commit (`CommitToGit`), pull (`RefreshChangesFromGit` + `PullChangesFromGit`), or conflict resolution.
 
-**Flags:**
-- `--dry-run` — run pre-flight only; emit `pre-commit-report.html` + `last-validation.json`; do not touch Dataverse.
-- `--dry-run --json` — additionally stream the orchestrator's JSON envelope to stdout for CI consumption.
-- `--background` — fire-and-forget: POST returns immediately; a detached child polls and writes `last-commit.json` on completion.
+**Modes:**
+- `--dry-run` / `--dry-run --json` — commit pre-flight only; writes `last-validation.json`; no mutation.
+- `--commit` — force the commit flow for pending Changes.
+- `--pull` — force the pull flow for incoming Updates.
+- `--background` — commit fire-and-forget polling.
+- `--hard-delete` — pull with destructive deletion handling; always gated.
 
-#### `/sync-from-git`
-
-> "Pull from the branch"
-
-Two-step `RefreshChangesFromGit` + `PullChangesFromGit`. Detects conflicts and dispatches `/resolve-conflicts` automatically. Gates explicitly on the destructive `DeleteDeletedComponents: true` flag.
-
-#### `/resolve-conflicts`
-
-> "Fix the conflicts in my env"
-
-Walks per-conflict Keep-Existing / Accept-Incoming decisions; collapses to one bundled prompt when more than 3 conflicts exist. Renders a side-by-side HTML diff page.
 
 #### `/revert-workspace`
 

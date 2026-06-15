@@ -155,7 +155,7 @@ async function resolveSolutionUniqueNameAuto({ envUrl, token }) {
   if (candidates.length === 0) {
     throw new Error(
       '--solutionUniqueName was omitted and no bound solution has pending changes. ' +
-      'There is nothing to commit. Run /power-pages:sync-from-git if Updates are pending.',
+      'There is nothing to commit. Run /power-pages:git-sync --pull if Updates are pending.',
     );
   }
 

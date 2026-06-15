@@ -14,7 +14,7 @@ description: >-
   explicit user approval.
   Writes docs/inner-loop/diagnosis.html and docs/inner-loop/last-diagnosis.json.
   Use when asked: "diagnose git integration", "something's broken with git",
-  "git sync isn't working", "why did commit-to-git fail", "help me debug
+  "git sync isn't working", "why did git-sync fail", "help me debug
   connect-to-git", "inner-loop error", "investigate git failure",
   "run diagnose-git-integration".
 user-invocable: true
@@ -35,7 +35,7 @@ This is the inner-loop counterpart of `/power-pages:diagnose-deployment` for the
 
 The skill runs in three modes (chosen at the Phase 1 intent gate):
 1. **Paste an error** — the user pastes a raw error string; the skill pattern-matches against the catalog regex set.
-2. **Describe symptoms** — the user picks symptoms from a checklist (e.g. "commit-to-git failed", "binding looks wrong", "files not appearing in ADO"); the skill maps each to candidate patterns.
+2. **Describe symptoms** — the user picks symptoms from a checklist (e.g. "git-sync failed", "binding looks wrong", "files not appearing in ADO"); the skill maps each to candidate patterns.
 3. **Full scan** — the skill runs every pattern's detector script in parallel; useful when the user doesn't have a specific error but knows "something is off".
 
 No artifacts are mutated without per-finding consent. The `auto-fix` consent gate is a single loop-style marker (`diagnose-git-integration:5.auto-fix`) reused for each fixable Error finding — same loop-style pattern as `diagnose-deployment:6.auto-fix`. Answers are Yes / No / Skip-all-remaining.
@@ -43,7 +43,7 @@ No artifacts are mutated without per-finding consent. The `auto-fix` consent gat
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-error-catalog.md` (18 patterns IL-001–IL-018)
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md` §3 (Broken state — this skill is the recommended remediation)
-- `${CLAUDE_PLUGIN_ROOT}/references/conflict-resolution-patterns.md` (Pattern IL-010 fix dispatches to `resolve-conflicts`; IL-015 covers tenants where the API is absent)
+- `${CLAUDE_PLUGIN_ROOT}/references/conflict-resolution-patterns.md` (Pattern IL-010 fix dispatches to `git-sync`; IL-015 covers tenants where the API is absent)
 
 ## Prerequisites
 
@@ -81,7 +81,7 @@ Steps:
    | What's broken? | Diagnosis input | Paste an error message (I'll pattern-match against the catalog), Describe the symptoms (I'll surface a checklist), Run the full 13-pattern scan, Cancel |
 
    - **Paste an error** → collect the raw error text via a follow-up `AskUserQuestion`. The text becomes `symptomInput`.
-   - **Describe symptoms** → present a multi-select checklist of common symptoms (e.g. *"commit-to-git failed"*, *"git-configure setup failed"*, *"binding looks wrong"*, *"files I committed aren't in ADO"*, *"sync-from-git keeps reporting conflicts"*). The selected items become `symptomInput`.
+   - **Describe symptoms** → present a multi-select checklist of common symptoms (e.g. *"git-sync failed"*, *"git-configure setup failed"*, *"binding looks wrong"*, *"files I committed aren't in ADO"*, *"git-sync keeps reporting conflicts"*). The selected items become `symptomInput`.
    - **Full scan** → set `symptomInput = "*"` (matches every pattern's detector).
    - **Cancel** → exit cleanly.
 
@@ -111,7 +111,7 @@ Steps:
 
    - For paste-an-error mode, gate on regex match between the error text and the pattern's known signature strings before running the detector — patterns whose signature doesn't match are skipped.
 
-   - For describe-symptoms mode, map each selected symptom to its candidate pattern set (e.g. *"sync-from-git keeps reporting conflicts"* → only run IL-010, IL-011 detectors).
+   - For describe-symptoms mode, map each selected symptom to its candidate pattern set (e.g. *"git-sync keeps reporting conflicts"* → only run IL-010, IL-011 detectors).
 
    - For full-scan mode, run every detector in parallel.
 
@@ -208,7 +208,7 @@ Steps:
 
 3. Branch on each answer:
 
-   - **Yes** → dispatch the `fixDelegate` skill (e.g. IL-003 → `/power-pages:git-configure`; IL-010 → `/power-pages:resolve-conflicts`; IL-011 → re-run `/power-pages:plan-inner-loop` to refresh manifest). Wait for the dispatched skill to return, then continue the loop with the next finding. Record outcome on the finding (`autoFix.status`).
+   - **Yes** → dispatch the `fixDelegate` skill (e.g. IL-003 → `/power-pages:git-configure`; IL-010 → `/power-pages:git-sync`; IL-011 → re-run `/power-pages:plan-inner-loop` to refresh manifest). Wait for the dispatched skill to return, then continue the loop with the next finding. Record outcome on the finding (`autoFix.status`).
    - **No** → record `autoFix.status: "skipped-by-user"`; continue.
    - **Skip ALL** → set a `skipAll` flag; for this and every remaining auto-fixable finding, record `autoFix.status: "skipped-by-user-bulk"`; exit the loop.
 
@@ -284,7 +284,7 @@ Steps:
    ```
 
 2. Suggest the next step:
-   - If any auto-fix was applied → suggest the user re-run the originally-failing skill (e.g. `/power-pages:commit-to-git`).
+   - If any auto-fix was applied → suggest the user re-run the originally-failing skill (e.g. `/power-pages:git-sync --commit`).
    - If only non-fixable errors remain → suggest the manual remediation from the catalog.
    - If errors = 0 and warnings = 0 → suggest `/power-pages:plan-inner-loop` to confirm the env is back to a known-good state.
 

@@ -211,9 +211,7 @@ const ALM_SKILLS = new Set([
 const INNER_LOOP_SKILLS = new Set([
   'plan-inner-loop',
   'git-configure',
-  'commit-to-git',
-  'sync-from-git',
-  'resolve-conflicts',
+  'git-sync',
   'revert-workspace',
   'revert-branch',
   'open-pr',
