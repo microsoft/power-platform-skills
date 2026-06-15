@@ -56,9 +56,9 @@ Context passed to `resolve`:
 
 ## 4. Dispatcher resolution (shared, generic)
 
-The dispatcher discovers an optional resolver **by convention** — a `resolver.js` sibling of the resolved `ikey.json` — with an env override for tests. iKey/collector are chosen by this precedence:
+The dispatcher discovers an optional resolver **by convention** — a `resolver.js` sibling of the resolved `ikey.json`. There is no resolver-path override: tests exercise the seam by writing a stub `resolver.js` next to the temp `ikey.json` they already create. iKey/collector are chosen by this precedence:
 
-1. **Env override** `POWER_PLATFORM_SKILLS_IKEY` / `_COLLECTOR` (test seam) — unchanged.
+1. **Env override** `POWER_PLATFORM_SKILLS_IKEY` / `_COLLECTOR` (existing test seam) — unchanged.
 2. **Injected resolver** `resolver.js` (if present) — `await resolver.resolve({event, cfg, cloud, configDir})`.
 3. **Static config** — `cfg.instrumentationKey` + `cfg.collector_url` (zero-effort single-key plugins).
 4. **None** → `keyMissing` → local mirror already written, no POST (unchanged).
@@ -95,13 +95,11 @@ A ~15-line shared helper so the dispatcher and `emit-from-prompt` discover the r
 "use strict";
 const path = require("node:path");
 
-// Discover an optional resolver module. Env override wins (test seam); else the
-// conventional resolver.js next to the plugin's ikey.json. Returns null when
-// none is found or it fails to load (fail open → static/no-op path).
+// Discover an optional resolver module: the conventional resolver.js next to the
+// plugin's ikey.json. Returns null when none is found or it fails to load
+// (fail open → static/no-op path).
 function loadResolver(dir) {
-  const override = process.env.POWER_PLATFORM_SKILLS_RESOLVER || "";
-  const candidate = override || path.join(dir, "resolver.js");
-  try { return require(candidate); } catch { return null; }
+  try { return require(path.join(dir, "resolver.js")); } catch { return null; }
 }
 
 module.exports = { loadResolver };
@@ -202,12 +200,12 @@ Both keep `disabled` (kill switch) and `event_stream_name` (generic, read by cal
 **Move (no logic change):** `region-resolver.test.js`, `region-cache.test.js`, `artemis-service.test.js` → `plugins/power-pages/scripts/tests/`. Fix relative `require` paths to `../lib/telemetry/region/...`.
 
 **New:**
-- `shared/telemetry/tests/resolver-loader.test.js` — env override wins; conventional path found; missing/broken module → null.
+- `shared/telemetry/tests/resolver-loader.test.js` — conventional `resolver.js` in the dir is loaded; missing/broken module → null.
 - `plugins/power-pages/scripts/tests/resolver.test.js` — `resolve` maps region lookup; `isProvisioned` true/false by default-region key.
 
 **Rewrite `shared/telemetry/tests/emit-dispatcher.test.js`:**
 - Drop the 3 region-specific tests (default_region / cache-hit / no-orgId) — they move to the plugin resolver/region tests.
-- Add: static-key path (`instrumentationKey`/`collector_url` in `ikey.json` → POST), injected-resolver path (point `POWER_PLATFORM_SKILLS_RESOLVER` at a stub module that returns a fixed iKey → POST uses it), and no-resolver-no-static path (→ no POST, local mirror written). Keep all kill-switch / opt-out / local-mirror / sanitize tests unchanged.
+- Add: static-key path (`instrumentationKey`/`collector_url` in `ikey.json` → POST), injected-resolver path (write a stub `resolver.js` next to the temp `ikey.json` returning a fixed iKey → POST uses it), and no-resolver-no-static path (→ no POST, local mirror written). Keep all kill-switch / opt-out / local-mirror / sanitize tests unchanged.
 
 **Adjust `emit-from-prompt.test.js`:** gate tests use the generic `isProvisioned`/static path; an injected stub resolver drives the provisioned/unprovisioned cases.
 
@@ -226,11 +224,11 @@ Both keep `disabled` (kill switch) and `event_stream_name` (generic, read by cal
 **Effort:** ~one focused session. ~90 lines of real new/changed logic (adapter + dispatcher block + two gates + loader), ~170 lines of test scaffolding (new + rewrite), ~80 lines of docs. ~643 lines of region code/tests **relocate** unchanged via `git mv`.
 
 **Risks (both contained):**
-1. **Resolver discovery path** — `dirname(ikeyJsonPath())` must point at the plugin's real telemetry dir even though the dispatcher runs from the symlinked `lib/`. Mitigation: discovery keys off `POWER_PLATFORM_SKILLS_IKEY_JSON` (already passed by hooks) and a `POWER_PLATFORM_SKILLS_RESOLVER` override for tests; `loadResolver` fails open to the static/no-op path.
+1. **Resolver discovery path** — `dirname(ikeyJsonPath())` must point at the plugin's real telemetry dir even though the dispatcher runs from the symlinked `lib/`. Mitigation: discovery keys off `POWER_PLATFORM_SKILLS_IKEY_JSON` (already passed by hooks); `loadResolver` fails open to the static/no-op path; tests write a stub `resolver.js` beside the temp `ikey.json`.
 2. **Test-coverage equivalence** — moving region tests + rewriting dispatcher tests must not drop a case. Mitigation: explicit acceptance grep for `region`/`artemis` under `shared/telemetry/`, and the integration test that exercises the real resolver through the seam.
 
 ## 13. Decisions (confirmed)
 
-- Discovery by **convention** (`resolver.js` beside `ikey.json`), env override for tests. ✓
+- Discovery by **convention** only (`resolver.js` beside `ikey.json`); no resolver-path env var — tests drop a stub `resolver.js` beside the temp `ikey.json`. ✓
 - **Static-key fallback** kept as the zero-effort default. ✓
 - Resolution stays in the **background dispatcher**. ✓
