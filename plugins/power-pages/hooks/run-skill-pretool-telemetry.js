@@ -9,13 +9,14 @@ const crypto = require("node:crypto");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
   sessionLib = require(path.join(TELEMETRY_DIR, "lib", "session"));
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
+  resolverLoader = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
 } catch {
   process.exit(0);
 }
@@ -43,20 +44,9 @@ function readIkey() {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(TELEMETRY_DIR, "ikey.json"), "utf8")
     );
-    const defaultRegion = cfg.default_region || "us";
-    const defaultEntry = (cfg.regions && cfg.regions[defaultRegion]) || null;
-    return {
-      eventStreamName: cfg.event_stream_name || "",
-      disabled: cfg.disabled === true,
-      defaultInstrumentationKey:
-        (defaultEntry && defaultEntry.instrumentation_key) || "",
-    };
+    return { cfg, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return {
-      eventStreamName: "",
-      disabled: false,
-      defaultInstrumentationKey: "",
-    };
+    return { cfg: null, eventStreamName: "", disabled: false };
   }
 }
 
@@ -95,9 +85,14 @@ function readStdin() {
   // enriched event is still built and dispatched so the detached dispatcher can
   // write the local diagnostic mirror; it reads the per-plugin config and skips
   // the POST. (Opting out therefore costs the same as an enabled run.)
-  const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey();
+  const { cfg, eventStreamName, disabled } = readIkey();
   if (disabled) process.exit(0);
-  if (!defaultInstrumentationKey) process.exit(0);
+  const resolver = resolverLoader.loadResolver(TELEMETRY_DIR);
+  const provisioned =
+    resolver && typeof resolver.isProvisioned === "function"
+      ? resolver.isProvisioned(cfg)
+      : !!(cfg && cfg.instrumentationKey);
+  if (!provisioned) process.exit(0);
 
   const correlation_id = crypto.randomUUID();
 

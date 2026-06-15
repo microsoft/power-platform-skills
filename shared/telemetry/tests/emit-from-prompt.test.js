@@ -16,13 +16,19 @@ function mkTelemetryDir({ instrumentationKey, collectorUrl, eventStreamName, dis
       event_stream_name: eventStreamName,
       disabled: disabled === true,
       default_region: "us",
-      regions: {
-        us: {
-          instrumentation_key: instrumentationKey,
-          collector_url: collectorUrl,
-        },
-      },
+      regions: { us: { instrumentation_key: instrumentationKey, collector_url: collectorUrl } },
     })
+  );
+  // Drop the region resolver beside ikey.json so the generic isProvisioned gate
+  // behaves exactly like production (provisioned == default-region key present).
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = {" +
+      "async resolve() { return null; }," +
+      "isProvisioned(cfg) {" +
+      "  const e = cfg && cfg.regions && cfg.regions[(cfg && cfg.default_region) || 'us'];" +
+      "  return !!(e && e.instrumentation_key);" +
+      "} };"
   );
   return tmp;
 }
@@ -269,7 +275,7 @@ test("does not throw when ikey.json is missing", () => {
       _readPacAuth: () => null,
     })
   );
-  // Missing ikey.json → defaultInstrumentationKey is empty → no emit.
+  // Missing ikey.json → cfg is null → gate not provisioned → no emit.
   assert.equal(captured.event, undefined);
 });
 

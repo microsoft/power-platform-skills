@@ -9,6 +9,7 @@ const { detectSlashCommand } = require("./prompt-detector");
 const { buildSkillStarted } = require("./events");
 const { getSessionId } = require("./session");
 const { fireAndForget } = require("./emit-spawn");
+const { loadResolver } = require("./resolver-loader");
 const { readPacAuth } = require("./pac-auth");
 const { readPacCliVersion, readAiAgent } = require("./agent-info");
 
@@ -17,23 +18,13 @@ function readIkey(telemetryDir) {
   // ikey.json so tests don't have to mutate the checked-in config file.
   const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
   const ikeyPath =
-    override && override.trim()
-      ? override
-      : path.join(telemetryDir, "ikey.json");
+    override && override.trim() ? override : path.join(telemetryDir, "ikey.json");
+  const dir = path.dirname(ikeyPath);
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
-    const defaultRegion = cfg.default_region || "us";
-    const defaultEntry = (cfg.regions && cfg.regions[defaultRegion]) || {};
-    return {
-      eventStreamName: cfg.event_stream_name || "",
-      disabled: cfg.disabled === true,
-      // Gate-4 key: the dispatcher resolves the actual region at emit time,
-      // but we short-circuit here if the default region isn't even configured
-      // so a half-provisioned plugin pays no PAC / agent-info cost.
-      defaultInstrumentationKey: defaultEntry.instrumentation_key || "",
-    };
+    return { cfg, dir, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return { eventStreamName: "", disabled: false, defaultInstrumentationKey: "" };
+    return { cfg: null, dir, eventStreamName: "", disabled: false };
   }
 }
 
@@ -64,9 +55,16 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   // no cost. The user opt-out is NOT checked here: the event is still built and
   // dispatched so the detached dispatcher can write the local diagnostic mirror;
   // the dispatcher reads the per-plugin config and skips the POST when opted out.
-  const { eventStreamName, disabled, defaultInstrumentationKey } = readIkey(telemetryDir);
+  const { cfg, dir, eventStreamName, disabled } = readIkey(telemetryDir);
   if (disabled) return { emitted: false, skillName };
-  if (!defaultInstrumentationKey) return { emitted: false, skillName };
+  // Provisioning fast-gate (generic): a plugin resolver decides "is there a key
+  // worth paying the pac shellout for?"; default is "static key present".
+  const resolver = loadResolver(dir);
+  const provisioned =
+    resolver && typeof resolver.isProvisioned === "function"
+      ? resolver.isProvisioned(cfg)
+      : !!(cfg && cfg.instrumentationKey);
+  if (!provisioned) return { emitted: false, skillName };
 
   const pacReader = typeof _readPacAuth === "function" ? _readPacAuth : readPacAuth;
   let pacAuth = null;
