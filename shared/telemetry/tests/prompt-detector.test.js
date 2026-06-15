@@ -33,6 +33,22 @@ test("returns null for casual mid-sentence mention", () => {
   );
 });
 
+test("matches the bare form without the plugin namespace", () => {
+  assert.equal(detectSlashCommand("/add-seo", OPTS), "add-seo");
+  assert.equal(detectSlashCommand("  /create-site", OPTS), "create-site");
+  assert.equal(detectSlashCommand("/test-site --foo", OPTS), "test-site");
+  assert.equal(detectSlashCommand("/add-seo\nmore", OPTS), "add-seo");
+});
+
+test("returns null for a bare command that is not a tracked skill", () => {
+  assert.equal(detectSlashCommand("/clear", OPTS), null);
+  assert.equal(detectSlashCommand("/not-a-real-skill", OPTS), null);
+});
+
+test("returns null for a bare substring of a tracked skill", () => {
+  assert.equal(detectSlashCommand("/add-seo-extra", OPTS), null);
+});
+
 test("returns null for unknown skill", () => {
   assert.equal(detectSlashCommand("/power-pages:not-a-real-skill", OPTS), null);
 });

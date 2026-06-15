@@ -187,6 +187,90 @@ test("readAiAgent: CLAUDECODE wins over COPILOT_CLI when both set", () => {
   assert.equal(result.aiAgentName, "Claude Code");
 });
 
+test("readAiAgent returns Copilot CLI when COPILOT_CLI is truthy", () => {
+  const result = agentInfo.readAiAgent({
+    COPILOT_CLI: "true",
+    COPILOT_CLI_VERSION: "1.0.57",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "Copilot CLI",
+    aiAgentVersion: "1.0.57",
+  });
+});
+
+test("readAiAgent returns Codex from CODEX_CLI env", () => {
+  const result = agentInfo.readAiAgent({
+    CODEX_CLI: "1",
+    CODEX_CLI_VERSION: "0.8.1",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "Codex",
+    aiAgentVersion: "0.8.1",
+  });
+});
+
+test("readAiAgent returns OpenCode from OPENCODE env", () => {
+  const result = agentInfo.readAiAgent({
+    OPENCODE: "1",
+    OPENCODE_VERSION: "2.3.4",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "OpenCode",
+    aiAgentVersion: "2.3.4",
+  });
+});
+
+test("readAiAgent returns Hermes from HERMES_AGENT env", () => {
+  const result = agentInfo.readAiAgent({
+    HERMES_AGENT: "1",
+    HERMES_AGENT_VERSION: "3.4.5",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "Hermes",
+    aiAgentVersion: "3.4.5",
+  });
+});
+
+test("readAiAgent returns OpenClaw from OPENCLAW_CLI env", () => {
+  const result = agentInfo.readAiAgent({
+    OPENCLAW_CLI: "1",
+    OPENCLAW_CLI_BINARY_VERSION: "4.5.6",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "OpenClaw",
+    aiAgentVersion: "4.5.6",
+  });
+});
+
+test("readAiAgent detects known agent and version from AI_AGENT", () => {
+  const result = agentInfo.readAiAgent({
+    AI_AGENT: "opencode_2-1-0_agent",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "OpenCode",
+    aiAgentVersion: "2.1.0",
+  });
+});
+
+test("readAiAgent backfills explicit known agent version from matching env", () => {
+  const result = agentInfo.readAiAgent({
+    AI_AGENT_NAME: "Codex",
+    CODEX_CLI_VERSION: "0.9.0",
+  });
+  assert.deepEqual(result, {
+    aiAgentName: "Codex",
+    aiAgentVersion: "0.9.0",
+  });
+});
+
+test("readAiAgent ignores falsey known-agent env flags", () => {
+  const result = agentInfo.readAiAgent({
+    CODEX_CLI: "0",
+    OPENCODE: "false",
+  });
+  assert.deepEqual(result, { aiAgentName: "", aiAgentVersion: "" });
+});
+
 test("readPacCliVersion parses semver from pac --version output", () => {
   agentInfo._resetCache();
   const result = agentInfo.readPacCliVersion({
