@@ -96,3 +96,14 @@ test('hint mentions remediation steps when repo is uninitialized', async () => {
     assert.match(r.hint, /empty|README|initial commit|Initialize/i);
   }
 });
+
+test('verify-repo-initialized: --tokenFile JSON envelope is accepted as token input', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-verify-repo-initialized.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    const result = await verifyRepoInitialized({ organization: 'nonexistent-org-tokenfile-test', project: 'p', repository: 'r', tokenFile });
+    assert.ok(!String(result.error || '').includes('No ADO token provided'));
+    assert.ok(!String(result.error || '').includes('token is required'));
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

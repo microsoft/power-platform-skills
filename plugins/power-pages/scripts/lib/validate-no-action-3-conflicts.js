@@ -29,7 +29,7 @@
 //         severity: 'blocker',
 //         key: 'action-3-conflict',
 //         message: 'Conflict on <path> (action=3, useraction=<label>).',
-//         ref: 'IL-010',
+//         ref: 'IL-CONFLICT-002',
 //         details: {
 //           sourcecontrolcomponentid, componentType, componentPath,
 //           useractionLabel,
@@ -146,7 +146,7 @@ async function validateNoAction3Conflicts({ envUrl, token, solutionUniqueName, s
         severity: 'info',
         key: 'conflict-detection-unavailable',
         message: 'sourcecontrolcomponents entity returned 404 — conflict detection unavailable on this tenant.',
-        ref: 'IL-016',
+        ref: 'IL-CONFLICT-001',
         details: { statusCode: 404 },
         remediation: 'Skip this validator on this tenant; CommitToGit will surface 0x80098015 inline if conflicts actually exist.',
       }],
@@ -173,7 +173,7 @@ async function validateNoAction3Conflicts({ envUrl, token, solutionUniqueName, s
       severity: 'blocker',
       key: 'action-3-conflict',
       message: `Conflict on ${r.componentpath || r.sourcecontrolcomponentid} (useraction=${useractionLabel}).`,
-      ref: 'IL-010',
+      ref: 'IL-CONFLICT-002',
       details: {
         sourcecontrolcomponentid: r.sourcecontrolcomponentid,
         componentType: r.componenttypename || (r.componenttype !== undefined ? String(r.componenttype) : null),
@@ -190,7 +190,7 @@ async function validateNoAction3Conflicts({ envUrl, token, solutionUniqueName, s
       severity: 'info',
       key: 'action-3-truncation',
       message: `Server reports ${totalCount} conflict rows; only the first ${rows.length} returned. Increase --top to see more.`,
-      ref: 'IL-010',
+      ref: 'IL-CONFLICT-003',
       details: { totalCount, returnedCount: rows.length, top },
       remediation: 'Re-run with --top <larger-number> to enumerate the remaining rows.',
     });

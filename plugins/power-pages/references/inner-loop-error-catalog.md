@@ -2,6 +2,8 @@
 
 Known failure patterns for Dataverse Git integration (Connect-to-Git). Used by the `diagnose-git-integration` skill to pattern-match symptoms against root causes and propose auto-fixes.
 
+For greppable validator finding codes (`IL-<DOMAIN>-<NNN>`), see [`error-codes.md`](error-codes.md).
+
 Each pattern includes: detection signal, root cause, severity, whether an auto-fix is available, and the fix procedure.
 
 > **Naming convention.** Patterns are numbered `IL-001`, `IL-002`, … (inner-loop). They live alongside (not inside) `deployment-error-catalog.md`'s deployment patterns (`Pattern 1`, `Pattern 2`, …).
@@ -64,7 +66,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 1. Detect with `verify-repo-initialized.js` **before** calling `ConnectToGit`.
 2. **Ask explicit user permission:** *"The ADO repo `{org}/{project}/{repo}` is empty. Initialize it now with a single README commit on `{branch}` so `ConnectToGit` can bind cleanly?"* (consent gate, two options: Initialize now / Cancel.)
 3. If approved: invoke `scripts/lib/init-ado-repo.js --organization <o> --project <p> --repository <r> --branch <b> --token <adoToken>`. The helper GETs the repo metadata first and returns `alreadyInitialized:true` (no-op) when `defaultBranch` is already set — safe to retry. Otherwise it POSTs to `/_apis/git/repositories/{repoId}/pushes?api-version=7.1` with `oldObjectId` set to 40 zeros (ADO empty-repo marker) and a default README body. On 403 it surfaces an actionable "your account lacks Contribute" hint; on 404 it surfaces a "repository not found" hint.
-4. The helper is idempotent — no explicit re-verification step is needed. Continue to Phase 3 of `setup-git-integration`.
+4. The helper is idempotent — no explicit re-verification step is needed. Continue with `git-configure`.
 
 ---
 
@@ -91,7 +93,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 - `CommitToGit` returns: `Permission denied while pushing to repository.`
 - ADO repo permission check returns `Contribute = false` for the calling identity.
 
-**Root cause:** The Dataverse → ADO connection's identity (or, when applicable, the user's Entra-issued bearer token used for ADO pre-checks) lacks Contribute on the repo. Note: `setup-git-integration` no longer collects a PAT — it acquires an Entra OAuth token via `get-ado-token.js`. A 403 from any ADO REST call (including `init-ado-repo.js`'s push) means the calling identity does not hold Contribute, regardless of which auth shape (PAT or Bearer JWT) was used.
+**Root cause:** The Dataverse → ADO connection's identity (or, when applicable, the user's Entra-issued bearer token used for ADO pre-checks) lacks Contribute on the repo. Note: `git-configure` no longer collects a PAT — it acquires an Entra OAuth token via `get-ado-token.js`. A 403 from any ADO REST call (including `init-ado-repo.js`'s push) means the calling identity does not hold Contribute, regardless of which auth shape (PAT or Bearer JWT) was used.
 
 **Severity:** Error
 
@@ -143,7 +145,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 **Detection signal:**
 
-- User invokes `setup-git-integration` or `connect-solution-to-git` targeting `Default` or `Common Data Service Default Solution`.
+- User invokes `git-configure` targeting `Default` or `Common Data Service Default Solution`.
 - API rejects with: `Default solutions cannot be connected to Git source control.`
 
 **Root cause:** Platform restriction. Documented in `binding-strategy.md` §5.
@@ -205,7 +207,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
 
 1. Confirm via `verify-repo-initialized.js --branch <bound branch>` — returns `{ exists: false }`.
 2. **Ask explicit user permission:** *"The branch `{branch}` no longer exists in the bound repo. Disconnect this env's stale binding and prompt you to re-bind to a current branch? This does not delete any local components."*
-3. If approved: `disconnect-from-git.js` + suggest `setup-git-integration` again.
+3. If approved: `disconnect-from-git.js` + suggest `git-configure` again.
 
 ---
 
@@ -262,7 +264,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
   - `GET {envUrl}/api/data/v9.2/powerpagecomponents?$top=1` returns 200 with a real record including the `powerpagecomponentid` field. Records are accessible.
   - `PreValidateGitComponents` on the same solution returns HTTP 200 with empty `ValidationMessages` — the platform's own pre-validator sees nothing wrong.
   - `PublishAllXml` returns 204 but the pull still fails after — it's not a stale metadata cache.
-- `CommitToGit`, `RefreshChangesFromGit`, `ValidateSourceControlConnection`, `branch-switch`, `commit-to-git --dry-run`, and conflict-detection all work on the same solution. The failure is isolated to the pull mutation.
+- `CommitToGit`, `RefreshChangesFromGit`, `ValidateSourceControlConnection`, `git-configure` switch mode, `commit-to-git --dry-run`, and conflict-detection all work on the same solution. The failure is isolated to the pull mutation.
 
 **Root cause:** A bug in the Dataverse SourceControl plugin's pull-direction handler. When the handler enumerates the solution's components and encounters one of type `10429` (`powerpagecomponent`), an internal metadata-resolver call returns a result that fails the "primary key column is present" assertion, even though the public metadata API contradicts that conclusion. This is platform-internal and not user-fixable at the OData layer. Likely root location is the plugin's compiled-metadata cache or a SQL view (different from the publicly exposed `EntityDefinitions` endpoint) that it reads first. **The previous IL-014 hypothesis — that the entity was misregistered with `IsCustomEntity=true` — is incorrect.** `IsCustomEntity=true` is the normal state for ALL Power Pages entities on tenants installed via the modern provisioning path (verified against `mspp_contentsnippet` which is undeniably Microsoft-managed).
 
@@ -301,7 +303,7 @@ Each pattern includes: detection signal, root cause, severity, whether an auto-f
    - A note that `PublishAllXml`, `RefreshChangesFromGit`, and disconnecting+reconnecting to git all do NOT clear the condition.
    - The histogram of failing-solution component types (the count of `componenttype = 10429` rows is the critical signal).
    - Tag the ticket as "Power Platform Pipelines / Git Integration / SourceControl plugin metadata resolver".
-4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The commit-to-git half of the loop (`/power-pages:commit-to-git`, `/power-pages:open-pr`, `/power-pages:branch-switch`) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
+4. **Until resolved:** instruct the user to remove `PullChangesFromGit` from their inner-loop workflow on this env for any solution containing `powerpagecomponent` records. The commit-to-git half of the loop (`/power-pages:commit-to-git`, `/power-pages:open-pr`, `/power-pages:git-configure` switch mode) still works — use those to snapshot dev changes to ADO. For pulling changes INTO this env, use `/power-pages:import-solution` with a zip exported from the source env instead.
 
 ---
 

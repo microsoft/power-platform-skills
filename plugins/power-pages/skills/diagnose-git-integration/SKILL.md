@@ -81,7 +81,7 @@ Steps:
    | What's broken? | Diagnosis input | Paste an error message (I'll pattern-match against the catalog), Describe the symptoms (I'll surface a checklist), Run the full 13-pattern scan, Cancel |
 
    - **Paste an error** → collect the raw error text via a follow-up `AskUserQuestion`. The text becomes `symptomInput`.
-   - **Describe symptoms** → present a multi-select checklist of common symptoms (e.g. *"commit-to-git failed"*, *"setup-git-integration failed"*, *"binding looks wrong"*, *"files I committed aren't in ADO"*, *"sync-from-git keeps reporting conflicts"*). The selected items become `symptomInput`.
+   - **Describe symptoms** → present a multi-select checklist of common symptoms (e.g. *"commit-to-git failed"*, *"git-configure setup failed"*, *"binding looks wrong"*, *"files I committed aren't in ADO"*, *"sync-from-git keeps reporting conflicts"*). The selected items become `symptomInput`.
    - **Full scan** → set `symptomInput = "*"` (matches every pattern's detector).
    - **Cancel** → exit cleanly.
 
@@ -115,6 +115,10 @@ Steps:
 
    - For full-scan mode, run every detector in parallel.
 
+   Manifest reconcile (B3): whenever a detector calls `detect-git-binding.js`, compare `.git-integration-manifest.json` against that server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: diagnose-git-integration:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · diagnose-git-integration:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
 2. Record per-pattern:
 
    ```json
@@ -125,7 +129,7 @@ Steps:
      "severity":          "Error"|"Warning"|"Info",
      "evidence":          "<short detector output>",
      "autoFixAvailable":  true|false,
-     "fixDelegate":       "/power-pages:setup-git-integration"  // null if manual
+     "fixDelegate":       "/power-pages:git-configure"  // null if manual
    }
    ```
 
@@ -204,7 +208,7 @@ Steps:
 
 3. Branch on each answer:
 
-   - **Yes** → dispatch the `fixDelegate` skill (e.g. IL-003 → `/power-pages:setup-git-integration`; IL-010 → `/power-pages:resolve-conflicts`; IL-011 → re-run `/power-pages:plan-inner-loop` to refresh manifest). Wait for the dispatched skill to return, then continue the loop with the next finding. Record outcome on the finding (`autoFix.status`).
+   - **Yes** → dispatch the `fixDelegate` skill (e.g. IL-003 → `/power-pages:git-configure`; IL-010 → `/power-pages:resolve-conflicts`; IL-011 → re-run `/power-pages:plan-inner-loop` to refresh manifest). Wait for the dispatched skill to return, then continue the loop with the next finding. Record outcome on the finding (`autoFix.status`).
    - **No** → record `autoFix.status: "skipped-by-user"`; continue.
    - **Skip ALL** → set a `skipAll` flag; for this and every remaining auto-fixable finding, record `autoFix.status: "skipped-by-user-bulk"`; exit the loop.
 
@@ -242,7 +246,7 @@ Steps:
          "severity":    "Error",
          "evidence":    "...",
          "autoFixAvailable": true,
-         "fixDelegate": "/power-pages:setup-git-integration",
+         "fixDelegate": "/power-pages:git-configure",
          "autoFix":     { "status": "applied" }
        }
      ],

@@ -146,3 +146,15 @@ test('ado-list-commits: HTTP 404 surfaces error envelope', async () => {
   assert.equal(r.statusCode, 404);
   assert.equal(r.errorCode, 'BranchNotFoundException');
 });
+
+test('ado-list-commits: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-list-commits.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 200, body: JSON.stringify({ value: [] }) }]);
+  try {
+    const r = await listCommits({ organization: 'o', project: 'p', repository: 'r', branch: 'main', tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.count, 0);
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

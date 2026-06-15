@@ -179,14 +179,18 @@ async function pollAndProbe({ hostEnvUrl, token, stageRunId, intervalMs, maxAtte
       try {
         const data = JSON.parse(probe.body);
         if (data.stagerunstatus === STAGE_RUN_STATUS_PENDING_APPROVAL) {
-          return { status: 'PendingApproval', validationResults: data.validationresults || null };
+          return { status: 'PendingApproval', ref: 'IL-STAGE-003', validationResults: data.validationresults || null };
         }
       } catch {
         // fall through to timeout/failed classification
       }
     }
     const msg = pollErr && pollErr.message ? pollErr.message : String(pollErr);
-    return { status: /timed out/i.test(msg) ? 'Timeout' : 'Failed', error: msg };
+    return {
+      status: /timed out/i.test(msg) ? 'Timeout' : 'Failed',
+      ref: /timed out/i.test(msg) ? 'IL-STAGE-004' : 'IL-STAGE-005',
+      error: msg,
+    };
   }
 }
 
@@ -197,6 +201,7 @@ async function validateOne({ hostEnvUrl, token, stageId, sourceDeploymentEnviron
       solutionId: spec && spec.solutionId,
       stageRunId: null,
       status: 'Error',
+      ref: 'IL-STAGE-001',
       error: 'spec missing required fields (solutionUniqueName, solutionId)',
     };
   }
@@ -232,6 +237,7 @@ async function validateOne({ hostEnvUrl, token, stageId, sourceDeploymentEnviron
       solutionId: spec.solutionId,
       stageRunId,
       status: 'Error',
+      ref: 'IL-STAGE-002',
       error: err && err.message ? err.message : String(err),
     };
   }
@@ -255,6 +261,7 @@ async function rePollOne({ hostEnvUrl, token, spec, intervalMs, maxAttempts }) {
       solutionId: spec && spec.solutionId,
       stageRunId: spec && spec.stageRunId,
       status: 'Error',
+      ref: 'IL-STAGE-001',
       error: 'rePoll spec missing required fields (solutionUniqueName, solutionId, stageRunId)',
     };
   }
@@ -279,6 +286,7 @@ async function rePollOne({ hostEnvUrl, token, spec, intervalMs, maxAttempts }) {
       solutionId: spec.solutionId,
       stageRunId: spec.stageRunId,
       status: 'Error',
+      ref: 'IL-STAGE-002',
       error: err && err.message ? err.message : String(err),
     };
   }

@@ -78,3 +78,15 @@ test('missing value array → ok:false', async () => {
   const r = await listAdoRepos({ organization:'o', project:'p', token:'t', _makeRequestImpl: async () => ({ statusCode: 200, body: '{}' }) });
   assert.equal(r.ok, false); assert.match(r.error, /value array/);
 });
+
+test('list-ado-repos: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-list-ado-repos.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    let header;
+    const r = await listAdoRepos({ organization: 'org', project: 'proj', tokenFile, _makeRequestImpl: async (opts) => { header = opts.headers.Authorization; return { statusCode: 200, body: JSON.stringify({ value: [] }) }; } });
+    assert.equal(r.ok, true);
+    assert.equal(header, 'Bearer header.payload.sig');
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

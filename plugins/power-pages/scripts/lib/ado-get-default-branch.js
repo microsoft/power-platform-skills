@@ -28,12 +28,13 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
   const out = {
     organization: null, project: null, repository: null,
-    pat: null, token: null, apiVersion: '7.0',
+    pat: null, token: null, tokenFile: null, apiVersion: '7.0',
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     else if (args[i] === '--repository' && args[i + 1]) out.repository = args[++i];
     else if (args[i] === '--pat' && args[i + 1]) out.pat = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--apiVersion' && args[i + 1]) out.apiVersion = args[++i];
   }
   return out;
@@ -48,16 +50,21 @@ function parseArgs(argv) {
 
 async function getDefaultBranch({
   organization, project, repository,
-  pat = null, token = null,
+  pat = null, token = null, tokenFile = null,
   apiVersion = '7.0',
   baseUrl = null,
 } = {}) {
   if (!organization) throw new Error('--organization is required');
   if (!project) throw new Error('--project is required');
   if (!repository) throw new Error('--repository is required');
-  if (!pat && !token) throw new Error('Either --pat or --token is required for ADO auth');
+  let resolvedToken = token;
+  if (!pat) {
+    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
+    resolvedToken = tokenResult.token;
+  }
 
-  const client = createAdoClient({ organization, project, repository, pat, token, baseUrl, apiVersion });
+  const client = createAdoClient({ organization, project, repository, pat, token: resolvedToken, baseUrl, apiVersion });
   // The repo-get endpoint is at the *repository root*. ado-client expects
   // path to start with '/' — passing '/' produces a URL with a trailing
   // slash that ADO accepts for the repo GET. Tested live against

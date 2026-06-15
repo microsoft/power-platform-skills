@@ -1,6 +1,6 @@
 # Binding Strategy — Environment vs Solution
 
-Decision reference for `plan-inner-loop`, `setup-git-integration`, and `connect-solution-to-git`. Helps the user (and the agent) pick **environment binding** or **solution binding** when first connecting to Git.
+Decision reference for `plan-inner-loop` and `git-configure`. Helps the user (and the agent) pick **environment binding** or **solution binding** when first connecting to Git.
 
 > Built from [Microsoft Learn: Dataverse Git integration setup](https://learn.microsoft.com/power-platform/alm/git-integration/connecting-to-git) §"Connect to Git" and the [Git API reference](https://learn.microsoft.com/power-platform/alm/git-integration/git-api).
 
@@ -88,7 +88,7 @@ In **solution binding**, two solutions bound to different repos/branches can't s
 - Use solution binding but bind both solutions to the **same repo + same branch + different `GitFolder`**.
 - Leave the shared component in just one solution; the other consumes it via Dataverse dependency tracking.
 
-The `binding-strategy` reference is what `setup-git-integration` and `connect-solution-to-git` cite when this conflict surfaces.
+The `binding-strategy` reference is what `git-configure` cites when this conflict surfaces.
 
 ---
 
@@ -100,7 +100,7 @@ This is **not directly supported**. The flow:
 2. Confirm `detect-git-binding.js` returns `null` for every solution.
 3. `ConnectToGit` with the new `ConnectionType` and per-solution params.
 
-`branch-switch` does not handle this — it only switches the branch within the same binding type. Switching binding type is a deliberate, rare operation; `plan-inner-loop` should ask the user to confirm with a `consent` gate (typed phrase: `SWITCH BINDING TYPE`) before invoking the flow.
+`git-configure` switch-branch mode does not handle this by itself — it only switches the branch within the same binding type. Switching binding type is a deliberate, rare operation; `plan-inner-loop` should ask the user to confirm with a `consent` gate (typed phrase: `SWITCH BINDING TYPE`) before invoking the disconnect/rebind flow.
 
 ---
 
@@ -113,7 +113,7 @@ Per the [Microsoft Learn doc](https://learn.microsoft.com/power-platform/alm/git
 The setup procedure:
 
 1. Export the unmanaged solution from env A, import into env B (or create a fresh solution in env B with the **exact same `uniquename` + publisher**).
-2. In env B, run the same `setup-git-integration` (or `connect-solution-to-git`) call with the same parameters.
+2. In env B, run the same `git-configure` setup call with the same parameters.
 3. Both envs now sync to the same branch — change-conflict resolution happens at commit/refresh time in either env.
 
 The `.git-integration-manifest.json` written by the setup skills records the canonical (org, project, repo, branch, folder, bindingType) so a second dev can re-run the skill in their env without re-typing anything.

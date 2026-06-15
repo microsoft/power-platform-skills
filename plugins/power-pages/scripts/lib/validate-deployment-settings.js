@@ -147,6 +147,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
       valueFormat: 'empty',
       status: 'valid',
       severity: 'info',
+      ref: 'IL-DEPLOY-001',
       message: 'Empty value — runtime falls back to the env var definition default.',
     };
   }
@@ -159,6 +160,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
         valueFormat,
         status: 'valid',
         severity: 'info',
+        ref: 'IL-DEPLOY-002',
         message: 'Valid Key Vault Secret Identifier URI.',
       };
     }
@@ -168,6 +170,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
         valueFormat,
         status: 'valid',
         severity: 'info',
+        ref: 'IL-DEPLOY-003',
         message: 'Valid Azure Key Vault resource ID.',
       };
     }
@@ -177,6 +180,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
         valueFormat,
         status: 'invalid',
         severity: 'error',
+        ref: 'IL-DEPLOY-004',
         message:
           `Secret env var \`${schemaName}\` has a placeholder value. ` +
           `Dataverse / the Pipelines handler does NOT recognize template patterns like \`@KeyVault(...)\` or \`<KEY_VAULT_URI>\`. ` +
@@ -190,6 +194,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
         valueFormat,
         status: 'invalid',
         severity: 'error',
+        ref: 'IL-DEPLOY-005',
         message:
           `Secret env var \`${schemaName}\` value looks like an HTTPS URL but is not a valid Key Vault Secret Identifier ` +
           `(expected shape: https://<vault>.vault.azure.net/secrets/<name>[/<version>], all lowercase host, ` +
@@ -205,6 +210,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
       valueFormat: 'plain-text',
       status: 'invalid',
       severity: 'error',
+      ref: 'IL-DEPLOY-006',
       message:
         `Secret env var \`${schemaName}\` has a plain-text value where a Key Vault reference is expected. ` +
         `If this is a real secret, REMOVE it from deployment-settings.json (the file is committed to git!) and ` +
@@ -224,6 +230,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
         valueFormat,
         status: 'invalid',
         severity: 'error',
+        ref: 'IL-DEPLOY-007',
         message:
           `\`${schemaName}\` has a placeholder value (\`${value}\`). ` +
           `This is not a recognized syntax for any env var type. ` +
@@ -236,6 +243,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
       valueFormat,
       status: 'unknown-type',
       severity: 'info',
+      ref: 'IL-DEPLOY-008',
       message:
         `Type unknown (envUrl not provided or lookup failed). ` +
         `Value format is "${valueFormat}". Cannot enforce type-specific rules — re-run with --envUrl for full validation.`,
@@ -249,6 +257,7 @@ function classifyEntry({ schemaName, value, type, stageLabel }) {
     valueFormat: valueFormat === 'plain-text' ? 'non-secret' : valueFormat,
     status: 'valid',
     severity: 'info',
+    ref: 'IL-DEPLOY-009',
     message: `${type} value — no format constraint enforced.`,
   };
 }
@@ -395,6 +404,7 @@ async function validateSettings({ settingsFile, envUrl, stageLabel, token }) {
         valueFormat: 'invalid',
         status: 'invalid',
         severity: 'error',
+        ref: 'IL-DEPLOY-010',
         message: 'Entry has no SchemaName — missing or empty field in deployment-settings.json.',
       });
       continue;

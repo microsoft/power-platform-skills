@@ -17,18 +17,18 @@ test('approves a regular solution name', () => {
   assert.deepEqual(r.info, []);
 });
 
-test('flags Default solution as BLOCKER citing IL-008', () => {
+test('flags Default solution as BLOCKER citing IL-DEFSOL ref', () => {
   const r = validateNotDefaultSolution({ bindingType: 'solution', solutionUniqueName: 'Default' });
   assert.equal(r.ok, false);
   assert.equal(r.blocking.length, 1);
   assert.equal(r.blocking[0].severity, 'blocker');
   assert.equal(r.blocking[0].key, 'default-solution-binding');
-  assert.equal(r.blocking[0].ref, 'IL-008');
+  assert.equal(r.blocking[0].ref, 'IL-DEFSOL-003');
   assert.equal(r.blocking[0].details.solutionUniqueName, 'Default');
   assert.match(r.blocking[0].remediation, /non-Default/i);
 });
 
-test('flags Active solution as BLOCKER citing IL-008', () => {
+test('flags Active solution as BLOCKER citing IL-DEFSOL ref', () => {
   const r = validateNotDefaultSolution({ bindingType: 'solution', solutionUniqueName: 'Active' });
   assert.equal(r.ok, false);
   assert.equal(r.blocking.length, 1);

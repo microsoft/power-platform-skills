@@ -2,12 +2,13 @@
 
 // Checks whether a Dataverse solution exists by unique name.
 //
-// Usage: node verify-solution-exists.js --envUrl <url> --uniqueName <name> [--token <token>]
+// Usage: node verify-solution-exists.js --envUrl <url> --solutionUniqueName <name> [--token <token>]
 //
 // Options:
-//   --envUrl <url>       Dataverse environment URL
-//   --uniqueName <name>  Solution unique name (e.g., ContosoSite)
-//   --token <token>      Bearer token (optional — acquired via Azure CLI if omitted)
+//   --envUrl <url>              Dataverse environment URL
+//   --solutionUniqueName <name> Solution unique name (e.g., ContosoSite). Primary flag.
+//   --uniqueName <name>         DEPRECATED alias for --solutionUniqueName (still accepted; warns).
+//   --token <token>             Bearer token (optional — acquired via Azure CLI if omitted)
 //
 // Output (JSON to stdout):
 //   Found:     { "found": true, "solutionId": "...", "uniqueName": "...", "version": "...", "isManaged": false }
@@ -20,16 +21,22 @@
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
 
-function parseArgs(argv) {
+function parseArgs(argv, { warn = (m) => process.stderr.write(m) } = {}) {
   const args = argv.slice(2);
   let envUrl = null;
   let uniqueName = null;
   let token = null;
+  let usedDeprecatedAlias = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) envUrl = args[++i];
-    else if (args[i] === '--uniqueName' && args[i + 1]) uniqueName = args[++i];
+    else if (args[i] === '--solutionUniqueName' && args[i + 1]) uniqueName = args[++i];
+    else if (args[i] === '--uniqueName' && args[i + 1]) { uniqueName = args[++i]; usedDeprecatedAlias = true; }
     else if (args[i] === '--token' && args[i + 1]) token = args[++i];
+  }
+
+  if (usedDeprecatedAlias) {
+    warn('[DEPRECATION WARN] verify-solution-exists: --uniqueName is deprecated; use --solutionUniqueName instead.\n');
   }
 
   return { envUrl, uniqueName, token };
@@ -37,7 +44,7 @@ function parseArgs(argv) {
 
 async function verifySolutionExists({ envUrl, uniqueName, token }) {
   if (!envUrl) throw new Error('--envUrl is required');
-  if (!uniqueName) throw new Error('--uniqueName is required');
+  if (!uniqueName) throw new Error('--solutionUniqueName is required');
 
   const resolvedToken = token || getAuthToken(envUrl);
   if (!resolvedToken) {
@@ -95,4 +102,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { verifySolutionExists };
+module.exports = { verifySolutionExists, parseArgs };

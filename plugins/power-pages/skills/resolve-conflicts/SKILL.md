@@ -49,7 +49,7 @@ A conflict in Power Platform Connect-to-Git terminology is a single component (w
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
-- A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+- A Git binding already established (run `/power-pages:git-configure` first if needed)
 - At least one conflict in the environment (otherwise the skill exits cleanly)
 
 **Initial request:** $ARGUMENTS
@@ -78,7 +78,12 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-conflicts.js"     --envUrl "<envUrl>"
    ```
 
-3. Branch on result:
+3. Manifest reconcile (B3): Compare the local `.git-integration-manifest.json` against the `detect-git-binding.js` server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+
+   <!-- gate: resolve-conflicts:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · resolve-conflicts:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
+4. Branch on result:
 
    - `bound === false` → no binding to resolve against.
    - `conflicts.count === 0` → nothing to resolve.
@@ -88,7 +93,7 @@ Steps:
 
    | Condition | Question | Options |
    |---|---|---|
-   | No binding | No Git binding found. Set one up first? | Run /power-pages:setup-git-integration, Cancel |
+   | No binding | No Git binding found. Set one up first? | Run /power-pages:git-configure, Cancel |
    | No conflicts | No conflicts found (Conflicts count = 0). The env is clean. | Run /power-pages:sync-from-git (if stale), Exit — nothing to do |
 
 **Output:** Confirmed binding + N > 0 conflicts to resolve.

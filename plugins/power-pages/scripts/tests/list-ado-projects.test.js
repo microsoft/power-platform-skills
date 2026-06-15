@@ -85,3 +85,15 @@ test('network error → ok:false statusCode:null', async () => {
   assert.equal(r.statusCode, null);
   assert.match(r.error, /ECONNRESET/);
 });
+
+test('list-ado-projects: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-list-ado-projects.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    let header;
+    const r = await listAdoProjects({ organization: 'org', tokenFile, _makeRequestImpl: async (opts) => { header = opts.headers.Authorization; return { statusCode: 200, body: JSON.stringify({ value: [] }) }; } });
+    assert.equal(r.ok, true);
+    assert.equal(header, 'Bearer header.payload.sig');
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

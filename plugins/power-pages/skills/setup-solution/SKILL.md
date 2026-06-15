@@ -189,7 +189,7 @@ Before creating anything, check if publisher and solution already exist:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
      --envUrl "{envUrl}" \
-     --uniqueName "{solutionUniqueName}" \
+     --solutionUniqueName "{solutionUniqueName}" \
      --token "{token}"
    ```
    Capture output as JSON; check `.found` (boolean). If `found`, also read `.solutionId`, `.version`, and `.isManaged` for display.

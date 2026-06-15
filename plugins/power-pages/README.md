@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 41 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 39 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, the daily Dataverse Git inner loop, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -351,7 +351,7 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 ### Inner Dev Loop (Dataverse Git integration)
 
-A 12-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: bind a Dataverse environment to an Azure DevOps repository, commit pending changes back to a branch, pull teammates' changes in, resolve conflicts, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
+A 10-skill family that automates the [Connect-to-Git](https://learn.microsoft.com/power-platform/alm/git-integration/overview) workflow: configure Dataverse Git binding, commit pending changes back to a branch, pull teammates' changes in, resolve conflicts, switch branches, recover from mistakes, and open PRs. Every skill writes a marker file under `docs/inner-loop/` for audit and inter-skill state.
 
 #### `/plan-inner-loop`
 
@@ -359,17 +359,11 @@ A 12-skill family that automates the [Connect-to-Git](https://learn.microsoft.co
 
 Read-only orchestrator that detects current binding + pending changes + incoming updates + conflicts, classifies state (Disconnected / Clean / Dirty / Stale / Mixed / Conflicted / Broken), renders a visual `docs/inner-loop/inner-loop-plan.html` status page, and recommends the next skill. Front door of the inner loop.
 
-#### `/setup-git-integration`
+#### `/git-configure`
 
-> "Connect my env to ADO"
+> "Connect my env or solution to ADO" — or "switch branches", "rebind", "disconnect", or "validate my Git setup"
 
-Binds the whole Dataverse environment to an ADO repo + branch + folder via the `ConnectToGit` action. Verifies Managed Env, system-admin role, ADO PAT scopes, and repo init before any mutation.
-
-#### `/connect-solution-to-git`
-
-> "Bind just my custom solution to git"
-
-Solution-scoped variant of `setup-git-integration` (`ConnectionType=0`). Warns about the shared-object restriction (a component cannot be in two Git-bound solutions concurrently).
+Unified Git configuration skill for Dataverse Git integration. Detects the code site, solution, environment, and current binding; runs auth, Managed Env, system-admin, tenant, BYOK/CMK, license, ADO permission, and repo-init preflights; explains environment vs solution binding; then connects, switches branch, rebinds, disconnects, or validates without mutation.
 
 #### `/commit-to-git`
 
@@ -393,12 +387,6 @@ Two-step `RefreshChangesFromGit` + `PullChangesFromGit`. Detects conflicts and d
 > "Fix the conflicts in my env"
 
 Walks per-conflict Keep-Existing / Accept-Incoming decisions; collapses to one bundled prompt when more than 3 conflicts exist. Renders a side-by-side HTML diff page.
-
-#### `/branch-switch`
-
-> "Switch my env to a different branch"
-
-Wraps `DisconnectFromGit` + `ConnectToGit` against a new branch. HARD-STOPS on a dirty workspace (Changes / Updates / Conflicts > 0) to prevent silent data loss across branches.
 
 #### `/revert-workspace`
 

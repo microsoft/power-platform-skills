@@ -42,7 +42,7 @@ The skill enumerates recent commits, has the user pick a target SHA, shows an im
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
-- A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+- A Git binding already established (run `/power-pages:git-configure` first if needed)
 - An ADO PAT with `Code (read & write)` on the target repo (the force-update needs write scope)
 - The target commit SHA must exist in the bound branch's history
 
@@ -71,6 +71,10 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-git-binding.js" --envUrl "<envUrl>"
    ```
 
+   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: revert-branch:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · revert-branch:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
    If `bound === false`:
 
    <!-- gate: revert-branch:1.no-binding | category=intent | cancel-leaves=nothing -->
@@ -78,7 +82,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:setup-git-integration, Cancel |
+   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:git-configure, Cancel |
 
 3. Capture binding fields: `organization`, `project`, `repository`, `branch` (the branch to revert), `bindingType`.
 
@@ -330,7 +334,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: If no Git binding exists → run `setup-git-integration` or cancel (gate `revert-branch:1.no-binding`).
+1. **Phase 1**: If no Git binding exists → run `git-configure` or cancel (gate `revert-branch:1.no-binding`).
 2. **Phase 3**: Target commit SHA (data-gathering, not a gate); validated against commit history.
 3. **Phase 5**: Typed-consent — exact `REVERT BRANCH {shortSha}` to proceed; anything else cancels safely (gate `revert-branch:5.typed-consent`).
 4. **Phase 9**: Choose next action — acknowledge team-notification, sync this env, or exit (gate `revert-branch:8.final`).

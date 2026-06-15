@@ -22,7 +22,7 @@
 //         severity: 'warn',
 //         key: 'solution-version-not-bumped',
 //         message: 'Solution version 1.0.0.0 unchanged since last commit, but N non-trivial Changes pending.',
-//         ref: 'IL-008',
+//         ref: 'IL-VERSION-002',
 //         details: { current, lastCommitted, pendingNonTrivialCount },
 //         remediation: 'Bump the solution version (Maker Portal → Solutions → ... → Properties).',
 //       },
@@ -141,7 +141,7 @@ async function validateSolutionVersionBumped({
       severity: 'info',
       key: 'version-bump-no-prior-baseline',
       message: 'No prior lastCommittedSolutionVersion baseline found — skipping version-bump check.',
-      ref: 'IL-008',
+      ref: 'IL-VERSION-001',
       details: { currentVersion, lastValidationFile: lvFile },
       remediation: 'After the next successful commit, the orchestrator will record lastCommittedSolutionVersion automatically.',
     });
@@ -158,7 +158,7 @@ async function validateSolutionVersionBumped({
         severity: 'warn',
         key: 'solution-version-not-bumped',
         message: `Solution version ${currentVersion} unchanged since last commit, but ${detailedCount} non-trivial Changes pending.`,
-        ref: 'IL-008',
+        ref: 'IL-VERSION-002',
         details: {
           currentVersion,
           lastCommittedVersion: lastCommitted,

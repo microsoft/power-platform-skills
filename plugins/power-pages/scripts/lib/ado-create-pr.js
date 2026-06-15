@@ -51,6 +51,7 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -58,7 +59,7 @@ function parseArgs(argv) {
     organization: null, project: null, repository: null,
     sourceBranch: null, targetBranch: null,
     title: null, description: null,
-    pat: null, token: null,
+    pat: null, token: null, tokenFile: null,
     reviewers: null, workItems: null,
     apiVersion: '7.0',
   };
@@ -72,6 +73,7 @@ function parseArgs(argv) {
     else if (args[i] === '--description' && args[i + 1]) out.description = args[++i];
     else if (args[i] === '--pat' && args[i + 1]) out.pat = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--reviewers' && args[i + 1]) out.reviewers = args[++i];
     else if (args[i] === '--workItems' && args[i + 1]) out.workItems = args[++i];
     else if (args[i] === '--apiVersion' && args[i + 1]) out.apiVersion = args[++i];
@@ -97,7 +99,7 @@ function splitCsv(s) {
 async function createPullRequest({
   organization, project, repository,
   sourceBranch, targetBranch, title, description,
-  pat = null, token = null,
+  pat = null, token = null, tokenFile = null,
   reviewers = null, workItems = null,
   apiVersion = '7.0',
   baseUrl = null,
@@ -108,9 +110,14 @@ async function createPullRequest({
   if (!sourceBranch) throw new Error('--sourceBranch is required');
   if (!targetBranch) throw new Error('--targetBranch is required');
   if (!title) throw new Error('--title is required');
-  if (!pat && !token) throw new Error('Either --pat or --token is required for ADO auth');
+  let resolvedToken = token;
+  if (!pat) {
+    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
+    resolvedToken = tokenResult.token;
+  }
 
-  const client = createAdoClient({ organization, project, repository, pat, token, baseUrl, apiVersion });
+  const client = createAdoClient({ organization, project, repository, pat, token: resolvedToken, baseUrl, apiVersion });
 
   const body = {
     sourceRefName: normalizeRef(sourceBranch),

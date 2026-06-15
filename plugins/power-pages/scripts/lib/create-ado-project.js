@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Creates a new Azure DevOps project and polls the operation until it finishes.
-// Used by setup-git-integration when the user chooses to create a project
-// instead of selecting an existing one.
+// Used by git-configure (Phase 4 create-project gate, git-configure:4.create-project)
+// when the user chooses to create a project instead of selecting an existing one.
 //
 // Idempotency: ADO name conflicts are not retried; they return ok:false with a
 // Project already exists hint so the caller can choose the existing project.
@@ -18,6 +18,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 const AGILE_PROCESS_TEMPLATE_ID = '6b724908-ef14-45cf-84f8-768b5384da45';
@@ -26,13 +27,14 @@ const DEFAULT_MAX_POLL_ATTEMPTS = 60;
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { organization: null, name: null, description: null, processTemplateId: null, token: null, pollIntervalMs: DEFAULT_POLL_INTERVAL_MS, maxPollAttempts: DEFAULT_MAX_POLL_ATTEMPTS };
+  const out = { organization: null, name: null, description: null, processTemplateId: null, token: null, tokenFile: null, pollIntervalMs: DEFAULT_POLL_INTERVAL_MS, maxPollAttempts: DEFAULT_MAX_POLL_ATTEMPTS };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--name' && args[i + 1]) out.name = args[++i];
     else if (args[i] === '--description' && args[i + 1]) out.description = args[++i];
     else if (args[i] === '--processTemplateId' && args[i + 1]) out.processTemplateId = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--pollIntervalMs' && args[i + 1]) out.pollIntervalMs = Number(args[++i]);
     else if (args[i] === '--maxPollAttempts' && args[i + 1]) out.maxPollAttempts = Number(args[++i]);
   }
@@ -49,16 +51,17 @@ function hintForStatus(sc) {
 function delay(ms) { return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve(); }
 
 async function createAdoProject(options = {}) {
-  const { organization, name, description, token } = options;
+  const { organization, name, description, token, tokenFile } = options;
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
   if (!organization) return failure(null, '--organization is required');
   if (!name) return failure(null, '--name is required');
-  if (!token) return failure(null, '--token is required');
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return failure(null, tokenResult.error);
   const pollIntervalMs = Number.isFinite(Number(options.pollIntervalMs)) ? Number(options.pollIntervalMs) : DEFAULT_POLL_INTERVAL_MS;
   const maxPollAttempts = Number.isFinite(Number(options.maxPollAttempts)) ? Number(options.maxPollAttempts) : DEFAULT_MAX_POLL_ATTEMPTS;
   const processTemplateId = options.processTemplateId || AGILE_PROCESS_TEMPLATE_ID;
   const start = Date.now();
-  const { header: authHeader } = buildAuthHeader(token);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const url = `https://dev.azure.com/${encodeURIComponent(organization)}/_apis/projects?api-version=${API_VERSION}`;
   const payload = {
     name,

@@ -13,6 +13,7 @@ const {
   allowlistPathMatches,
   KNOWN_RULES,
   ALM_SKILLS,
+  INNER_LOOP_SKILLS,
   CANCEL_LEAVES_VOCAB,
   extractGateMarkers,
   extractNotAGateMarkers,
@@ -768,6 +769,26 @@ test('ALM_SKILLS export includes the 12 documented ALM skills', () => {
   for (const skill of required) {
     assert.ok(ALM_SKILLS.has(skill), `ALM_SKILLS missing: ${skill}`);
   }
+});
+
+test('INNER_LOOP_SKILLS export includes the 9 Inner Dev Loop skills', () => {
+  const required = [
+    'plan-inner-loop',
+    'git-configure',
+    'commit-to-git',
+    'sync-from-git',
+    'resolve-conflicts',
+    'revert-workspace',
+    'revert-branch',
+    'open-pr',
+    'diagnose-git-integration',
+  ];
+  for (const skill of required) {
+    assert.ok(INNER_LOOP_SKILLS.has(skill), `INNER_LOOP_SKILLS missing: ${skill}`);
+  }
+  assert.equal(INNER_LOOP_SKILLS.has('setup-git-integration'), false);
+  assert.equal(INNER_LOOP_SKILLS.has('connect-solution-to-git'), false);
+  assert.equal(INNER_LOOP_SKILLS.has('branch-switch'), false);
 });
 
 test('CANCEL_LEAVES_VOCAB export has the documented values', () => {

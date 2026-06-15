@@ -131,7 +131,7 @@ async function resolveSolutionUniqueNameAuto({ envUrl, token }) {
   if (!detect || detect.bound === false) {
     throw new Error(
       '--solutionUniqueName was omitted and the environment is not bound to Git. ' +
-      'Run /power-pages:setup-git-integration first, or pass --solutionUniqueName explicitly.',
+      'Run /power-pages:git-configure first to bind the env or solution to ADO, or pass --solutionUniqueName explicitly.',
     );
   }
 

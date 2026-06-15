@@ -46,6 +46,7 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const DEFAULT_TOP = 20;
 const MAX_TOP = 100;
@@ -55,7 +56,7 @@ function parseArgs(argv) {
   const out = {
     organization: null, project: null, repository: null,
     branch: null, top: DEFAULT_TOP, author: null,
-    pat: null, token: null,
+    pat: null, token: null, tokenFile: null,
     apiVersion: '7.0',
   };
   for (let i = 0; i < args.length; i++) {
@@ -67,6 +68,7 @@ function parseArgs(argv) {
     else if (args[i] === '--author' && args[i + 1]) out.author = args[++i];
     else if (args[i] === '--pat' && args[i + 1]) out.pat = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--apiVersion' && args[i + 1]) out.apiVersion = args[++i];
   }
   return out;
@@ -79,7 +81,7 @@ function parseArgs(argv) {
 async function listCommits({
   organization, project, repository, branch,
   top = DEFAULT_TOP, author = null,
-  pat = null, token = null,
+  pat = null, token = null, tokenFile = null,
   apiVersion = '7.0',
   baseUrl = null,
 } = {}) {
@@ -87,12 +89,17 @@ async function listCommits({
   if (!project) throw new Error('--project is required');
   if (!repository) throw new Error('--repository is required');
   if (!branch) throw new Error('--branch is required');
-  if (!pat && !token) throw new Error('Either --pat or --token is required for ADO auth');
+  let resolvedToken = token;
+  if (!pat) {
+    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
+    resolvedToken = tokenResult.token;
+  }
 
   const cappedTop = Math.max(1, Math.min(top, MAX_TOP));
   const branchName = branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch;
 
-  const client = createAdoClient({ organization, project, repository, pat, token, baseUrl, apiVersion });
+  const client = createAdoClient({ organization, project, repository, pat, token: resolvedToken, baseUrl, apiVersion });
 
   const query = {
     'searchCriteria.itemVersion.version': branchName,

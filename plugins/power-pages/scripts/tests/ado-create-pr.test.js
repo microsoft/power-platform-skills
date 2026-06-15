@@ -139,3 +139,15 @@ test('ado-create-pr: 409 conflict (e.g. PR already exists) surfaces error', asyn
   assert.equal(r.statusCode, 409);
   assert.equal(r.errorCode, 'GitPullRequestExistsException');
 });
+
+test('ado-create-pr: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-create-pr.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 201, body: JSON.stringify({ pullRequestId: 1, status: 'active' }) }]);
+  try {
+    const r = await createPullRequest({ organization: 'o', project: 'p', repository: 'r', sourceBranch: 's', targetBranch: 't', title: 'title', tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.created, true);
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

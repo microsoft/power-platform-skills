@@ -211,7 +211,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 | `create-table-permission.js` | Generates table permission YAML with proper formatting, UUIDs, field ordering |
 | `create-site-setting.js` | Generates site setting YAML |
 | `generate-uuid.js` | Centralized UUID generation — never duplicate this |
-| `update-skill-tracking.js` | Records skill usage in site settings |
+| `lib/update-skill-tracking.js` | Records skill usage in site settings (moved to `scripts/lib/`; shim at old path until 2026-07-13) |
 
 **Dataverse API scripts** (`scripts/` and skill-specific `scripts/`):
 

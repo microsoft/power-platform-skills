@@ -10,11 +10,29 @@ test('verifySolutionExists throws when --envUrl is missing', async () => {
   );
 });
 
-test('verifySolutionExists throws when --uniqueName is missing', async () => {
+test('verifySolutionExists throws when solution unique name is missing', async () => {
   await assert.rejects(
     () => verifySolutionExists({ envUrl: 'https://org.crm.dynamics.com', token: 'tok' }),
-    /--uniqueName is required/
+    /--solutionUniqueName is required/
   );
+});
+
+test('parseArgs: --solutionUniqueName is the primary flag (no deprecation warning)', () => {
+  const { parseArgs } = require('../lib/verify-solution-exists');
+  const warns = [];
+  const r = parseArgs(['node', 'x', '--envUrl', 'https://o.crm.dynamics.com', '--solutionUniqueName', 'RetailOS'], { warn: (m) => warns.push(m) });
+  assert.equal(r.uniqueName, 'RetailOS');
+  assert.equal(warns.length, 0, 'primary flag must not warn');
+});
+
+test('parseArgs: --uniqueName still works as a deprecated alias and warns', () => {
+  const { parseArgs } = require('../lib/verify-solution-exists');
+  const warns = [];
+  const r = parseArgs(['node', 'x', '--envUrl', 'https://o.crm.dynamics.com', '--uniqueName', 'RetailOS'], { warn: (m) => warns.push(m) });
+  assert.equal(r.uniqueName, 'RetailOS', 'alias still resolves the name (backward-compatible)');
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /DEPRECATION WARN/);
+  assert.match(warns[0], /--solutionUniqueName/);
 });
 
 test('verifySolutionExists returns found:false when solution does not exist', async (t) => {

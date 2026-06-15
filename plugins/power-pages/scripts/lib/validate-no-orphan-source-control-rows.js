@@ -34,7 +34,7 @@
 //         severity: 'blocker',
 //         key: 'orphan-source-control-row',
 //         message: 'Orphan sourcecontrolcomponent <id> (no objectid).',
-//         ref: 'IL-019',
+//         ref: 'IL-ORPHAN-002',
 //         details: {
 //           sourcecontrolcomponentid,
 //           componentType, componentPath, actionLabel, payloadId
@@ -151,7 +151,7 @@ async function validateNoOrphanSourceControlRows({ envUrl, token, solutionUnique
         severity: 'info',
         key: 'orphan-detection-unavailable',
         message: 'sourcecontrolcomponents entity returned 404 — orphan detection unavailable on this tenant.',
-        ref: 'IL-016',
+        ref: 'IL-ORPHAN-001',
         details: { statusCode: 404 },
         remediation: 'Skip this validator on this tenant; CommitToGit will surface 0x80040217 inline if orphans actually exist.',
       }],
@@ -176,7 +176,7 @@ async function validateNoOrphanSourceControlRows({ envUrl, token, solutionUnique
     severity: 'blocker',
     key: 'orphan-source-control-row',
     message: `Orphan sourcecontrolcomponent ${r.sourcecontrolcomponentid} (no payload)${r.componentpath ? ` at ${r.componentpath}` : ''}.`,
-    ref: 'IL-019',
+    ref: 'IL-ORPHAN-002',
     details: {
       sourcecontrolcomponentid: r.sourcecontrolcomponentid,
       componentId: r.componentid || null,
@@ -193,7 +193,7 @@ async function validateNoOrphanSourceControlRows({ envUrl, token, solutionUnique
       severity: 'info',
       key: 'orphan-row-truncation',
       message: `Server reports ${totalCount} orphan rows; only the first ${rows.length} returned. Increase --top to see more.`,
-      ref: 'IL-019',
+      ref: 'IL-ORPHAN-003',
       details: { totalCount, returnedCount: rows.length, top },
       remediation: 'Re-run with --top <larger-number> to enumerate the remaining rows.',
     });

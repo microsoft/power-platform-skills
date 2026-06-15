@@ -32,7 +32,7 @@
 //         severity: 'blocker',
 //         key: 'shared-component',
 //         message: 'Component <objectid> (<componenttype>) is also in solution <other>.',
-//         ref: 'IL-009',
+//         ref: 'IL-SHARED-003',
 //         details: {
 //           objectId, componentType,
 //           otherSolutionUniqueName, otherSolutionId,
@@ -183,7 +183,7 @@ async function validateNoSharedComponents({
         severity: 'info',
         key: 'shared-components-skipped-too-many-solutions',
         message: `Skipping shared-component check: ${others.length} other Git-bound solutions exceed limit ${maxOtherSolutions}.`,
-        ref: 'IL-009',
+        ref: 'IL-SHARED-001',
         details: { otherCount: others.length, maxOtherSolutions },
         remediation: 'Re-run with --max-other-solutions <larger> to force the check.',
       }],
@@ -203,7 +203,7 @@ async function validateNoSharedComponents({
       severity: 'info',
       key: 'shared-components-target-truncated',
       message: `Target solution has > ${maxTargetComponents} components; only the first ${maxTargetComponents} compared.`,
-      ref: 'IL-009',
+      ref: 'IL-SHARED-002',
       details: { maxTargetComponents },
       remediation: 'Re-run with --max-target-components <larger> for full coverage.',
     });
@@ -230,7 +230,7 @@ async function validateNoSharedComponents({
           severity: 'blocker',
           key: 'shared-component',
           message: `Component ${c.objectId} (componenttype=${c.componentType}) is also in solution '${other.uniqueName}'.`,
-          ref: 'IL-009',
+          ref: 'IL-SHARED-003',
           details: {
             objectId: c.objectId,
             componentType: c.componentType,
@@ -247,7 +247,7 @@ async function validateNoSharedComponents({
         severity: 'info',
         key: 'shared-components-other-truncated',
         message: `Other solution '${other.uniqueName}' has > ${maxTargetComponents} components; only the first ${maxTargetComponents} compared.`,
-        ref: 'IL-009',
+        ref: 'IL-SHARED-004',
         details: { otherSolutionUniqueName: other.uniqueName, maxTargetComponents },
         remediation: 'Re-run with --max-target-components <larger> for full coverage.',
       });

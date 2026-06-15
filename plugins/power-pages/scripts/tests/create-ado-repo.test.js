@@ -48,3 +48,15 @@ test('401 → ok:false', async () => { const r=await createAdoRepo({ organizatio
 test('403 with hint', async () => { const r=await createAdoRepo({ organization:'o', project:'p', projectId:'pid', name:'repo', token:'t', _makeRequestImpl: async () => ({ statusCode:403, body:'{}' }) }); assert.equal(r.ok,false); assert.match(r.hint,/Project Administrator/); });
 test('409 with hint', async () => { const r=await createAdoRepo({ organization:'o', project:'p', projectId:'pid', name:'repo', token:'t', _makeRequestImpl: async () => ({ statusCode:409, body:'{}' }) }); assert.equal(r.ok,false); assert.match(r.hint,/already exists/); });
 test('404 project not found', async () => { const r=await createAdoRepo({ organization:'o', project:'p', projectId:'pid', name:'repo', token:'t', _makeRequestImpl: async () => ({ statusCode:404, body:'{}' }) }); assert.equal(r.ok,false); assert.match(r.hint,/Project "p" not found/); });
+
+test('create-ado-repo: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-create-ado-repo.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    let header;
+    const r = await createAdoRepo({ organization: 'org', project: 'proj', projectId: 'pid', name: 'repo', tokenFile, _makeRequestImpl: async (opts) => { header = opts.headers.Authorization; return { statusCode: 201, body: JSON.stringify({ id: 'rid', name: 'repo' }) }; } });
+    assert.equal(r.ok, true);
+    assert.equal(header, 'Bearer header.payload.sig');
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Lists Azure DevOps organizations the supplied token can access.
-// Used by setup-git-integration discovery flows before project/repo selection.
+// Used by git-configure discovery flows (Phase 4) before project/repo selection.
 //
 // Output (JSON to stdout):
 //   { "ok": true, "memberId": "<guid>", "count": 1, "orgs": [{ "accountId": "<guid>", "accountName": "org", "accountUri": "https://..." }] }
@@ -14,6 +14,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 const PROFILE_ENDPOINT = `https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=${API_VERSION}`;
@@ -22,9 +23,10 @@ const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { token: null, profileEndpoint: null, accountsEndpoint: null };
+  const out = { token: null, tokenFile: null, profileEndpoint: null, accountsEndpoint: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--profileEndpoint' && args[i + 1]) out.profileEndpoint = args[++i];
     else if (args[i] === '--accountsEndpoint' && args[i + 1]) out.accountsEndpoint = args[++i];
   }
@@ -60,11 +62,12 @@ function hintForStatus(statusCode, step) {
 }
 
 async function listAdoOrgs(options = {}) {
-  const { token } = options;
+  const { token, tokenFile } = options;
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
-  if (!token) return failure(null, '--token is required');
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return failure(null, tokenResult.error);
 
-  const { header: authHeader } = buildAuthHeader(token);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const profileUrl = options.profileEndpoint || PROFILE_ENDPOINT;
   const profileRes = await request({ url: profileUrl, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' } });
   if (profileRes && profileRes.error) return failure(null, profileRes.error);

@@ -72,7 +72,7 @@ test('render-inner-loop-plan: Disconnected state — minimal payload', () => {
   assert.match(html, /class="plan-status disconnected"/);
   assert.match(html, />Disconnected</);
   assert.match(html, /No binding detected/);
-  assert.match(html, /setup-git-integration/);
+  assert.match(html, /git-configure/);
   // No __PLACEHOLDER__ tokens should remain
   assert.ok(!/__[A-Z_]+__/.test(html), 'no placeholders should remain unreplaced');
 });

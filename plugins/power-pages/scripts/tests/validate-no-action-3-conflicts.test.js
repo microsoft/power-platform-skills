@@ -61,7 +61,7 @@ test('flags action=3 row as BLOCKER even when useraction=0 (None)', async () => 
     assert.equal(r.blocking.length, 1);
     assert.equal(r.blocking[0].severity, 'blocker');
     assert.equal(r.blocking[0].key, 'action-3-conflict');
-    assert.equal(r.blocking[0].ref, 'IL-010');
+    assert.equal(r.blocking[0].ref, 'IL-CONFLICT-002');
     assert.equal(r.blocking[0].details.useractionLabel, 'None');
     assert.match(r.blocking[0].message, /useraction=None/);
   } finally { server.close(); }
@@ -97,7 +97,7 @@ test('emits info finding (not error) on tenant where entity 404s', async () => {
     assert.equal(r.ok, true);
     assert.equal(r.info.length, 1);
     assert.equal(r.info[0].key, 'conflict-detection-unavailable');
-    assert.equal(r.info[0].ref, 'IL-016');
+    assert.equal(r.info[0].ref, 'IL-CONFLICT-001');
   } finally { server.close(); }
 });
 

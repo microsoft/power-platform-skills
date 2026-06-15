@@ -39,7 +39,7 @@ This skill is the "inner-loop save" — the daily action that promotes maker-por
 
 `commit-to-git` runs the pre-flight orchestrator inline in Phase 3 — you do not need to invoke any separate validation skill first.
 
-> 🛈 **First-commit baseline expectation (HAR-confirmed 2026-06).** The FIRST `CommitToGit` after `connect-solution-to-git` captures the ENTIRE solution as `Create` operations — not just what the maker recently edited. Expect the Changes count to equal the full solution component count (every custom entity drags ~13 standard system columns; pre-existing OOTB components in the solution also appear). One tutorial run produced **189 Changes for "Added a new Table"**. This is not a bug — Phase 4 plan render must NOT trigger a "this looks suspicious" warning when the first-commit count is large. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §17.
+> 🛈 **First-commit baseline expectation (HAR-confirmed 2026-06).** The FIRST `CommitToGit` after `/power-pages:git-configure --binding=solution` captures the ENTIRE solution as `Create` operations — not just what the maker recently edited. Expect the Changes count to equal the full solution component count (every custom entity drags ~13 standard system columns; pre-existing OOTB components in the solution also appear). One tutorial run produced **189 Changes for "Added a new Table"**. This is not a bug — Phase 4 plan render must NOT trigger a "this looks suspicious" warning when the first-commit count is large. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §17.
 
 > 🛈 **Post-conflict-resolve commits are normal (HAR-confirmed 2026-06).** When the user resolves a Conflict with **Keep current changes**, the item moves to pending Changes and lands here. The resulting commit is a flat linear commit on top of the conflict point — there is no special "merge commit" semantic. One tutorial run produced a single-file commit from a Keep-Existing decision on a custom-table description. Phase 8 verify should NOT flag the post-resolution commit as anomalous even if its file count is 1. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md` §21.
 
@@ -53,7 +53,7 @@ This skill is the "inner-loop save" — the daily action that promotes maker-por
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
-- A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+- A Git binding already established (run `/power-pages:git-configure` first if needed)
 - At least one pending Change in the environment (otherwise the skill exits cleanly)
 
 **Initial request:** $ARGUMENTS
@@ -87,6 +87,10 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-git-binding.js" --envUrl "<envUrl>"
    ```
 
+   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: commit-to-git:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · commit-to-git:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
    If `bound === false`:
 
    <!-- gate: commit-to-git:1.no-binding | category=intent | cancel-leaves=nothing -->
@@ -94,7 +98,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:setup-git-integration, Cancel |
+   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:git-configure, Cancel |
 
 3. Count pending Changes:
 
@@ -109,7 +113,7 @@ Steps:
 
    If `count > 0` AND `.git-integration-manifest.json`'s `boundAt` is within the last **2 hours**, this is the *fresh-bind initial-commit* case. Surface this clarifying note up-front so the user knows what they're about to push:
 
-   > "This is the first commit since `connect-solution-to-git` ran. {count} components are staged as the **real** initial commit (the bind itself only created a placeholder `Readme.md`). After this commit, your ADO repo's `solutions/{gitFolder}/` folder will hold every component in the solution."
+   > "This is the first commit since `/power-pages:git-configure --binding=solution` ran. {count} components are staged as the **real** initial commit (the bind itself only created a placeholder `Readme.md`). After this commit, your ADO repo's `solutions/{gitFolder}/` folder will hold every component in the solution."
 
 4. **Branch-policy info-note (C-10).** Fetch the bound branch's policies and tell the user when a blocking PR policy is configured — Dataverse's `CommitToGit` bypasses branch policies entirely (it commits via the platform service account, not through a PR), so users sometimes don't realise they're about to push directly to a "protected" branch. This is informational only; it is NOT a blocker for this skill.
 
@@ -357,14 +361,16 @@ Steps:
    |---|---|---|
    | Final consent — call `CommitToGit` on `{envHost}` with message "{commitMessage}" now? | Final consent | Commit now, Cancel |
 
-2. On **Commit now**:
+2. On **Commit now** (prefer `--commitMessageFile` — it avoids multi-line / quoting pitfalls on PowerShell; write the message to a temp file and pass its path):
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/commit-to-git.js" \
        --envUrl              "<envUrl>" \
        --solutionUniqueName  "<solutionUniqueName from manifest>" \
-       --commitMessage       "<message>"
+       --commitMessageFile   "docs/inner-loop/.commit-message.txt"
    ```
+
+   `--commitMessage "<message>"` is still accepted for a simple single-line subject, but `--commitMessageFile` is the recommended path for anything multi-line.
 
    The platform's `CommitToGit` action ALWAYS requires `SolutionUniqueName` in the request body — both solution-bound and env-bound contexts. For env-bound contexts, the manifest's `bindingType === 'environment'` means multiple solutions can be enabled for source control, so the helper needs to know which one to push.
 
@@ -413,7 +419,7 @@ Steps:
 
 3. If `polled.reached === false` after all attempts: surface `pollWarning` to the user (e.g. "pending-changes count did not drop to 0 after M attempts (~Ts)") — the commit may still be processing on the platform side. Continue to Phase 8 anyway; ADO verification is the authoritative success signal.
 
-4. **(C-14) Third-party-writer detection (best-effort, post-poll).** If `polled.reached === false` AND the warning is going to be surfaced, snapshot the latest 3 commits on the bound branch and compare authors against the platform service account. A non-Dataverse author on the branch tip between this skill's POST and its poll-clear means another writer (a teammate's `commit-to-git`, a CI bot, a maker-portal push from another solution bound to the same branch) raced us — useful context for the user.
+4. **(C-14) Third-party-writer detection (best-effort, post-poll).** If `polled.reached === false` AND the warning is going to be surfaced, snapshot the latest 3 commits on the bound branch and classify each author as platform-authored or not. A non-platform author on the branch tip between this skill's POST and its poll-clear means another writer (a teammate's `commit-to-git`, a CI bot, a maker-portal push from another solution bound to the same branch) raced us — useful context for the user.
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/ado-list-commits.js" \
@@ -421,11 +427,15 @@ Steps:
         --branch "<branch>" --token "<adoToken>" --top 3
    ```
 
-   If ANY of the top-3 commits' `author.email` does NOT match the Dataverse platform service account pattern (`admin@PowerPlatform.onmicrosoft.com` or `PowerPortals Runtime` as `author.name`), append a one-line warning to `pollWarning`:
+   **Classify a commit as platform-authored when EITHER holds:**
+   - **Primary (durable):** `author.name === "PowerPortals Runtime"`. This is the by-design service identity Dataverse Git integration uses for *every* customer commit — it does not impersonate the human user (confirmed by Microsoft Learn, "Source control — known limitations"). It is stable across tenants and account renames, so it is the authoritative signal.
+   - **Secondary (fallback):** `author.email` is in the known platform service-account allow-list. This list is environment-specific and documented in `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md`; do **not** hard-code any single tenant's service-account email here, because the email differs per customer tenant (a dev/test tenant may surface a tester account, while a production tenant surfaces that customer's own service identity).
+
+   If ANY of the top-3 commits is NOT platform-authored by the rule above, append a one-line warning to `pollWarning`:
 
    > "ℹ️  Detected concurrent writer on `{branch}`: commit `{shortSha}` by `{author}` landed during the wait. This is the most common cause of a non-clearing pending-changes count."
 
-   This detection is opportunistic — if the ADO call errors out, log and move on; the third-party-writer warning is informational, not a blocker.
+   **Bias to under-warn.** If the author signal is ambiguous — `author.name` is absent or unexpected AND the email is not in the allow-list but is not clearly a distinct human committer either — prefer to treat the commit as platform-authored and suppress the warning. Falsely flagging a customer's own commits is worse than missing a genuine third-party writer; this detection is informational, not a blocker. If the ADO call errors out, log and move on.
 
 **Output:** Pending-changes count is 0 (or poll-timeout noted with the adaptive `M` reflected in the warning text, plus the optional third-party-writer note).
 
@@ -663,7 +673,7 @@ Dry-run mode (`--dry-run` — 2 tasks):
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: If no Git binding exists → run `setup-git-integration` or cancel (gate `commit-to-git:1.no-binding`).
+1. **Phase 1**: If no Git binding exists → run `git-configure` or cancel (gate `commit-to-git:1.no-binding`).
 2. **Phase 3**: If pre-flight finds blockers → must fix and re-run (gate `commit-to-git:3.pre-flight-blockers`). In dry-run mode this gate is informational only (skill exits after surfacing blockers without offering "Cancel" — there's nothing to cancel).
 3. **Phase 3**: If pre-flight finds warnings only → proceed, view details, or cancel (gate `commit-to-git:3.pre-flight-warnings`). In dry-run mode this gate is informational only; dry-run never proceeds past Phase 3.
 4. **Phase 4** (real-commit only): Approve the commit plan (gate `commit-to-git:4.plan`).

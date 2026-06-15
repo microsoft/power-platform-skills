@@ -38,12 +38,14 @@ const FILE_NAMES = Object.freeze({
   planHtml:                  'inner-loop-plan.html',
 
   // Skill-run markers (written when a skill completes)
-  lastSetup:                 'last-setup.json',
+  // NOTE: `git-configure` (which merged setup-git-integration + connect-solution-to-git +
+  // branch-switch) writes its own marker via `git-configure-paths.js` (last-git-configure.json
+  // / last-git-configure-validation.json / git-configure-plan-data.json), NOT through this
+  // table. Lifecycle isolation is documented at the top of git-configure-paths.js.
   lastCommit:                'last-commit.json',
   lastSync:                  'last-sync.json',
   lastValidation:            'last-validation.json',
   lastConflictResolution:    'last-conflict-resolution.json',
-  lastBranchSwitch:          'last-branch-switch.json',
   lastRevert:                'last-revert.json',
   lastBranchRevert:          'last-branch-revert.json',
   lastPr:                    'last-pr.json',
@@ -141,6 +143,42 @@ function gitIntegrationManifestPath(projectRoot) {
   return path.join(projectRoot, '.git-integration-manifest.json');
 }
 
+/**
+ * Resolves the project root for an inner-loop helper, centralising the
+ * deprecation policy for the legacy "guess the root from cwd" behaviour.
+ *
+ * Passing `--project-root` explicitly is the supported path: it guarantees
+ * artifacts land under the intended `<projectRoot>/docs/inner-loop/` and never
+ * pollute an unrelated ancestor that happens to match a project heuristic.
+ *
+ * Migration runway:
+ *   - Today: if `projectRoot` is absent, emit a one-line deprecation WARN to
+ *     stderr and fall back to `fallbackResolver()` (or cwd).
+ *   - After RUNWAY_HARD_ERROR_DATE: callers should flip this to a hard error.
+ *     The date is surfaced in the warning so operators can plan.
+ *
+ * @param {string|null|undefined} projectRoot  The explicitly-provided root, if any.
+ * @param {object} [options]
+ * @param {string} [options.caller]            Helper name, for the warning text.
+ * @param {() => (string|null)} [options.fallbackResolver]  Legacy resolver (e.g. findProjectRoot(cwd)).
+ * @param {(msg: string) => void} [options._warn]  DI hook for tests.
+ * @returns {string} The resolved project root.
+ */
+const RUNWAY_HARD_ERROR_DATE = '2026-07-13'; // 30-day runway from 2026-06-13
+
+function requireProjectRoot(projectRoot, { caller = 'inner-loop helper', fallbackResolver = null, _warn = null } = {}) {
+  if (projectRoot) return projectRoot;
+  const fallback = typeof fallbackResolver === 'function' ? fallbackResolver() : null;
+  const target = fallback || process.cwd();
+  const warn = typeof _warn === 'function' ? _warn : (m) => process.stderr.write(m);
+  warn(
+    `[DEPRECATION WARN] ${caller}: --project-root was not provided; falling back to ` +
+    `'${target}'. This fallback becomes a hard error after ${RUNWAY_HARD_ERROR_DATE}. ` +
+    `Pass --project-root <path> explicitly to keep artifacts out of an unintended ancestor.\n`
+  );
+  return target;
+}
+
 module.exports = {
   INNER_LOOP_DIR,
   FILE_NAMES,
@@ -148,4 +186,6 @@ module.exports = {
   innerLoopPath,
   ensureInnerLoopDir,
   gitIntegrationManifestPath,
+  requireProjectRoot,
+  RUNWAY_HARD_ERROR_DATE,
 };

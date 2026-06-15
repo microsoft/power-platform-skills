@@ -1,10 +1,10 @@
 'use strict';
 
 // Offline DI-driven tests for check-ado-folder-exists.js. The helper is the
-// pre-bind safety check that E7 adds at connect-solution-to-git Phase 3
-// step 5 — its accuracy directly determines whether the user gets the
-// folder-occupied consent gate or silently co-locates Dataverse files
-// with unrelated content.
+// pre-bind safety check that git-configure Phase 4 (folder-occupied gate,
+// git-configure:4.folder-occupied) runs in the solution-binding flow — its
+// accuracy directly determines whether the user gets the folder-occupied
+// consent gate or silently co-locates Dataverse files with unrelated content.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -379,4 +379,17 @@ test('non-200/404 on items (e.g. 500) → ok:false, statusCode:500', async () =>
   });
   assert.equal(r.ok, false);
   assert.equal(r.statusCode, 500);
+});
+
+test('check-ado-folder-exists: --tokenFile JSON envelope resolves and --folder alias works', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-check-ado-folder-exists.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    const headers = [];
+    const r = await checkAdoFolderExists({ organization: 'org', project: 'proj', repository: 'repo', folder: 'solutions', branch: 'main', tokenFile, _makeRequestImpl: async (opts) => { headers.push(opts.headers.Authorization); return headers.length === 1 ? { statusCode: 200, body: JSON.stringify({ value: [{ objectId: 'sha' }] }) } : { statusCode: 200, body: JSON.stringify({ value: [] }) }; } });
+    assert.equal(r.ok, true);
+    assert.equal(r.gitFolder, 'solutions');
+    assert.deepEqual(headers, ['Bearer header.payload.sig', 'Bearer header.payload.sig']);
+  } finally { fs.rmSync(tokenFile, { force: true }); }
 });

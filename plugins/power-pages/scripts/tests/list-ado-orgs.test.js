@@ -103,3 +103,15 @@ test('profile non-JSON body → ok:false', async () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /parse profile/);
 });
+
+test('list-ado-orgs: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-list-ado-orgs.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    const headers = [];
+    const r = await listAdoOrgs({ tokenFile, _makeRequestImpl: async (opts) => { headers.push(opts.headers.Authorization); return headers.length === 1 ? { statusCode: 200, body: JSON.stringify({ id: '11111111-2222-3333-4444-555555555555' }) } : { statusCode: 200, body: JSON.stringify({ value: [] }) }; } });
+    assert.equal(r.ok, true);
+    assert.deepEqual(headers, ['Bearer header.payload.sig', 'Bearer header.payload.sig']);
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

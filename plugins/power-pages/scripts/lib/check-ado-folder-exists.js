@@ -2,9 +2,10 @@
 
 // Checks whether a specific top-level folder in an Azure DevOps git repository
 // is already occupied with content on a specific branch. Used by
-// `connect-solution-to-git` Phase 3 step 5 (E7) to surface a collision-risk
-// consent gate BEFORE the `ConnectToGit` bind co-locates Dataverse-managed
-// files with whatever's already in that folder.
+// `git-configure` Phase 4 (folder-occupied gate, git-configure:4.folder-occupied,
+// solution-binding only) to surface a collision-risk consent gate BEFORE the
+// `ConnectToGit` bind co-locates Dataverse-managed files with whatever's
+// already in that folder.
 //
 // Two-step probe:
 //   1. GET refs?filter=heads/<branch>&top=1 → obtains headCommitId for the
@@ -49,6 +50,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 
@@ -56,15 +58,16 @@ function parseArgs(argv) {
   const args = argv.slice(2);
   const out = {
     organization: null, project: null, repository: null,
-    gitFolder: null, branch: null, token: null,
+    gitFolder: null, branch: null, token: null, tokenFile: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--project' && args[i + 1]) out.project = args[++i];
     else if (args[i] === '--repository' && args[i + 1]) out.repository = args[++i];
-    else if (args[i] === '--gitFolder' && args[i + 1]) out.gitFolder = args[++i];
+    else if ((args[i] === '--gitFolder' || args[i] === '--folder') && args[i + 1]) out.gitFolder = args[++i];
     else if (args[i] === '--branch' && args[i + 1]) out.branch = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
   }
   return out;
 }
@@ -98,8 +101,8 @@ function hintForStatus(sc, repository) {
 }
 
 // Strip leading slash, strip refs/heads/ prefix, defensively trim whitespace.
-// Mirrors the format the connect-solution-to-git skill normalizes before
-// invoking this helper (the skill's 3d sub-step requires a plain branch name).
+// Mirrors the format the git-configure skill normalizes before invoking this
+// helper (the skill's Phase 4 solution-binding flow requires a plain branch name).
 function normalizeBranch(branch) {
   if (!branch) return null;
   let b = String(branch).trim();
@@ -133,8 +136,8 @@ function normalizeGitFolder(folder) {
  * @returns {Promise<object>}
  */
 async function checkAdoFolderExists(options = {}) {
-  const { organization, project, repository, token } = options;
-  const gitFolder = normalizeGitFolder(options.gitFolder);
+  const { organization, project, repository, token, tokenFile } = options;
+  const gitFolder = normalizeGitFolder(options.folder || options.gitFolder);
   const branch = normalizeBranch(options.branch);
   const request = typeof options._makeRequestImpl === 'function'
     ? options._makeRequestImpl
@@ -145,7 +148,6 @@ async function checkAdoFolderExists(options = {}) {
   if (!repository) return failure(null, '--repository is required');
   if (!gitFolder) return failure(null, '--gitFolder is required');
   if (!branch) return failure(null, '--branch is required');
-  if (!token) return failure(null, '--token is required');
 
   // Reject embedded path separators with a clear error — this helper
   // checks a single top-level folder, not nested paths.
@@ -155,7 +157,9 @@ async function checkAdoFolderExists(options = {}) {
       'Pass just the folder name, e.g. "solutions" (NOT "solutions/sub" or "/solutions").');
   }
 
-  const { header: authHeader } = buildAuthHeader(token);
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return failure(null, tokenResult.error);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;
   const repoSegment =
     `${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}`;
@@ -192,8 +196,8 @@ async function checkAdoFolderExists(options = {}) {
     // doesn't exist yet. Either way, the folder cannot exist on it.
     // The helper conservatively reports exists:false; the caller can
     // distinguish empty-repo from missing-branch by running
-    // verify-repo-initialized first (connect-solution-to-git Phase 3 step 4
-    // already does this immediately before step 5).
+    // verify-repo-initialized first (git-configure Phase 2 repo-init gate
+    // already runs this immediately before the folder-occupied check in Phase 4).
     return {
       ok: true, organization, project, repository, branch, gitFolder,
       exists: false, itemCount: 0, headCommitId: null,

@@ -45,7 +45,7 @@ function escapeHtml(str) {
 }
 
 const STATE_LABEL = {
-  Disconnected: { title: 'Not bound to Git',                 desc: 'This environment is not bound to any ADO repo. Run setup-git-integration to bind.' },
+  Disconnected: { title: 'Not bound to Git',                 desc: 'This environment is not bound to any ADO repo. Run git-configure to bind.' },
   Clean:        { title: 'Everything is in sync',            desc: 'No pending changes, no incoming updates, no conflicts. Nothing to do right now.' },
   Dirty:        { title: 'You have local changes to commit', desc: 'There are pending Changes in this environment that have not been committed to Git yet.' },
   Stale:        { title: 'Incoming updates available',       desc: 'Teammate commits in the bound branch have not been pulled into this environment yet.' },
@@ -56,14 +56,14 @@ const STATE_LABEL = {
 
 const NEXT_STEP = {
   Disconnected: {
-    cmd: '/power-pages:setup-git-integration',
+    cmd: '/power-pages:git-configure',
     desc: 'Bind this environment to an Azure DevOps repo + branch + folder.',
-    alts: ['/power-pages:connect-solution-to-git'],
+    alts: ['/power-pages:git-configure --binding=solution'],
   },
   Clean: {
     cmd: '(no action required)',
     desc: 'Your environment is fully in sync with the bound branch. Continue developing in the maker portal, and re-run this skill whenever you want a status check.',
-    alts: ['/power-pages:branch-switch', '/power-pages:open-pr'],
+    alts: ['/power-pages:git-configure --mode=switch-branch', '/power-pages:open-pr'],
   },
   Dirty: {
     cmd: '/power-pages:commit-to-git --dry-run',

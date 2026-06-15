@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Lists Azure DevOps projects in an organization.
-// Used by setup-git-integration discovery flows after org selection.
+// Used by git-configure discovery flows (Phase 4) after org selection.
 //
 // Output (JSON to stdout):
 //   { "ok": true, "organization": "<org>", "count": 1, "projects": [{ "id": "<guid>", "name": "proj", "description": "...", "state": "wellFormed", "visibility": "private" }] }
@@ -14,15 +14,17 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { organization: null, token: null };
+  const out = { organization: null, token: null, tokenFile: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
   }
   return out;
 }
@@ -36,11 +38,12 @@ function hintForStatus(sc, org) {
 }
 
 async function listAdoProjects(options = {}) {
-  const { organization, token } = options;
+  const { organization, token, tokenFile } = options;
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
   if (!organization) return failure(null, '--organization is required');
-  if (!token) return failure(null, '--token is required');
-  const { header: authHeader } = buildAuthHeader(token);
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return failure(null, tokenResult.error);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const url = `https://dev.azure.com/${encodeURIComponent(organization)}/_apis/projects?api-version=${API_VERSION}`;
   const res = await request({ url, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' } });
   if (res && res.error) return failure(null, res.error);

@@ -34,7 +34,7 @@
 //   - pendingChangesCount catches local edits between runs.
 //   - solutionUniqueName guards against accidental cache reuse if the user
 //     switches the bound solution mid-session (rare but possible with
-//     bindingType=solution + branch-switch).
+//     bindingType=solution + git-configure switch-branch mode).
 //
 // TTL of 60s is intentionally tight — the cache is for fast iterate-on-fix
 // cycles, not durable state. A maker editing in parallel is the failure mode;

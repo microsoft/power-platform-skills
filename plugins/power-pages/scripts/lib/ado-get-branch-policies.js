@@ -49,12 +49,13 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
   const out = {
     organization: null, project: null, repositoryId: null, branch: null,
-    pat: null, token: null, apiVersion: '7.0',
+    pat: null, token: null, tokenFile: null, apiVersion: '7.0',
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
@@ -63,6 +64,7 @@ function parseArgs(argv) {
     else if (args[i] === '--branch' && args[i + 1]) out.branch = args[++i];
     else if (args[i] === '--pat' && args[i + 1]) out.pat = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--apiVersion' && args[i + 1]) out.apiVersion = args[++i];
   }
   return out;
@@ -70,7 +72,7 @@ function parseArgs(argv) {
 
 async function getBranchPolicies({
   organization, project, repositoryId, branch,
-  pat = null, token = null,
+  pat = null, token = null, tokenFile = null,
   apiVersion = '7.0',
   baseUrl = null,
 } = {}) {
@@ -78,14 +80,19 @@ async function getBranchPolicies({
   if (!project) throw new Error('--project is required');
   if (!repositoryId) throw new Error('--repositoryId is required (the repo GUID, not the name)');
   if (!branch) throw new Error('--branch is required');
-  if (!pat && !token) throw new Error('Either --pat or --token is required for ADO auth');
+  let resolvedToken = token;
+  if (!pat) {
+    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
+    resolvedToken = tokenResult.token;
+  }
 
   const branchName = branch.startsWith('refs/heads/') ? branch : `refs/heads/${branch}`;
 
   // The policy endpoint lives under {org}/{project}/_apis/policy/configurations
   // — NOT under the git/repositories/{repo} prefix that the rest of ado-client
   // assumes. We hand-build the URL via the raw token/pat-aware HTTP helper.
-  const { getAuthHeader, host } = adoAuthAndHost({ organization, pat, token, baseUrl });
+  const { getAuthHeader, host } = adoAuthAndHost({ organization, pat, token: resolvedToken, baseUrl });
   const url = `${host}/${encodeURIComponent(organization)}/${encodeURIComponent(project)}` +
               `/_apis/policy/configurations` +
               `?repositoryId=${encodeURIComponent(repositoryId)}` +

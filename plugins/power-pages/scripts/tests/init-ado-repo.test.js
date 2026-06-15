@@ -339,3 +339,15 @@ test('api-version: both GET repo and POST pushes use the stable 7.1 (no preview)
   assert.doesNotMatch(postCall.url, /api-version=[\d.]+-preview/,
     'POST /pushes URL must not use a -preview api-version (returns HTTP 405)');
 });
+
+test('init-ado-repo: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-init-ado-repo.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    let header;
+    const r = await initAdoRepo({ organization: 'org', project: 'proj', repository: 'repo', branch: 'main', tokenFile, _makeRequestImpl: async (opts) => { header = opts.headers.Authorization; return { statusCode: 200, body: JSON.stringify({ id: 'rid', defaultBranch: 'refs/heads/main' }) }; } });
+    assert.equal(r.ok, true);
+    assert.equal(header, 'Bearer header.payload.sig');
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

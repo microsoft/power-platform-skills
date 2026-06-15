@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Acquires a Microsoft Entra-issued bearer token scoped to Azure DevOps via
-// `az account get-access-token`. Used by `setup-git-integration` Phase 1
-// step 0 and Phase 2 step 1 to replace the PAT prompt.
+// `az account get-access-token`. Used by `git-configure` Phase 1 (auth
+// preflight) and Phase 2 (ADO permission / repo-init preflights) to replace
+// the PAT prompt.
 //
 // Azure DevOps accepts both PATs (Basic auth) and Entra OAuth bearer tokens
 // for its REST APIs. The ADO Entra application has a tenant-invariant ID:
@@ -93,22 +94,46 @@ function sha256Hex(token) {
 }
 
 /**
- * Writes the token payload to disk with restrictive permissions. Best-effort
- * on Windows where chmod does not map cleanly to NTFS ACLs.
+ * Writes the token payload to disk with restrictive permissions.
+ *
+ * POSIX: mode 0o600 (owner read/write only).
+ * Windows: NTFS ignores the POSIX mode and the file inherits the parent
+ *   directory's ACL — which in a shared host may grant other principals
+ *   (BUILTIN\Users, Authenticated Users). We therefore actively lock the ACL
+ *   down with `icacls`: disable inheritance and grant Full control only to the
+ *   current user (plus SYSTEM, which the OS needs). This guarantees the token
+ *   file is owner-only regardless of where it is written.
  *
  * @param {string} filePath
  * @param {object} payload Full payload incl. "token"
+ * @param {object} [deps]
+ * @param {(cmd: string) => void} [deps._execImpl]  DI for the icacls call (tests).
+ * @param {string} [deps._platform]                 DI for process.platform (tests).
  * @returns {string} Absolute path actually written
  */
-function writeTokenFile(filePath, payload) {
+function writeTokenFile(filePath, payload, { _execImpl, _platform } = {}) {
   const abs = path.resolve(filePath);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   // Write with explicit 0o600 mode so the file is owner-only from the moment
-  // it's created (POSIX). On Windows, the mode argument is largely ignored
-  // and the parent dir's ACL is inherited.
+  // it's created (POSIX). On Windows the mode argument is largely ignored.
   fs.writeFileSync(abs, JSON.stringify(payload, null, 2) + '\n', { mode: 0o600 });
   // Defence-in-depth: chmod after write in case writeFileSync mode was ignored.
   try { fs.chmodSync(abs, 0o600); } catch (_) { /* best-effort */ }
+
+  const platform = _platform || process.platform;
+  if (platform === 'win32') {
+    // Strip inherited ACEs and grant only the current user + SYSTEM. Without
+    // this, a token file written under a shared path inherits Users/Authenticated
+    // Users read access — a credential-leak footgun on multi-user hosts.
+    const exec = _execImpl || ((cmd) => execSync(cmd, { stdio: 'ignore' }));
+    const user = process.env.USERNAME
+      ? `${process.env.USERDOMAIN || process.env.COMPUTERNAME || '.'}\\${process.env.USERNAME}`
+      : null;
+    try {
+      const grants = user ? `/grant:r "${user}:F" ` : '';
+      exec(`icacls "${abs}" /inheritance:r ${grants}/grant:r "SYSTEM:F"`);
+    } catch (_) { /* best-effort: chmod above is the POSIX fallback */ }
+  }
   return abs;
 }
 

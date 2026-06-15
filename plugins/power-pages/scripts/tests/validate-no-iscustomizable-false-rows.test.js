@@ -95,7 +95,7 @@ test('emits WARN per non-customizable Entity', async () => {
     assert.equal(r.warnings.length, 1);
     assert.equal(r.warnings[0].severity, 'warn');
     assert.equal(r.warnings[0].key, 'not-customizable-metadata');
-    assert.equal(r.warnings[0].ref, 'IL-007');
+    assert.equal(r.warnings[0].ref, 'IL-CUSTOMIZABLE-001');
     assert.equal(r.warnings[0].details.componentId, 'gB');
     assert.equal(r.warnings[0].details.logicalName, 'sri_blocked');
     assert.match(r.warnings[0].message, /sri_blocked/);

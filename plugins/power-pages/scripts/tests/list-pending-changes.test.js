@@ -96,7 +96,7 @@ test('unknown solutioncomponentstate falls back to the raw string', async () => 
   } finally { server.close(); }
 });
 
-test('count reflects @odata.count even when value is paginated', async () => {
+test('count reflects @odata.count; truncated:true when server returns fewer rows than count without a nextLink', async () => {
   const server = await createTestServer({
     status: 200,
     body: {
@@ -113,6 +113,7 @@ test('count reflects @odata.count even when value is paginated', async () => {
     assert.equal(result.count, 385);
     assert.equal(result.items.length, 3);
     assert.equal(result.items[2].changeType, 'Modify');
+    assert.equal(result.truncated, true, 'items (3) < count (385) and no nextLink → truncated');
   } finally { server.close(); }
 });
 
@@ -245,7 +246,52 @@ test('probe=false (default) still returns items[] with full field set', async ()
     const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok' });
     assert.equal(result.probe, undefined);
     assert.equal(result.items.length, 1);
+    assert.equal(result.truncated, false, 'complete single page → truncated:false');
     assert.match(captured, /\$select=/, 'non-probe path must include $select');
-    assert.match(captured, /\$top=50/, 'non-probe path default top is 50');
+    assert.match(captured, /\$top=5000/, 'non-probe path default top is 5000');
+  } finally { server.close(); }
+});
+
+// ===== pagination + truncation (B1) =====
+
+test('auto-follows @odata.nextLink across pages and returns a complete, non-truncated snapshot', async () => {
+  const mkRow = (id) => ({ componentid: id, componentdisplayname: id, componenttypename: 'Web Page', solutioncomponentstate: 0, action: 1 });
+  // Page 1 carries the total count + a nextLink; page 2 completes the set.
+  const server = await new Promise((resolve) => {
+    const responses = [
+      { '@odata.count': 4, '@odata.nextLink': null, value: [mkRow('a'), mkRow('b')] },
+      { value: [mkRow('c'), mkRow('d')] },
+    ];
+    let i = 0;
+    const s = http.createServer((req, res) => {
+      const body = responses[Math.min(i, responses.length - 1)];
+      // Inject a nextLink that points back at this server for the first page only.
+      if (i === 0) body['@odata.nextLink'] = `http://${s.address().address}:${s.address().port}/page2`;
+      i++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok' });
+    assert.equal(result.count, 4);
+    assert.equal(result.items.length, 4, 'both pages accumulated');
+    assert.deepEqual(result.items.map((x) => x.componentId), ['a', 'b', 'c', 'd']);
+    assert.equal(result.truncated, false, 'full pagination → complete snapshot');
+  } finally { server.close(); }
+});
+
+test('caps at maxItems and reports truncated:true when count exceeds the safety cap', async () => {
+  const mkRow = (id) => ({ componentid: String(id), componentdisplayname: String(id), componenttypename: 'Web Page', solutioncomponentstate: 0, action: 1 });
+  const server = await createTestServer({
+    status: 200,
+    body: { '@odata.count': 10, value: [mkRow(1), mkRow(2), mkRow(3), mkRow(4), mkRow(5)] },
+  });
+  try {
+    const result = await listPendingChanges({ envUrl: serverUrl(server), token: 'tok', maxItems: 3 });
+    assert.equal(result.count, 10);
+    assert.equal(result.items.length, 3, 'items capped at maxItems');
+    assert.equal(result.truncated, true, 'cap tripped → truncated');
   } finally { server.close(); }
 });

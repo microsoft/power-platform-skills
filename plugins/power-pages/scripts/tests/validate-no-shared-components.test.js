@@ -111,7 +111,7 @@ test('flags each overlapping component as a BLOCKER citing the other solution', 
     const ids = r.blocking.map((b) => b.details.objectId).sort();
     assert.deepEqual(ids, ['shared1', 'shared2']);
     assert.equal(r.blocking[0].severity, 'blocker');
-    assert.equal(r.blocking[0].ref, 'IL-009');
+    assert.equal(r.blocking[0].ref, 'IL-SHARED-003');
     assert.equal(r.blocking[0].details.otherSolutionUniqueName, 'Other');
     assert.match(r.blocking[0].remediation, /Remove/);
   } finally { server.close(); }

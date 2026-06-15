@@ -106,6 +106,7 @@ function validateFileSizes(items, { capBytes = CAP_BYTES, warnThreshold = WARN_T
 
     if (encoded > capBytes) {
       blocking.push({
+        ref: 'IL-SIZE-001',
         componentId: it.componentId ?? null,
         componentName: it.componentName ?? null,
         componentType: it.componentType ?? null,
@@ -117,6 +118,7 @@ function validateFileSizes(items, { capBytes = CAP_BYTES, warnThreshold = WARN_T
       });
     } else if (encoded > capBytes * warnThreshold) {
       warnings.push({
+        ref: 'IL-SIZE-002',
         componentId: it.componentId ?? null,
         componentName: it.componentName ?? null,
         componentType: it.componentType ?? null,

@@ -13,6 +13,8 @@ const {
   innerLoopPath,
   ensureInnerLoopDir,
   gitIntegrationManifestPath,
+  requireProjectRoot,
+  RUNWAY_HARD_ERROR_DATE,
 } = require('../lib/inner-loop-paths');
 
 function makeTmp(t) {
@@ -29,8 +31,8 @@ test('FILE_NAMES exposes the inner-loop artifact keys and uses kebab-case file n
   // Snapshot test: lock the key set so a careless rename or missing key is loud.
   const expected = [
     'plan', 'planHtml',
-    'lastSetup', 'lastCommit', 'lastSync', 'lastValidation',
-    'lastConflictResolution', 'lastBranchSwitch', 'lastRevert',
+    'lastCommit', 'lastSync', 'lastValidation',
+    'lastConflictResolution', 'lastRevert',
     'lastBranchRevert', 'lastPr', 'lastDiagnosis',
     'preCommitReportHtml', 'conflictsHtml', 'diagnosisHtml',
     'pendingChangesSnapshot', 'pendingChangesCache',
@@ -141,4 +143,39 @@ test('gitIntegrationManifestPath returns project-root manifest (NOT under docs/i
 test('gitIntegrationManifestPath throws when projectRoot is missing', () => {
   assert.throws(() => gitIntegrationManifestPath(undefined), /projectRoot is required/);
   assert.throws(() => gitIntegrationManifestPath(''), /projectRoot is required/);
+});
+
+// ===== requireProjectRoot (B2) =====
+
+test('requireProjectRoot returns the explicit root unchanged and never warns', () => {
+  let warned = false;
+  const out = requireProjectRoot('C:/explicit/root', { _warn: () => { warned = true; } });
+  assert.equal(out, 'C:/explicit/root');
+  assert.equal(warned, false, 'explicit root must not trigger the deprecation warning');
+});
+
+test('requireProjectRoot warns and falls back to fallbackResolver when root is absent', () => {
+  const msgs = [];
+  const out = requireProjectRoot(undefined, {
+    caller: 'unit-test',
+    fallbackResolver: () => 'C:/fallback/root',
+    _warn: (m) => msgs.push(m),
+  });
+  assert.equal(out, 'C:/fallback/root');
+  assert.equal(msgs.length, 1);
+  assert.match(msgs[0], /DEPRECATION WARN/);
+  assert.match(msgs[0], /unit-test/);
+  assert.match(msgs[0], /C:\/fallback\/root/);
+  assert.match(msgs[0], new RegExp(RUNWAY_HARD_ERROR_DATE));
+});
+
+test('requireProjectRoot falls back to cwd when no fallbackResolver is supplied', () => {
+  const msgs = [];
+  const out = requireProjectRoot(null, { _warn: (m) => msgs.push(m) });
+  assert.equal(out, process.cwd());
+  assert.equal(msgs.length, 1);
+});
+
+test('RUNWAY_HARD_ERROR_DATE is an ISO date string', () => {
+  assert.match(RUNWAY_HARD_ERROR_DATE, /^\d{4}-\d{2}-\d{2}$/);
 });

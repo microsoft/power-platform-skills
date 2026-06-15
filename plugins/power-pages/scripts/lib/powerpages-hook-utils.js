@@ -60,18 +60,15 @@ const TRACKED_SKILLS = {
   'test-site': {},
 
   // ───── Inner Dev Loop skills (Dataverse Git integration) ─────
-  // 12-skill family that automates the Connect-to-Git workflow. Validators
+  // 9-skill family that automates the Connect-to-Git workflow. Validators
   // live alongside each skill and write markers to `docs/inner-loop/`.
-  // `connect-solution-to-git` shares the `setup-git-integration` validator
-  // (both skills write the same `.git-integration-manifest.json` + marker).
+  // `git-configure` handles setup, switch-branch, rebind, disconnect, and
+  // validate modes through a single merged validator.
   'plan-inner-loop': {
     validatorScript: 'skills/plan-inner-loop/scripts/validate-plan-inner-loop.js',
   },
-  'setup-git-integration': {
-    validatorScript: 'skills/setup-git-integration/scripts/validate-setup-git-integration.js',
-  },
-  'connect-solution-to-git': {
-    validatorScript: 'skills/connect-solution-to-git/scripts/validate-connect-solution-to-git.js',
+  'git-configure': {
+    validatorScript: 'skills/git-configure/scripts/validate-git-configure.js',
   },
   // NOTE: 'validate-pending-changes' was folded into 'commit-to-git --dry-run'.
   // The merged validator (skills/commit-to-git/scripts/validate-commit-to-git.js)
@@ -85,9 +82,6 @@ const TRACKED_SKILLS = {
   },
   'resolve-conflicts': {
     validatorScript: 'skills/resolve-conflicts/scripts/validate-resolve-conflicts.js',
-  },
-  'branch-switch': {
-    validatorScript: 'skills/branch-switch/scripts/validate-branch-switch.js',
   },
   'revert-workspace': {
     validatorScript: 'skills/revert-workspace/scripts/validate-revert-workspace.js',

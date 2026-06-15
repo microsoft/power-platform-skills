@@ -40,7 +40,7 @@ The `DeleteDeletedComponents: true` flag turns the pull into a destructive opera
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
-- A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+- A Git binding already established (run `/power-pages:git-configure` first if needed)
 
 
 **Initial request:** $ARGUMENTS
@@ -68,6 +68,10 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-git-binding.js" --envUrl "<envUrl>"
    ```
 
+   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: sync-from-git:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · sync-from-git:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
    If `bound === false`:
 
    <!-- gate: sync-from-git:1.no-binding | category=intent | cancel-leaves=nothing -->
@@ -75,7 +79,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:setup-git-integration, Cancel |
+   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:git-configure, Cancel |
 
 **Output:** Confirmed binding to org/project/repo/branch.
 
@@ -313,7 +317,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: If no Git binding exists → run `setup-git-integration` or cancel (gate `sync-from-git:1.no-binding`).
+1. **Phase 1**: If no Git binding exists → run `git-configure` or cancel (gate `sync-from-git:1.no-binding`).
 2. **Phase 3**: If conflicts detected → dispatch `resolve-conflicts` or cancel (gate `sync-from-git:3.conflicts-detected`).
 3. **Phase 4**: Approve the sync plan (gate `sync-from-git:4.plan`).
 4. **Phase 5a** (conditional): Confirm `DeleteDeletedComponents: true` is destructive (gate `sync-from-git:5.hard-delete`).

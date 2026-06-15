@@ -1271,7 +1271,7 @@ If you also need to surface a timestamp in the footer (e.g. plan completion time
 > Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/update-skill-tracking.js" \
   --projectRoot "." \
   --skillName "PlanAlm" \
   --authoringTool "ClaudeCode"

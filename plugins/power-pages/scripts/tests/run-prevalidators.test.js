@@ -8,11 +8,53 @@ const os      = require('node:os');
 
 const orch = require('../lib/run-prevalidators');
 const {
-  normaliseEnvelope, normaliseFinding, aggregateResults, computeDelta,
+  normaliseEnvelope, normaliseFinding, aggregateResults, collapseFindings, computeDelta,
   emitText, emitJUnit, emitSarif, renderHtmlReport, buildHelpUri,
   ilRefToAnchor, ruleId, xmlEscape, htmlEscape,
   VALIDATORS, runPrevalidators,
 } = orch;
+
+// ===== O1 collapseFindings =====
+
+test('collapseFindings collapses >threshold same-(validator,ref) findings into one summary row', () => {
+  const findings = [];
+  for (let i = 0; i < 61; i++) {
+    findings.push({ validator: 'publisher-prefix', ref: 'IL-PFX-001', message: `component ${i} uses prefix sri_` });
+  }
+  const out = collapseFindings(findings, { threshold: 5 });
+  assert.equal(out.length, 1, '61 same-code findings collapse to 1');
+  assert.equal(out[0].collapsedCount, 61);
+  assert.match(out[0].message, /61×/);
+  assert.match(out[0].message, /--verbose/);
+});
+
+test('collapseFindings keeps groups at or below threshold expanded', () => {
+  const findings = [
+    { validator: 'a', ref: 'IL-A', message: 'm1' },
+    { validator: 'a', ref: 'IL-A', message: 'm2' },
+    { validator: 'b', ref: 'IL-B', message: 'm3' },
+  ];
+  const out = collapseFindings(findings, { threshold: 5 });
+  assert.equal(out.length, 3, 'small groups stay expanded');
+});
+
+test('collapseFindings with verbose:true returns everything expanded', () => {
+  const findings = Array.from({ length: 20 }, (_, i) => ({ validator: 'x', ref: 'IL-X', message: `m${i}` }));
+  const out = collapseFindings(findings, { threshold: 5, verbose: true });
+  assert.equal(out.length, 20, 'verbose disables collapsing');
+});
+
+test('collapseFindings groups by (validator, ref) so different codes are not merged', () => {
+  const findings = [
+    ...Array.from({ length: 10 }, () => ({ validator: 'v', ref: 'IL-1', message: 'a' })),
+    ...Array.from({ length: 10 }, () => ({ validator: 'v', ref: 'IL-2', message: 'b' })),
+  ];
+  const out = collapseFindings(findings, { threshold: 5 });
+  assert.equal(out.length, 2, 'two distinct codes → two summary rows');
+  assert.equal(out[0].collapsedCount, 10);
+  assert.equal(out[1].collapsedCount, 10);
+});
+
 
 function tmp(t) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'run-prevalidators-'));
@@ -221,6 +263,29 @@ test('runPrevalidators: returns error when snapshot file does not exist', async 
   const dir = tmp(t);
   const r = await runPrevalidators({ pendingFile: path.join(dir, 'nope.json') });
   assert.match(r.error, /Snapshot not found/);
+});
+
+test('runPrevalidators: rejects a truncated snapshot (truncated:true) before running validators (B1)', async (t) => {
+  const dir = tmp(t);
+  const snap = { count: 344, truncated: true, items: [
+    { componentType: 'Entity', componentpath: '/x/y/Account.xml' },
+  ] };
+  const snapPath = path.join(dir, 'snap.json');
+  fs.writeFileSync(snapPath, JSON.stringify(snap), 'utf8');
+  const r = await runPrevalidators({ pendingFile: snapPath, projectRoot: dir, outDir: dir });
+  assert.match(r.error, /truncated/i);
+  assert.equal(r.truncated, true);
+  assert.ok(!r.report, 'no validators should run on a truncated snapshot');
+});
+
+test('runPrevalidators: rejects when items.length < declared count even without truncated flag (B1)', async (t) => {
+  const dir = tmp(t);
+  const snap = { count: 100, items: [{ componentType: 'Entity', componentpath: '/x.xml' }] };
+  const snapPath = path.join(dir, 'snap.json');
+  fs.writeFileSync(snapPath, JSON.stringify(snap), 'utf8');
+  const r = await runPrevalidators({ pendingFile: snapPath, projectRoot: dir, outDir: dir });
+  assert.match(r.error, /truncated/i);
+  assert.equal(r.truncated, true);
 });
 
 test('runPrevalidators: runs end-to-end with mock snapshot, emits json + html + skipped infos', async (t) => {

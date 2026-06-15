@@ -56,6 +56,7 @@ const {
   innerLoopPath,
   ensureInnerLoopDir,
   gitIntegrationManifestPath,
+  requireProjectRoot,
 } = require('./inner-loop-paths');
 
 // ===== Validator catalog =====
@@ -193,7 +194,7 @@ function parseArgs(argv) {
     envFriendlyName: null,
     captureTimings: true, computeDelta: true,
     validatorTimeoutMs: 60000,
-    quiet: false,
+    quiet: false, verbose: false,
     docsBaseUrl: process.env.POWER_PAGES_DOCS_BASE_URL || null,
   };
   for (let i = 0; i < a.length; i++) {
@@ -211,6 +212,7 @@ function parseArgs(argv) {
       case '--no-delta':             o.computeDelta = false; break;
       case '--validator-timeout':    o.validatorTimeoutMs = parseInt(a[++i], 10); break;
       case '--quiet':                o.quiet = true; break;
+      case '--verbose':              o.verbose = true; break;
       case '--docs-base-url':        o.docsBaseUrl = a[++i]; break;
       default: /* ignore unknown */
     }
@@ -294,6 +296,38 @@ function aggregateResults(perValidator) {
   }
   const status = blockers.length > 0 ? 'blocked' : (warnings.length > 0 ? 'warnings' : 'passed');
   return { status, blockers, warnings, infos };
+}
+
+// O1 — collapse a noisy run of same-(validator, ref/code) findings into a single
+// summary row so one root cause (e.g. 61 publisher-prefix warnings) doesn't flood
+// the report. Blockers are NEVER collapsed — every blocker must stay visible.
+// Returns a NEW array; the caller's raw arrays (used for counts/delta) are
+// untouched. `verbose` disables collapsing entirely.
+function collapseFindings(findings, { threshold = 5, verbose = false } = {}) {
+  if (verbose || !Array.isArray(findings)) return findings || [];
+  const groups = new Map();
+  const order = [];
+  for (const f of findings) {
+    const code = f.ref || 'no-ref';
+    const k = `${f.validator || '?'}||${code}`;
+    if (!groups.has(k)) { groups.set(k, []); order.push(k); }
+    groups.get(k).push(f);
+  }
+  const out = [];
+  for (const k of order) {
+    const grp = groups.get(k);
+    if (grp.length > threshold) {
+      const first = grp[0];
+      out.push({
+        ...first,
+        collapsedCount: grp.length,
+        message: `${grp.length}× ${first.message} — collapsed; run with --verbose to expand all ${grp.length}.`,
+      });
+    } else {
+      out.push(...grp);
+    }
+  }
+  return out;
 }
 
 function computeDelta(current, priorPath) {
@@ -460,8 +494,8 @@ function renderHtmlReport(report) {
   const statusLabel = report.status.charAt(0).toUpperCase() + report.status.slice(1);
   const findings = [
     ...report.blockers.map((f) => ({ ...f, sev: 'blocker' })),
-    ...report.warnings.map((f) => ({ ...f, sev: 'warning' })),
-    ...report.infos.map((f) => ({ ...f, sev: 'info' })),
+    ...collapseFindings(report.warnings, { verbose: report.verbose }).map((f) => ({ ...f, sev: 'warning' })),
+    ...collapseFindings(report.infos, { verbose: report.verbose }).map((f) => ({ ...f, sev: 'info' })),
   ];
   const findingsRows = findings.length ? findings.map((f) => `
     <tr>
@@ -546,8 +580,12 @@ async function runPrevalidators(rawArgs = {}) {
   if (!opts.pendingFile)              return { error: '--pending-file is required.' };
   if (!fs.existsSync(opts.pendingFile)) return { error: `Snapshot not found: ${opts.pendingFile}` };
 
-  // Resolve project root + paths.
-  const projectRoot = opts.projectRoot || findProjectRoot(process.cwd()) || process.cwd();
+  // Resolve project root + paths. requireProjectRoot centralises the
+  // deprecation policy: WARN now, hard error after the runway date.
+  const projectRoot = requireProjectRoot(opts.projectRoot, {
+    caller: 'run-prevalidators',
+    fallbackResolver: () => findProjectRoot(process.cwd()),
+  });
   // Always ensure the canonical docs/inner-loop/ exists under projectRoot —
   // every artifact path we write resolves there via innerLoopPath().
   ensureInnerLoopDir(projectRoot);
@@ -565,6 +603,22 @@ async function runPrevalidators(rawArgs = {}) {
   let snapshot = { items: [] };
   try { snapshot = JSON.parse(fs.readFileSync(opts.pendingFile, 'utf8')); } catch { /* tolerate */ }
   const items = Array.isArray(snapshot.items) ? snapshot.items : (Array.isArray(snapshot) ? snapshot : []);
+
+  // B1 guard: refuse to validate a truncated snapshot. A partial items[] makes
+  // every downstream validator under-report (false-negatives on the missing
+  // rows). list-pending-changes.js sets truncated:true and/or a count that
+  // exceeds items.length when it could not materialise every row.
+  const declaredCount = typeof snapshot.count === 'number' ? snapshot.count : null;
+  if (snapshot.truncated === true || (declaredCount !== null && items.length < declaredCount)) {
+    return {
+      error: `Pending-changes snapshot is truncated (items=${items.length}` +
+             (declaredCount !== null ? `, count=${declaredCount}` : '') +
+             '). Re-run list-pending-changes.js with a higher --max-items so validators see ' +
+             'every row — validating a partial snapshot would yield false-negatives.',
+      truncated: true,
+    };
+  }
+
   const componentsByType = {};
   for (const it of items) {
     const t = it?.componentType || 'Unknown';
@@ -685,6 +739,7 @@ async function runPrevalidators(rawArgs = {}) {
     componentsByType,
     elapsedMs,
     docsBaseUrl: opts.docsBaseUrl,
+    verbose: opts.verbose === true,
     // Carry forward last-committed solution version across runs.
     lastCommittedSolutionVersion: null,
   };
@@ -730,7 +785,7 @@ function defaultOpts() {
     envFriendlyName: null,
     captureTimings: true, computeDelta: true,
     validatorTimeoutMs: 60000,
-    quiet: false,
+    quiet: false, verbose: false,
     docsBaseUrl: process.env.POWER_PAGES_DOCS_BASE_URL || null,
   };
 }
@@ -766,6 +821,7 @@ module.exports = {
   normaliseEnvelope,
   normaliseFinding,
   aggregateResults,
+  collapseFindings,
   computeDelta,
   emitText,
   emitJUnit,

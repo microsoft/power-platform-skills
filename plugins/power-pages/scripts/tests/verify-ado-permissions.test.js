@@ -148,3 +148,14 @@ test('returns a hint containing "404" or "not found" when the live call would 40
     assert.equal(result.hasAccess, false);
   }
 });
+
+test('verify-ado-permissions: --tokenFile JSON envelope is accepted as token input', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-verify-ado-permissions.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    const result = await verifyAdoPermissions({ organization: 'nonexistent-org-tokenfile-test', project: 'p', repository: 'r', tokenFile });
+    assert.ok(!String(result.error || '').includes('No ADO token provided'));
+    assert.ok(!String(result.error || '').includes('token is required'));
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

@@ -15,16 +15,18 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const API_VERSION = '7.1';
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { organization: null, project: null, token: null };
+  const out = { organization: null, project: null, token: null, tokenFile: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--project' && args[i + 1]) out.project = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
   }
   return out;
 }
@@ -36,12 +38,13 @@ function hintForStatus(sc, project) {
   return null;
 }
 async function listAdoRepos(options = {}) {
-  const { organization, project, token } = options;
+  const { organization, project, token, tokenFile } = options;
   const request = typeof options._makeRequestImpl === 'function' ? options._makeRequestImpl : makeRequest;
   if (!organization) return failure(null, '--organization is required');
   if (!project) return failure(null, '--project is required');
-  if (!token) return failure(null, '--token is required');
-  const { header: authHeader } = buildAuthHeader(token);
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return failure(null, tokenResult.error);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const url = `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_apis/git/repositories?api-version=${API_VERSION}`;
   const res = await request({ url, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' } });
   if (res && res.error) return failure(null, res.error);

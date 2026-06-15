@@ -121,3 +121,15 @@ test('ado-get-branch-policies: blocking-but-disabled does NOT trip hasBlockingPu
   await closeAll(s);
   assert.equal(r.hasBlockingPullRequestPolicy, false);
 });
+
+test('ado-get-branch-policies: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-get-branch-policies.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 200, body: JSON.stringify({ value: [] }) }]);
+  try {
+    const r = await getBranchPolicies({ organization: 'o', project: 'p', repositoryId: 'rid', branch: 'main', tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.count, 0);
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

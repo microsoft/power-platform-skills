@@ -48,7 +48,7 @@ test('approves when server returns zero orphan rows', async () => {
   } finally { server.close(); }
 });
 
-test('flags every orphan row as a BLOCKER finding with IL-019 ref', async () => {
+test('flags every orphan row as a BLOCKER finding with IL-ORPHAN ref', async () => {
   const server = await createTestServer({
     status: 200,
     body: {
@@ -80,7 +80,7 @@ test('flags every orphan row as a BLOCKER finding with IL-019 ref', async () => 
     assert.equal(r.blocking.length, 2);
     assert.equal(r.blocking[0].severity, 'blocker');
     assert.equal(r.blocking[0].key, 'orphan-source-control-row');
-    assert.equal(r.blocking[0].ref, 'IL-019');
+    assert.equal(r.blocking[0].ref, 'IL-ORPHAN-002');
     assert.equal(r.blocking[0].details.sourcecontrolcomponentid, 'aaa1');
     assert.equal(r.blocking[0].details.componentId, 'cid-1');
     assert.equal(r.blocking[0].details.componentType, 'Entity');
@@ -104,7 +104,7 @@ test('emits info finding (not error) on tenant where entity 404s', async () => {
     assert.equal(r.info.length, 1);
     assert.equal(r.info[0].severity, 'info');
     assert.equal(r.info[0].key, 'orphan-detection-unavailable');
-    assert.equal(r.info[0].ref, 'IL-016');
+    assert.equal(r.info[0].ref, 'IL-ORPHAN-001');
   } finally { server.close(); }
 });
 

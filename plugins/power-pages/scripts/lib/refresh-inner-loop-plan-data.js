@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Refreshes docs/inner-loop/inner-loop-plan.json with post-run state from
-// the marker files written by inner-loop skills (setup-git-integration,
-// commit-to-git, sync-from-git, resolve-conflicts, branch-switch,
+// the marker files written by inner-loop skills (git-configure,
+// commit-to-git, sync-from-git, resolve-conflicts,
 // revert-workspace, revert-branch, open-pr, diagnose-git-integration).
 //
 // plan-inner-loop writes the plan file once at orchestration start, reflecting
@@ -17,14 +17,14 @@
 // Usage:
 //   node refresh-inner-loop-plan-data.js
 //     --projectRoot <path>
-//     --phase <setup-git-integration|commit-to-git|sync-from-git
-//             |resolve-conflicts|branch-switch|revert-workspace
+//     --phase <git-configure|commit-to-git|sync-from-git
+//             |resolve-conflicts|revert-workspace
 //             |revert-branch|open-pr|diagnose|finalize>
 //     [--state-only]      only flip PLAN_STATUS / step status (skip marker read)
 //
 // What gets refreshed per phase:
-//   setup-git-integration:
-//     - binding from last-setup.json
+//   git-configure:
+//     - binding from last-git-configure.json
 //     - state -> "Connected & Clean" (assumes a fresh bind has no pending work)
 //   commit-to-git:
 //     - lastCommit from last-commit.json (sha, message, components)
@@ -37,9 +37,6 @@
 //   resolve-conflicts:
 //     - lastConflictResolution from last-conflict-resolution.json
 //     - pendingCounts.conflicts -> 0 (post-resolve invariant)
-//   branch-switch:
-//     - binding.branch <- new branch from last-branch-switch.json
-//     - state -> "Connected & Clean" + reminder to run sync-from-git
 //   revert-workspace:
 //     - pendingCounts.changes -> 0
 //     - state -> "Connected & Clean" (if updates/conflicts are also 0) else Stale/Conflicted
@@ -65,14 +62,13 @@
 const fs = require('fs');
 const path = require('path');
 const { innerLoopPath } = require('./inner-loop-paths');
+const { gitConfigurePath } = require('./git-configure-paths');
 
 const PHASES = new Set([
-  'setup-git-integration',
-  'connect-solution-to-git',
+  'git-configure',
   'commit-to-git',
   'sync-from-git',
   'resolve-conflicts',
-  'branch-switch',
   'revert-workspace',
   'revert-branch',
   'open-pr',
@@ -93,6 +89,14 @@ function parseArgs(argv) {
 
 function readJsonMarker(projectRoot, key) {
   const p = innerLoopPath(projectRoot, key);
+  return readJsonFile(p);
+}
+
+function readGitConfigureMarker(projectRoot) {
+  return readJsonFile(gitConfigurePath(projectRoot, 'lastGitConfigure'));
+}
+
+function readJsonFile(p) {
   if (!fs.existsSync(p)) return null;
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
 }
@@ -130,28 +134,28 @@ function ensureCountsShape(planData) {
 }
 
 const HANDLERS = {
-  'setup-git-integration': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastSetup');
+  'git-configure': (planData, projectRoot) => {
+    const marker = readGitConfigureMarker(projectRoot);
     if (marker) {
-      planData.binding = {
-        bindingType: marker.bindingType || planData.binding && planData.binding.bindingType || null,
-        organization: marker.organization || null,
-        project: marker.project || null,
-        repository: marker.repository || null,
-        branch: marker.branch || null,
-        gitFolder: marker.gitFolder || null,
-        rootFolder: marker.rootFolder || null,
-        solutionUniqueName: marker.solutionUniqueName || null,
-        boundAt: marker.boundAt || marker.completedAt || null,
-      };
+      planData.lastGitConfigure = marker;
+      if (marker.mode === 'disconnect') {
+        planData.binding = null;
+      } else {
+        planData.binding = {
+          bindingType: marker.bindingType || planData.binding && planData.binding.bindingType || null,
+          organization: marker.organization || null,
+          project: marker.project || null,
+          repository: marker.repository || null,
+          branch: marker.newBranch || marker.branch || null,
+          gitFolder: marker.gitFolder || null,
+          rootFolder: marker.rootFolder || null,
+          solutionUniqueName: marker.solutionUniqueName || null,
+          boundAt: marker.boundAt || marker.completedAt || marker.ranAt || null,
+        };
+      }
     }
     planData.pendingCounts = { changes: 0, updates: 0, conflicts: 0 };
     planData.state = classifyState(planData.binding, planData.pendingCounts);
-    planData.lastSetup = marker || planData.lastSetup || null;
-  },
-  'connect-solution-to-git': (planData, projectRoot) => {
-    // Same shape as env binding; the marker just carries bindingType: 'solution'.
-    HANDLERS['setup-git-integration'](planData, projectRoot);
   },
   'commit-to-git': (planData, projectRoot) => {
     const marker = readJsonMarker(projectRoot, 'lastCommit');
@@ -184,17 +188,6 @@ const HANDLERS = {
     if (marker) planData.lastConflictResolution = marker;
     ensureCountsShape(planData);
     planData.pendingCounts.conflicts = 0;
-    planData.state = classifyState(planData.binding, planData.pendingCounts);
-  },
-  'branch-switch': (planData, projectRoot) => {
-    const marker = readJsonMarker(projectRoot, 'lastBranchSwitch');
-    if (marker) {
-      planData.lastBranchSwitch = marker;
-      if (planData.binding && marker.newBranch) {
-        planData.binding.branch = marker.newBranch;
-      }
-    }
-    planData.pendingCounts = { changes: 0, updates: 0, conflicts: 0 };
     planData.state = classifyState(planData.binding, planData.pendingCounts);
   },
   'revert-workspace': (planData, projectRoot) => {

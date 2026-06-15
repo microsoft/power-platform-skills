@@ -130,6 +130,7 @@ function validateDependencies(items) {
       if (typeof it.componentId === 'string' && it.componentId.toLowerCase() === r.id) continue;
       if (presentIds.has(r.id)) continue;
       missing.push({
+        ref: 'IL-DEP-001',
         fromComponent: {
           componentId: it.componentId ?? null,
           componentName: it.componentName ?? null,

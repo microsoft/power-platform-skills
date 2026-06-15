@@ -63,7 +63,11 @@ async function validateBlockedAttachments({ envUrl, extensions = ['js'], quiet =
       dryRun: true,
       execImpl,
     });
-    return toCheckOnlyEnvelope(result);
+    const envelope = toCheckOnlyEnvelope(result);
+    for (const finding of envelope.blocking || []) {
+      finding.ref = 'IL-ATTACH-001';
+    }
+    return envelope;
   } catch (e) {
     return { error: e.message };
   }

@@ -34,7 +34,7 @@ test('validateBlockedAttachments: ok=false when js IS blocked, exits a single BL
   assert.equal(r.blocking.length, 1);
   assert.equal(r.blocking[0].severity, 'blocker');
   assert.equal(r.blocking[0].key, 'blocked-attachment-extension');
-  assert.equal(r.blocking[0].ref, 'IL-012');
+  assert.equal(r.blocking[0].ref, 'IL-ATTACH-001');
   assert.equal(r.blocking[0].details.extension, 'js');
   assert.match(r.blocking[0].remediation, /without --check-only/);
 });

@@ -41,6 +41,7 @@
 'use strict';
 
 const { createAdoClient } = require('./ado-client');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 // Reasonable git tag name regex: starts with letter/digit/v, allows
 // letters/digits/. / _ / - / / , length 1-100. Rejects whitespace, control
@@ -62,7 +63,7 @@ function parseArgs(argv) {
   const out = {
     organization: null, project: null, repository: null,
     name: null, commitSha: null, message: 'Tagged via commit-to-git',
-    pat: null, token: null, apiVersion: '7.0',
+    pat: null, token: null, tokenFile: null, apiVersion: '7.0',
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
@@ -73,6 +74,7 @@ function parseArgs(argv) {
     else if (args[i] === '--message' && args[i + 1]) out.message = args[++i];
     else if (args[i] === '--pat' && args[i + 1]) out.pat = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--apiVersion' && args[i + 1]) out.apiVersion = args[++i];
   }
   return out;
@@ -81,7 +83,7 @@ function parseArgs(argv) {
 async function createTag({
   organization, project, repository, name, commitSha,
   message = 'Tagged via commit-to-git',
-  pat = null, token = null,
+  pat = null, token = null, tokenFile = null,
   apiVersion = '7.0',
   baseUrl = null,
 } = {}) {
@@ -90,7 +92,12 @@ async function createTag({
   if (!repository) throw new Error('--repository is required');
   if (!name) throw new Error('--name is required');
   if (!commitSha) throw new Error('--commitSha is required');
-  if (!pat && !token) throw new Error('Either --pat or --token is required for ADO auth');
+  let resolvedToken = token;
+  if (!pat) {
+    const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+    if (!tokenResult.ok) throw new Error(`Either --pat or --token/--tokenFile/ADO_TOKEN is required for ADO auth: ${tokenResult.error}`);
+    resolvedToken = tokenResult.token;
+  }
   if (!isValidTagName(name)) {
     throw new Error(`--name "${name}" is not a valid git tag name (must start with alnum, allow [A-Za-z0-9._/-], no '..' or '@{', no '.lock' suffix)`);
   }
@@ -98,7 +105,7 @@ async function createTag({
     throw new Error(`--commitSha must be a full 40-char hex SHA; got: ${commitSha}`);
   }
 
-  const client = createAdoClient({ organization, project, repository, pat, token, baseUrl, apiVersion });
+  const client = createAdoClient({ organization, project, repository, pat, token: resolvedToken, baseUrl, apiVersion });
   const body = {
     name,
     taggedObject: { objectId: commitSha },

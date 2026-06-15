@@ -80,7 +80,7 @@ test('returns error when no existing binding is found', async () => {
   try {
     const r = await switchBranch({ envUrl: url(server), token: 'tok', newBranch: 'feature/x', ...FAST });
     assert.ok(r.error);
-    assert.match(r.error, /setup-git-integration/);
+    assert.match(r.error, /git-configure/);
   } finally { server.close(); }
 });
 

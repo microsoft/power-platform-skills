@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // Initializes an empty Azure DevOps repo by pushing a single README commit
-// on the requested branch. Used by `setup-git-integration` Phase 2 step 2
-// (consent-and-act) when `verify-repo-initialized.js` reports the target
-// repo has no default branch.
+// on the requested branch. Used by `git-configure` Phase 2 (repo-init gate,
+// git-configure:2.repo-init) when `verify-repo-initialized.js` reports the
+// target repo has no default branch.
 //
 // Idempotent: if the repo already has a `defaultBranch`, no write is made.
 // This lets the calling skill retry the consent gate safely.
@@ -38,6 +38,7 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 const EMPTY_REPO_OLD_OBJECT_ID = '0000000000000000000000000000000000000000';
 // MUST be a stable api-version (no `-preview.N` suffix). The Pushes endpoint
@@ -57,7 +58,7 @@ function parseArgs(argv) {
     project: null,
     repository: null,
     branch: null,
-    token: null,
+    token: null, tokenFile: null,
     readmeContent: null,
   };
   for (let i = 0; i < args.length; i++) {
@@ -66,6 +67,7 @@ function parseArgs(argv) {
     else if (args[i] === '--repository' && args[i + 1]) out.repository = args[++i];
     else if (args[i] === '--branch' && args[i + 1]) out.branch = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
     else if (args[i] === '--readmeContent' && args[i + 1]) out.readmeContent = args[++i];
   }
   return out;
@@ -88,7 +90,7 @@ function defaultReadme({ repository }) {
   const stamp = new Date().toISOString();
   return (
     `# ${repository}\n\n` +
-    `Initialized automatically by Power Platform \`setup-git-integration\` skill ` +
+    `Initialized automatically by Power Platform \`git-configure\` skill ` +
     `on ${stamp}.\n\n` +
     `This repository will be populated by Dataverse via the \`ConnectToGit\` ` +
     `integration. Solutions land under \`solutions/<gitFolder>/\` after the ` +
@@ -131,7 +133,7 @@ function hintForStatus(statusCode, repoSlug) {
  * @returns {Promise<object>}
  */
 async function initAdoRepo(options = {}) {
-  const { organization, project, repository, branch, token, readmeContent } = options;
+  const { organization, project, repository, branch, token, tokenFile, readmeContent } = options;
   const request = typeof options._makeRequestImpl === 'function'
     ? options._makeRequestImpl
     : makeRequest;
@@ -140,9 +142,10 @@ async function initAdoRepo(options = {}) {
   if (!project) return { ok: false, error: '--project is required' };
   if (!repository) return { ok: false, error: '--repository is required' };
   if (!branch) return { ok: false, error: '--branch is required' };
-  if (!token) return { ok: false, error: '--token is required' };
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return { ok: false, error: tokenResult.error };
 
-  const { header: authHeader } = buildAuthHeader(token);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;
   const repoSlug = `${organization}/${project}/${repository}`;
 

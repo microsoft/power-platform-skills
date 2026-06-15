@@ -26,7 +26,7 @@
 //         severity: 'blocker',
 //         key: 'default-solution-binding',
 //         message: 'Solution ''Default'' cannot be Git-bound.',
-//         ref: 'IL-008',
+//         ref: 'IL-DEFSOL-003',
 //         details: { solutionUniqueName: 'Default', bindingType: 'solution' },
 //         remediation: 'Create a non-Default solution and bind that instead.',
 //       },
@@ -79,7 +79,7 @@ function validateNotDefaultSolution(manifest = {}) {
         severity: 'info',
         key: 'default-solution-check-skipped',
         message: `bindingType='${bindingType || 'unknown'}' — skipping Default-solution check.`,
-        ref: 'IL-008',
+        ref: 'IL-DEFSOL-001',
         details: { bindingType, solutionUniqueName },
         remediation: 'No action required; this check is only meaningful when bindingType==="solution".',
       }],
@@ -91,7 +91,7 @@ function validateNotDefaultSolution(manifest = {}) {
       severity: 'info',
       key: 'default-solution-no-name',
       message: 'bindingType=solution but solutionUniqueName is missing from manifest — cannot validate.',
-      ref: 'IL-008',
+      ref: 'IL-DEFSOL-002',
       details: { bindingType, solutionUniqueName: null },
       remediation: 'Repair .git-integration-manifest.json to include solutionUniqueName.',
     });
@@ -103,7 +103,7 @@ function validateNotDefaultSolution(manifest = {}) {
       severity: 'blocker',
       key: 'default-solution-binding',
       message: `Solution '${solutionUniqueName}' cannot be Git-bound.`,
-      ref: 'IL-008',
+      ref: 'IL-DEFSOL-003',
       details: { solutionUniqueName, bindingType },
       remediation:
         'Create a non-Default solution (e.g. via Maker Portal → Solutions → New), move your components ' +

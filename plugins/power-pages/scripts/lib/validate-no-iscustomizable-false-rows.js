@@ -26,7 +26,7 @@
 //         severity: 'warn',
 //         key: 'not-customizable-metadata',
 //         message: 'Component <name> (IsCustomizable=false) commits but breaks Pull on targets.',
-//         ref: 'IL-007',
+//         ref: 'IL-CUSTOMIZABLE-001',
 //         details: { componentId, componentType, entitySet, isCustomizable: false },
 //         remediation: 'Mark the component customizable in the source env, or remove it from the pending changes.',
 //       },
@@ -167,7 +167,7 @@ async function validateNoIscustomizableFalseRows({ envUrl, token, pendingFile, b
             severity: 'warn',
             key: 'not-customizable-metadata',
             message: `${bucket.label} '${m.LogicalName || it?.componentName || m.MetadataId}' (IsCustomizable=false) commits but breaks Pull on targets.`,
-            ref: 'IL-007',
+            ref: 'IL-CUSTOMIZABLE-001',
             details: {
               componentId: m.MetadataId,
               componentType: bucket.label,
@@ -189,7 +189,7 @@ async function validateNoIscustomizableFalseRows({ envUrl, token, pendingFile, b
       severity: 'info',
       key: 'iscustomizable-check-skipped-type',
       message: `Skipped IsCustomizable check for ${n} component(s) of type '${t}' (no metadata-id mapping).`,
-      ref: 'IL-007',
+      ref: 'IL-CUSTOMIZABLE-002',
       details: { componentType: t, count: n },
       remediation: 'IsCustomizable is only checkable for Entity / Attribute metadata. Other types are unaffected by this validator.',
     });

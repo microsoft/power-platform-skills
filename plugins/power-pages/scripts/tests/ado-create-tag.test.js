@@ -116,3 +116,15 @@ test('ado-create-tag: 409 Conflict surfaces a friendly "tag already exists" erro
   assert.equal(r.statusCode, 409);
   assert.match(r.error, /already exists in r/);
 });
+
+test('ado-create-tag: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-create-tag.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 201, body: JSON.stringify({ name: 'v1.2.3', taggedObject: { objectId: 'a'.repeat(40) }, url: 'u' }) }]);
+  try {
+    const r = await createTag({ organization: 'o', project: 'p', repository: 'r', name: 'v1.2.3', commitSha: 'a'.repeat(40), tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.name, 'v1.2.3');
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

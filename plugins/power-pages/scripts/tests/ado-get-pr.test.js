@@ -112,3 +112,15 @@ test('ado-get-pr: 500 surfaces error envelope', async () => {
   assert.equal(r.error, 'Internal');
   assert.equal(r.statusCode, 500);
 });
+
+test('ado-get-pr: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-get-pr.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 200, body: JSON.stringify({ pullRequestId: 5, status: 'active', sourceRefName: 'refs/heads/s', targetRefName: 'refs/heads/t', title: 'T' }) }]);
+  try {
+    const r = await getPullRequest({ organization: 'o', project: 'p', repository: 'r', pullRequestId: 5, tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.found, true);
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

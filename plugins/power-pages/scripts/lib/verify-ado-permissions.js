@@ -3,7 +3,7 @@
 // Verifies that the ADO PAT or OAuth token has sufficient permissions
 // (at minimum: "Code - Read & Write" / Contribute) on the target repository.
 //
-// Used by setup-git-integration (Phase 1), connect-solution-to-git (Phase 1),
+// Used by git-configure (Phase 2 ado-perms-fail gate, git-configure:2.ado-perms-fail),
 // open-pr (Phase 1), and diagnose-git-integration to surface the
 // "ADO auth insufficient" root cause (IL-002) before attempting any writes.
 //
@@ -44,15 +44,17 @@
 'use strict';
 
 const { makeRequest } = require('./validation-helpers');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { organization: null, project: null, repository: null, token: null };
+  const out = { organization: null, project: null, repository: null, token: null, tokenFile: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--project' && args[i + 1]) out.project = args[++i];
     else if (args[i] === '--repository' && args[i + 1]) out.repository = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
   }
   return out;
 }
@@ -81,20 +83,19 @@ function buildAuthHeader(token) {
  * @param {string} [options.token]
  * @returns {Promise<object>}
  */
-async function verifyAdoPermissions({ organization, project, repository, token } = {}) {
+async function verifyAdoPermissions({ organization, project, repository, token, tokenFile } = {}) {
   if (!organization) return { error: '--organization is required' };
   if (!project) return { error: '--project is required' };
   if (!repository) return { error: '--repository is required' };
 
-  const tok = token || process.env.ADO_TOKEN || null;
-  if (!tok) {
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) {
     return {
-      error: 'ADO token is required. Pass --token <PAT> or set ADO_TOKEN env var. ' +
-        'The PAT must have "Code - Read & Write" scope on the target repository.',
+      error: tokenResult.error + ' The PAT must have "Code - Read & Write" scope on the target repository.',
     };
   }
 
-  const { header: authHeader, tokenType } = buildAuthHeader(tok);
+  const { header: authHeader, tokenType } = buildAuthHeader(tokenResult.token);
   const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;
   const apiVersion = '7.1-preview.1';
 

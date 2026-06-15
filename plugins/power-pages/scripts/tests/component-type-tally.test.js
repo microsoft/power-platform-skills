@@ -32,6 +32,25 @@ test('labelForType: null/undefined → "Unknown"', () => {
   assert.equal(labelForType(undefined), 'Unknown');
 });
 
+test('formatTallyMarkdown: O2 — suppresses redundant "(N other)" when every item is "other"', () => {
+  // changetype null → "other" bucket. All 143 fall into "other".
+  const items = Array.from({ length: 143 }, () => ({ componenttype: 1, changetype: null }));
+  const md = formatTallyMarkdown(tallyByType(items));
+  assert.match(md, /143 Entity/, 'shows the clean total');
+  assert.doesNotMatch(md, /143 other/, 'no redundant "(143 other)" suffix');
+  assert.doesNotMatch(md, /\(.*other.*\)/, 'no other-only parenthetical');
+});
+
+test('formatTallyMarkdown: still shows a breakdown when there is a real change-type mix', () => {
+  const items = [
+    { componenttype: 1, changetype: 1 },
+    { componenttype: 1, changetype: 2 },
+    { componenttype: 1, changetype: null },
+  ];
+  const md = formatTallyMarkdown(tallyByType(items));
+  assert.match(md, /\(1 create, 1 update, 1 other\)/, 'real mix keeps the full breakdown');
+});
+
 test('tallyByType: groups by type and counts changetype breakdown', () => {
   const items = [
     { componenttype: 1, changetype: 1 },

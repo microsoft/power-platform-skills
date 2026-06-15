@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Switches the bound branch on the current Dataverse Git binding by chaining
-// disconnect + reconnect. Used by the `branch-switch` skill.
+// disconnect + reconnect. Used by the `git-configure` skill (switch-branch mode).
 //
 // Supports BOTH binding shapes:
 //
@@ -34,8 +34,8 @@
 //     0x80040265 error code (some races slip past the poll).
 //
 // PRECONDITION: Workspace must be clean (no Changes / no Updates / no Conflicts).
-// The branch-switch skill enforces this in its Phase 1 hard-stop gate; this
-// helper does NOT re-check.
+// The git-configure skill enforces this in its Phase 5 workspace-dirty gate
+// (git-configure:5.workspace-dirty); this helper does NOT re-check.
 //
 // Output (JSON to stdout):
 //   Success: {
@@ -70,7 +70,7 @@
 //
 // Inherits org/project/repo/gitFolder/rootFolder from the existing binding —
 // no need to pass them. If no binding exists, returns an error (caller should
-// run setup-git-integration instead).
+// run /power-pages:git-configure to set up a binding instead).
 
 'use strict';
 
@@ -175,7 +175,7 @@ async function switchBranch({
   if (current.error) return { error: 'Pre-check failed: ' + current.error };
   if (!current.bound) {
     return {
-      error: 'No existing Git binding found. Use setup-git-integration to create one first.',
+      error: 'No existing Git binding found. Use /power-pages:git-configure to create one first.',
     };
   }
 

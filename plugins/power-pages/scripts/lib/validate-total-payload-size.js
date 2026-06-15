@@ -71,7 +71,7 @@ function validateTotalPayloadSize(items, { thresholdMb = DEFAULT_THRESHOLD_MB } 
     severity: 'info',
     key: 'total-payload-summary',
     message: `Total encoded payload: ${(totalEncodedBytes / (1024 * 1024)).toFixed(2)} MB across ${items.length} item(s).`,
-    ref: null,
+    ref: 'IL-SIZE-003',
     details: {
       totalItems: items.length,
       itemsWithoutSize,
@@ -88,7 +88,7 @@ function validateTotalPayloadSize(items, { thresholdMb = DEFAULT_THRESHOLD_MB } 
       severity: 'warn',
       key: 'total-payload-size-warning',
       message: `Total encoded payload (${(totalEncodedBytes / (1024 * 1024)).toFixed(1)} MB) exceeds threshold of ${thresholdMb} MB; commit may take 5–15 min and trip throttles.`,
-      ref: null,
+      ref: 'IL-SIZE-004',
       details: {
         totalEncodedMb: Number((totalEncodedBytes / (1024 * 1024)).toFixed(2)),
         thresholdMb,

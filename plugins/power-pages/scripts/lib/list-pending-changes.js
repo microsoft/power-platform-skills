@@ -36,11 +36,22 @@
 //       [--token <token>]
 //       [--solutionUniqueName <name>]   // preferred way to scope per-solution
 //       [--solutionId <guid>]           // alternative if you already have the id
-//       [--top <n>]                     // default 50 items returned; count is always exact
+//       [--top <n>]                     // page size; default 5000 (Dataverse max page).
+//                                       // The helper auto-follows @odata.nextLink so items[]
+//                                       // is COMPLETE up to --max-items; count is always exact.
+//       [--max-items <n>]               // safety cap on materialised rows; default 100000.
+//                                       // If count exceeds this, items[] is capped and
+//                                       // `truncated: true` is set so callers fail loudly.
 //       [--probe]                       // fast count-only mode: returns { count } without
 //                                       // materialising items[]. Used by the cache layer
 //                                       // in validate-pending-changes Phase 2 to compute
 //                                       // a cache key without paying for full row fetch.
+//
+// Output `truncated` field:
+//   false → items.length === count (complete snapshot; safe for validators).
+//   true  → items[] is incomplete because --max-items was hit. Downstream
+//           validators MUST refuse to run on a truncated snapshot (a partial
+//           view yields false-negatives). run-prevalidators.js enforces this.
 
 'use strict';
 
@@ -48,13 +59,14 @@ const { getAuthToken, getEnvironmentUrl, makeRequest } = require('./validation-h
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null, top: 50, probe: false };
+  const out = { envUrl: null, token: null, solutionUniqueName: null, solutionId: null, top: 5000, maxItems: 100000, probe: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
     else if (args[i] === '--solutionUniqueName' && args[i + 1]) out.solutionUniqueName = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
     else if (args[i] === '--top' && args[i + 1]) out.top = parseInt(args[++i], 10);
+    else if (args[i] === '--max-items' && args[i + 1]) out.maxItems = parseInt(args[++i], 10);
     else if (args[i] === '--probe') out.probe = true;
   }
   return out;
@@ -93,7 +105,7 @@ async function resolveSolutionId({ base, tok, solutionUniqueName }) {
  * @param {object} options
  * @returns {Promise<object>}
  */
-async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionId, top = 50, probe = false } = {}) {
+async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionId, top = 5000, maxItems = 100000, probe = false } = {}) {
   const url = envUrl || getEnvironmentUrl();
   if (!url) return { error: 'Could not determine environment URL.' };
   const tok = token || getAuthToken(url);
@@ -112,68 +124,87 @@ async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionI
   if (sid) filterParts.push(`partitionid eq ${sid}`);
   const filterExpr = filterParts.join(' and ');
 
+  const headers = {
+    Authorization: `Bearer ${tok}`,
+    'OData-MaxVersion': '4.0',
+    'OData-Version': '4.0',
+    Accept: 'application/json',
+    Prefer: 'odata.include-annotations="*"',
+  };
+  const scope = solutionUniqueName
+    ? { solutionUniqueName, solutionId: sid }
+    : (sid ? { solutionId: sid } : { all: true });
+
+  // Fetch one page and normalise the result into { parsed } | { error } | { hint }.
+  async function fetchPage(pageUrl) {
+    const res = await makeRequest({ url: pageUrl, method: 'GET', headers });
+    if (res.error) return { error: res.error };
+    if (res.statusCode === 404) {
+      return {
+        hint: 'sourcecontrolcomponent 404 — verify the env actually has Git integration. ' +
+              'If the entity is missing, the env was likely never bound to Git.',
+      };
+    }
+    if (res.statusCode !== 200) {
+      let msg = `HTTP ${res.statusCode}`;
+      try { msg = JSON.parse(res.body).error.message || msg; } catch {}
+      return { error: msg, statusCode: res.statusCode };
+    }
+    try { return { parsed: JSON.parse(res.body) }; }
+    catch (e) { return { error: 'Failed to parse response: ' + e.message }; }
+  }
+
   // Probe mode: count-only query. We use $top=1 (Dataverse rejects $top=0)
   // and the smallest viable $select so the server returns @odata.count with a
   // near-empty payload. ~50-100ms round-trip vs ~300-700ms for the full row
   // fetch on tenants with a few hundred pending Changes — used by the cache
   // layer to compute a key cheaply.
-  const apiUrl = probe
-    ? `${base}/api/data/v9.2/sourcecontrolcomponents` +
+  if (probe) {
+    const probeUrl = `${base}/api/data/v9.2/sourcecontrolcomponents` +
       `?$filter=${encodeURIComponent(filterExpr)}` +
       `&$select=sourcecontrolcomponentid` +
-      `&$count=true&$top=1`
-    : `${base}/api/data/v9.2/sourcecontrolcomponents` +
-      `?$filter=${encodeURIComponent(filterExpr)}` +
-      `&$select=sourcecontrolcomponentid,componentid,componentdisplayname,name,componenttypename,componenttype,componentpath,solutioncomponentstate,action,partitionid,modifiedon` +
-      `&$count=true&$top=${top}`;
-
-  const res = await makeRequest({
-    url: apiUrl,
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${tok}`,
-      'OData-MaxVersion': '4.0',
-      'OData-Version': '4.0',
-      Accept: 'application/json',
-      Prefer: 'odata.include-annotations="*"',
-    },
-  });
-
-  if (res.error) return { error: res.error };
-  if (res.statusCode === 404) {
-    // Should not happen on tenants with Git integration enabled — surface a hint.
-    return {
-      count: 0,
-      items: [],
-      hint: 'sourcecontrolcomponent 404 — verify the env actually has Git integration. ' +
-            'If the entity is missing, the env was likely never bound to Git.',
-    };
-  }
-  if (res.statusCode !== 200) {
-    let msg = `HTTP ${res.statusCode}`;
-    try { msg = JSON.parse(res.body).error.message || msg; } catch {}
-    return { error: msg, statusCode: res.statusCode };
+      `&$count=true&$top=1`;
+    const page = await fetchPage(probeUrl);
+    if (page.error) return { error: page.error, statusCode: page.statusCode };
+    if (page.hint) return { count: 0, items: [], hint: page.hint };
+    const count = typeof page.parsed['@odata.count'] === 'number'
+      ? page.parsed['@odata.count']
+      : (page.parsed.value || []).length;
+    return { count, scope, probe: true };
   }
 
-  let parsed;
-  try { parsed = JSON.parse(res.body); } catch (e) {
-    return { error: 'Failed to parse response: ' + e.message };
+  // Full mode: fetch the first page, then auto-follow @odata.nextLink until the
+  // server stops paging or the maxItems safety cap is hit. The cap exists so a
+  // pathological tenant with hundreds of thousands of rows can't exhaust memory;
+  // when it trips, `truncated: true` tells callers the snapshot is incomplete.
+  let nextUrl = `${base}/api/data/v9.2/sourcecontrolcomponents` +
+    `?$filter=${encodeURIComponent(filterExpr)}` +
+    `&$select=sourcecontrolcomponentid,componentid,componentdisplayname,name,componenttypename,componenttype,componentpath,solutioncomponentstate,action,partitionid,modifiedon` +
+    `&$count=true&$top=${top}`;
+
+  let totalCount = null;
+  let cappedEarly = false;
+  const rawRows = [];
+
+  while (nextUrl) {
+    const page = await fetchPage(nextUrl);
+    if (page.error) return { error: page.error, statusCode: page.statusCode };
+    if (page.hint) return { count: 0, items: [], truncated: false, hint: page.hint };
+
+    if (totalCount === null) {
+      totalCount = typeof page.parsed['@odata.count'] === 'number'
+        ? page.parsed['@odata.count']
+        : (page.parsed.value || []).length;
+    }
+    for (const row of (page.parsed.value || [])) {
+      rawRows.push(row);
+      if (rawRows.length >= maxItems) { cappedEarly = true; break; }
+    }
+    if (cappedEarly) break;
+    nextUrl = page.parsed['@odata.nextLink'] || null;
   }
 
-  const totalCount = typeof parsed['@odata.count'] === 'number'
-    ? parsed['@odata.count']
-    : (parsed.value || []).length;
-
-  if (probe) {
-    // Probe mode returns count only — caller (cache layer) needs just the key.
-    return {
-      count: totalCount,
-      scope: solutionUniqueName ? { solutionUniqueName, solutionId: sid } : (sid ? { solutionId: sid } : { all: true }),
-      probe: true,
-    };
-  }
-
-  const items = (parsed.value || []).map((r) => ({
+  const items = rawRows.map((r) => ({
     componentId:    r.componentid || null,
     componentName:  r.componentdisplayname || r.name || null,
     componentType:  r.componenttypename || String(r.componenttype),
@@ -184,11 +215,13 @@ async function listPendingChanges({ envUrl, token, solutionUniqueName, solutionI
     lastModifiedOn: r.modifiedon || null,
   }));
 
-  return {
-    count: totalCount,
-    scope: solutionUniqueName ? { solutionUniqueName, solutionId: sid } : (sid ? { solutionId: sid } : { all: true }),
-    items,
-  };
+  const count = totalCount == null ? items.length : totalCount;
+  // truncated is true when items[] does NOT fully represent count — either the
+  // safety cap tripped, or (defensively) the server returned fewer rows than it
+  // counted without offering a nextLink.
+  const truncated = cappedEarly || items.length < count;
+
+  return { count, scope, items, truncated };
 }
 
 if (require.main === module) {

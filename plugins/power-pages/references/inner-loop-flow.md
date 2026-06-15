@@ -12,7 +12,7 @@ Every Power Pages dev env that has touched Connect-to-Git is in **exactly one** 
 
 | State | `detect-git-binding.js` returns | Pending counts (`list-pending-changes` / `list-incoming-updates` / `list-conflicts`) | Recommended action |
 |---|---|---|---|
-| **Disconnected** | `null` | n/a | `setup-git-integration` (or `connect-solution-to-git`) |
+| **Disconnected** | `null` | n/a | `git-configure` |
 | **Connected & Clean** | binding object | `0 / 0 / 0`. **NB:** A freshly-bound env enters this state automatically — Connect-to-Git creates the initial commit via `SourceControlInitialSyncPlugin`, so you do NOT see Dirty after a fresh bind. See `inner-loop-empirical-findings.md` §3. | Idle; user may edit |
 | **Dirty** | binding object | `>0 / 0 / 0` | `commit-to-git` (use `--dry-run` for a non-mutating pre-flight) |
 | **Stale** | binding object | `0 / >0 / 0` | `sync-from-git` |
@@ -33,8 +33,8 @@ Plus one error state:
                 ┌───────────────┐
                 │  Disconnected │
                 └──────┬────────┘
-                       │ setup-git-integration (env)
-                       │ connect-solution-to-git (per-solution)
+                       │ git-configure (env setup)
+                       │ git-configure (per-solution setup)
                        ▼
    ┌────────────────────────────────────────┐
    │                                        │
@@ -108,7 +108,7 @@ Given a detected state, `plan-inner-loop` recommends:
 
 | Detected state | Default recommendation | Alternative offered |
 |---|---|---|
-| Disconnected | `setup-git-integration` (env binding) | `connect-solution-to-git` (per-solution) |
+| Disconnected | `git-configure` (env binding setup) | `git-configure` (per-solution setup) |
 | Connected & Clean | "You're idle. Make a change in the env to start a commit, or close." | n/a |
 | Dirty | `commit-to-git --dry-run` then `commit-to-git` | Skip pre-flight if user knows pending changes are safe |
 | Stale | `sync-from-git` | n/a |

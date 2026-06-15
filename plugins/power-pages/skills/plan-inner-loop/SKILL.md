@@ -113,6 +113,10 @@ Steps:
 
    Output: `{ bound: bool, bindingType: 'env'|'solution'|null, organization, project, repository, branch, folder, solutionUniqueName?, branchSyncedCommitId?, upstreamBranchSyncedCommitId?, sourceControlSyncStatus?, pendingChangesCount?, nonCommittedRootCount?, cleanState?, boundSolutions?, multipleSolutionsBound?, staleBranchConfigs?, detectedVia?, ... }`.
 
+   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: plan-inner-loop:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · plan-inner-loop:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
    - `bound === false` → state is **Disconnected**. Skip to Phase 3 with empty Changes / Updates / Conflicts arrays.
    - `bound === true` → record the binding fields into `planData.binding` and continue.
 
@@ -237,8 +241,8 @@ Steps:
 
    | State | Recommended next skill | Alternative skills |
    |---|---|---|
-   | `Disconnected` | `/power-pages:setup-git-integration` | `/power-pages:connect-solution-to-git` |
-   | `Clean`        | (no action — env is in sync)         | `/power-pages:branch-switch`, `/power-pages:open-pr` |
+   | `Disconnected` | `/power-pages:git-configure` | `/power-pages:git-configure --binding=solution` |
+   | `Clean`        | (no action — env is in sync)         | `/power-pages:git-configure --mode=switch-branch`, `/power-pages:open-pr` |
    | `Dirty`        | `/power-pages:commit-to-git --dry-run` then `/power-pages:commit-to-git` | `/power-pages:revert-workspace` |
    | `Stale`        | `/power-pages:sync-from-git`         | — |
    | `Mixed`        | depends on user choice (gate below)  | — |

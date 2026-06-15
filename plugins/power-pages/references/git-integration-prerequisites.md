@@ -1,6 +1,6 @@
 # Git Integration Prerequisites
 
-Shared prerequisite reference for **inner-loop** skills that interact with Dataverse Git integration (Connect-to-Git). Used by `plan-inner-loop`, `setup-git-integration`, `connect-solution-to-git`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `branch-switch`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`.
+Shared prerequisite reference for **inner-loop** skills that interact with Dataverse Git integration (Connect-to-Git). Used by `plan-inner-loop`, `git-configure`, `commit-to-git`, `sync-from-git`, `resolve-conflicts`, `revert-workspace`, `revert-branch`, `open-pr`, `diagnose-git-integration`.
 
 > **Source of truth.** This document mirrors the Microsoft Learn page [Dataverse Git integration setup](https://learn.microsoft.com/power-platform/alm/git-integration/connecting-to-git) and the [Git API reference](https://learn.microsoft.com/power-platform/alm/git-integration/git-api). If those pages move, update this doc.
 
@@ -19,7 +19,7 @@ Dataverse Git integration is documented as a **feature of Managed Environments**
 > ⚠️ **Field test (June 2026, development tenant):** `protectionLevel: "Basic"` (Managed Env OFF), yet two solutions were successfully solution-bound, the `SourceControlInitialSyncPlugin` ran to completion, and `sourcecontrolsyncstatus` reached `3` (Synced) on both. The reference doc was previously too strict. See [`inner-loop-empirical-findings.md`](inner-loop-empirical-findings.md) §1.
 
 **Recommended hard-block remediation message** (for env-binding only):
-> "Managed Environments is OFF on env `{envName}`. Enable it in [Power Platform Admin Center → Environments → {env} → Manage → Edit Managed Environments](https://admin.powerplatform.microsoft.com/environments). Or switch to `/power-pages:connect-solution-to-git`, which is empirically known to work without Managed Env on some tenants."
+> "Managed Environments is OFF on env `{envName}`. Enable it in [Power Platform Admin Center → Environments → {env} → Manage → Edit Managed Environments](https://admin.powerplatform.microsoft.com/environments). Or switch to `/power-pages:git-configure` with solution binding, which is empirically known to work without Managed Env on some tenants."
 
 ---
 
@@ -31,10 +31,10 @@ Azure DevOps is currently the **only supported Git provider** (`GitProvider = 0`
 |---|---|---|
 | ADO organization exists | User-supplied URL `https://dev.azure.com/{org}` | Create at https://dev.azure.com |
 | ADO project exists | `GET https://dev.azure.com/{org}/_apis/projects/{project}?api-version=7.1` (via `ado-client.js`) | Skill prompts user to create in ADO |
-| ADO **repo exists AND is initialized** | `GET .../repos/{repo}` (200 + `defaultBranch` populated). **Empty repos return 200 with `defaultBranch=null` — must reject.** | `verify-repo-initialized.js` catches this; `setup-git-integration` then offers a one-tap consent gate that auto-creates the first README commit via `init-ado-repo.js` (idempotent — re-running against an initialized repo is a no-op). |
+| ADO **repo exists AND is initialized** | `GET .../repos/{repo}` (200 + `defaultBranch` populated). **Empty repos return 200 with `defaultBranch=null` — must reject.** | `verify-repo-initialized.js` catches this; `git-configure` then offers a one-tap consent gate that auto-creates the first README commit via `init-ado-repo.js` (idempotent — re-running against an initialized repo is a no-op). |
 | User has **Contribute** permission on the repo | Try a no-op operation, or check `/_apis/permissions/{namespaceId}/...` | Surface ADO permission URL; cannot auto-grant. `init-ado-repo.js` surfaces this exact remediation on 403. |
 | User has an ADO **Basic license** (not Stakeholder) | `GET .../graph/users/{descriptor}` | Stakeholders cannot push commits — escalate to ADO admin |
-| **Auth to `dev.azure.com` for the pre-checks** | `scripts/lib/get-ado-token.js` mints an ADO-scoped Microsoft Entra JWT via `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the well-known, tenant-invariant ADO Entra app id). `buildAuthHeader` in `verify-ado-permissions.js` auto-detects PAT vs JWT and emits the correct header. | `setup-git-integration` and `connect-solution-to-git` run `get-ado-token.js --writeToFile docs/inner-loop/.ado-token` in Phase 1 step 0 (and re-run with `--verifyTenant --organization <org>` once the org is known). `--writeToFile` writes a 0o600 JSON bundle to disk and returns `tokenSha256` (no raw JWT in stdout). On failure, the helper surfaces `az login` / `az login --tenant <guid>` hints. Cross-tenant scenarios are not supported by this skill — fall back to `connect-solution-to-git`, which still accepts `--token <PAT>`. |
+| **Auth to `dev.azure.com` for the pre-checks** | `scripts/lib/get-ado-token.js` mints an ADO-scoped Microsoft Entra JWT via `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the well-known, tenant-invariant ADO Entra app id). `buildAuthHeader` in `verify-ado-permissions.js` auto-detects PAT vs JWT and emits the correct header. | `git-configure` runs `get-ado-token.js --writeToFile docs/inner-loop/.ado-token` in Phase 1 step 0 (and re-runs with `--verifyTenant --organization <org>` once the org is known). `--writeToFile` writes a 0o600 JSON bundle to disk and returns `tokenSha256` (no raw JWT in stdout). On failure, the helper surfaces `az login` / `az login --tenant <guid>` hints. Cross-tenant scenarios are not supported by this skill's Entra-OAuth path; use the explicit-token fallback when a PAT or CI/SP token is required. |
 
 > ⚠️ **Cryptic-error footgun.** An uninitialized repo fails ~30 min into the Connect flow with *"Failed to retrieve default branch"*. `verify-repo-initialized.js` catches this in <1 sec; `init-ado-repo.js` fixes it in the same skill run with one consent.
 
@@ -84,7 +84,7 @@ These cannot be auto-checked end-to-end; the skill should surface them as a one-
 node scripts/lib/get-ado-token.js --writeToFile "docs/inner-loop/.ado-token" [--verifyTenant --organization <o>]
   → stdout: { ok: true, tokenFile: "<abs path>", tokenSha256: "<hex>", tokenType: "OAuth", tenantId, expiresOn, tenantMismatch: false }
   → file:   { token: "<jwt>", tokenType: "OAuth", tenantId, expiresOn, adoOrgTenantId, tenantMismatch } (mode 0o600 on POSIX)
-  // setup-git-integration and connect-solution-to-git both run this in Phase 1 step 0 (no --verifyTenant — org unknown),
+  // git-configure runs this in Phase 1 step 0 (no --verifyTenant — org unknown),
   // and re-run it once the org is known (with --verifyTenant --organization <org>). --writeToFile MUST always be passed
   // from agent-driven contexts so the raw JWT never enters stdout / session event logs. Hard-blocks on tenantMismatch:true.
   // Downstream helpers read the token from the file at call-time (e.g. via shell expansion
@@ -98,7 +98,7 @@ node scripts/lib/verify-managed-env.js --envUrl <url>
 
 node scripts/lib/verify-repo-initialized.js --organization <o> --project <p> --repository <r> --token <adoToken>
   → { initialized: true, defaultBranch: "main" }
-  // initialized:false → setup-git-integration calls init-ado-repo.js after a one-tap consent gate.
+  // initialized:false → git-configure calls init-ado-repo.js after a one-tap consent gate.
 
 node scripts/lib/verify-ado-permissions.js --organization <o> --project <p> --repository <r> --token <adoToken>
   → { contribute: true, basicLicense: true }

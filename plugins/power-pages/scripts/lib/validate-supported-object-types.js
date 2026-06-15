@@ -103,6 +103,7 @@ function validateSupportedObjectTypes(items, { extraUnsupported = null, extraDep
     const uReason = lookupReason(type, unsupportedTbl);
     if (uReason) {
       unsupported.push({
+        ref: 'IL-OBJTYPE-001',
         componentId: it.componentId ?? null,
         componentName: it.componentName ?? null,
         componentType: type,
@@ -113,6 +114,7 @@ function validateSupportedObjectTypes(items, { extraUnsupported = null, extraDep
     const dReason = lookupReason(type, deprecatedTbl);
     if (dReason) {
       deprecated.push({
+        ref: 'IL-OBJTYPE-002',
         componentId: it.componentId ?? null,
         componentName: it.componentName ?? null,
         componentType: type,

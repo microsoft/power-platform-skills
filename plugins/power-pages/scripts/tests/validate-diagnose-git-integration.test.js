@@ -53,7 +53,7 @@ const GOOD_MARKER = {
       severity: 'Error',
       evidence: 'verify-repo-initialized.js returned initialized=false',
       autoFixAvailable: true,
-      fixDelegate: '/power-pages:setup-git-integration',
+      fixDelegate: '/power-pages:git-configure',
       autoFix: { status: 'applied' },
     },
     {

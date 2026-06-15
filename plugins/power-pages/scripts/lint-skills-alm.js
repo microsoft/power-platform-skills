@@ -210,12 +210,10 @@ const ALM_SKILLS = new Set([
 // so any gate-rule violation is a regression rather than work-in-progress.
 const INNER_LOOP_SKILLS = new Set([
   'plan-inner-loop',
-  'setup-git-integration',
-  'connect-solution-to-git',
+  'git-configure',
   'commit-to-git',
   'sync-from-git',
   'resolve-conflicts',
-  'branch-switch',
   'revert-workspace',
   'revert-branch',
   'open-pr',

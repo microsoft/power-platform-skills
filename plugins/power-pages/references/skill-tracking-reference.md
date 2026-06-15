@@ -11,7 +11,7 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 Run the shared tracking script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 
 - `--projectRoot`: The project root directory (containing `powerpages.config.json`)
@@ -55,12 +55,10 @@ If the tracking script creates or updates site setting YAML files, include those
 | ensure-pipelines-host | EnsurePipelinesHost | Site/AI/Skills/EnsurePipelinesHost |
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 | plan-inner-loop | PlanInnerLoop | Site/AI/Skills/PlanInnerLoop |
-| setup-git-integration | SetupGitIntegration | Site/AI/Skills/SetupGitIntegration |
-| connect-solution-to-git | ConnectSolutionToGit | Site/AI/Skills/ConnectSolutionToGit |
+| git-configure | GitConfigure | Site/AI/Skills/GitConfigure |
 | commit-to-git | CommitToGit | Site/AI/Skills/CommitToGit |
 | sync-from-git | SyncFromGit | Site/AI/Skills/SyncFromGit |
 | resolve-conflicts | ResolveConflicts | Site/AI/Skills/ResolveConflicts |
-| branch-switch | BranchSwitch | Site/AI/Skills/BranchSwitch |
 | revert-workspace | RevertWorkspace | Site/AI/Skills/RevertWorkspace |
 | revert-branch | RevertBranch | Site/AI/Skills/RevertBranch |
 | open-pr | OpenPr | Site/AI/Skills/OpenPr |

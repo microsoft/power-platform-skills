@@ -272,7 +272,7 @@ If response is 404 or returns an "unknown entity" error, stop and inform the use
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-solution-exists.js" \
   --envUrl "{devEnvUrl}" \
-  --uniqueName "{uniqueName}" \
+  --solutionUniqueName "{uniqueName}" \
   --token "{DEV_TOKEN}"
 ```
 Capture output as JSON; check `.found`. If `false`: warn the user — the solution must be exported from dev before it can be deployed.

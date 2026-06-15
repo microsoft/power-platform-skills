@@ -32,7 +32,7 @@ This skill is the typical exit point of the inner-loop daily cycle. After the PR
 
 > 🛈 **ADO Complete dialog offers 4 merge types (HAR-confirmed 2026-06).** The maker chooses at completion time — this skill must not hardcode one. Default recommendation for solo Power Pages inner-loop PRs is **Squash commit** (keeps `main` linear and one-commit-per-PR for easy revert); for multi-maker PRs prefer **Merge (no fast forward)** to preserve per-commit attribution. **Rebase and fast-forward** / **Semi-linear merge** are rare for solution-shaped diffs. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §16.
 
-> 🛈 **Bound-branch-deletion advisory (HAR-confirmed 2026-06).** ADO's *"Delete `<sourceBranch>` after merging"* checkbox is ticked by default. When the maker accepts that AND the env is bound to the source branch, the maker portal Source control page surfaces a sticky red banner: *"connected … branch does not exist or you do not have access to it."* Phase 9 final gate must surface this advisory BEFORE the user clicks Complete in ADO, and route them to `/power-pages:branch-switch` for recovery. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §15.
+> 🛈 **Bound-branch-deletion advisory (HAR-confirmed 2026-06).** ADO's *"Delete `<sourceBranch>` after merging"* checkbox is ticked by default. When the maker accepts that AND the env is bound to the source branch, the maker portal Source control page surfaces a sticky red banner: *"connected … branch does not exist or you do not have access to it."* Phase 9 final gate must surface this advisory BEFORE the user clicks Complete in ADO, and route them to `/power-pages:git-configure --mode=switch-branch` for recovery. See [`references/inner-loop-empirical-findings.md`](../../references/inner-loop-empirical-findings.md) §15.
 
 **References:**
 - `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md` §3 (Clean state — `open-pr` is one of the suggested follow-ups)
@@ -43,7 +43,7 @@ This skill is the typical exit point of the inner-loop daily cycle. After the PR
 
 - PAC CLI installed and authenticated
 - Azure CLI installed and logged in
-- A Git binding already established (run `/power-pages:setup-git-integration` first if needed)
+- A Git binding already established (run `/power-pages:git-configure` first if needed)
 - An ADO PAT with `Code (read & write)` AND `Pull request contributor` on the bound repo
 - At least one commit on the bound branch that is NOT yet on the target branch (otherwise the PR has no content)
 
@@ -72,6 +72,10 @@ Steps:
    node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-git-binding.js" --envUrl "<envUrl>"
    ```
 
+   **Manifest reconcile (B3).** Compare the local `.git-integration-manifest.json` against this server truth using `reconcileManifest({ manifest, serverBinding })` from `${CLAUDE_PLUGIN_ROOT}/scripts/lib/reconcile-manifest.js`; see `${CLAUDE_PLUGIN_ROOT}/references/manifest-contract.md` for the full contract.
+   <!-- gate: open-pr:1.manifest-stale | category=intent | cancel-leaves=nothing -->
+   > 🚦 **Gate (intent · open-pr:1.manifest-stale):** When `aligned:false`, surface the divergence and let the user choose from the helper's returned `options` (`overwrite-from-server`, `rebind-old-coords`, `clear-local`) before proceeding; cancellation leaves the manifest untouched.
+
    If `bound === false`:
 
    <!-- gate: open-pr:1.no-binding | category=intent | cancel-leaves=nothing -->
@@ -79,7 +83,7 @@ Steps:
 
    | Question | Header | Options |
    |---|---|---|
-   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:setup-git-integration, Cancel |
+   | No Git binding found for this environment. Set one up first? | Not bound to Git | Run /power-pages:git-configure, Cancel |
 
 3. Capture binding fields: `organization`, `project`, `repository`, `branch` (the bound branch = `sourceBranch`).
 
@@ -341,7 +345,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 ## Key Decision Points (Wait for User)
 
-1. **Phase 1**: If no Git binding exists → run `setup-git-integration` or cancel (gate `open-pr:1.no-binding`).
+1. **Phase 1**: If no Git binding exists → run `git-configure` or cancel (gate `open-pr:1.no-binding`).
 2. **Phase 1**: If nothing-to-PR (0 commits ahead) → commit first, pick a different target, or exit (gate `open-pr:1.nothing-to-pr`).
 3. **Phase 4**: PR title (data-gathering, not a gate).
 4. **Phase 4**: Target branch (default `main`; conversational if different).

@@ -104,16 +104,14 @@ test('rejects unknown phase', async () => {
   } finally { cleanup(dir); }
 });
 
-test('PHASES set covers all 11 inner-loop skills plus finalize (validate-pending-changes was folded into commit-to-git per the VPC merge)', () => {
+test('PHASES set covers the long-lived inner-loop refresh phases plus finalize', () => {
   // Snapshot: locks the phase vocabulary so a new skill must explicitly extend
   // the handler map alongside the test.
   const expected = [
-    'setup-git-integration',
-    'connect-solution-to-git',
+    'git-configure',
     'commit-to-git',
     'sync-from-git',
     'resolve-conflicts',
-    'branch-switch',
     'revert-workspace',
     'revert-branch',
     'open-pr',
@@ -125,19 +123,22 @@ test('PHASES set covers all 11 inner-loop skills plus finalize (validate-pending
 
 // ===== Per-phase handlers =====
 
-test('setup-git-integration: ingests binding from last-setup.json, sets state=Connected & Clean', async () => {
+test('git-configure setup: ingests binding from last-git-configure.json, sets state=Connected & Clean', async () => {
   const dir = tempProject({ PLAN_STATUS: 'In Execution' });
-  writeMarker(dir, 'last-setup.json', {
+  writeMarker(dir, 'last-git-configure.json', {
+    skill: 'git-configure',
+    mode: 'setup',
+    status: 'ok',
     bindingType: 'environment',
     organization: 'contoso',
     project: 'pp-site',
     repository: 'pp-site-repo',
     branch: 'main',
     gitFolder: '/site-name',
-    boundAt: '2026-05-01T10:00:00.000Z',
+    ranAt: '2026-05-01T10:00:00.000Z',
   });
   try {
-    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'setup-git-integration' });
+    const r = await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-configure' });
     assert.equal(r.ok, true);
     const plan = readPlan(dir);
     assert.equal(plan.binding.bindingType, 'environment');
@@ -149,16 +150,22 @@ test('setup-git-integration: ingests binding from last-setup.json, sets state=Co
   } finally { cleanup(dir); }
 });
 
-test('connect-solution-to-git: uses the same handler as setup-git-integration (solution binding)', async () => {
+test('git-configure setup: records solution binding metadata', async () => {
   const dir = tempProject({ PLAN_STATUS: 'In Execution' });
-  writeMarker(dir, 'last-setup.json', {
+  writeMarker(dir, 'last-git-configure.json', {
+    skill: 'git-configure',
+    mode: 'setup',
+    status: 'ok',
     bindingType: 'solution',
     solutionUniqueName: 'cre48_PowerPagesSite',
+    organization: 'contoso',
+    project: 'pp-site',
     repository: 'pp-site-repo',
     branch: 'feature/solution-binding',
+    gitFolder: '/solutions/cre48_PowerPagesSite',
   });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'connect-solution-to-git' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-configure' });
     const plan = readPlan(dir);
     assert.equal(plan.binding.bindingType, 'solution');
     assert.equal(plan.binding.solutionUniqueName, 'cre48_PowerPagesSite');
@@ -298,20 +305,27 @@ test('commit-to-git (real-commit mode): both markers present — ingests lastCom
   } finally { cleanup(dir); }
 });
 
-test('branch-switch: updates binding.branch and zeros pendingCounts', async () => {
+test('git-configure switch-branch: updates binding.branch and zeros pendingCounts', async () => {
   const dir = tempProject({
     PLAN_STATUS: 'In Execution',
     binding: { bindingType: 'environment', repository: 'r', branch: 'main' },
     pendingCounts: { changes: 0, updates: 4, conflicts: 0 },
     state: 'Stale',
   });
-  writeMarker(dir, 'last-branch-switch.json', {
-    previousBranch: 'main',
+  writeMarker(dir, 'last-git-configure.json', {
+    skill: 'git-configure',
+    mode: 'switch-branch',
+    status: 'ok',
+    organization: 'contoso',
+    project: 'pp-site',
+    repository: 'r',
+    oldBranch: 'main',
     newBranch: 'feature/about-page',
-    switchedAt: '2026-05-01T14:00:00.000Z',
+    gitFolder: '/site-name',
+    ranAt: '2026-05-01T14:00:00.000Z',
   });
   try {
-    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'branch-switch' });
+    await refreshInnerLoopPlanData({ projectRoot: dir, phase: 'git-configure' });
     const plan = readPlan(dir);
     assert.equal(plan.binding.branch, 'feature/about-page');
     assert.deepEqual(plan.pendingCounts, { changes: 0, updates: 0, conflicts: 0 });

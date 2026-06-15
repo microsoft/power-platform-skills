@@ -2,7 +2,7 @@
 
 // Verifies that an ADO repository is initialized (has at least one commit on
 // a default branch). ConnectToGit fails with a cryptic error if the repo is
-// empty, so setup-git-integration runs this in Phase 2.
+// empty, so git-configure runs this in Phase 2.
 //
 // Detection algorithm:
 //   1. GET repository metadata → if `defaultBranch` is null, the repo is
@@ -31,15 +31,17 @@
 
 const { makeRequest } = require('./validation-helpers');
 const { buildAuthHeader } = require('./verify-ado-permissions');
+const { resolveAdoToken } = require('./resolve-ado-token');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const out = { organization: null, project: null, repository: null, token: null };
+  const out = { organization: null, project: null, repository: null, token: null, tokenFile: null };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) out.organization = args[++i];
     else if (args[i] === '--project' && args[i + 1]) out.project = args[++i];
     else if (args[i] === '--repository' && args[i + 1]) out.repository = args[++i];
     else if (args[i] === '--token' && args[i + 1]) out.token = args[++i];
+    else if (args[i] === '--tokenFile' && args[i + 1]) out.tokenFile = args[++i];
   }
   return out;
 }
@@ -48,17 +50,15 @@ function parseArgs(argv) {
  * @param {object} options
  * @returns {Promise<object>}
  */
-async function verifyRepoInitialized({ organization, project, repository, token } = {}) {
+async function verifyRepoInitialized({ organization, project, repository, token, tokenFile } = {}) {
   if (!organization) return { error: '--organization is required' };
   if (!project) return { error: '--project is required' };
   if (!repository) return { error: '--repository is required' };
 
-  const tok = token || process.env.ADO_TOKEN || null;
-  if (!tok) {
-    return { error: 'ADO token is required. Pass --token or set ADO_TOKEN env var.' };
-  }
+  const tokenResult = resolveAdoToken({ token, tokenFile, env: process.env });
+  if (!tokenResult.ok) return { error: tokenResult.error };
 
-  const { header: authHeader } = buildAuthHeader(tok);
+  const { header: authHeader } = buildAuthHeader(tokenResult.token);
   const adoBase = `https://dev.azure.com/${encodeURIComponent(organization)}`;
   const apiVersion = '7.1-preview.1';
 
@@ -125,7 +125,7 @@ async function verifyRepoInitialized({ organization, project, repository, token 
     hint: initialized
       ? null
       : `Repository "${repository}" appears to be empty (no default branch / no commits). ` +
-        `Push an initial commit (e.g. README) before running setup-git-integration. ` +
+        `Push an initial commit (e.g. README) before running /power-pages:git-configure. ` +
         `In the ADO UI: "Initialize main branch with a README".`,
   };
 }

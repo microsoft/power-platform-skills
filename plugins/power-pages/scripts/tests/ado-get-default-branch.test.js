@@ -78,3 +78,15 @@ test('ado-get-default-branch: 404 returns error envelope', async () => {
   assert.equal(r.statusCode, 404);
   assert.match(r.error, /repo not found/);
 });
+
+test('ado-get-default-branch: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-get-default-branch.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const s = await createQueuedServer([{ status: 200, body: JSON.stringify({ id: 'rid', defaultBranch: 'refs/heads/main' }) }]);
+  try {
+    const r = await getDefaultBranch({ organization: 'o', project: 'p', repository: 'r', tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.defaultBranch, 'main');
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

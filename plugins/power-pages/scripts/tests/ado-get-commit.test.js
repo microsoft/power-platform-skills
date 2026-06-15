@@ -125,3 +125,16 @@ test('ado-get-commit: accepts short (7-char) SHAs', async () => {
   assert.equal(r.found, true);
   assert.match(s.received[0].url, /\/commits\/abc1234/);
 });
+
+test('ado-get-commit: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-ado-get-commit.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  const commitId = 'a'.repeat(40);
+  const s = await createQueuedServer([{ status: 200, body: JSON.stringify({ commitId, comment: 'c', author: {}, committer: {}, url: 'u' }) }]);
+  try {
+    const r = await getCommit({ organization: 'o', project: 'p', repository: 'r', commitId, tokenFile, baseUrl: serverUrl(s) });
+    assert.equal(r.found, true);
+    assert.equal(s.received[0].headers.authorization, 'Bearer header.payload.sig');
+  } finally { await closeAll(s); fs.rmSync(tokenFile, { force: true }); }
+});

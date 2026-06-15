@@ -104,7 +104,13 @@ function formatTallyMarkdown(tally, opts = {}) {
     if (t.byChangeType.update) parts.push(`${t.byChangeType.update} update`);
     if (t.byChangeType.delete) parts.push(`${t.byChangeType.delete} delete`);
     if (t.byChangeType.other)  parts.push(`${t.byChangeType.other} other`);
-    const breakdown = parts.length ? ` (${parts.join(', ')})` : '';
+    // O2: when every item is "other" (no create/update/delete distinction),
+    // the "(N other)" suffix just repeats the total — "143 Site Component" reads
+    // better than "143 Site Component (143 other)". Only show a breakdown when
+    // there is a real mix of change types.
+    const onlyOther = t.byChangeType.other === t.total &&
+      !t.byChangeType.create && !t.byChangeType.update && !t.byChangeType.delete;
+    const breakdown = (parts.length && !onlyOther) ? ` (${parts.join(', ')})` : '';
     lines.push(`- ${t.total} ${t.label}${breakdown}`);
   }
   if (tally.length > maxLines) {

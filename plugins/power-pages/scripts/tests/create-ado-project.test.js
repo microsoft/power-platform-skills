@@ -84,3 +84,15 @@ test('403 → ok:false', async () => {
   const r = await createAdoProject({ organization:'o', name:'P', token:'t', _makeRequestImpl: async () => ({ statusCode:403, body:'{}' }) });
   assert.equal(r.ok, false); assert.match(r.hint, /lacks permission/);
 });
+
+test('create-ado-project: --tokenFile JSON envelope resolves for Authorization header', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const tokenFile = path.join(__dirname, '.ado-token-create-ado-project.json');
+  fs.writeFileSync(tokenFile, JSON.stringify({ token: 'header.payload.sig' }));
+  try {
+    let header;
+    const r = await createAdoProject({ organization: 'org', name: 'proj', tokenFile, _makeRequestImpl: async (opts) => { header = opts.headers.Authorization; return { statusCode: 401, body: JSON.stringify({ message: 'Unauthorized' }) }; } });
+    assert.equal(r.ok, false);
+    assert.equal(header, 'Bearer header.payload.sig');
+  } finally { fs.rmSync(tokenFile, { force: true }); }
+});

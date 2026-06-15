@@ -66,7 +66,7 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 **How to actually know if you have pending pushes:** count rows in `sourcecontrolcomponent` where `partitionid == <solutionId>` and `iscommitted == false`. See §10.
 
 **Action (rewrites the obsolete guidance):**
-- `connect-solution-to-git` / `setup-git-integration` Phase 8 must:
+- `git-configure` setup and solution-binding paths must:
   - Wait for `sourcecontrolsyncstatus` to reach `3` (initial component staging done).
   - Count `sourcecontrolcomponents` with `iscommitted=false` → that's the post-bind pending-push count.
   - Tell the user: *"Folder seeded with SHA `<placeholder>`. N components are now staged as pending Changes. Next step: `/power-pages:commit-to-git` to push them as the real initial commit."*
@@ -96,9 +96,9 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 - ADO REST calls from the pre-check helpers (`verify-repo-initialized.js`, `verify-ado-permissions.js`, `ado-list-commits.js`, and the newer `init-ado-repo.js`) need *some* `Authorization` header on `dev.azure.com`. ADO accepts both `Basic <base64(:PAT)>` and `Bearer <JWT>`. `buildAuthHeader` in `verify-ado-permissions.js` auto-detects which shape was passed by dot-counting (<2 dots → PAT, exactly 2 → JWT).
 
 **Current state (2026-07):**
-- `setup-git-integration` **no longer collects a PAT at all.** Phase 1 step 0 runs `scripts/lib/get-ado-token.js`, which shells `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the immutable, tenant-invariant ADO Entra app id documented at <https://learn.microsoft.com/azure/devops/integrate/get-started/authentication/entra>). The skill caches the resulting JWT as `adoToken` and passes it to all four pre-check helpers via `--token`.
+- `git-configure` **no longer collects a PAT at all.** Phase 1 step 0 runs `scripts/lib/get-ado-token.js`, which shells `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798` (the immutable, tenant-invariant ADO Entra app id documented at <https://learn.microsoft.com/azure/devops/integrate/get-started/authentication/entra>). The skill caches the resulting JWT as `adoToken` and passes it to all four pre-check helpers via `--token`.
 - Phase 2 step 1 re-runs `get-ado-token.js --verifyTenant --organization <org>` once the org is known and hard-blocks on `tenantMismatch:true`.
-- The pre-check helpers retain PAT support unchanged. Other inner-loop skills (`connect-solution-to-git`, `branch-switch`, `open-pr`, `diagnose-git-integration`) still take `--token <PAT>` from the caller — useful for cross-tenant scenarios that the Entra-OAuth path can't service, and for CI / SP flows where minting a token via `az` isn't viable.
+- The pre-check helpers retain PAT support unchanged. Other inner-loop paths (`git-configure` explicit-token modes, `open-pr`, `diagnose-git-integration`) still take `--token <PAT>` from the caller — useful for cross-tenant scenarios that the Entra-OAuth path can't service, and for CI / SP flows where minting a token via `az` isn't viable.
 
 **Action for new inner-loop skills:**
 - Prefer the Entra-OAuth path (`get-ado-token.js`) when the user is interactively running the skill in a dev environment where `az login` is current.
@@ -170,7 +170,7 @@ These columns say nothing about **outbound pending pushes**. After Connect-to-Gi
   ```
 - The error names ONE shared component at a time. If there are N shared components, the user must remove N-1 of them and retry, each retry surfacing the next one — UNLESS the skill pre-computes the full intersection and removes them in one pass.
 
-**Action (must be added to `connect-solution-to-git` Phase 4 — BEFORE the bind):**
+**Action (must be added to `git-configure` solution-binding preflight — BEFORE the bind):**
 1. Enumerate already-Git-bound solutions on the env (`solutions?$filter=enabledforsourcecontrolintegration eq true`).
 2. For each, query `solutioncomponents` and intersect by `(objectid, componenttype)` with the target solution.
 3. If intersections exist, surface them with names + types and require the user to either:
@@ -274,7 +274,7 @@ Direct `DELETE /solutioncomponents(<id>)` is also rejected: `The 'Delete' method
 
 - `commit-to-git` Phase 4 (plan) must explicitly say: *"This will produce exactly **1 new commit** on `<branch>`. Power Platform's CommitToGit always creates a single commit regardless of file count."*
 - `commit-to-git` Phase 8 (verify) must explain the ADO commit-list context: *"Your new commit appears alongside the bind-time placeholder (`Creating new project folder …`) and any repo-init commits (`Added README.md`). Those pre-existed — they are NOT batches of your push."*
-- `setup-git-integration` and `connect-solution-to-git` Phase 8 already disclose the placeholder commit; they additionally should note: *"Your next `commit-to-git` will add one more commit on top of this placeholder."*
+- `git-configure` setup and solution-binding verification already disclose the placeholder commit; they additionally should note: *"Your next `commit-to-git` will add one more commit on top of this placeholder."*
 - `commit-to-git` Phase 4 must surface the **"want multiple commits?"** workflow: *"To split work into multiple commits, commit incrementally as you edit (save → commit, save → commit). Do NOT batch all changes and then try to split — there is no API for that, and the platform won't fake-split a single push."*
 
 **Do NOT** implement client-side batching in `commit-to-git.js` that calls `CommitToGit` multiple times with the same staged set. There is no way to scope a `CommitToGit` call to a subset of pending changes — every call pushes ALL `iscommitted=false` rows for the bound solution, so a "loop with subset selection" pattern is impossible. Repeated calls with no intervening changes will return a "no changes to commit" 400 on attempt #2.
@@ -332,7 +332,7 @@ The 342-row gap was stale orphans from a previously-disconnected solution. `dete
 - `cleanState` derives from `pendingChangesCount` (the direct env-wide count) so "Clean" means there are zero unflushed rows of any kind, not just unflushed rows for currently-enabled solutions.
 - When `--solutionUniqueName` IS provided, both fields are the per-solution direct count (which is unambiguous because the filter `partitionid eq <sid> and iscommitted eq false` is the same in both helpers).
 
-Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-switch" decisions and `nonCommittedRootCount` for "how many rows will the next `commit-to-git` actually flush" decisions.
+Callers should prefer `pendingChangesCount` for "is the env safe to bind or switch branches" decisions and `nonCommittedRootCount` for "how many rows will the next `commit-to-git` actually flush" decisions.
 
 ---
 
@@ -347,8 +347,8 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 - This is exactly what `switch-branch.js` does under the hood (`DisconnectFromGit` → `ConnectToGit` against the new branch), so the API helper is the single source of truth for the two-step pattern.
 
 **Action:**
-- `branch-switch` SKILL.md Overview must call this out for users who fall back to the manual UI path: *"Even in the maker portal the operation is two API calls. This skill wraps both with a workspace-clean precondition so you don't silently lose in-flight Changes between disconnect and reconnect — the UI does NOT enforce that precondition."*
-- `connect-solution-to-git` and `setup-git-integration` SKILL.md should remind the user post-bind: *"To switch this solution to a different branch later, run `/power-pages:branch-switch` (or in the UI: Disconnect from Git → Connect to Git → pick the new branch)."*
+- `git-configure` switch-branch mode must call this out for users who fall back to the manual UI path: *"Even in the maker portal the operation is two API calls. This skill wraps both with a workspace-clean precondition so you don't silently lose in-flight Changes between disconnect and reconnect — the UI does NOT enforce that precondition."*
+- `git-configure` setup and solution-binding paths should remind the user post-bind: *"To switch this solution to a different branch later, run `/power-pages:git-configure` in switch mode (or in the UI: Disconnect from Git → Connect to Git → pick the new branch)."*
 - Do **NOT** add a "branch dropdown" affordance request to the maker-portal team in skill error messages — the UI deliberately treats branch as bind-time-immutable and the API mirrors that.
 
 ---
@@ -363,8 +363,8 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 - The only recovery path is **Git connection → Disconnect solution from Git → Connect to Git → pick the merge target** (typically `main`). The solution's local environment state is preserved across the reconnect because `DisconnectFromGit` does not touch Dataverse rows, only `sourcecontrolconfigurations` / `sourcecontrolbranchconfigurations` linkage.
 
 **Action:**
-- `open-pr` Phase 9 final gate must surface a post-merge advisory when the source branch is the bound branch: *"After the PR merges, the env will be bound to a deleted branch and the Source control page will surface a red 'branch does not exist' banner. Run `/power-pages:branch-switch` to retarget to `<targetBranch>` BEFORE clicking Complete in ADO, or immediately after."*
-- `branch-switch` Error Handling must add a "recovery from deleted-branch banner" path: if `detect-git-binding.js` returns the binding fields but the ADO branch lookup 404s, classify as **Broken (orphaned binding)** and route the user to re-bind to a valid branch — the workspace-clean precondition does NOT apply here because the source branch is gone (there is nothing to lose).
+- `open-pr` Phase 9 final gate must surface a post-merge advisory when the source branch is the bound branch: *"After the PR merges, the env will be bound to a deleted branch and the Source control page will surface a red 'branch does not exist' banner. Run `/power-pages:git-configure` in switch mode to retarget to `<targetBranch>` BEFORE clicking Complete in ADO, or immediately after."*
+- `git-configure` switch-branch error handling must add a "recovery from deleted-branch banner" path: if `detect-git-binding.js` returns the binding fields but the ADO branch lookup 404s, classify as **Broken (orphaned binding)** and route the user to re-bind to a valid branch — the workspace-clean precondition does NOT apply here because the source branch is gone (there is nothing to lose).
 - `plan-inner-loop` Phase 2 already flags `Broken` state; the message should include this specific failure mode in its example list.
 
 ---
@@ -398,7 +398,7 @@ Callers should prefer `pendingChangesCount` for "is the env safe to bind/branch-
 - This is not a bug — it's the inevitable consequence of the first commit being a **baseline snapshot** of "what's in the solution today" rather than "what the user just edited".
 
 **Action:**
-- `commit-to-git` Phase 1.5 (the "first commit since connect" disclosure at line 89) must explicitly set expectations: *"This is the FIRST commit since `connect-solution-to-git`. Expect the Changes count to equal the FULL solution component count, NOT just what you recently edited. Every custom entity drags ~13 standard system columns; pre-existing OOTB components in the solution also appear. Subsequent commits will only show real edits."*
+- `commit-to-git` Phase 1.5 (the "first commit since connect" disclosure at line 89) must explicitly set expectations: *"This is the FIRST commit since Git configuration. Expect the Changes count to equal the FULL solution component count, NOT just what you recently edited. Every custom entity drags ~13 standard system columns; pre-existing OOTB components in the solution also appear. Subsequent commits will only show real edits."*
 - `commit-to-git` Phase 4 plan render must NOT trigger a "this looks suspicious, are you sure?" warning when the first-commit count is large — that would be a false alarm.
 - The PR diff in ADO (when the user later runs `open-pr`) will likely show FAR fewer changed files than the Changes count — see §19.
 
@@ -541,7 +541,7 @@ After the PATCH:
 
 **Action:**
 
-- scripts/lib/enable-solution-source-control.js IS the canonical helper for the env-binding opt-in flow (Phase 9 of setup-git-integration). Do NOT route the env-binding opt-in case through connect-solution-to-git.js — that helper is for the alternative flow of binding a solution from scratch (no prior env bind), where the additional sourcecontrolconfigurations row IS desired.
+- scripts/lib/enable-solution-source-control.js IS the canonical helper for the env-binding opt-in flow (Phase 9 of `git-configure`). Do NOT route the env-binding opt-in case through connect-solution-to-git.js — that helper is for the alternative flow of binding a solution from scratch (no prior env bind), where the additional sourcecontrolconfigurations row IS desired.
 - The poll for sourcecontrolsyncstatus === 3 is identical to what's documented in §3 for env-binding placeholder commit completion — the helper accepts --poll --pollIntervalMs --maxPollAttempts and applies the same convergence check.
 - This finding may seem redundant with §3 but is documented separately because §3 covers env-LEVEL post-bind state (sourcecontrolbranchconfigurations) whereas §24 covers per-SOLUTION post-enable state (sourcecontrolsyncstatus on solutions). Different entities, different convergence signals, same async plugin.
 
@@ -587,3 +587,26 @@ After the PATCH:
 ---
 
 > **§-numbering note (2026-06-11):** The E10 brief originally specified inserting this finding at §13, but §13 already exists with related content on `boundSolutions[]` enumeration. The new finding lands here at §25 to avoid renumbering; the §13 addendum at the top of this file (E8) cross-references this section.
+
+---
+
+## §26 — Dataverse Git commits are authored by the by-design service identity "PowerPortals Runtime" (2026-06)
+
+**Context:** `commit-to-git` C-14 third-party-writer detection needs to tell a *platform-authored* commit (the Dataverse Git sync wrote it) from a *concurrent third-party* commit (a teammate, CI bot, or another solution bound to the same branch raced us).
+
+**Empirical reality** (verified 2026-06-13, last 10 commits on a bound branch):
+- Every Dataverse-authored commit carries `author.name = "PowerPortals Runtime"` and the matching `committer.name`. This held for 10/10 commits across multiple solutions and operations.
+- Microsoft Learn ("Source control — known limitations") confirms this is **by design and universal**: Dataverse Git integration does NOT impersonate the human user at the Git level; the background service account authors all commits. So `author.name === "PowerPortals Runtime"` is the durable, cross-tenant, rename-resilient signal.
+
+**The email is tenant-specific — do NOT hard-code it.**
+- On the development tenant used to build these skills, `author.email` was `admin@powerportalruntime.onmicrosoft.com`. **This is a tester account Microsoft issues to plugin developers — it is NOT a production signal.** A real customer tenant surfaces that environment's own service-identity email, which differs per tenant.
+- Hard-coding any single email into the detector would make C-14 mis-classify on every customer tenant. The email may only be used as a **secondary allow-list fallback**, never as the primary signal.
+
+**`KNOWN_PLATFORM_EMAILS` allow-list (fallback only, extend as confirmed):**
+| Email | Source | Notes |
+|---|---|---|
+| `admin@powerportalruntime.onmicrosoft.com` | dev/test tenant | tester account; internal-dev only, NOT a customer signal |
+
+**Action:**
+- `commit-to-git` C-14: classify platform-authored as `author.name === "PowerPortals Runtime"` (primary) OR `author.email ∈ KNOWN_PLATFORM_EMAILS` (fallback). See `skills/commit-to-git/SKILL.md` Phase 7 step 4.
+- **Bias to under-warn:** when the signal is ambiguous, suppress the third-party-writer warning rather than risk flagging a customer's own commits. Missing a real third-party writer is a recoverable annoyance; falsely flagging every customer commit erodes trust in the warning.
