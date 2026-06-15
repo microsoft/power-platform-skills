@@ -1,5 +1,5 @@
 {
-  "event_stream_name": "PagesPluginEvent",
+  "event_stream_name": "PagesAIPluginEvent",
   "disabled": true,
   "default_region": "us",
   "regions": {
