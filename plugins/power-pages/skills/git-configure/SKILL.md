@@ -27,6 +27,8 @@ model: opus
 
 **Initial request:** $ARGUMENTS
 
+**User-facing voice:** speak plainly. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-user-language.md` for the authoring rules — no raw API names, raw JSON, or GUIDs in user chat (except on failure); show progress as sequential `Phase {N} — {plainTitle}` (internal phase numbers stay internal).
+
 **Shared references, do not duplicate:** `${CLAUDE_PLUGIN_ROOT}/references/binding-strategy.md`, `${CLAUDE_PLUGIN_ROOT}/references/git-integration-prerequisites.md`, `${CLAUDE_PLUGIN_ROOT}/references/git-integration-api-patterns.md`, `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md`, `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md`, and `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`.
 
 ## Global invariants

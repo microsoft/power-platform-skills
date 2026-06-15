@@ -48,6 +48,8 @@ The skill enumerates recent commits, has the user pick a target SHA, shows an im
 
 **Initial request:** $ARGUMENTS
 
+**User-facing voice:** speak plainly. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-user-language.md` for the authoring rules — no raw API names, raw JSON, or GUIDs in user chat (except on failure); show progress as sequential `Phase {N} — {plainTitle}` (internal phase numbers stay internal).
+
 ---
 
 ## Phase 1 — Binding Check

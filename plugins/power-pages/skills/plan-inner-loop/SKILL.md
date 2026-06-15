@@ -43,6 +43,8 @@ This is the **front door** to the 12-skill Inner Dev Loop family. When the user 
 
 **Initial request:** $ARGUMENTS
 
+**User-facing voice:** speak plainly. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-user-language.md` for the authoring rules — no raw API names, raw JSON, or GUIDs in user chat (except on failure); show progress as sequential `Phase {N} — {plainTitle}` (internal phase numbers stay internal).
+
 ---
 
 ## Phase 1 — Prereq + State Freshness

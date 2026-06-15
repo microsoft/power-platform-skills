@@ -49,6 +49,8 @@ This skill is the typical exit point of the inner-loop daily cycle. After the PR
 
 **Initial request:** $ARGUMENTS
 
+**User-facing voice:** speak plainly. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-user-language.md` for the authoring rules — no raw API names, raw JSON, or GUIDs in user chat (except on failure); show progress as sequential `Phase {N} — {plainTitle}` (internal phase numbers stay internal).
+
 ---
 
 ## Phase 1 — Binding Check + Nothing-to-PR Short Circuit

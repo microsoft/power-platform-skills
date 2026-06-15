@@ -27,6 +27,8 @@ model: opus
 
 **Initial request:** $ARGUMENTS
 
+**User-facing voice:** speak plainly. See `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-user-language.md` for the authoring rules — no raw API names, raw JSON, or GUIDs in user chat (except on failure); show progress as sequential `Phase {N} — {plainTitle}` (internal phase numbers stay internal).
+
 This SKILL.md is a **state dispatcher**: it detects the current state once, renders one readable summary, and then **reads and follows the matching reference doc** for the active flow. The deep, deterministic step lists live in the three `references/*.md` files (the same pattern `add-sample-data` uses with `references/odata-record-patterns.md`).
 
 **Shared references, do not duplicate:** `${CLAUDE_PLUGIN_ROOT}/references/git-integration-api-patterns.md`, `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-empirical-findings.md`, `${CLAUDE_PLUGIN_ROOT}/references/inner-loop-flow.md`, `${CLAUDE_PLUGIN_ROOT}/references/conflict-resolution-patterns.md`, `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`.
