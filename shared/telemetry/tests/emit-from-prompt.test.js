@@ -225,6 +225,29 @@ test("forwards POWER_PLATFORM_SKILLS_CONFIG_DIR and FAKE_HTTPS into spawn opts",
   assert.equal(captured.spawnOpts.fakeProbe, "/tmp/fake-probe.json");
 });
 
+test("forwards the plugin ikey.json path into spawn opts (so the dispatcher reads the plugin config, not shared/'s placeholder)", () => {
+  const telemetryDir = mkTelemetryDir({
+    instrumentationKey: "x",
+    collectorUrl: "https://x",
+    eventStreamName: "PowerPagesPluginEvent",
+  });
+  // Production-faithful: no IKEY_JSON override → ikeyPath resolves to telemetryDir/ikey.json.
+  const prevOverride = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+  const captured = {};
+  try {
+    callWithStub({
+      promptText: "/power-pages:add-seo",
+      telemetryDir,
+      captured,
+    });
+  } finally {
+    if (prevOverride === undefined) delete process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
+    else process.env.POWER_PLATFORM_SKILLS_IKEY_JSON = prevOverride;
+  }
+  assert.equal(captured.spawnOpts.ikeyJsonPath, path.join(telemetryDir, "ikey.json"));
+});
+
 test("forwards pacAuth.cloud into spawn opts", () => {
   const telemetryDir = mkTelemetryDir({
     instrumentationKey: "x",

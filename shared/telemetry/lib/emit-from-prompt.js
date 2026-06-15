@@ -22,9 +22,9 @@ function readIkey(telemetryDir) {
   const dir = path.dirname(ikeyPath);
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
-    return { cfg, dir, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
+    return { cfg, dir, ikeyPath, eventStreamName: cfg.event_stream_name || "", disabled: cfg.disabled === true };
   } catch {
-    return { cfg: null, dir, eventStreamName: "", disabled: false };
+    return { cfg: null, dir, ikeyPath, eventStreamName: "", disabled: false };
   }
 }
 
@@ -55,7 +55,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   // no cost. The user opt-out is NOT checked here: the event is still built and
   // dispatched so the detached dispatcher can write the local diagnostic mirror;
   // the dispatcher reads the per-plugin config and skips the POST when opted out.
-  const { cfg, dir, eventStreamName, disabled } = readIkey(telemetryDir);
+  const { cfg, dir, ikeyPath, eventStreamName, disabled } = readIkey(telemetryDir);
   if (disabled) return { emitted: false, skillName };
   // Provisioning fast-gate (generic): a plugin resolver decides "is there a key
   // worth paying the pac shellout for?"; default is "static key present".
@@ -112,6 +112,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
       cloud: (pacAuth && pacAuth.cloud) || "",
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
+      ikeyJsonPath: ikeyPath,
     });
   } catch {
     // fail closed — telemetry never propagates errors
