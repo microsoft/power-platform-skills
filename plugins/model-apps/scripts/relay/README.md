@@ -51,12 +51,29 @@ starts cheaply; **Edge launches lazily on the first `designer_open`**.
 
 ## Tests
 
-Pure logic is covered by `node --test` and needs **no** install (the SDK and
-Playwright load only at live-run time):
+Two layers:
+
+**1. Unit (deterministic, no install).** Pure logic — handle acquisition, inspect,
+the duplicate guard, the evaluate round-trip, serialization, timeouts:
 
 ```bash
 node --test plugins/model-apps/scripts/tests/relay-*.test.js
 ```
+
+**2. Live smoke (`smoke.js`).** Drives the *real* designer through the same
+`driver.js`/`bridge.js` the MCP relay uses, but with no MCP/agent in the loop —
+a one-command live integration check. Needs `npm install` + a signed-in Edge
+profile:
+
+```bash
+MM_FORM_URL='https://make.test.powerapps.com/e/.../form/edit/<formId>?...' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+MM_ADD_FIELD=accountcategorycode \
+npm run smoke      # opens the form, inspects, adds the field (no save), screenshots
+```
+
+The MCP relay (`designer_open`/`form_inspect`/`form_addField`) is the shipping
+product path; `smoke.js` is the regression/acceptance harness for the same code.
 
 ## Notes
 
