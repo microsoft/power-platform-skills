@@ -68,9 +68,28 @@ async function main() {
     log('  ->', JSON.stringify(desc));
   }
 
+  const before = await driver.call('getControl', [FIELD]);
+  log('  control BEFORE: classId=%s customControls=%j',
+    before.result && before.result.classId, before.result && before.result.customControls);
+
   log('\n-- set: setControl(%s, %s) --', FIELD, CONTROL);
   const set = await driver.call('setControl', [FIELD, CONTROL, null, null]);
   log('  ->', JSON.stringify(set));
+
+  const after = await driver.call('getControl', [FIELD]);
+  log('  control AFTER:  classId=%s customControls=%j',
+    after.result && after.result.classId, after.result && after.result.customControls);
+  const changed = before.result && after.result && before.result.classId !== after.result.classId;
+  log('  => classId changed by set: %s', changed);
+
+  // Optional settle wait before the screenshot — the canvas re-renders async
+  // (and the local debug build shows a loading overlay), so a short wait yields a
+  // clean WYSIWYG capture of the placed control.
+  const waitMs = Number(process.env.MM_WAIT_MS || 0);
+  if (waitMs > 0) {
+    log('  waiting %dms for the canvas to settle...', waitMs);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
 
   const shot = process.env.MM_SHOT || path.join(process.cwd(), 'mm-setcontrol.png');
   await driver.screenshot(shot);

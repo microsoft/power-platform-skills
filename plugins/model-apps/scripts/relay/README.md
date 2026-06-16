@@ -10,7 +10,7 @@ in-page `ws://127.0.0.1` socket, so there is no socket). The injected
 [`bridge.js`](./bridge.js) acquires the live `FormDesignerService` (via the
 first-party `window.__formDesignerApi` export if present, else a duck-typed
 React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
-/ `describeControl` / `setControl` on `window.__mmBridge`.
+/ `describeControl` / `setControl` / `getControl` on `window.__mmBridge`.
 
 ## Tools
 
@@ -23,6 +23,7 @@ React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
 | `form_listControls` | Custom controls (PCF / AI Builder, e.g. Business card reader) the env offers for a field, with `bindingKind`. Omit the field for the unbound/default list. Read-only. |
 | `form_describeControl` | A control's binding kind + parameter schema (name, usage, required, defaults, enum) from its manifest. Read-only. |
 | `form_setControl` | Set a custom control on a field via the designer's command. Generic across controls; needs the first-party façade build (`enableModelMakerBridge`). |
+| `form_getControl` | Read the control on a field's cell (`classId` + applied custom controls) — the read-back/verify for `form_setControl`. Read-only. |
 
 ## Setup (live run)
 

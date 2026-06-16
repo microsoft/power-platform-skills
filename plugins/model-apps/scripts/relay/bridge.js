@@ -9,6 +9,7 @@
 //   - listControls(fieldName)               -> (READ-ONLY) custom controls (PCF/AI Builder) the env offers for a field
 //   - describeControl(controlId)            -> (READ-ONLY) a control's binding kind + param schema (from its manifest)
 //   - setControl(field, controlId, p, ff)   -> set a custom control on a field (prefers the first-party facade)
+//   - getControl(field)                     -> (READ-ONLY) the control currently on a field's cell (classId + custom controls)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -343,7 +344,47 @@
     } });
   }
 
-  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl };
+  // Find the cell currently hosting a field, by walking the form model.
+  function findCellForField(fm, fieldName) {
+    var found = null;
+    try {
+      fm.visit(function (n) {
+        if (found) return;
+        if (n && n.getNodeName && n.getNodeName() === 'cell' && n.control && n.control.dataFieldName === fieldName) found = n;
+      });
+    } catch (e) { /* tolerate a partial tree */ }
+    return found;
+  }
+
+  // READ-ONLY: report the control currently bound to a field's cell — the control
+  // class id and any applied custom controls (from the form's ControlDescriptions).
+  // This is the verify step after setControl (and a useful read on its own): when a
+  // custom control is set, classId flips to the CustomControl class id and the
+  // custom control name appears here.
+  function getControl(fieldName) {
+    var h = getDesignerHandle();
+    if (!h) return { ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } };
+    var fm = h.service.formModel;
+    var cell = findCellForField(fm, fieldName);
+    if (!cell) return { ok: false, error: { code: 'no-cell', message: fieldName + ' is not placed on the form' } };
+    var control = cell.control || {};
+    var classId = control.ClassId && (control.ClassId.guidString || control.ClassId.GuidString || String(control.ClassId));
+    var customControls = [];
+    try {
+      var uid = control.UniqueId;
+      var desc = (uid != null && typeof fm.getControlDescriptionByForControl === 'function') ? fm.getControlDescriptionByForControl(uid) : null;
+      var list = desc && (desc.customControls || desc.CustomControls);
+      if (list && list.length) {
+        for (var i = 0; i < list.length; i++) {
+          var cc = list[i] || {};
+          customControls.push({ name: cc.customControlName || cc.name, formFactor: cc.formFactor });
+        }
+      }
+    } catch (e) { /* tolerate models we can't fully read */ }
+    return { ok: true, result: { field: fieldName, dataFieldName: control.dataFieldName, classId: classId, customControls: customControls } };
+  }
+
+  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl, getControl: getControl };
 
   var w = getWin();
   if (w && typeof w === 'object') w.__mmBridge = api;

@@ -76,6 +76,13 @@ test('setControl() forwards field/control/params/factors (null-normalized)', asy
   ]);
 });
 
+test('getControl() forwards the field to the bridge (read-only)', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.getControl({ fieldLogicalName: 'name' });
+  assert.deepStrictEqual(d.calls, [['call', 'getControl', ['name']]]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

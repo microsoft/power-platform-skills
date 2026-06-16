@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_getControl
 ---
 
 # model-maker — live form co-authoring
@@ -80,6 +80,9 @@ of adding a field:
    build; if it returns `code:'needs-facade'`, the env is on a normal build —
    discovery still works, but setting a control needs the `enableModelMakerBridge`
    designer build.
+5. **Verify:** `form_getControl({ fieldLogicalName })` → the cell's `classId` flips
+   to the CustomControl class and `customControls` lists the control you set. (More
+   reliable than the canvas in a debug build, which may not repaint.)
 
 ## Tools (designer-relay)
 
@@ -92,6 +95,7 @@ of adding a field:
 | `form_listControls(fieldLogicalName?)` | `{ ok, result: { controls:[{name,displayName,bindingKind,…}] } }` — controls the env offers for a field (read-only) |
 | `form_describeControl(controlId)` | `{ ok, result: { bindingKind, requiredParams, params:[…] } }` — a control's param schema (read-only) |
 | `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'params-unsupported' } }` |
+| `form_getControl(fieldLogicalName)` | `{ ok, result: { classId, dataFieldName, customControls:[{name}] } }` — the read-back/verify for `form_setControl` |
 
 ## Notes & limits
 

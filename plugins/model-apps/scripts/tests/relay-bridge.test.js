@@ -229,6 +229,36 @@ test('setControl delegates to window.__formDesignerApi.addCustomControl when pre
   });
 });
 
+test('getControl reports the cell control class id + applied custom controls', () => {
+  const svc = fakeService({
+    formModel: {
+      formType: 2,
+      visit(cb) {
+        cb({ getNodeName: () => 'section', id: { guidString: 'S1' } });
+        cb({ getNodeName: () => 'cell', control: { dataFieldName: 'name', UniqueId: 'u1', ClassId: { guidString: 'custom-control-guid' } } });
+      },
+      getControlDescriptionByForControl: (uid) => (uid === 'u1'
+        ? { customControls: [{ customControlName: 'Intelligence.BusinessCardReaderControl.BusinessCardReader', formFactor: 0 }] }
+        : null),
+    },
+  });
+  withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, (mod) => {
+    const r = mod.getControl('name');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.classId, 'custom-control-guid');
+    assert.strictEqual(r.result.customControls[0].name, 'Intelligence.BusinessCardReaderControl.BusinessCardReader');
+  });
+});
+
+test('getControl returns no-cell when the field is not placed', () => {
+  const svc = fakeService({ formModel: { formType: 2, visit() {} } });
+  withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, (mod) => {
+    const r = mod.getControl('missing');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error.code, 'no-cell');
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();

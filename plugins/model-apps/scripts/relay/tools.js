@@ -77,6 +77,17 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.setControl(args))
   );
+
+  server.registerTool(
+    'form_getControl',
+    {
+      description: 'Read the control currently bound to a field cell — the control class id and any applied custom controls. Use to verify form_setControl. Read-only.',
+      inputSchema: {
+        fieldLogicalName: z.string().describe('Logical name of the field, e.g. "name"'),
+      },
+    },
+    async (args) => toToolResult(await handlers.getControl(args))
+  );
 }
 
 module.exports = { registerTools };
