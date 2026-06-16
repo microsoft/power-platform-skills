@@ -41,6 +41,9 @@ function read(orgId, configDir) {
   };
 }
 
+// Per-process counter so concurrent writers never collide on the temp name.
+let writeSeq = 0;
+
 function write(orgId, entry, configDir) {
   if (!orgId || !entry) return;
   const dir = configDir || defaultDir();
@@ -62,10 +65,28 @@ function write(orgId, entry, configDir) {
     collectorUrl: entry.collectorUrl,
     expiresAt: Date.now() + TTL_MS,
   };
+  // Write to a per-process temp file, then atomically rename over the target.
+  // Each tracked-skill invocation spawns its own detached dispatcher, so several
+  // processes can write this shared file at once. fs.rename replaces the
+  // destination atomically (incl. on Windows via MoveFileEx), so a concurrent
+  // reader always sees either the complete old or the complete new file — never
+  // a torn/half-written one (which would miss for ALL orgs).
+  //
+  // The read-modify-write above is still last-writer-wins across DIFFERENT
+  // orgIds, but that residual is rare (needs two parallel sessions on different
+  // orgs writing the same instant) and self-heals on the next resolve, so a
+  // heavier file lock isn't warranted for a best-effort 24h cache.
+  const tmp = `${file}.tmp.${process.pid}.${writeSeq++}`;
   try {
-    fs.writeFileSync(file, JSON.stringify(existing), "utf8");
+    fs.writeFileSync(tmp, JSON.stringify(existing), "utf8");
+    fs.renameSync(tmp, file);
   } catch {
-    // fail closed: cache miss next time
+    // fail closed: cache miss next time. Best-effort cleanup of the temp file.
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // temp may not have been created; ignore
+    }
   }
 }
 

@@ -72,6 +72,23 @@ test("write swallows disk errors (target dir unwritable)", () => {
   assert.doesNotThrow(() => write(orgIdA, entryUS, notADir));
 });
 
+test("write is atomic: leaves no temp files and produces a complete cache", () => {
+  const tmp = mkTmp();
+  write(orgIdA, entryUS, tmp);
+  write(orgIdB, entryEU, tmp);
+  // The temp file used for the atomic rename must not survive the write.
+  const leftover = fs
+    .readdirSync(tmp)
+    .filter((f) => f.startsWith("region-cache.json.tmp"));
+  assert.deepEqual(leftover, [], "atomic write must not leave .tmp files behind");
+  // Final file is complete, valid JSON with both orgs.
+  const parsed = JSON.parse(
+    fs.readFileSync(path.join(tmp, "region-cache.json"), "utf8")
+  );
+  assert.equal(parsed[orgIdA].region, "us");
+  assert.equal(parsed[orgIdB].region, "eu");
+});
+
 test("TTL_MS is exported as 24 hours", () => {
   assert.equal(TTL_MS, 24 * 60 * 60 * 1000);
 });
