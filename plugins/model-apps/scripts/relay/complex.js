@@ -7,7 +7,9 @@
 // build (source:"export") for the custom-control / subgrid / tab / section verbs.
 //
 // Env: MM_FORM_URL (required), MM_EDGE_PROFILE (required),
-//      MM_LIBRARY (optional, default new_demoscript), MM_HEADLESS=1, MM_SHOT.
+//      MM_LIBRARY (optional, default new_demoscript), MM_HEADLESS=1, MM_SHOT,
+//      MM_PAUSE_MS (optional — keep the Edge window open this long at the end, e.g.
+//                   for screen-recording; default 0 = close immediately).
 
 const path = require('node:path');
 const { createDriver, launchEdge } = require('./driver.js');
@@ -77,6 +79,13 @@ async function main() {
   const shot = process.env.MM_SHOT || path.join(process.cwd(), 'mm-complex.png');
   await driver.screenshot(shot);
   log('\nscreenshot: %s', shot);
+
+  const pauseMs = Number(process.env.MM_PAUSE_MS || 0);
+  if (pauseMs > 0) {
+    log('\n✅ Complex form built (in-memory, NOTHING saved). Keeping the window open %ds for review/recording…', Math.round(pauseMs / 1000));
+    log('   Tip: if a "Switch to classic?" debug dialog is up, click Ok; toggle "Show Loading Overlay" off for a clean canvas.');
+    await new Promise((r) => setTimeout(r, pauseMs));
+  }
 
   await ctx.close();
   log('done (no save — in-memory only).');
