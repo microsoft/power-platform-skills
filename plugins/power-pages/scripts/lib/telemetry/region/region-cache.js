@@ -4,81 +4,75 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const FILE_NAME = "region-cache.json";
+const DIR_NAME = "region-cache";
 const TTL_MS = 24 * 60 * 60 * 1000;
+
+// orgId comes from `pac auth who` ("Organization Id") — a Dataverse org GUID.
+// Validate the shape before using it as a filename: defensive against a
+// malformed/spoofed value containing path separators (`/`, `\`, `..`), and it
+// doubles as the falsy-orgId guard.
+const ORG_ID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function defaultDir() {
   return path.join(os.homedir(), ".power-platform-skills");
 }
 
-function cacheFilePath(configDir) {
-  return path.join(configDir || defaultDir(), FILE_NAME);
+function cacheDir(configDir) {
+  return path.join(configDir || defaultDir(), DIR_NAME);
 }
 
+function entryFile(orgId, configDir) {
+  return path.join(cacheDir(configDir), `${orgId}.json`);
+}
+
+// Returns the cached { region } for an org, or null when missing / unreadable /
+// malformed / expired. Only the plugin-INDEPENDENT org→region mapping is cached;
+// the caller maps region→iKey from its own regionsMap (so a cache shared across
+// plugins can never hand one plugin another plugin's key).
 function read(orgId, configDir) {
-  if (!orgId) return null;
-  let raw;
+  if (!ORG_ID_RE.test(String(orgId || ""))) return null;
+  let entry;
   try {
-    raw = fs.readFileSync(cacheFilePath(configDir), "utf8");
+    entry = JSON.parse(fs.readFileSync(entryFile(orgId, configDir), "utf8"));
   } catch {
     return null;
   }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  if (
+    !entry ||
+    typeof entry.expiresAt !== "number" ||
+    entry.expiresAt < Date.now()
+  ) {
     return null;
   }
-  const entry = parsed && parsed[orgId];
-  if (!entry) return null;
-  if (typeof entry.expiresAt !== "number" || entry.expiresAt < Date.now()) {
-    return null;
-  }
-  return {
-    region: entry.region,
-    iKey: entry.iKey,
-    collectorUrl: entry.collectorUrl,
-  };
+  return { region: entry.region };
 }
 
 // Per-process counter so concurrent writers never collide on the temp name.
 let writeSeq = 0;
 
 function write(orgId, entry, configDir) {
-  if (!orgId || !entry) return;
-  const dir = configDir || defaultDir();
+  if (!ORG_ID_RE.test(String(orgId || "")) || !entry || !entry.region) return;
+  const dir = cacheDir(configDir);
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
     return;
   }
-  const file = path.join(dir, FILE_NAME);
-  let existing = {};
-  try {
-    existing = JSON.parse(fs.readFileSync(file, "utf8")) || {};
-  } catch {
-    existing = {};
-  }
-  existing[orgId] = {
+  const file = path.join(dir, `${orgId}.json`);
+  const payload = JSON.stringify({
     region: entry.region,
-    iKey: entry.iKey,
-    collectorUrl: entry.collectorUrl,
     expiresAt: Date.now() + TTL_MS,
-  };
-  // Write to a per-process temp file, then atomically rename over the target.
-  // Each tracked-skill invocation spawns its own detached dispatcher, so several
-  // processes can write this shared file at once. fs.rename replaces the
-  // destination atomically (incl. on Windows via MoveFileEx), so a concurrent
-  // reader always sees either the complete old or the complete new file — never
-  // a torn/half-written one (which would miss for ALL orgs).
-  //
-  // The read-modify-write above is still last-writer-wins across DIFFERENT
-  // orgIds, but that residual is rare (needs two parallel sessions on different
-  // orgs writing the same instant) and self-heals on the next resolve, so a
-  // heavier file lock isn't warranted for a best-effort 24h cache.
+  });
+  // Per-org file + atomic rename: each org owns its own file, so concurrent
+  // detached dispatchers (one per skill invocation) writing DIFFERENT orgs can
+  // never clobber each other — the shared read-modify-write is gone, and
+  // same-org concurrent writes are idempotent (identical content). The temp name
+  // is per-process so writers don't collide; rename is an atomic replace (incl.
+  // Windows via MoveFileEx) so a reader never sees a torn/half-written file.
   const tmp = `${file}.tmp.${process.pid}.${writeSeq++}`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(existing), "utf8");
+    fs.writeFileSync(tmp, payload, "utf8");
     fs.renameSync(tmp, file);
   } catch {
     // fail closed: cache miss next time. Best-effort cleanup of the temp file.

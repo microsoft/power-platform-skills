@@ -86,22 +86,39 @@ test("resolve: no orgId → default region without calling Artemis or cache", as
   assert.equal(cacheReadCalled, false);
 });
 
-test("resolve: cache hit returns cached entry without calling Artemis", async () => {
+test("resolve: cache hit maps the cached region to THIS plugin's iKey (not a cached key)", async () => {
   let fetchCalled = false;
-  const cached = { region: "eu", iKey: "ik-cached", collectorUrl: "https://cached/" };
+  // Cache holds region only. The iKey must come from regionsMap, never the cache —
+  // this is what stops a shared cache from misrouting one plugin's events to
+  // another plugin's collector.
   const result = await resolve({
     orgId: "11111111-1111-1111-1111-111111111111",
     cloud: "Public",
     regionsMap: REGIONS,
     defaultRegion: "us",
     _fetchGeo: () => { fetchCalled = true; return Promise.resolve(null); },
-    _cache: { read: () => cached, write: () => {} },
+    _cache: { read: () => ({ region: "eu" }), write: () => {} },
   });
-  assert.deepEqual(result, cached);
+  assert.equal(result.region, "eu");
+  assert.equal(result.iKey, "ik-eu");
+  assert.equal(result.collectorUrl, "https://eu/");
   assert.equal(fetchCalled, false);
 });
 
-test("resolve: cache miss + Artemis success → resolved region + cache write", async () => {
+test("resolve: cache hit on a region missing from regionsMap → falls back to default", async () => {
+  const partial = { us: REGIONS.us };
+  const result = await resolve({
+    orgId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
+    regionsMap: partial,
+    defaultRegion: "us",
+    _fetchGeo: () => Promise.resolve(null),
+    _cache: { read: () => ({ region: "eu" }), write: () => {} },
+  });
+  assert.equal(result.region, "us"); // default fallback, since partial has no eu
+});
+
+test("resolve: cache miss + Artemis success → region-only cache write", async () => {
   let written;
   const result = await resolve({
     orgId: "11111111-1111-1111-1111-111111111111",
@@ -116,7 +133,22 @@ test("resolve: cache miss + Artemis success → resolved region + cache write", 
   });
   assert.equal(result.region, "eu");
   assert.equal(result.iKey, "ik-eu");
-  assert.equal(written.entry.region, "eu");
+  // Only the plugin-independent region is persisted — no iKey/collectorUrl.
+  assert.deepEqual(written.entry, { region: "eu" });
+});
+
+test("resolve: unrecognized geo (falls back to defaultRegion) is NOT cached", async () => {
+  let writeCalled = false;
+  const result = await resolve({
+    orgId: "11111111-1111-1111-1111-111111111111",
+    cloud: "Public",
+    regionsMap: REGIONS,
+    defaultRegion: "eu",
+    _fetchGeo: () => Promise.resolve({ geoName: "mars", stamp: "Public" }),
+    _cache: { read: () => null, write: () => { writeCalled = true; } },
+  });
+  assert.equal(result.region, "eu"); // defaultRegion
+  assert.equal(writeCalled, false, "a per-plugin default fallback must not be cached");
 });
 
 test("resolve: cache miss + Artemis null → default region, no cache write", async () => {

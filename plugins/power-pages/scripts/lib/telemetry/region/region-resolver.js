@@ -8,7 +8,11 @@ const defaultCache = require("./region-cache");
 const PUBLIC_US_GEOS = new Set(["us", "br", "jp", "in", "au", "ca", "as", "za", "ae", "kr"]);
 const PUBLIC_EU_GEOS = new Set(["eu", "uk", "de", "fr", "no", "ch"]);
 
-function mapToRegion(cloud, geoName, defaultRegion) {
+// Derive the plugin-INDEPENDENT routing region from the org's cloud stamp + geo,
+// or null when the public geo is unrecognized (caller falls back to its own
+// defaultRegion). Only a non-null result is safe to cache: it's a property of
+// the org, not of any plugin's config.
+function deriveRegion(cloud, geoName) {
   const stamp = normalizeCloud(cloud);
   if (stamp === "Gov") return "gov";
   if (stamp === "High") return "high";
@@ -19,7 +23,11 @@ function mapToRegion(cloud, geoName, defaultRegion) {
   const g = String(geoName || "").toLowerCase();
   if (PUBLIC_US_GEOS.has(g)) return "us";
   if (PUBLIC_EU_GEOS.has(g)) return "eu";
-  return defaultRegion;
+  return null;
+}
+
+function mapToRegion(cloud, geoName, defaultRegion) {
+  return deriveRegion(cloud, geoName) || defaultRegion;
 }
 
 function entryFromMap(regionsMap, region) {
@@ -47,8 +55,13 @@ async function resolve({
 
   if (!orgId) return fallback;
 
+  // Cache holds only the plugin-independent org→region mapping; map it to THIS
+  // plugin's iKey/collector from regionsMap on every hit, so a cache shared
+  // across plugins can never hand one plugin another plugin's key.
   const cached = cache.read(orgId, configDir);
-  if (cached) return cached;
+  if (cached && cached.region) {
+    return entryFromMap(regionsMap, cached.region) || fallback;
+  }
 
   let artemis;
   try {
@@ -58,13 +71,19 @@ async function resolve({
   }
   if (!artemis) return fallback;
 
-  const region = mapToRegion(cloud, artemis.geoName, defaultRegion);
+  // Only a region DERIVED from a recognized geo/stamp is plugin-independent and
+  // cacheable; an unrecognized geo falls back to this plugin's defaultRegion,
+  // which must NOT be cached (another plugin's default may differ).
+  const derived = deriveRegion(cloud, artemis.geoName);
+  const region = derived || defaultRegion;
   const entry = entryFromMap(regionsMap, region) || fallback;
   if (!entry) return null;
-  try {
-    cache.write(orgId, entry, configDir);
-  } catch {
-    // swallow
+  if (derived) {
+    try {
+      cache.write(orgId, { region: derived }, configDir);
+    } catch {
+      // swallow
+    }
   }
   return entry;
 }
