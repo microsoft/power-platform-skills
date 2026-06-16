@@ -109,6 +109,17 @@ test('removeControl/setFieldProps/moveControl/addSubgrid handlers forward to the
   ]);
 });
 
+test('addTab/addSection handlers forward to the bridge', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.addTab({ columns: 2, displayName: 'Details' });
+  await h.addSection({ targetElementId: 'SEC1', columns: 3 });
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'addTab', [null, 2, 'Details']],
+    ['call', 'addSection', ['SEC1', 3, null]],
+  ]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

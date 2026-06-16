@@ -67,6 +67,14 @@ function makeHandlers(driver, seq) {
         relationshipName: a.relationshipName, viewId: a.viewId, recordsPerPage: a.recordsPerPage, displayName: a.displayName,
       }]), 30000);
     },
+    async addTab(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addTab', [a.targetTabId || null, a.columns || null, a.displayName || null]), 30000);
+    },
+    async addSection(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addSection', [a.targetElementId, a.columns || null, a.displayName || null]), 30000);
+    },
   };
 }
 

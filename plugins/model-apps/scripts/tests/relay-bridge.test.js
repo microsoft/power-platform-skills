@@ -90,6 +90,7 @@ test('inspect returns sections (node name "section") and available unused fields
   withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, (mod) => {
     const r = mod.inspect();
     assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(r.result.tabs, [{ id: 'T1' }]);
     assert.deepStrictEqual(r.result.sections, [{ id: 'S1' }, { id: 'S2' }]);
     assert.deepStrictEqual(r.result.available, [{ name: 'telephone1', displayName: 'Phone' }]);
     assert.strictEqual(r.result.formType, 2);
@@ -345,6 +346,43 @@ test('addSubgrid delegates to window.__formDesignerApi.addSubgrid when present',
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.source, 'facade');
     assert.deepStrictEqual(calls, [['SEC1', 'contact', { relationshipName: 'rel' }]]);
+  });
+});
+
+test('addTab reports needs-facade when the façade is absent', async () => {
+  const svc = fakeService();
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    assert.strictEqual((await mod.addTab(null, 2, 'Details')).error.code, 'needs-facade');
+  });
+});
+
+test('addSection reports needs-facade when the façade is absent', async () => {
+  const svc = fakeService();
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    assert.strictEqual((await mod.addSection('SEC1', 2, 'More')).error.code, 'needs-facade');
+  });
+});
+
+test('addTab delegates to the first-party façade', async () => {
+  const calls = [];
+  const svc = fakeService();
+  const win = { __formDesignerApi: { service: svc, addTab: (tgt, cols, name) => { calls.push([tgt, cols, name]); return Promise.resolve({ ok: true, result: { kind: 'tab' } }); } } };
+  await withBridge({ win, doc: {} }, async (mod) => {
+    const t = await mod.addTab(null, 2, 'Details');
+    assert.strictEqual(t.ok, true);
+    assert.strictEqual(t.source, 'facade');
+    assert.deepStrictEqual(calls, [[null, 2, 'Details']]);
+  });
+});
+
+test('addSection delegates to the first-party façade', async () => {
+  const calls = [];
+  const svc = fakeService();
+  const win = { __formDesignerApi: { service: svc, addSection: (tgt, cols, name) => { calls.push([tgt, cols, name]); return Promise.resolve({ ok: true, result: { kind: 'section' } }); } } };
+  await withBridge({ win, doc: {} }, async (mod) => {
+    const s = await mod.addSection('SEC1', 3, 'More');
+    assert.strictEqual(s.ok, true);
+    assert.deepStrictEqual(calls, [['SEC1', 3, 'More']]);
   });
 });
 

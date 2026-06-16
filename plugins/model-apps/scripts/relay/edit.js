@@ -61,6 +61,12 @@ async function main() {
     log('  ->', j(await driver.call('moveControl', [FIELD, sections[1].id, null])));
   }
 
+  log('\n== addSection(section %s, 2 col) ==', sections[0] && sections[0].id);
+  log('  ->', j(await driver.call('addSection', [sections[0] && sections[0].id, 2, 'New Section (edited)'])));
+
+  log('\n== addTab(2 col) ==');
+  log('  ->', j(await driver.call('addTab', [null, 2, 'New Tab (edited)'])));
+
   await ctx.close();
   log('\ndone (no save — in-memory only).');
 }

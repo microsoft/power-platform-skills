@@ -13,8 +13,9 @@ React-fiber walk) and exposes the command surface on `window.__mmBridge`:
 discovery (`status` / `inspect` / `listControls` / `describeControl` /
 `getControl`), control ops (`addField` / `setControl` / `addComponent` /
 `addSubgrid`), and structural/property edits (`setFieldProps` / `removeControl` /
-`moveControl`). The structural/property edits + remove/move are DIRECT designer
-commands (work on any build); custom-control set/place/subgrid need the façade.
+`moveControl` / `addSection` / `addTab`). set-props/remove/move are DIRECT designer
+commands (work on any build); custom-control set/place + subgrid/section/tab need
+the façade.
 
 ## Tools
 
@@ -32,6 +33,8 @@ commands (work on any build); custom-control set/place/subgrid need the façade.
 | `form_setFieldProps` | Set label / visible / readonly / showLabel / locked / availableForPhone on a placed control. DIRECT — any build. |
 | `form_removeControl` | Remove a field/control from the form. DIRECT — any build. |
 | `form_moveControl` | Move a control to another section / before-after an element. DIRECT — any build. |
+| `form_addSection` | Add a 1-4 column section (anchored at a section/tab id). Needs the façade build. |
+| `form_addTab` | Add a 1-3 column tab (anchors after the last tab). Needs the façade build. |
 | `form_getControl` | Read a field cell's control + props (`classId`, custom controls, label, visible, readonly, …) — the read-back/verify for set ops. Read-only. |
 
 ## Setup (live run)

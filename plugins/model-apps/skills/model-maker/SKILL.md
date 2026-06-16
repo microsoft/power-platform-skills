@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_addSubgrid, mcp__designer-relay__form_getControl, mcp__designer-relay__form_setFieldProps, mcp__designer-relay__form_removeControl, mcp__designer-relay__form_moveControl
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_addSubgrid, mcp__designer-relay__form_addSection, mcp__designer-relay__form_addTab, mcp__designer-relay__form_getControl, mcp__designer-relay__form_setFieldProps, mcp__designer-relay__form_removeControl, mcp__designer-relay__form_moveControl
 ---
 
 # model-maker — live form co-authoring
@@ -103,6 +103,10 @@ commands that work on any build — only `form_addSubgrid` needs the façade):
 - **Remove a control:** `form_removeControl({ fieldLogicalName })`.
 - **Move a control:** `form_moveControl({ fieldLogicalName, targetElementId,
   position? })` (target = a section id from `form_inspect`).
+- **Add a section / tab:** `form_addSection({ targetElementId, columns?,
+  displayName? })` (target = a section/tab id; 1-4 columns); `form_addTab({
+  columns?, displayName?, targetTabId? })` (1-3 columns; anchors after the last
+  tab). `form_inspect` returns `tabs:[{id}]` and `sections:[{id}]` for targeting.
 
 ## Tools (designer-relay)
 
@@ -117,6 +121,8 @@ commands that work on any build — only `form_addSubgrid` needs the façade):
 | `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'unknown-param' } }` (field-bound) |
 | `form_addComponent(controlId, targetSectionId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-section' \| 'unknown-param' } }` (unbound/dataset, e.g. PowerBI) |
 | `form_addSubgrid(targetSectionId, entity, relationshipName?, viewId?, recordsPerPage?)` | `{ ok, result }` — related-records subgrid (needs façade build) |
+| `form_addSection(targetElementId, columns?, displayName?)` | `{ ok, result }` — add a 1-4 column section (needs façade build) |
+| `form_addTab(targetTabId?, columns?, displayName?)` | `{ ok, result }` — add a 1-3 column tab (needs façade build) |
 | `form_setFieldProps(fieldLogicalName, props)` | `{ ok, result:{ applied } }` — set label/visible/readonly/showLabel/locked/availableForPhone (any build) |
 | `form_removeControl(fieldLogicalName)` | `{ ok, result }` — remove a control (any build) |
 | `form_moveControl(fieldLogicalName, targetElementId, position?)` | `{ ok, result }` — move a control (any build) |

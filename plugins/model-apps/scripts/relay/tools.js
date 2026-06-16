@@ -161,6 +161,32 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.addSubgrid(args))
   );
+
+  server.registerTool(
+    'form_addTab',
+    {
+      description: 'Add a tab to the open form (with 1/2/3 columns). Requires the first-party façade build (enableModelMakerBridge).',
+      inputSchema: {
+        columns: z.number().optional().describe('Number of columns: 1, 2, or 3 (default 1)'),
+        displayName: z.string().optional().describe('Tab label (default "New Tab")'),
+        targetTabId: z.string().optional().describe('Anchor tab id from form_inspect (default: after the last tab)'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addTab(args))
+  );
+
+  server.registerTool(
+    'form_addSection',
+    {
+      description: 'Add a section (with 1-4 columns) to the open form. Requires the first-party façade build (enableModelMakerBridge).',
+      inputSchema: {
+        targetElementId: z.string().describe('A section id (insert as a sibling) or tab id from form_inspect'),
+        columns: z.number().optional().describe('Number of columns: 1-4 (default 1)'),
+        displayName: z.string().optional().describe('Section label (default "New Section")'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addSection(args))
+  );
 }
 
 module.exports = { registerTools };

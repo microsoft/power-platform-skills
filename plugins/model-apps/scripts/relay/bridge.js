@@ -15,6 +15,8 @@
 //   - setFieldProps(field, props)           -> set label/visible/readonly/showLabel/locked/availableForPhone (DIRECT; any build)
 //   - moveControl(field, targetId, pos)     -> move a control to another section/position (DIRECT; any build)
 //   - addSubgrid(sectionId, entity, opts)   -> add a related-records subgrid to a section (facade)
+//   - addTab(targetTabId, columns, name)    -> add a tab to the form (facade)
+//   - addSection(targetId, columns, name)   -> add a section to a tab/section (facade)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -126,11 +128,13 @@
     var fm = svc.formModel;
 
     var sections = [];
+    var tabs = [];
     try {
       fm.visit(function (n) {
-        if (n && n.getNodeName && n.getNodeName() === 'section' && n.id) {
-          sections.push({ id: n.id.guidString });
-        }
+        if (!n || !n.getNodeName) return;
+        var nm = n.getNodeName();
+        if (nm === 'section' && n.id) sections.push({ id: n.id.guidString });
+        else if (nm === 'tab' && n.id) tabs.push({ id: n.id.guidString || n.id.GuidString });
       });
     } catch (e) { /* tolerate a partially-loaded tree */ }
 
@@ -146,7 +150,7 @@
       }
     } catch (e) { /* field service not ready */ }
 
-    return { ok: true, result: { formType: fm.formType, sections: sections, available: available } };
+    return { ok: true, result: { formType: fm.formType, tabs: tabs, sections: sections, available: available } };
   }
 
   function addField(fieldName, sectionId, force) {
@@ -476,6 +480,32 @@
       .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
   }
 
+  // Generic thin pass-through to a facade method that needs in-product model
+  // construction. Returns needs-facade on a normal (non-facade) build.
+  function facadeCall(method, args, label) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var w = getWin();
+    var fapi = w.__formDesignerApi;
+    if (fapi && typeof fapi[method] === 'function') {
+      return Promise.resolve()
+        .then(function () { return fapi[method].apply(fapi, args); })
+        .then(function (r) { if (r && r.ok === false) return r; return { ok: true, result: (r && r.result) || {}, source: 'facade' }; })
+        .catch(function (e) { return { ok: false, error: { code: 'facade-error', message: String((e && e.message) || e) } }; });
+    }
+    return Promise.resolve({ ok: false, error: { code: 'needs-facade', message: (label || method) + ' needs the first-party facade (enableModelMakerBridge build).' } });
+  }
+
+  // Add a TAB to the form (facade — model construction).
+  function addTab(targetTabId, columns, displayName) {
+    return facadeCall('addTab', [targetTabId || null, columns || null, displayName || null], 'addTab');
+  }
+
+  // Add a SECTION to a tab/section (facade — model construction).
+  function addSection(targetElementId, columns, displayName) {
+    return facadeCall('addSection', [targetElementId, columns || null, displayName || null], 'addSection');
+  }
+
   // Add a subgrid (related-records grid) to a section. Needs the facade (FormCell +
   // FormGridControl construction). Thin pass-through.
   function addSubgrid(targetSectionId, entity, opts) {
@@ -496,6 +526,7 @@
     status: status, inspect: inspect, addField: addField,
     listControls: listControls, describeControl: describeControl,
     setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
+    addTab: addTab, addSection: addSection,
     getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
   };
 
