@@ -120,6 +120,17 @@ test('addTab/addSection handlers forward to the bridge', async () => {
   ]);
 });
 
+test('addColumn/addEventHandler handlers forward to the bridge', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.addColumn({ sectionId: 'S1', columns: 3 });
+  await h.addEventHandler({ target: 'form', eventType: 'onload', library: 'lib.js', functionName: 'ns.onLoad' });
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'addColumn', ['S1', 3]],
+    ['call', 'addEventHandler', ['form', { eventType: 'onload', library: 'lib.js', functionName: 'ns.onLoad', enabled: undefined, passExecutionContext: undefined, parameters: undefined }]],
+  ]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

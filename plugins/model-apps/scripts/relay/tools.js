@@ -187,6 +187,35 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.addSection(args))
   );
+
+  server.registerTool(
+    'form_addColumn',
+    {
+      description: 'Set a section\'s column count (1-4) — the designer\'s add/remove-column operation (a column is part of a section\'s layout, not a standalone element). Live; undoable; works on any build.',
+      inputSchema: {
+        sectionId: z.string().describe('Section id from form_inspect'),
+        columns: z.number().describe('Target number of columns: 1-4'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addColumn(args))
+  );
+
+  server.registerTool(
+    'form_addEventHandler',
+    {
+      description: 'Add a form/control event handler (form script). onLoad/onSave on the form (target "form"); onChange on a field (target = field logical name). The referenced library (web resource) must already be on the form. Live; works on any build.',
+      inputSchema: {
+        target: z.string().optional().describe('"form" for onLoad/onSave (default), or a field logical name for onChange'),
+        eventType: z.string().describe('Event: "onload", "onsave", or "onchange"'),
+        library: z.string().describe('Form library (web resource) name the function lives in'),
+        functionName: z.string().describe('Function to call, e.g. "MyNamespace.onLoad"'),
+        enabled: z.boolean().optional().describe('Enabled (default true)'),
+        passExecutionContext: z.boolean().optional().describe('Pass execution context as first parameter (default true)'),
+        parameters: z.string().optional().describe('Comma-separated additional parameters'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addEventHandler(args))
+  );
 }
 
 module.exports = { registerTools };

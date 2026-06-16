@@ -75,6 +75,17 @@ function makeHandlers(driver, seq) {
       const a = args || {};
       return queue.run(() => driver.call('addSection', [a.targetElementId, a.columns || null, a.displayName || null]), 30000);
     },
+    async addColumn(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addColumn', [a.sectionId, a.columns]));
+    },
+    async addEventHandler(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addEventHandler', [a.target || 'form', {
+        eventType: a.eventType, library: a.library, functionName: a.functionName,
+        enabled: a.enabled, passExecutionContext: a.passExecutionContext, parameters: a.parameters,
+      }]));
+    },
   };
 }
 

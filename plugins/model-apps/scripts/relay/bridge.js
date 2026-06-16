@@ -17,6 +17,8 @@
 //   - addSubgrid(sectionId, entity, opts)   -> add a related-records subgrid to a section (facade)
 //   - addTab(targetTabId, columns, name)    -> add a tab to the form (facade)
 //   - addSection(targetId, columns, name)   -> add a section to a tab/section (facade)
+//   - addColumn(sectionId, columns)         -> set a section's column count 1-4 (DIRECT; any build)
+//   - addEventHandler(target, options)      -> add a form/control event handler (DIRECT; any build)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -506,6 +508,89 @@
     return facadeCall('addSection', [targetElementId, columns || null, displayName || null], 'addSection');
   }
 
+  // The form's root node (for form-level events like onLoad/onSave).
+  function formNode(svc) {
+    var fm = svc.formModel;
+    if (fm && fm.getNodeName && fm.getNodeName() === 'form') return fm;
+    var found = null;
+    try { fm.visit(function (n) { if (!found && n && n.getNodeName && n.getNodeName() === 'form') found = n; }); } catch (e) { /* ignore */ }
+    return found || fm;
+  }
+
+  // Find a section node by its id.
+  function findSectionById(fm, sectionId) {
+    var found = null;
+    try {
+      fm.visit(function (n) {
+        if (found) return;
+        if (n && n.getNodeName && n.getNodeName() === 'section' && n.id && (n.id.guidString === sectionId || n.id.GuidString === sectionId)) found = n;
+      });
+    } catch (e) { /* ignore */ }
+    return found;
+  }
+
+  // Set a section's column count (1-4) — the designer's "add/remove column" op.
+  // DIRECT (SectionCanvasService.setNewColumnCount via the element-service factory,
+  // inside makeFormModelChange); works on any build.
+  function addColumn(sectionId, columns) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var count = Math.max(1, Math.min(4, +columns || 1));
+    var section = findSectionById(svc.formModel, sectionId);
+    if (!section) return Promise.resolve({ ok: false, error: { code: 'no-section', message: sectionId + ' not found on the form' } });
+    return Promise.resolve()
+      .then(function () {
+        return svc.makeFormModelChange(function () {
+          var factory = svc.formCanvasService && svc.formCanvasService.formElementServiceFactory;
+          var sectionSvc = factory && typeof factory.getFormElementService === 'function' && factory.getFormElementService(section);
+          if (sectionSvc && typeof sectionSvc.setNewColumnCount === 'function') {
+            sectionSvc.setNewColumnCount(section, count);
+          } else {
+            throw new Error('section column service unavailable');
+          }
+        }, { actionName: 'Change property' }, 'Set section columns');
+      })
+      .then(function () { return { ok: true, result: { sectionId: sectionId, columns: count } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Add a form/control EVENT HANDLER (onLoad/onSave on the form; onChange on a
+  // field). DIRECT (FormDesignerService.formEventsService.addEventHandler); works on
+  // any build. The referenced `library` (web resource) must already be on the form.
+  function addEventHandler(target, options) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var ehs = svc.formEventsService;
+    if (!ehs || typeof ehs.addEventHandler !== 'function') {
+      return Promise.resolve({ ok: false, error: { code: 'no-events-service', message: 'formEventsService unavailable' } });
+    }
+    var o = options || {};
+    if (!o.library || !o.functionName) {
+      return Promise.resolve({ ok: false, error: { code: 'missing-args', message: 'library and functionName are required' } });
+    }
+    var node;
+    if (!target || target === 'form') {
+      node = formNode(svc);
+    } else {
+      node = findCellForField(svc.formModel, target);
+      if (!node) return Promise.resolve({ ok: false, error: { code: 'no-cell', message: target + ' is not placed on the form' } });
+    }
+    var opts = {
+      eventType: o.eventType || 'onload',
+      library: o.library,
+      functionName: o.functionName,
+      enabled: o.enabled !== false,
+      executionContext: o.passExecutionContext !== false,
+      parametersList: o.parameters || '',
+    };
+    return Promise.resolve()
+      .then(function () { return ehs.addEventHandler(opts, node); })
+      .then(function () { return { ok: true, result: { target: target || 'form', eventType: opts.eventType, library: opts.library, functionName: opts.functionName } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
   // Add a subgrid (related-records grid) to a section. Needs the facade (FormCell +
   // FormGridControl construction). Thin pass-through.
   function addSubgrid(targetSectionId, entity, opts) {
@@ -526,7 +611,7 @@
     status: status, inspect: inspect, addField: addField,
     listControls: listControls, describeControl: describeControl,
     setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
-    addTab: addTab, addSection: addSection,
+    addTab: addTab, addSection: addSection, addColumn: addColumn, addEventHandler: addEventHandler,
     getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
   };
 

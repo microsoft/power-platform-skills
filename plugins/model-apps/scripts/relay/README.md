@@ -35,6 +35,8 @@ the façade.
 | `form_moveControl` | Move a control to another section / before-after an element. DIRECT — any build. |
 | `form_addSection` | Add a 1-4 column section (anchored at a section/tab id). Needs the façade build. |
 | `form_addTab` | Add a 1-3 column tab (anchors after the last tab). Needs the façade build. |
+| `form_addColumn` | Set a section's column count (1-4) — the add/remove-column op. DIRECT — any build. |
+| `form_addEventHandler` | Add a form onLoad/onSave or field onChange handler (form script). The library must already be on the form. DIRECT — any build. |
 | `form_getControl` | Read a field cell's control + props (`classId`, custom controls, label, visible, readonly, …) — the read-back/verify for set ops. Read-only. |
 
 ## Setup (live run)

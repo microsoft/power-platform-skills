@@ -386,6 +386,51 @@ test('addSection delegates to the first-party façade', async () => {
   });
 });
 
+test('addColumn sets a section column count via setNewColumnCount', async () => {
+  const calls = [];
+  const section = { getNodeName: () => 'section', id: { guidString: 'S1' } };
+  const svc = fakeService({
+    makeFormModelChange: (fn) => { fn(); return Promise.resolve(); },
+    formModel: { visit(cb) { cb(section); } },
+    formCanvasService: { formElementServiceFactory: { getFormElementService: () => ({ setNewColumnCount: (node, c) => calls.push([node === section, c]) }) } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.addColumn('S1', 3);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.columns, 3);
+    assert.deepStrictEqual(calls, [[true, 3]]);
+  });
+});
+
+test('addColumn returns no-section when the id is not found', async () => {
+  const svc = fakeService({ formModel: { visit() {} } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    assert.strictEqual((await mod.addColumn('missing', 2)).error.code, 'no-section');
+  });
+});
+
+test('addEventHandler adds a form-level handler via formEventsService', async () => {
+  const calls = [];
+  const svc = fakeService({
+    formModel: { getNodeName: () => 'form', visit() {} },
+    formEventsService: { addEventHandler: (opts, node) => { calls.push([opts, node]); return Promise.resolve(); } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.addEventHandler('form', { eventType: 'onload', library: 'lib.js', functionName: 'ns.onLoad' });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(calls[0][0].functionName, 'ns.onLoad');
+    assert.strictEqual(calls[0][0].executionContext, true);
+    assert.strictEqual(calls[0][0].enabled, true);
+  });
+});
+
+test('addEventHandler requires library + functionName', async () => {
+  const svc = fakeService({ formEventsService: { addEventHandler: () => Promise.resolve() } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    assert.strictEqual((await mod.addEventHandler('form', { eventType: 'onload' })).error.code, 'missing-args');
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();

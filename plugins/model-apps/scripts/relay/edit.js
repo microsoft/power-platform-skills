@@ -67,6 +67,12 @@ async function main() {
   log('\n== addTab(2 col) ==');
   log('  ->', j(await driver.call('addTab', [null, 2, 'New Tab (edited)'])));
 
+  log('\n== addColumn(section %s -> 2 col) ==', sections[0] && sections[0].id);
+  log('  ->', j(await driver.call('addColumn', [sections[0] && sections[0].id, 2])));
+
+  log('\n== addEventHandler(form, onload) ==');
+  log('  ->', j(await driver.call('addEventHandler', ['form', { eventType: 'onload', library: process.env.MM_LIBRARY || 'new_demoscript', functionName: 'Demo.onLoad', passExecutionContext: true }])));
+
   await ctx.close();
   log('\ndone (no save — in-memory only).');
 }
