@@ -49,6 +49,24 @@ function makeHandlers(driver, seq) {
       const a = args || {};
       return queue.run(() => driver.call('getControl', [a.fieldLogicalName]));
     },
+    async removeControl(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('removeControl', [a.fieldLogicalName]));
+    },
+    async setFieldProps(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('setFieldProps', [a.fieldLogicalName, a.props || {}]));
+    },
+    async moveControl(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('moveControl', [a.fieldLogicalName, a.targetElementId, a.position || null]));
+    },
+    async addSubgrid(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addSubgrid', [a.targetSectionId, a.entity, {
+        relationshipName: a.relationshipName, viewId: a.viewId, recordsPerPage: a.recordsPerPage, displayName: a.displayName,
+      }]), 30000);
+    },
   };
 }
 

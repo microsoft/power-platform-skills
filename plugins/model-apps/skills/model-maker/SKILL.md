@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_getControl
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_addSubgrid, mcp__designer-relay__form_getControl, mcp__designer-relay__form_setFieldProps, mcp__designer-relay__form_removeControl, mcp__designer-relay__form_moveControl
 ---
 
 # model-maker — live form co-authoring
@@ -89,6 +89,21 @@ of adding a field:
    to the CustomControl class and `customControls` lists the control you set. (More
    reliable than the canvas in a debug build, which may not repaint.)
 
+## Structural & property edits
+
+Beyond controls, the relay edits form structure and properties (most are DIRECT
+commands that work on any build — only `form_addSubgrid` needs the façade):
+
+- **Edit a field's properties:** `form_setFieldProps({ fieldLogicalName, props: {
+  label?, visible?, readonly?, showLabel?, locked?, availableForPhone? } })` →
+  verify with `form_getControl` (it returns label/visible/readonly/locked).
+- **Add a related-records subgrid:** `form_addSubgrid({ targetSectionId, entity,
+  relationshipName?, viewId?, recordsPerPage? })` (e.g. `entity:'contact'`,
+  `relationshipName:'contact_customer_accounts'`).
+- **Remove a control:** `form_removeControl({ fieldLogicalName })`.
+- **Move a control:** `form_moveControl({ fieldLogicalName, targetElementId,
+  position? })` (target = a section id from `form_inspect`).
+
 ## Tools (designer-relay)
 
 | Tool | Returns |
@@ -101,7 +116,11 @@ of adding a field:
 | `form_describeControl(controlId)` | `{ ok, result: { bindingKind, requiredParams, params:[…] } }` — a control's param schema (read-only) |
 | `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'unknown-param' } }` (field-bound) |
 | `form_addComponent(controlId, targetSectionId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-section' \| 'unknown-param' } }` (unbound/dataset, e.g. PowerBI) |
-| `form_getControl(fieldLogicalName)` | `{ ok, result: { classId, dataFieldName, customControls:[{name}] } }` — the read-back/verify for `form_setControl` |
+| `form_addSubgrid(targetSectionId, entity, relationshipName?, viewId?, recordsPerPage?)` | `{ ok, result }` — related-records subgrid (needs façade build) |
+| `form_setFieldProps(fieldLogicalName, props)` | `{ ok, result:{ applied } }` — set label/visible/readonly/showLabel/locked/availableForPhone (any build) |
+| `form_removeControl(fieldLogicalName)` | `{ ok, result }` — remove a control (any build) |
+| `form_moveControl(fieldLogicalName, targetElementId, position?)` | `{ ok, result }` — move a control (any build) |
+| `form_getControl(fieldLogicalName)` | `{ ok, result: { classId, dataFieldName, customControls:[{name}], label, visible, readonly, locked, showLabel } }` — the read-back/verify for set ops |
 
 ## Notes & limits
 

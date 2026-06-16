@@ -10,7 +10,11 @@
 //   - describeControl(controlId)            -> (READ-ONLY) a control's binding kind + param schema (from its manifest)
 //   - setControl(field, controlId, p, ff)   -> set a custom control on a field (prefers the first-party facade); p applies params
 //   - addComponent(controlId, sectionId, p, ff) -> place a control as a NEW component in a section (unbound/dataset, e.g. PowerBI)
-//   - getControl(field)                     -> (READ-ONLY) the control currently on a field's cell (classId + custom controls)
+//   - getControl(field)                     -> (READ-ONLY) a field cell's control + props (classId, customControls, label, visible, ...)
+//   - removeControl(field)                  -> remove a field/control from the form (DIRECT; any build)
+//   - setFieldProps(field, props)           -> set label/visible/readonly/showLabel/locked/availableForPhone (DIRECT; any build)
+//   - moveControl(field, targetId, pos)     -> move a control to another section/position (DIRECT; any build)
+//   - addSubgrid(sectionId, entity, opts)   -> add a related-records subgrid to a section (facade)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -405,10 +409,95 @@
         }
       }
     } catch (e) { /* tolerate models we can't fully read */ }
-    return { ok: true, result: { field: fieldName, dataFieldName: control.dataFieldName, classId: classId, customControls: customControls } };
+    var lcid = +((h.service.sessionInfo && h.service.sessionInfo.lCID) || 1033) || 1033;
+    var label;
+    try { label = typeof cell.getDisplayName === 'function' ? cell.getDisplayName(lcid) : cell.displayName; } catch (e) { /* ignore */ }
+    return { ok: true, result: {
+      field: fieldName, dataFieldName: control.dataFieldName, classId: classId, customControls: customControls,
+      label: label, visible: cell.visible, readonly: cell.readonly, locked: cell.isLocked, showLabel: cell.showlabel,
+    } };
   }
 
-  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl, addComponent: addComponent, getControl: getControl };
+  // Remove a field/control from the form. DIRECT designer command — works on ANY
+  // build (no facade needed).
+  function removeControl(fieldName) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var cell = findCellForField(svc.formModel, fieldName);
+    if (!cell) return Promise.resolve({ ok: false, error: { code: 'no-cell', message: fieldName + ' is not placed on the form' } });
+    var id = cell.id && (cell.id.guidString || cell.id.GuidString);
+    return Promise.resolve()
+      .then(function () { return svc.removeElement(id); })
+      .then(function () { return { ok: true, result: { field: fieldName, removedCellId: id } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Set common properties on a field's cell (label / visible / readonly / showLabel
+  // / locked / availableForPhone). DIRECT (makeFormModelChange + node setters) —
+  // works on ANY build.
+  function setFieldProps(fieldName, props) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var cell = findCellForField(svc.formModel, fieldName);
+    if (!cell) return Promise.resolve({ ok: false, error: { code: 'no-cell', message: fieldName + ' is not placed on the form' } });
+    var p = props || {};
+    var lcid = +((svc.sessionInfo && svc.sessionInfo.lCID) || 1033) || 1033;
+    var applied = {};
+    return Promise.resolve()
+      .then(function () {
+        return svc.makeFormModelChange(function () {
+          if ('label' in p && typeof cell.setDisplayName === 'function') { cell.setDisplayName(String(p.label), lcid); applied.label = String(p.label); }
+          if ('visible' in p) { cell.visible = !!p.visible; applied.visible = !!p.visible; }
+          if ('readonly' in p) { cell.readonly = !!p.readonly; applied.readonly = !!p.readonly; }
+          if ('showLabel' in p) { cell.showlabel = !!p.showLabel; applied.showLabel = !!p.showLabel; }
+          if ('locked' in p) { cell.isLocked = !!p.locked; applied.locked = !!p.locked; }
+          if ('availableForPhone' in p) { cell.availableforphone = !!p.availableForPhone; applied.availableForPhone = !!p.availableForPhone; }
+        }, { actionName: 'Change property' }, 'Set field properties');
+      })
+      .then(function () { return { ok: true, result: { field: fieldName, applied: applied } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Move a field's control to another element (a section, or a cell with a
+  // before/after position). DIRECT — works on ANY build.
+  function moveControl(fieldName, targetElementId, position) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    if (!targetElementId) return Promise.resolve({ ok: false, error: { code: 'no-target', message: 'targetElementId is required (a section/cell id from form_inspect)' } });
+    var cell = findCellForField(svc.formModel, fieldName);
+    if (!cell) return Promise.resolve({ ok: false, error: { code: 'no-cell', message: fieldName + ' is not placed on the form' } });
+    var id = cell.id && (cell.id.guidString || cell.id.GuidString);
+    return Promise.resolve()
+      .then(function () { return svc.moveElement(id, targetElementId, 'Click', position || undefined); })
+      .then(function () { return { ok: true, result: { field: fieldName, movedTo: targetElementId } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Add a subgrid (related-records grid) to a section. Needs the facade (FormCell +
+  // FormGridControl construction). Thin pass-through.
+  function addSubgrid(targetSectionId, entity, opts) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var w = getWin();
+    var fapi = w.__formDesignerApi;
+    if (fapi && typeof fapi.addSubgrid === 'function') {
+      return Promise.resolve()
+        .then(function () { return fapi.addSubgrid(targetSectionId, entity, opts || null); })
+        .then(function (r) { if (r && r.ok === false) return r; return { ok: true, result: (r && r.result) || { targetSectionId: targetSectionId, entity: entity }, source: 'facade' }; })
+        .catch(function (e) { return { ok: false, error: { code: 'facade-error', message: String((e && e.message) || e) } }; });
+    }
+    return Promise.resolve({ ok: false, error: { code: 'needs-facade', message: 'addSubgrid needs the first-party addSubgrid facade (enableModelMakerBridge build).' } });
+  }
+
+  var api = {
+    status: status, inspect: inspect, addField: addField,
+    listControls: listControls, describeControl: describeControl,
+    setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
+    getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
+  };
 
   var w = getWin();
   if (w && typeof w === 'object') w.__mmBridge = api;

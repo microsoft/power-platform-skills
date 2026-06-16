@@ -94,6 +94,21 @@ test('getControl() forwards the field to the bridge (read-only)', async () => {
   assert.deepStrictEqual(d.calls, [['call', 'getControl', ['name']]]);
 });
 
+test('removeControl/setFieldProps/moveControl/addSubgrid handlers forward to the bridge', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.removeControl({ fieldLogicalName: 'fax' });
+  await h.setFieldProps({ fieldLogicalName: 'telephone1', props: { visible: false } });
+  await h.moveControl({ fieldLogicalName: 'telephone1', targetElementId: 'SEC2', position: 'after' });
+  await h.addSubgrid({ targetSectionId: 'SEC1', entity: 'contact', relationshipName: 'rel' });
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'removeControl', ['fax']],
+    ['call', 'setFieldProps', ['telephone1', { visible: false }]],
+    ['call', 'moveControl', ['telephone1', 'SEC2', 'after']],
+    ['call', 'addSubgrid', ['SEC1', 'contact', { relationshipName: 'rel', viewId: undefined, recordsPerPage: undefined, displayName: undefined }]],
+  ]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

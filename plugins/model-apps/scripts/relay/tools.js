@@ -102,6 +102,65 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.addComponent(args))
   );
+
+  server.registerTool(
+    'form_removeControl',
+    {
+      description: 'Remove a field/control from the open form via the designer\'s own delete command (live). Works on any build (no façade needed).',
+      inputSchema: {
+        fieldLogicalName: z.string().describe('Logical name of the field/control to remove, e.g. "fax"'),
+      },
+    },
+    async (args) => toToolResult(await handlers.removeControl(args))
+  );
+
+  server.registerTool(
+    'form_setFieldProps',
+    {
+      description: 'Set common properties on a placed field/control: label (display name), visibility, read-only, show-label, locked, available-on-phone. Live; undoable; works on any build.',
+      inputSchema: {
+        fieldLogicalName: z.string().describe('Logical name of the field, e.g. "telephone1"'),
+        props: z.object({
+          label: z.string().optional().describe('Display label'),
+          visible: z.boolean().optional().describe('Visible (false hides by default)'),
+          readonly: z.boolean().optional().describe('Read-only'),
+          showLabel: z.boolean().optional().describe('Show the label'),
+          locked: z.boolean().optional().describe('Lock the control'),
+          availableForPhone: z.boolean().optional().describe('Available on phone'),
+        }).describe('Properties to set (only the keys you pass are changed)'),
+      },
+    },
+    async (args) => toToolResult(await handlers.setFieldProps(args))
+  );
+
+  server.registerTool(
+    'form_moveControl',
+    {
+      description: 'Move a placed field/control to another section (or before/after another element) via the designer\'s own move command. Works on any build.',
+      inputSchema: {
+        fieldLogicalName: z.string().describe('Logical name of the field/control to move'),
+        targetElementId: z.string().describe('Target section id (or a sibling cell id) from form_inspect'),
+        position: z.string().optional().describe('Insert position relative to the target, e.g. "before" / "after" (default: append)'),
+      },
+    },
+    async (args) => toToolResult(await handlers.moveControl(args))
+  );
+
+  server.registerTool(
+    'form_addSubgrid',
+    {
+      description: 'Add a SUBGRID (related-records grid) to a form section — e.g. related Contacts on an Account form. Set the related table + 1:N relationship + view. Requires the first-party façade build (enableModelMakerBridge).',
+      inputSchema: {
+        targetSectionId: z.string().describe('Section id from form_inspect to place the subgrid in'),
+        entity: z.string().describe('Related table logical name, e.g. "contact"'),
+        relationshipName: z.string().optional().describe('1:N relationship schema name for related records, e.g. "contact_customer_accounts". Omit for an "all records" grid.'),
+        viewId: z.string().optional().describe('Saved query (view) id to show, GUID with braces. Omit for the table default view.'),
+        recordsPerPage: z.number().optional().describe('Rows per page (default 4)'),
+        displayName: z.string().optional().describe('Subgrid label'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addSubgrid(args))
+  );
 }
 
 module.exports = { registerTools };

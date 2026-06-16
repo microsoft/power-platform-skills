@@ -9,9 +9,12 @@ tab via `page.evaluate` round-trips (CSP-safe — the designer's CSP blocks an
 in-page `ws://127.0.0.1` socket, so there is no socket). The injected
 [`bridge.js`](./bridge.js) acquires the live `FormDesignerService` (via the
 first-party `window.__formDesignerApi` export if present, else a duck-typed
-React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
-/ `describeControl` / `setControl` / `addComponent` / `getControl` on
-`window.__mmBridge`.
+React-fiber walk) and exposes the command surface on `window.__mmBridge`:
+discovery (`status` / `inspect` / `listControls` / `describeControl` /
+`getControl`), control ops (`addField` / `setControl` / `addComponent` /
+`addSubgrid`), and structural/property edits (`setFieldProps` / `removeControl` /
+`moveControl`). The structural/property edits + remove/move are DIRECT designer
+commands (work on any build); custom-control set/place/subgrid need the façade.
 
 ## Tools
 
@@ -25,7 +28,11 @@ React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
 | `form_describeControl` | A control's binding kind + parameter schema (name, usage, required, defaults, enum) from its manifest. Read-only. |
 | `form_setControl` | Set a custom control on a FIELD via the designer's command. Field-bound controls; `params` applied. Needs the façade build (`enableModelMakerBridge`). |
 | `form_addComponent` | Place an UNBOUND/dataset control (PowerBI, subgrid) as a new component in a section; `params` applied. Needs the façade build. |
-| `form_getControl` | Read the control on a field's cell (`classId` + applied custom controls) — the read-back/verify for `form_setControl`. Read-only. |
+| `form_addSubgrid` | Add a related-records SUBGRID to a section (e.g. related Contacts). Needs the façade build. |
+| `form_setFieldProps` | Set label / visible / readonly / showLabel / locked / availableForPhone on a placed control. DIRECT — any build. |
+| `form_removeControl` | Remove a field/control from the form. DIRECT — any build. |
+| `form_moveControl` | Move a control to another section / before-after an element. DIRECT — any build. |
+| `form_getControl` | Read a field cell's control + props (`classId`, custom controls, label, visible, readonly, …) — the read-back/verify for set ops. Read-only. |
 
 ## Setup (live run)
 
@@ -123,6 +130,17 @@ MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
 MM_CONTROL=MscrmControls.PowerBIPCFControl \
 MM_PARAMS='{"PowerBIReport":"<reportUniqueName>","FilterPaneVisible":"true"}' \
 npm run add-component    # places into the first section (or MM_SECTION); no save
+```
+
+**6. Structural/property edits E2E (`edit.js`).** Exercises `setFieldProps` (+
+`getControl` read-back), `addSubgrid`, `removeControl` (+ read-back), and
+`moveControl` in one session. setProps/remove/move are DIRECT (any build);
+addSubgrid needs the façade build:
+
+```bash
+MM_FORM_URL='https://make.local.powerapps.com/e/.../form/edit/<formId>?...' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+npm run edit             # MM_FIELD / MM_REMOVE_FIELD / MM_SUBGRID_ENTITY / MM_SUBGRID_REL; no save
 ```
 
 ## Notes

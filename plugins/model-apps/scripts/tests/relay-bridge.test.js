@@ -285,6 +285,69 @@ test('getControl returns no-cell when the field is not placed', () => {
   });
 });
 
+test('removeControl removes the field cell via removeElement (direct command)', async () => {
+  const removed = [];
+  const svc = fakeService({
+    removeElement: (id) => { removed.push(id); return Promise.resolve(id); },
+    formModel: { visit(cb) { cb({ getNodeName: () => 'cell', control: { dataFieldName: 'fax' }, id: { guidString: 'CELL-FAX' } }); } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.removeControl('fax');
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(removed, ['CELL-FAX']);
+  });
+});
+
+test('setFieldProps sets cell properties inside makeFormModelChange', async () => {
+  const cell = { getNodeName: () => 'cell', control: { dataFieldName: 'telephone1' }, id: { guidString: 'C1' }, visible: true, setDisplayName(v) { this._label = v; } };
+  const svc = fakeService({
+    sessionInfo: { lCID: '1033' },
+    makeFormModelChange: (fn) => { fn(); return Promise.resolve(); },
+    formModel: { visit(cb) { cb(cell); } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.setFieldProps('telephone1', { label: 'Phone', visible: false });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(cell.visible, false);
+    assert.strictEqual(cell._label, 'Phone');
+    assert.deepStrictEqual(r.result.applied, { label: 'Phone', visible: false });
+  });
+});
+
+test('moveControl moves the field cell via moveElement (direct command)', async () => {
+  const moves = [];
+  const svc = fakeService({
+    moveElement: (src, tgt, ui, pos) => { moves.push([src, tgt, ui, pos]); return Promise.resolve(); },
+    formModel: { visit(cb) { cb({ getNodeName: () => 'cell', control: { dataFieldName: 'telephone1' }, id: { guidString: 'C1' } }); } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.moveControl('telephone1', 'SEC2', 'after');
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(moves, [['C1', 'SEC2', 'Click', 'after']]);
+  });
+});
+
+test('addSubgrid reports needs-facade when the façade is absent', async () => {
+  const svc = fakeService();
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.addSubgrid('SEC1', 'contact', { relationshipName: 'rel' });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error.code, 'needs-facade');
+  });
+});
+
+test('addSubgrid delegates to window.__formDesignerApi.addSubgrid when present', async () => {
+  const calls = [];
+  const svc = fakeService();
+  const win = { __formDesignerApi: { service: svc, addSubgrid: (sec, ent, o) => { calls.push([sec, ent, o]); return Promise.resolve({ ok: true, result: { entity: ent, targetSectionId: sec } }); } } };
+  await withBridge({ win, doc: {} }, async (mod) => {
+    const r = await mod.addSubgrid('SEC1', 'contact', { relationshipName: 'rel' });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.source, 'facade');
+    assert.deepStrictEqual(calls, [['SEC1', 'contact', { relationshipName: 'rel' }]]);
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();
