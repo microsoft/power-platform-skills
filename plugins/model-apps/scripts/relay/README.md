@@ -37,7 +37,8 @@ subgrid/section/tab need the façade.
 | `form_addSection` | Add a 1-4 column section (anchored at a section/tab id). Needs the façade build. |
 | `form_addTab` | Add a 1-3 column tab (anchors after the last tab). Needs the façade build. |
 | `form_addColumn` | Set a section's column count (1-4) — the add/remove-column op. DIRECT — any build. |
-| `form_addEventHandler` | Add a form onLoad/onSave or field onChange handler (form script). The library must already be on the form. DIRECT — any build. |
+| `form_addEventHandler` | Add a form onLoad/onSave or field onChange handler (form script). Use `form_addLibrary` first to register the library. DIRECT — any build. |
+| `form_addLibrary` | Register a JS web-resource library on the form; reports `exists` (whether the web resource is real). DIRECT — any build. |
 | `form_setFormProps` | Set form name / description / maxWidth / showImage / showNavigation. DIRECT — any build. |
 | `form_removeElement` | Remove ANY element (tab/section/cell) by id. DIRECT — any build. |
 | `form_undo` / `form_redo` | Undo/redo the last designer change. DIRECT — any build. |
@@ -142,15 +143,26 @@ MM_PARAMS='{"PowerBIReport":"<reportUniqueName>","FilterPaneVisible":"true"}' \
 npm run add-component    # places into the first section (or MM_SECTION); no save
 ```
 
-**6. Structural/property edits E2E (`edit.js`).** Exercises `setFieldProps` (+
-`getControl` read-back), `addSubgrid`, `removeControl` (+ read-back), and
-`moveControl` in one session. setProps/remove/move are DIRECT (any build);
-addSubgrid needs the façade build:
+**6. Structural/property edits E2E (`edit.js`).** Exercises setFieldProps,
+addSubgrid, removeControl, moveControl, addSection/addTab/addColumn,
+addEventHandler, setFormProps, removeElement, undo — with `getControl`
+read-backs — in one session (no save).
 
 ```bash
 MM_FORM_URL='https://make.local.powerapps.com/e/.../form/edit/<formId>?...' \
 MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
 npm run edit             # MM_FIELD / MM_REMOVE_FIELD / MM_SUBGRID_ENTITY / MM_SUBGRID_REL; no save
+```
+
+**7. Complex-page showcase (`complex.js`).** Builds a complex form end-to-end —
+form props + custom controls (business card reader, rich text) + a related-
+records grid + new tab/section/column + a library + onLoad handler — verified by
+model read-backs. Needs the façade build; no save:
+
+```bash
+MM_FORM_URL='https://make.local.powerapps.com/e/.../form/edit/<formId>?...' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+npm run complex          # MM_LIBRARY (optional); no save
 ```
 
 ## Notes

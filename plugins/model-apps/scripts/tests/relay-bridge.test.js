@@ -431,6 +431,29 @@ test('addEventHandler requires library + functionName', async () => {
   });
 });
 
+test('addLibrary registers a web-resource library and reports existence', async () => {
+  const calls = [];
+  const svc = fakeService({
+    formLibrariesService: {
+      getJSWebResourceIdByName: (n) => Promise.resolve(n === 'new_myscript' ? 'WR-1' : undefined),
+      addLibrary: (rec) => { calls.push(rec); return Promise.resolve(); },
+    },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.addLibrary('new_myscript');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.exists, true);
+    assert.deepStrictEqual(calls, [{ name: 'new_myscript' }]);
+  });
+});
+
+test('addLibrary requires a library name', async () => {
+  const svc = fakeService({ formLibrariesService: { addLibrary: () => Promise.resolve() } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    assert.strictEqual((await mod.addLibrary()).error.code, 'missing-args');
+  });
+});
+
 test('setFormProps sets form node properties inside makeFormModelChange', async () => {
   const node = { getNodeName: () => 'form' };
   const svc = fakeService({ makeFormModelChange: (fn) => { fn(); return Promise.resolve(); }, formModel: node });

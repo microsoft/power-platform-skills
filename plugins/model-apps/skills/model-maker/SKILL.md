@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_addSubgrid, mcp__designer-relay__form_addSection, mcp__designer-relay__form_addTab, mcp__designer-relay__form_addColumn, mcp__designer-relay__form_addEventHandler, mcp__designer-relay__form_setFormProps, mcp__designer-relay__form_removeElement, mcp__designer-relay__form_undo, mcp__designer-relay__form_redo, mcp__designer-relay__form_save, mcp__designer-relay__form_publish, mcp__designer-relay__form_getControl, mcp__designer-relay__form_setFieldProps, mcp__designer-relay__form_removeControl, mcp__designer-relay__form_moveControl
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_addSubgrid, mcp__designer-relay__form_addSection, mcp__designer-relay__form_addTab, mcp__designer-relay__form_addColumn, mcp__designer-relay__form_addEventHandler, mcp__designer-relay__form_addLibrary, mcp__designer-relay__form_setFormProps, mcp__designer-relay__form_removeElement, mcp__designer-relay__form_undo, mcp__designer-relay__form_redo, mcp__designer-relay__form_save, mcp__designer-relay__form_publish, mcp__designer-relay__form_getControl, mcp__designer-relay__form_setFieldProps, mcp__designer-relay__form_removeControl, mcp__designer-relay__form_moveControl
 ---
 
 # model-maker — live form co-authoring
@@ -108,10 +108,11 @@ commands that work on any build — only `form_addSubgrid` needs the façade):
   columns?, displayName?, targetTabId? })` (1-3 columns; anchors after the last
   tab); `form_addColumn({ sectionId, columns })` (set an existing section's column
   count 1-4). `form_inspect` returns `tabs:[{id}]` and `sections:[{id}]`.
-- **Add a form script (event handler):** `form_addEventHandler({ target:'form',
-  eventType:'onload'|'onsave', library, functionName, passExecutionContext? })`
-  (or `target:'<field>'`, `eventType:'onchange'`). The `library` (web resource)
-  must already be on the form.
+- **Add a form script:** first register the library with `form_addLibrary({
+  libraryName })` (it reports `exists` — whether the web resource is real), then
+  `form_addEventHandler({ target:'form', eventType:'onload'|'onsave', library,
+  functionName, passExecutionContext? })` (or `target:'<field>'`,
+  `eventType:'onchange'`).
 - **Form-level props:** `form_setFormProps({ name?, description?, maxWidth?,
   showImage?, showNavigation? })`. **Remove any element:** `form_removeElement({
   elementId })` (tab/section/cell). **Undo/redo:** `form_undo()` / `form_redo()`.
@@ -138,6 +139,7 @@ commands that work on any build — only `form_addSubgrid` needs the façade):
 | `form_addTab(targetTabId?, columns?, displayName?)` | `{ ok, result }` — add a 1-3 column tab (needs façade build) |
 | `form_addColumn(sectionId, columns)` | `{ ok, result }` — set a section's column count 1-4 (any build) |
 | `form_addEventHandler(target, eventType, library, functionName, …)` | `{ ok, result }` — add a form/control event handler (any build) |
+| `form_addLibrary(libraryName)` | `{ ok, result:{ library, exists } }` — register a web-resource library on the form |
 | `form_setFormProps(props)` | `{ ok, result:{ applied } }` — set form name/description/maxWidth/showImage/showNavigation |
 | `form_removeElement(elementId)` | `{ ok, result }` — remove any element (tab/section/cell) by id |
 | `form_undo()` / `form_redo()` | `{ ok, result }` — undo/redo the last change |

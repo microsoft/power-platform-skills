@@ -86,6 +86,10 @@ function makeHandlers(driver, seq) {
         enabled: a.enabled, passExecutionContext: a.passExecutionContext, parameters: a.parameters,
       }]));
     },
+    async addLibrary(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addLibrary', [a.libraryName]), 30000);
+    },
     async setFormProps(args) {
       const a = args || {};
       return queue.run(() => driver.call('setFormProps', [a.props || {}]));

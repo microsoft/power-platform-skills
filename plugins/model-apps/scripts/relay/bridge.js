@@ -19,6 +19,7 @@
 //   - addSection(targetId, columns, name)   -> add a section to a tab/section (facade)
 //   - addColumn(sectionId, columns)         -> set a section's column count 1-4 (DIRECT; any build)
 //   - addEventHandler(target, options)      -> add a form/control event handler (DIRECT; any build)
+//   - addLibrary(libraryName)               -> register a JS web-resource library on the form (DIRECT; any build)
 //   - setFormProps(props)                   -> set form name/description/maxWidth/showImage (DIRECT; any build)
 //   - removeElement(elementId)              -> remove any element (tab/section/cell) by id (DIRECT; any build)
 //   - undo() / redo()                       -> undo/redo the last designer change (DIRECT; any build)
@@ -595,6 +596,31 @@
       .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
   }
 
+  // Register a form LIBRARY (JS web resource) on the form so event handlers can
+  // reference it. DIRECT (FormDesignerService.formLibrariesService.addLibrary —
+  // only reads .name). Also verifies the web resource exists via
+  // getJSWebResourceIdByName and reports it. Any build.
+  function addLibrary(libraryName) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var fls = svc.formLibrariesService || svc.FormLibrariesService;
+    if (!fls || typeof fls.addLibrary !== 'function') {
+      return Promise.resolve({ ok: false, error: { code: 'no-libraries-service', message: 'formLibrariesService unavailable' } });
+    }
+    if (!libraryName) return Promise.resolve({ ok: false, error: { code: 'missing-args', message: 'libraryName (web resource name) is required' } });
+    var webResourceId;
+    return Promise.resolve()
+      .then(function () {
+        return (typeof fls.getJSWebResourceIdByName === 'function')
+          ? Promise.resolve(fls.getJSWebResourceIdByName(libraryName)).catch(function () { return undefined; })
+          : undefined;
+      })
+      .then(function (id) { webResourceId = id; return fls.addLibrary({ name: libraryName }); })
+      .then(function () { return { ok: true, result: { library: libraryName, webResourceId: webResourceId, exists: !!webResourceId } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
   // Set FORM-level properties (name / description / maxWidth / showImage /
   // showNavigation). DIRECT (form node setters in makeFormModelChange); any build.
   function setFormProps(props) {
@@ -687,7 +713,7 @@
     status: status, inspect: inspect, addField: addField,
     listControls: listControls, describeControl: describeControl,
     setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
-    addTab: addTab, addSection: addSection, addColumn: addColumn, addEventHandler: addEventHandler,
+    addTab: addTab, addSection: addSection, addColumn: addColumn, addEventHandler: addEventHandler, addLibrary: addLibrary,
     setFormProps: setFormProps, removeElement: removeElement, undo: undo, redo: redo, save: save, publish: publish,
     getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
   };

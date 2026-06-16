@@ -218,6 +218,17 @@ function registerTools(server, handlers) {
   );
 
   server.registerTool(
+    'form_addLibrary',
+    {
+      description: 'Register a JS web-resource library on the form so form_addEventHandler can reference it. Reports whether the web resource actually exists in the env (exists:true). Live; works on any build.',
+      inputSchema: {
+        libraryName: z.string().describe('Web resource (library) name, e.g. "new_myscript" or "account_main.js"'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addLibrary(args))
+  );
+
+  server.registerTool(
     'form_setFormProps',
     {
       description: 'Set FORM-level properties: name (display title), description, maxWidth (pixels), showImage, showNavigation. Live; undoable; works on any build.',

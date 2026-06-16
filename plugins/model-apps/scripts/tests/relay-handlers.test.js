@@ -131,6 +131,13 @@ test('addColumn/addEventHandler handlers forward to the bridge', async () => {
   ]);
 });
 
+test('addLibrary handler forwards to the bridge', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.addLibrary({ libraryName: 'new_myscript' });
+  assert.deepStrictEqual(d.calls, [['call', 'addLibrary', ['new_myscript']]]);
+});
+
 test('save() handler is gated by MM_ALLOW_SAVE (operator opt-in)', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);
