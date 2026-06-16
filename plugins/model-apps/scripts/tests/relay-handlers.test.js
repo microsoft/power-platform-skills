@@ -131,6 +131,49 @@ test('addColumn/addEventHandler handlers forward to the bridge', async () => {
   ]);
 });
 
+test('save() handler is gated by MM_ALLOW_SAVE (operator opt-in)', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  const prev = process.env.MM_ALLOW_SAVE;
+  delete process.env.MM_ALLOW_SAVE;
+  const blocked = await h.save();
+  assert.strictEqual(blocked.ok, false);
+  assert.strictEqual(blocked.error.code, 'save-disabled');
+  assert.deepStrictEqual(d.calls, []);
+  process.env.MM_ALLOW_SAVE = '1';
+  await h.save();
+  assert.deepStrictEqual(d.calls, [['call', 'save', []]]);
+  if (prev === undefined) delete process.env.MM_ALLOW_SAVE; else process.env.MM_ALLOW_SAVE = prev;
+});
+
+test('publish() handler is gated by MM_ALLOW_PUBLISH (operator opt-in)', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  const prev = process.env.MM_ALLOW_PUBLISH;
+  delete process.env.MM_ALLOW_PUBLISH;
+  assert.strictEqual((await h.publish()).error.code, 'publish-disabled');
+  assert.deepStrictEqual(d.calls, []);
+  process.env.MM_ALLOW_PUBLISH = '1';
+  await h.publish();
+  assert.deepStrictEqual(d.calls, [['call', 'publish', []]]);
+  if (prev === undefined) delete process.env.MM_ALLOW_PUBLISH; else process.env.MM_ALLOW_PUBLISH = prev;
+});
+
+test('setFormProps/removeElement/undo/redo handlers forward to the bridge', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.setFormProps({ props: { name: 'X' } });
+  await h.removeElement({ elementId: 'SEC-9' });
+  await h.undo();
+  await h.redo();
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'setFormProps', [{ name: 'X' }]],
+    ['call', 'removeElement', ['SEC-9']],
+    ['call', 'undo', []],
+    ['call', 'redo', []],
+  ]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

@@ -216,6 +216,62 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.addEventHandler(args))
   );
+
+  server.registerTool(
+    'form_setFormProps',
+    {
+      description: 'Set FORM-level properties: name (display title), description, maxWidth (pixels), showImage, showNavigation. Live; undoable; works on any build.',
+      inputSchema: {
+        props: z.object({
+          name: z.string().optional().describe('Form display title'),
+          description: z.string().optional(),
+          maxWidth: z.number().optional().describe('Max width in pixels'),
+          showImage: z.boolean().optional(),
+          showNavigation: z.boolean().optional(),
+        }).describe('Form properties to set (only the keys you pass change)'),
+      },
+    },
+    async (args) => toToolResult(await handlers.setFormProps(args))
+  );
+
+  server.registerTool(
+    'form_removeElement',
+    {
+      description: 'Remove ANY form element by id — a tab, section, or cell (from form_inspect). For a field, form_removeControl is easier. Live; works on any build.',
+      inputSchema: { elementId: z.string().describe('Element id (tab/section/cell) from form_inspect') },
+    },
+    async (args) => toToolResult(await handlers.removeElement(args))
+  );
+
+  server.registerTool(
+    'form_undo',
+    { description: 'Undo the last designer change. Live; works on any build.', inputSchema: {} },
+    async () => toToolResult(await handlers.undo())
+  );
+
+  server.registerTool(
+    'form_redo',
+    { description: 'Redo the last undone designer change. Live; works on any build.', inputSchema: {} },
+    async () => toToolResult(await handlers.redo())
+  );
+
+  server.registerTool(
+    'form_save',
+    {
+      description: 'PERSIST the form (saveAsync) — writes the FormXml back to Dataverse. DISABLED by default; the operator must start the relay with MM_ALLOW_SAVE=1. Until then this returns {code:"save-disabled"}. Everything else the relay does is in-memory only.',
+      inputSchema: {},
+    },
+    async () => toToolResult(await handlers.save())
+  );
+
+  server.registerTool(
+    'form_publish',
+    {
+      description: 'PERSIST + PUBLISH the form (publishAsync = save then publishCustomizations) — makes it LIVE for users. DISABLED by default; the operator must start the relay with MM_ALLOW_PUBLISH=1. Returns {code:"publish-disabled"} otherwise.',
+      inputSchema: {},
+    },
+    async () => toToolResult(await handlers.publish())
+  );
 }
 
 module.exports = { registerTools };

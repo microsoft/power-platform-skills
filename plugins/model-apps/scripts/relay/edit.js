@@ -73,6 +73,20 @@ async function main() {
   log('\n== addEventHandler(form, onload) ==');
   log('  ->', j(await driver.call('addEventHandler', ['form', { eventType: 'onload', library: process.env.MM_LIBRARY || 'new_demoscript', functionName: 'Demo.onLoad', passExecutionContext: true }])));
 
+  log('\n== setFormProps(name, maxWidth, showImage) ==');
+  log('  ->', j(await driver.call('setFormProps', [{ name: 'Account (edited)', maxWidth: 1600, showImage: true }])));
+
+  if (sections[6]) {
+    log('\n== removeElement(section %s) ==', sections[6].id);
+    log('  ->', j(await driver.call('removeElement', [sections[6].id])));
+  }
+
+  log('\n== undo (reverts the last change) ==');
+  log('  ->', j(await driver.call('undo', [])));
+
+  // NOTE: form_save / form_publish are NOT called here — they persist, and are
+  // gated by MM_ALLOW_SAVE / MM_ALLOW_PUBLISH at the relay. This harness never saves.
+
   await ctx.close();
   log('\ndone (no save — in-memory only).');
 }

@@ -431,6 +431,48 @@ test('addEventHandler requires library + functionName', async () => {
   });
 });
 
+test('setFormProps sets form node properties inside makeFormModelChange', async () => {
+  const node = { getNodeName: () => 'form' };
+  const svc = fakeService({ makeFormModelChange: (fn) => { fn(); return Promise.resolve(); }, formModel: node });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.setFormProps({ name: 'Account v2', maxWidth: 1600, showImage: true });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(node.formName, 'Account v2');
+    assert.strictEqual(node.MaxWidth, '1600');
+    assert.strictEqual(node.ShowImagecheck, true);
+    assert.deepStrictEqual(r.result.applied, { name: 'Account v2', maxWidth: '1600', showImage: true });
+  });
+});
+
+test('removeElement removes any element by id', async () => {
+  const removed = [];
+  const svc = fakeService({ removeElement: (id) => { removed.push(id); return Promise.resolve(); } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.removeElement('TAB-1');
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(removed, ['TAB-1']);
+  });
+});
+
+test('undo calls the service undo', async () => {
+  let called = 0;
+  const svc = fakeService({ undo: () => { called++; return Promise.resolve(); } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.undo();
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(called, 1);
+  });
+});
+
+test('save calls saveAsync and returns the form id', async () => {
+  const svc = fakeService({ saveAsync: () => Promise.resolve('FORM-99') });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.save();
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.formId, 'FORM-99');
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();

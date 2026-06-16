@@ -12,10 +12,11 @@ first-party `window.__formDesignerApi` export if present, else a duck-typed
 React-fiber walk) and exposes the command surface on `window.__mmBridge`:
 discovery (`status` / `inspect` / `listControls` / `describeControl` /
 `getControl`), control ops (`addField` / `setControl` / `addComponent` /
-`addSubgrid`), and structural/property edits (`setFieldProps` / `removeControl` /
-`moveControl` / `addSection` / `addTab`). set-props/remove/move are DIRECT designer
-commands (work on any build); custom-control set/place + subgrid/section/tab need
-the façade.
+`addSubgrid`), structural edits (`addSection` / `addTab` / `addColumn` /
+`removeElement` / `moveControl`), property/script edits (`setFieldProps` /
+`setFormProps` / `addEventHandler`), `undo`/`redo`, and (opt-in) `save`/`publish`.
+Most are DIRECT designer commands (any build); custom-control set/place +
+subgrid/section/tab need the façade.
 
 ## Tools
 
@@ -37,6 +38,10 @@ the façade.
 | `form_addTab` | Add a 1-3 column tab (anchors after the last tab). Needs the façade build. |
 | `form_addColumn` | Set a section's column count (1-4) — the add/remove-column op. DIRECT — any build. |
 | `form_addEventHandler` | Add a form onLoad/onSave or field onChange handler (form script). The library must already be on the form. DIRECT — any build. |
+| `form_setFormProps` | Set form name / description / maxWidth / showImage / showNavigation. DIRECT — any build. |
+| `form_removeElement` | Remove ANY element (tab/section/cell) by id. DIRECT — any build. |
+| `form_undo` / `form_redo` | Undo/redo the last designer change. DIRECT — any build. |
+| `form_save` / `form_publish` | **PERSIST** — disabled unless the relay is started with `MM_ALLOW_SAVE=1` / `MM_ALLOW_PUBLISH=1`. |
 | `form_getControl` | Read a field cell's control + props (`classId`, custom controls, label, visible, readonly, …) — the read-back/verify for set ops. Read-only. |
 
 ## Setup (live run)

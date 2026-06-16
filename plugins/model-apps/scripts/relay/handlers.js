@@ -86,6 +86,35 @@ function makeHandlers(driver, seq) {
         enabled: a.enabled, passExecutionContext: a.passExecutionContext, parameters: a.parameters,
       }]));
     },
+    async setFormProps(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('setFormProps', [a.props || {}]));
+    },
+    async removeElement(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('removeElement', [a.elementId]));
+    },
+    async undo() {
+      return queue.run(() => driver.call('undo', []));
+    },
+    async redo() {
+      return queue.run(() => driver.call('redo', []));
+    },
+    // PERSIST — gated by an explicit operator opt-in. The relay never saves unless
+    // started with MM_ALLOW_SAVE=1 (publish: MM_ALLOW_PUBLISH=1). The agent cannot
+    // bypass this; it is set at relay launch.
+    async save() {
+      if (process.env.MM_ALLOW_SAVE !== '1') {
+        return { ok: false, error: { code: 'save-disabled', message: 'form_save is disabled by default. Start the relay with MM_ALLOW_SAVE=1 to allow persisting the form.' } };
+      }
+      return queue.run(() => driver.call('save', []), 60000);
+    },
+    async publish() {
+      if (process.env.MM_ALLOW_PUBLISH !== '1') {
+        return { ok: false, error: { code: 'publish-disabled', message: 'form_publish is disabled by default. Start the relay with MM_ALLOW_PUBLISH=1 to allow publishing (makes the form live for users).' } };
+      }
+      return queue.run(() => driver.call('publish', []), 120000);
+    },
   };
 }
 

@@ -19,6 +19,10 @@
 //   - addSection(targetId, columns, name)   -> add a section to a tab/section (facade)
 //   - addColumn(sectionId, columns)         -> set a section's column count 1-4 (DIRECT; any build)
 //   - addEventHandler(target, options)      -> add a form/control event handler (DIRECT; any build)
+//   - setFormProps(props)                   -> set form name/description/maxWidth/showImage (DIRECT; any build)
+//   - removeElement(elementId)              -> remove any element (tab/section/cell) by id (DIRECT; any build)
+//   - undo() / redo()                       -> undo/redo the last designer change (DIRECT; any build)
+//   - save() / publish()                    -> PERSIST (gated by the relay's MM_ALLOW_SAVE / MM_ALLOW_PUBLISH)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -591,6 +595,78 @@
       .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
   }
 
+  // Set FORM-level properties (name / description / maxWidth / showImage /
+  // showNavigation). DIRECT (form node setters in makeFormModelChange); any build.
+  function setFormProps(props) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var node = formNode(svc);
+    if (!node) return Promise.resolve({ ok: false, error: { code: 'no-form', message: 'form node not found' } });
+    var p = props || {};
+    var applied = {};
+    return Promise.resolve()
+      .then(function () {
+        return svc.makeFormModelChange(function () {
+          if ('name' in p) { node.formName = String(p.name); applied.name = String(p.name); }
+          if ('description' in p) { node.description = String(p.description); applied.description = String(p.description); }
+          if ('maxWidth' in p) { node.MaxWidth = String(p.maxWidth); applied.maxWidth = String(p.maxWidth); }
+          if ('showImage' in p) { node.ShowImagecheck = !!p.showImage; applied.showImage = !!p.showImage; }
+          if ('showNavigation' in p) { node.ShowNavigation = !!p.showNavigation; applied.showNavigation = !!p.showNavigation; }
+        }, { actionName: 'Change property' }, 'Set form properties');
+      })
+      .then(function () { return { ok: true, result: { applied: applied } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Remove ANY element by id (tab / section / cell). DIRECT; any build.
+  function removeElement(elementId) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    if (!elementId) return Promise.resolve({ ok: false, error: { code: 'no-target', message: 'elementId is required (an id from form_inspect)' } });
+    var svc = h.service;
+    return Promise.resolve()
+      .then(function () { return svc.removeElement(elementId); })
+      .then(function () { return { ok: true, result: { removedElementId: elementId } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Undo / redo the last designer change. DIRECT; any build.
+  function undoRedo(which) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var fn = (typeof svc[which] === 'function') ? svc[which].bind(svc)
+      : (svc.actionService && typeof svc.actionService[which] === 'function') ? svc.actionService[which].bind(svc.actionService) : null;
+    if (!fn) return Promise.resolve({ ok: false, error: { code: 'unsupported', message: which + ' unavailable' } });
+    return Promise.resolve().then(function () { return fn(); })
+      .then(function () { return { ok: true, result: { action: which } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+  function undo() { return undoRedo('undo'); }
+  function redo() { return undoRedo('redo'); }
+
+  // PERSIST — save / publish. The relay never persists by default; the operator
+  // opt-in gate lives in the relay handler (MM_ALLOW_SAVE / MM_ALLOW_PUBLISH).
+  function save() {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    if (typeof svc.saveAsync !== 'function') return Promise.resolve({ ok: false, error: { code: 'unsupported', message: 'saveAsync unavailable' } });
+    return Promise.resolve().then(function () { return svc.saveAsync(); })
+      .then(function (formId) { return { ok: true, result: { saved: true, formId: formId } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+  function publish() {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    if (typeof svc.publishAsync !== 'function') return Promise.resolve({ ok: false, error: { code: 'unsupported', message: 'publishAsync unavailable' } });
+    return Promise.resolve().then(function () { return svc.publishAsync(); })
+      .then(function (formId) { return { ok: true, result: { published: true, formId: formId } }; })
+      .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
+  }
+
   // Add a subgrid (related-records grid) to a section. Needs the facade (FormCell +
   // FormGridControl construction). Thin pass-through.
   function addSubgrid(targetSectionId, entity, opts) {
@@ -612,6 +688,7 @@
     listControls: listControls, describeControl: describeControl,
     setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
     addTab: addTab, addSection: addSection, addColumn: addColumn, addEventHandler: addEventHandler,
+    setFormProps: setFormProps, removeElement: removeElement, undo: undo, redo: redo, save: save, publish: publish,
     getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
   };
 
