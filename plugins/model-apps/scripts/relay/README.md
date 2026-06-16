@@ -95,6 +95,20 @@ npm run probe
 `MM_DESCRIBE` = comma-separated control ids (or `all` to describe every control
 from the first field's list).
 
+**4. Custom-control setter E2E (`set-control.js`).** discover → describe → **set**
+a custom control on a field. Needs the first-party façade build
+(`enableModelMakerBridge`) → `designer_status` `source: "export"`; against a normal
+build `setControl` returns `needs-facade` (discovery still works). Point
+`MM_FORM_URL` at the local dev build (`make.local.powerapps.com`):
+
+```bash
+MM_FORM_URL='https://make.local.powerapps.com/e/<env>/s/<sol>/entity/account/form/edit/<formId>?cds-form-designer.enableModelMakerBridge=true' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+MM_FIELD=name \
+MM_CONTROL=Intelligence.BusinessCardReaderControl.BusinessCardReader \
+npm run set-control      # sets the control (no save), screenshots
+```
+
 ## Notes
 
 - **stdout is the MCP channel** — all relay logging goes to stderr.
