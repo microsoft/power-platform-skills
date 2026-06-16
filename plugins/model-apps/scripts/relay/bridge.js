@@ -8,7 +8,8 @@
 //   - addField(fieldName, sectionId, force) -> add a table field to a section via the designer's own command
 //   - listControls(fieldName)               -> (READ-ONLY) custom controls (PCF/AI Builder) the env offers for a field
 //   - describeControl(controlId)            -> (READ-ONLY) a control's binding kind + param schema (from its manifest)
-//   - setControl(field, controlId, p, ff)   -> set a custom control on a field (prefers the first-party facade)
+//   - setControl(field, controlId, p, ff)   -> set a custom control on a field (prefers the first-party facade); p applies params
+//   - addComponent(controlId, sectionId, p, ff) -> place a control as a NEW component in a section (unbound/dataset, e.g. PowerBI)
 //   - getControl(field)                     -> (READ-ONLY) the control currently on a field's cell (classId + custom controls)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
@@ -344,6 +345,29 @@
     } });
   }
 
+  // Place a control as a NEW component in a section (unbound/dataset controls like
+  // PowerBI that aren't bound to a field's value). Thin pass-through to the
+  // first-party facade window.__formDesignerApi.addComponent.
+  function addComponent(controlId, targetSectionId, params, factors) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var w = getWin();
+    var fapi = w.__formDesignerApi;
+    if (fapi && typeof fapi.addComponent === 'function') {
+      return Promise.resolve()
+        .then(function () { return fapi.addComponent(controlId, targetSectionId, params || null, factors || null); })
+        .then(function (r) {
+          if (r && r.ok === false) return r;
+          return { ok: true, result: (r && r.result) || { controlId: controlId, targetSectionId: targetSectionId }, source: 'facade' };
+        })
+        .catch(function (e) { return { ok: false, error: { code: 'facade-error', message: String((e && e.message) || e) } }; });
+    }
+    return Promise.resolve({ ok: false, error: {
+      code: 'needs-facade',
+      message: 'addComponent needs the first-party addComponent facade (enableModelMakerBridge build).',
+    } });
+  }
+
   // Find the cell currently hosting a field, by walking the form model.
   function findCellForField(fm, fieldName) {
     var found = null;
@@ -384,7 +408,7 @@
     return { ok: true, result: { field: fieldName, dataFieldName: control.dataFieldName, classId: classId, customControls: customControls } };
   }
 
-  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl, getControl: getControl };
+  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl, addComponent: addComponent, getControl: getControl };
 
   var w = getWin();
   if (w && typeof w === 'object') w.__mmBridge = api;

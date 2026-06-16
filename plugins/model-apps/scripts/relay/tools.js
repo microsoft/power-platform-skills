@@ -67,11 +67,11 @@ function registerTools(server, handlers) {
   server.registerTool(
     'form_setControl',
     {
-      description: 'Set a custom control (PCF / AI Builder) on a field already placed on the form, via the designer\'s own command (live, WYSIWYG). Generic across controls. Requires the first-party façade build (enableModelMakerBridge). Param application is not yet supported — use form_describeControl to see a control\'s schema.',
+      description: 'Set a custom control (PCF / AI Builder) on a FIELD already placed on the form, via the designer\'s own command (live, WYSIWYG). Generic across field-bound controls. Requires the first-party façade build (enableModelMakerBridge). For unbound/dataset controls (PowerBI, subgrid) use form_addComponent instead.',
       inputSchema: {
         fieldLogicalName: z.string().describe('Logical name of the field whose control to set, e.g. "name"'),
         controlId: z.string().describe('Control id from form_listControls, e.g. "Intelligence.BusinessCardReaderControl.BusinessCardReader"'),
-        params: z.record(z.any()).optional().describe('Control parameters (schema from form_describeControl). Not yet applied; provided for forward compatibility.'),
+        params: z.record(z.any()).optional().describe('Control parameters (schema from form_describeControl). Each: a value, or { value, bound:true } to bind to a field. e.g. { FilterPaneVisible: "true" }'),
         formFactors: z.array(z.string()).optional().describe('Form factors to apply the control on (e.g. ["Web"]). Default Web.'),
       },
     },
@@ -87,6 +87,20 @@ function registerTools(server, handlers) {
       },
     },
     async (args) => toToolResult(await handlers.getControl(args))
+  );
+
+  server.registerTool(
+    'form_addComponent',
+    {
+      description: 'Place a custom control (PCF / AI Builder) as a NEW component in a form section — for UNBOUND / dataset controls (e.g. PowerBI, a subgrid) that are not bound to a field. Generic + param-driven. Requires the first-party façade build (enableModelMakerBridge).',
+      inputSchema: {
+        controlId: z.string().describe('Control id from form_listControls, e.g. "MscrmControls.PowerBIPCFControl"'),
+        targetSectionId: z.string().describe('Section id from form_inspect (node.id.guidString) to place the component in'),
+        params: z.record(z.any()).optional().describe('Control parameters (schema from form_describeControl), e.g. { PowerBIReport: "<reportUniqueName>", FilterPaneVisible: "true" }'),
+        formFactors: z.array(z.string()).optional().describe('Form factors (e.g. ["Web"]). Default Web.'),
+      },
+    },
+    async (args) => toToolResult(await handlers.addComponent(args))
   );
 }
 

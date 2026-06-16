@@ -9,6 +9,7 @@
     "smoke": "node smoke.js",
     "probe": "node probe-controls.js",
     "set-control": "node set-control.js",
+    "add-component": "node add-component.js",
     "mcp-smoke": "node mcp-smoke.js",
     "test": "node --test ../tests/relay-*.test.js"
   },

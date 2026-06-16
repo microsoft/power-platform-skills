@@ -41,6 +41,10 @@ function makeHandlers(driver, seq) {
       const a = args || {};
       return queue.run(() => driver.call('setControl', [a.fieldLogicalName, a.controlId, a.params || null, a.formFactors || null]), 30000);
     },
+    async addComponent(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('addComponent', [a.controlId, a.targetSectionId, a.params || null, a.formFactors || null]), 30000);
+    },
     async getControl(args) {
       const a = args || {};
       return queue.run(() => driver.call('getControl', [a.fieldLogicalName]));

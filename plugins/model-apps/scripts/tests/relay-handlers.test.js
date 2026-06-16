@@ -76,6 +76,17 @@ test('setControl() forwards field/control/params/factors (null-normalized)', asy
   ]);
 });
 
+test('addComponent() forwards control/section/params/factors', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.addComponent({ controlId: 'X.Y', targetSectionId: 'S1' });
+  await h.addComponent({ controlId: 'X.Y', targetSectionId: 'S1', params: { a: 1 }, formFactors: ['Web'] });
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'addComponent', ['X.Y', 'S1', null, null]],
+    ['call', 'addComponent', ['X.Y', 'S1', { a: 1 }, ['Web']]],
+  ]);
+});
+
 test('getControl() forwards the field to the bridge (read-only)', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

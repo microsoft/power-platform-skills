@@ -28,6 +28,7 @@ const log = (...a) => console.log(...a); // standalone tool — stdout is fine h
 
 const FIELD = process.env.MM_FIELD || 'name';
 const CONTROL = process.env.MM_CONTROL || 'Intelligence.BusinessCardReaderControl.BusinessCardReader';
+const PARAMS = process.env.MM_PARAMS ? JSON.parse(process.env.MM_PARAMS) : null; // e.g. {"FilterPaneVisible":"true"}
 
 async function main() {
   const url = process.env.MM_FORM_URL;
@@ -72,8 +73,8 @@ async function main() {
   log('  control BEFORE: classId=%s customControls=%j',
     before.result && before.result.classId, before.result && before.result.customControls);
 
-  log('\n-- set: setControl(%s, %s) --', FIELD, CONTROL);
-  const set = await driver.call('setControl', [FIELD, CONTROL, null, null]);
+  log('\n-- set: setControl(%s, %s) params=%j --', FIELD, CONTROL, PARAMS);
+  const set = await driver.call('setControl', [FIELD, CONTROL, PARAMS, null]);
   log('  ->', JSON.stringify(set));
 
   const after = await driver.call('getControl', [FIELD]);

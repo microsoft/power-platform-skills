@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_getControl
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl, mcp__designer-relay__form_addComponent, mcp__designer-relay__form_getControl
 ---
 
 # model-maker — live form co-authoring
@@ -71,15 +71,20 @@ of adding a field:
    offers for that field, each with `bindingKind` and a `name` (the control id).
    Omit the field for the unbound/default list.
 3. **Understand requirements:** `form_describeControl({ controlId })` → the
-   control's `requiredParams` + full param schema. If `requiredParams` aren't
-   satisfied by defaults (e.g. PowerBI `PowerBIReport`, Canvas `appId`, AgentResponse
-   `topicName`), ask the user for those values.
-4. **Set:** `form_setControl({ fieldLogicalName, controlId })` → renders live.
-   Param-free, field-bound controls (business card reader, rich text, optionset,
-   star rating, …) work directly. `form_setControl` needs the first-party façade
-   build; if it returns `code:'needs-facade'`, the env is on a normal build —
-   discovery still works, but setting a control needs the `enableModelMakerBridge`
-   designer build.
+   control's `bindingKind` + `requiredParams` + full param schema. If
+   `requiredParams` aren't satisfied by defaults (e.g. PowerBI `PowerBIReport`,
+   Canvas `appId`, AgentResponse `topicName`), ask the user for those values.
+4. **Apply — route by `bindingKind`:**
+   - **fieldBound** → `form_setControl({ fieldLogicalName, controlId, params? })`.
+   - **unbound / dataset** (PowerBI, subgrid) → `form_addComponent({ controlId,
+     targetSectionId, params? })` (a section id from `form_inspect`). These can't be
+     set on a field.
+
+   `params` is `{ name: value }` (or `{ name: { value, bound:true } }` to bind a
+   param to a field); the result's `appliedParams` echoes what was set, and an
+   unrecognized name returns `code:'unknown-param'`. Both need the first-party
+   façade build; on a normal build they return `code:'needs-facade'` (discovery
+   still works — setting/placing needs the `enableModelMakerBridge` designer build).
 5. **Verify:** `form_getControl({ fieldLogicalName })` → the cell's `classId` flips
    to the CustomControl class and `customControls` lists the control you set. (More
    reliable than the canvas in a debug build, which may not repaint.)
@@ -94,18 +99,21 @@ of adding a field:
 | `form_addField(fieldLogicalName, targetSectionId, force?)` | `{ ok, result }` or `{ ok:false, validation }` (e.g. duplicate-field) |
 | `form_listControls(fieldLogicalName?)` | `{ ok, result: { controls:[{name,displayName,bindingKind,…}] } }` — controls the env offers for a field (read-only) |
 | `form_describeControl(controlId)` | `{ ok, result: { bindingKind, requiredParams, params:[…] } }` — a control's param schema (read-only) |
-| `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'params-unsupported' } }` |
+| `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'unknown-param' } }` (field-bound) |
+| `form_addComponent(controlId, targetSectionId, params?, formFactors?)` | `{ ok, result:{ appliedParams } }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-section' \| 'unknown-param' } }` (unbound/dataset, e.g. PowerBI) |
 | `form_getControl(fieldLogicalName)` | `{ ok, result: { classId, dataFieldName, customControls:[{name}] } }` — the read-back/verify for `form_setControl` |
 
 ## Notes & limits
 
 - **Form field add** and **custom-control discovery** (`form_listControls` /
-  `form_describeControl`) work on any build. **Setting** a control
-  (`form_setControl`) needs the first-party façade build. Move / set-props /
-  add tab|section|column / events are the next verbs.
-- `form_setControl` is **param-free today** — it places controls with manifest
-  defaults; supplying `params` returns `params-unsupported` for now (use
-  `form_describeControl` to see the schema).
+  `form_describeControl` / `form_getControl`) work on any build. **Setting** /
+  **placing** a control (`form_setControl` / `form_addComponent`) needs the
+  first-party façade build. Move / set-props / add tab|section|column / events /
+  save are the next verbs.
+- `params` are applied for both `form_setControl` and `form_addComponent` (via the
+  designer's own model API); the result's `appliedParams` echoes what stuck. Use
+  `form_describeControl` to learn a control's `requiredParams` + schema. PowerBI's
+  `PowerBIReport` takes a report **uniqueName** (a real one from the env).
 - If `designer_status` reports `source: fiber`, the handle came from the React
   fiber walk (works on the deployed build); `source: export` means the
   first-party `window.__formDesignerApi` is live. See the design spec / POC

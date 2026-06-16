@@ -229,6 +229,32 @@ test('setControl delegates to window.__formDesignerApi.addCustomControl when pre
   });
 });
 
+test('addComponent reports needs-facade when the façade is absent', async () => {
+  const svc = fakeService();
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.addComponent('MscrmControls.PowerBIPCFControl', 'S1');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error.code, 'needs-facade');
+  });
+});
+
+test('addComponent delegates to window.__formDesignerApi.addComponent (params forwarded)', async () => {
+  const calls = [];
+  const svc = fakeService();
+  const win = {
+    __formDesignerApi: {
+      service: svc,
+      addComponent: (id, sec, p, ff) => { calls.push([id, sec, p, ff]); return Promise.resolve({ ok: true, result: { controlId: id, targetSectionId: sec, appliedParams: [{ name: 'FilterPaneVisible', value: 'true', bound: false }] } }); },
+    },
+  };
+  await withBridge({ win, doc: {} }, async (mod) => {
+    const r = await mod.addComponent('MscrmControls.PowerBIPCFControl', 'S1', { FilterPaneVisible: 'true' }, ['Web']);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.source, 'facade');
+    assert.deepStrictEqual(calls, [['MscrmControls.PowerBIPCFControl', 'S1', { FilterPaneVisible: 'true' }, ['Web']]]);
+  });
+});
+
 test('getControl reports the cell control class id + applied custom controls', () => {
   const svc = fakeService({
     formModel: {
