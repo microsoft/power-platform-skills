@@ -21,6 +21,7 @@
 //   - addEventHandler(target, options)      -> add a form/control event handler (DIRECT; any build)
 //   - addLibrary(libraryName)               -> register a JS web-resource library on the form (DIRECT; any build)
 //   - setFormProps(props)                   -> set form name/description/maxWidth/showImage (DIRECT; any build)
+//   - getFormProps()                        -> (READ-ONLY) form-level props (read-back for setFormProps)
 //   - removeElement(elementId)              -> remove any element (tab/section/cell) by id (DIRECT; any build)
 //   - undo() / redo()                       -> undo/redo the last designer change (DIRECT; any build)
 //   - save() / publish()                    -> PERSIST (gated by the relay's MM_ALLOW_SAVE / MM_ALLOW_PUBLISH)
@@ -645,6 +646,18 @@
       .catch(function (e) { return { ok: false, error: { code: 'designer-error', message: String((e && e.message) || e) } }; });
   }
 
+  // READ-ONLY: the form-level properties (the read-back for setFormProps).
+  function getFormProps() {
+    var h = getDesignerHandle();
+    if (!h) return { ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } };
+    var node = formNode(h.service);
+    if (!node) return { ok: false, error: { code: 'no-form', message: 'form node not found' } };
+    return { ok: true, result: {
+      name: node.formName, description: node.description, maxWidth: node.MaxWidth,
+      showImage: node.ShowImagecheck, showNavigation: node.ShowNavigation,
+    } };
+  }
+
   // Remove ANY element by id (tab / section / cell). DIRECT; any build.
   function removeElement(elementId) {
     var h = getDesignerHandle();
@@ -714,7 +727,7 @@
     listControls: listControls, describeControl: describeControl,
     setControl: setControl, addComponent: addComponent, addSubgrid: addSubgrid,
     addTab: addTab, addSection: addSection, addColumn: addColumn, addEventHandler: addEventHandler, addLibrary: addLibrary,
-    setFormProps: setFormProps, removeElement: removeElement, undo: undo, redo: redo, save: save, publish: publish,
+    setFormProps: setFormProps, getFormProps: getFormProps, removeElement: removeElement, undo: undo, redo: redo, save: save, publish: publish,
     getControl: getControl, removeControl: removeControl, setFieldProps: setFieldProps, moveControl: moveControl,
   };
 

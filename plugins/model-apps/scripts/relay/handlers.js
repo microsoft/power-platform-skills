@@ -94,6 +94,9 @@ function makeHandlers(driver, seq) {
       const a = args || {};
       return queue.run(() => driver.call('setFormProps', [a.props || {}]));
     },
+    async getFormProps() {
+      return queue.run(() => driver.call('getFormProps', []));
+    },
     async removeElement(args) {
       const a = args || {};
       return queue.run(() => driver.call('removeElement', [a.elementId]));

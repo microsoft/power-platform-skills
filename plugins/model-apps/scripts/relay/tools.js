@@ -246,6 +246,12 @@ function registerTools(server, handlers) {
   );
 
   server.registerTool(
+    'form_getFormProps',
+    { description: 'Read the form-level properties (name / description / maxWidth / showImage / showNavigation) — the read-back for form_setFormProps. Read-only.', inputSchema: {} },
+    async () => toToolResult(await handlers.getFormProps())
+  );
+
+  server.registerTool(
     'form_removeElement',
     {
       description: 'Remove ANY form element by id — a tab, section, or cell (from form_inspect). For a field, form_removeControl is easier. Live; works on any build.',

@@ -40,6 +40,7 @@ subgrid/section/tab need the façade.
 | `form_addEventHandler` | Add a form onLoad/onSave or field onChange handler (form script). Use `form_addLibrary` first to register the library. DIRECT — any build. |
 | `form_addLibrary` | Register a JS web-resource library on the form; reports `exists` (whether the web resource is real). DIRECT — any build. |
 | `form_setFormProps` | Set form name / description / maxWidth / showImage / showNavigation. DIRECT — any build. |
+| `form_getFormProps` | Read the form-level properties — the read-back for `form_setFormProps`. Read-only. |
 | `form_removeElement` | Remove ANY element (tab/section/cell) by id. DIRECT — any build. |
 | `form_undo` / `form_redo` | Undo/redo the last designer change. DIRECT — any build. |
 | `form_save` / `form_publish` | **PERSIST** — disabled unless the relay is started with `MM_ALLOW_SAVE=1` / `MM_ALLOW_PUBLISH=1`. |
@@ -162,7 +163,18 @@ model read-backs. Needs the façade build; no save:
 ```bash
 MM_FORM_URL='https://make.local.powerapps.com/e/.../form/edit/<formId>?...' \
 MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
-npm run complex          # MM_LIBRARY (optional); no save
+npm run complex          # MM_LIBRARY (optional); MM_PAUSE_MS for recording; no save
+```
+
+**8. save / publish validation (`save-test.js`) — THIS ONE PERSISTS.** 3 passes:
+set a benign sentinel → `save` + `publish` → re-open and confirm it persisted →
+restore → re-open and confirm. Form content ends unchanged. Calls the bridge
+directly, so it bypasses the `MM_ALLOW_SAVE` MCP gate — it WILL write to the env:
+
+```bash
+MM_FORM_URL='https://make.local.powerapps.com/e/.../form/edit/<formId>?...' \
+MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
+npm run save-test
 ```
 
 ## Notes

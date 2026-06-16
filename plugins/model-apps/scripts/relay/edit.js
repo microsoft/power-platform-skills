@@ -73,6 +73,9 @@ async function main() {
   log('\n== addEventHandler(form, onload) ==');
   log('  ->', j(await driver.call('addEventHandler', ['form', { eventType: 'onload', library: process.env.MM_LIBRARY || 'new_demoscript', functionName: 'Demo.onLoad', passExecutionContext: true }])));
 
+  log('\n== addEventHandler(%s, onchange) ==', FIELD);
+  log('  ->', j(await driver.call('addEventHandler', [FIELD, { eventType: 'onchange', library: process.env.MM_LIBRARY || 'new_demoscript', functionName: 'Demo.onChange', passExecutionContext: true }])));
+
   log('\n== setFormProps(name, maxWidth, showImage) ==');
   log('  ->', j(await driver.call('setFormProps', [{ name: 'Account (edited)', maxWidth: 1600, showImage: true }])));
 

@@ -467,6 +467,18 @@ test('setFormProps sets form node properties inside makeFormModelChange', async 
   });
 });
 
+test('getFormProps reads form-level properties from the form node', () => {
+  const node = { getNodeName: () => 'form', formName: 'Account', description: 'desc', MaxWidth: '1920', ShowImagecheck: true, ShowNavigation: false };
+  const svc = fakeService({ formModel: node });
+  withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, (mod) => {
+    const r = mod.getFormProps();
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.name, 'Account');
+    assert.strictEqual(r.result.maxWidth, '1920');
+    assert.strictEqual(r.result.showImage, true);
+  });
+});
+
 test('removeElement removes any element by id', async () => {
   const removed = [];
   const svc = fakeService({ removeElement: (id) => { removed.push(id); return Promise.resolve(); } });

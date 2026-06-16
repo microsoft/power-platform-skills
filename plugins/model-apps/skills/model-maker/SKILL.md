@@ -141,6 +141,7 @@ commands that work on any build — only `form_addSubgrid` needs the façade):
 | `form_addEventHandler(target, eventType, library, functionName, …)` | `{ ok, result }` — add a form/control event handler (any build) |
 | `form_addLibrary(libraryName)` | `{ ok, result:{ library, exists } }` — register a web-resource library on the form |
 | `form_setFormProps(props)` | `{ ok, result:{ applied } }` — set form name/description/maxWidth/showImage/showNavigation |
+| `form_getFormProps()` | `{ ok, result:{ name, description, maxWidth, showImage, showNavigation } }` — read-back for `form_setFormProps` |
 | `form_removeElement(elementId)` | `{ ok, result }` — remove any element (tab/section/cell) by id |
 | `form_undo()` / `form_redo()` | `{ ok, result }` — undo/redo the last change |
 | `form_save()` / `form_publish()` | `{ ok }` or `{ ok:false, error:{ code:"save-disabled"\|"publish-disabled" } }` — opt-in (`MM_ALLOW_SAVE`/`MM_ALLOW_PUBLISH`) |

@@ -12,6 +12,7 @@
     "add-component": "node add-component.js",
     "edit": "node edit.js",
     "complex": "node complex.js",
+    "save-test": "node save-test.js",
     "mcp-smoke": "node mcp-smoke.js",
     "test": "node --test ../tests/relay-*.test.js"
   },

@@ -170,11 +170,13 @@ test('setFormProps/removeElement/undo/redo handlers forward to the bridge', asyn
   const d = mockDriver();
   const h = makeHandlers(d);
   await h.setFormProps({ props: { name: 'X' } });
+  await h.getFormProps();
   await h.removeElement({ elementId: 'SEC-9' });
   await h.undo();
   await h.redo();
   assert.deepStrictEqual(d.calls, [
     ['call', 'setFormProps', [{ name: 'X' }]],
+    ['call', 'getFormProps', []],
     ['call', 'removeElement', ['SEC-9']],
     ['call', 'undo', []],
     ['call', 'redo', []],
