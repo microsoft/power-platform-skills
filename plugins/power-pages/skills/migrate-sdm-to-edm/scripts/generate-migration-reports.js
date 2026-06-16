@@ -1774,10 +1774,11 @@ function readBase64IfExists(filePath) {
  * `exportedAt`, `environmentId/Name`, `localWebsiteId/Name`, `remoteWebsiteId/Name`,
  * and `files[].localContent`/`.remoteContent` as base64).
  *
- * Semantic mapping for the PP-VSCode side:
- *   - `localContent`  = the live `<SITE_ROOT>` file (untouched)
- *   - `remoteContent` = the staged proposed file (what the rewriter wants to apply)
- * so the PP-VSCode diff editor reads "local vs remote" as "current vs proposed."
+ * Semantic mapping for the PP-VSCode side. PP-VSCode renders the diff editor as
+ *   vscode.diff(remoteUri, localUri) — remote on LEFT, local on RIGHT — so:
+ *   - `remoteContent` = live `<SITE_ROOT>` file (untouched) → LEFT pane (current state)
+ *   - `localContent`  = staged proposed file (what rewriter wants to apply) → RIGHT pane (proposed)
+ * Order matches git diff convention: read left-to-right as "current → proposed".
  */
 function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResults, meta) {
   const fxEntries = (fetchXmlResults && fetchXmlResults.diffEntries) || [];
@@ -1802,9 +1803,13 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
   if (files.length === 0) return null;
 
   // Attach base64 file contents for PP-VSCode import compatibility.
+  // PP-VSCode renders remoteContent on the LEFT, localContent on the RIGHT, so:
+  //   left  = remoteContent = live file (current state, untouched on disk)
+  //   right = localContent  = staged file (proposed change from the rewriter)
+  // This matches git diff convention (before → after, left → right).
   for (const entry of files) {
-    entry.localContent = readBase64IfExists(entry.livePath);
-    entry.remoteContent = readBase64IfExists(entry.stagedPath);
+    entry.remoteContent = readBase64IfExists(entry.livePath);
+    entry.localContent = readBase64IfExists(entry.stagedPath);
   }
 
   const websiteId = (meta && meta.websiteId) || 'unknown';
@@ -1829,7 +1834,7 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
     generatedAt: new Date().toISOString(),
     siteRoot: path.resolve(sitePath),
     stagedDir: path.resolve(path.join(outputDir, 'remediation-staged')),
-    note: 'In PP-VSCode terms: localContent = live <SITE_ROOT> file (untouched); remoteContent = staged proposed file from the auto-rewriters. Importing this into PP-VSCode\'s "Import Metadata Diff" command will surface a "current vs proposed" diff editor.',
+    note: 'PP-VSCode renders diffs as vscode.diff(remoteUri, localUri) — remote on LEFT, local on RIGHT. So: remoteContent = live <SITE_ROOT> file (untouched, LEFT pane = current state); localContent = staged proposed file from the auto-rewriters (RIGHT pane = proposed change). Importing this into PP-VSCode\'s "Import Metadata Diff" command surfaces a "current → proposed" diff editor reading left-to-right.',
 
     files,
   };
