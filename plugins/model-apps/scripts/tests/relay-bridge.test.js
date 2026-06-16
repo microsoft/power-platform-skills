@@ -170,6 +170,65 @@ test('listControls errors cleanly when the discovery service is unavailable', as
   });
 });
 
+test('describeControl returns binding kind + param schema from the manifest', async () => {
+  const md = {
+    name: 'Intelligence.BusinessCardReaderControl.BusinessCardReader',
+    displayName: 'Business card reader',
+    compatibleDataTypes: ['SingleLine.Text', 'Multiple'],
+    isBound: () => true,
+    hasDatasetConfiguration: false,
+    configurations: new Map([
+      ['DefaultImage', { name: 'DefaultImage', displayName: 'Default image', usage: 1, ofType: 'Multiple', isRequired: true, isPrimary: false }],
+      ['Email', { name: 'Email', usage: 0, ofType: 'SingleLine.Email', isRequired: false, isPrimary: false }],
+    ]),
+  };
+  const svc = fakeService({
+    FormModelService: { customControlDiscoveryService: { getCustomControlMetadata: () => Promise.resolve(md) } },
+  });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.describeControl('Intelligence.BusinessCardReaderControl.BusinessCardReader');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.bindingKind, 'fieldBound');
+    assert.deepStrictEqual(r.result.requiredParams, ['DefaultImage']);
+    assert.strictEqual(r.result.params.length, 2);
+  });
+});
+
+test('describeControl classifies a dataset control from its metadata', async () => {
+  const md = { name: 'Grid', compatibleDataTypes: ['Grid'], isBound: () => true, hasDatasetConfiguration: true, configurations: new Map() };
+  const svc = fakeService({ FormModelService: { customControlDiscoveryService: { getCustomControlMetadata: () => Promise.resolve(md) } } });
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.describeControl('Grid');
+    assert.strictEqual(r.result.bindingKind, 'dataset');
+  });
+});
+
+test('setControl reports needs-facade when the first-party façade is absent', async () => {
+  const svc = fakeService();
+  await withBridge({ win: { __formDesignerApi: { service: svc } }, doc: {} }, async (mod) => {
+    const r = await mod.setControl('name', 'X.Y');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error.code, 'needs-facade');
+  });
+});
+
+test('setControl delegates to window.__formDesignerApi.addCustomControl when present', async () => {
+  const calls = [];
+  const svc = fakeService();
+  const win = {
+    __formDesignerApi: {
+      service: svc,
+      addCustomControl: (f, c, p, ff) => { calls.push([f, c, p, ff]); return Promise.resolve({ ok: true, result: { field: f, controlId: c } }); },
+    },
+  };
+  await withBridge({ win, doc: {} }, async (mod) => {
+    const r = await mod.setControl('name', 'X.Y');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.result.source, 'facade');
+    assert.deepStrictEqual(calls, [['name', 'X.Y', null, null]]);
+  });
+});
+
 test('status reports not-ok when no designer handle is available', () => {
   withBridge({ win: {}, doc: { getElementById: () => null } }, (mod) => {
     const s = mod.status();

@@ -28,6 +28,19 @@ function makeHandlers(driver, seq) {
       const a = args || {};
       return queue.run(() => driver.call('addField', [a.fieldLogicalName, a.targetSectionId, !!a.force]));
     },
+    // Read-only discovery; the discovery service may fetch from the env, so allow longer.
+    async listControls(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('listControls', [a.fieldLogicalName]), 30000);
+    },
+    async describeControl(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('describeControl', [a.controlId]), 30000);
+    },
+    async setControl(args) {
+      const a = args || {};
+      return queue.run(() => driver.call('setControl', [a.fieldLogicalName, a.controlId, a.params || null, a.formFactors || null]), 30000);
+    },
   };
 }
 

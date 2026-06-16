@@ -41,6 +41,42 @@ function registerTools(server, handlers) {
     },
     async (args) => toToolResult(await handlers.addField(args))
   );
+
+  server.registerTool(
+    'form_listControls',
+    {
+      description: 'List the custom controls (PCF / AI Builder, e.g. "Business card reader") the environment offers for a field — the default component-picker list, filtered by the field\'s data type. Omit fieldLogicalName for the unbound/default list. Read-only.',
+      inputSchema: {
+        fieldLogicalName: z.string().optional().describe('Logical name of the field to list controls for, e.g. "name". Omit for the unbound/default list.'),
+      },
+    },
+    async (args) => toToolResult(await handlers.listControls(args))
+  );
+
+  server.registerTool(
+    'form_describeControl',
+    {
+      description: 'Describe one custom control: its binding kind (fieldBound / dataset / lookup / unbound) and its parameter schema (name, usage, required, defaults, enum values) read from the control manifest. Use this to learn what params form_setControl needs. Read-only.',
+      inputSchema: {
+        controlId: z.string().describe('Control id from form_listControls, e.g. "Intelligence.BusinessCardReaderControl.BusinessCardReader"'),
+      },
+    },
+    async (args) => toToolResult(await handlers.describeControl(args))
+  );
+
+  server.registerTool(
+    'form_setControl',
+    {
+      description: 'Set a custom control (PCF / AI Builder) on a field already placed on the form, via the designer\'s own command (live, WYSIWYG). Generic across controls. Requires the first-party façade build (enableModelMakerBridge). Param application is not yet supported — use form_describeControl to see a control\'s schema.',
+      inputSchema: {
+        fieldLogicalName: z.string().describe('Logical name of the field whose control to set, e.g. "name"'),
+        controlId: z.string().describe('Control id from form_listControls, e.g. "Intelligence.BusinessCardReaderControl.BusinessCardReader"'),
+        params: z.record(z.any()).optional().describe('Control parameters (schema from form_describeControl). Not yet applied; provided for forward compatibility.'),
+        formFactors: z.array(z.string()).optional().describe('Form factors to apply the control on (e.g. ["Web"]). Default Web.'),
+      },
+    },
+    async (args) => toToolResult(await handlers.setControl(args))
+  );
 }
 
 module.exports = { registerTools };

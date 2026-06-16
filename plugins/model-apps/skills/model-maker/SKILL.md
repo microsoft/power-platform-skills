@@ -1,7 +1,7 @@
 ---
 name: model-maker
 description: Co-authors model-driven FORM artifacts live in the designer. Use when the user says "edit form X", "add a field to the <table> form", "co-author a form", "open the form designer", or wants an agent to change a model-driven form's layout. Drives the designer's own commands via the designer-relay MCP server so changes render live (WYSIWYG) with the designer's real validation. Not for genux pages (use /genpage), tables/columns (use the plugin's DV scripts), or canvas apps.
-allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField
+allowed-tools: Read, Bash, Glob, Grep, mcp__designer-relay__designer_open, mcp__designer-relay__designer_status, mcp__designer-relay__form_inspect, mcp__designer-relay__form_addField, mcp__designer-relay__form_listControls, mcp__designer-relay__form_describeControl, mcp__designer-relay__form_setControl
 ---
 
 # model-maker — live form co-authoring
@@ -61,6 +61,26 @@ scaffolding, or solution lifecycle — those stay with the plugin's DV scripts
 8. **Persist** only when the user is done — saving/publishing and solution
    handling stay with PAC / the `dv-solution` flow, not this skill.
 
+## Setting a custom control (PCF / AI Builder) on a field
+
+To change a field's control (e.g. *Business card reader* on Account Name) instead
+of adding a field:
+
+1. Make sure the field is on the form (`form_inspect`; add it first if not).
+2. **Discover:** `form_listControls({ fieldLogicalName })` → the controls the env
+   offers for that field, each with `bindingKind` and a `name` (the control id).
+   Omit the field for the unbound/default list.
+3. **Understand requirements:** `form_describeControl({ controlId })` → the
+   control's `requiredParams` + full param schema. If `requiredParams` aren't
+   satisfied by defaults (e.g. PowerBI `PowerBIReport`, Canvas `appId`, AgentResponse
+   `topicName`), ask the user for those values.
+4. **Set:** `form_setControl({ fieldLogicalName, controlId })` → renders live.
+   Param-free, field-bound controls (business card reader, rich text, optionset,
+   star rating, …) work directly. `form_setControl` needs the first-party façade
+   build; if it returns `code:'needs-facade'`, the env is on a normal build —
+   discovery still works, but setting a control needs the `enableModelMakerBridge`
+   designer build.
+
 ## Tools (designer-relay)
 
 | Tool | Returns |
@@ -69,11 +89,19 @@ scaffolding, or solution lifecycle — those stay with the plugin's DV scripts
 | `designer_status` | `{ ok, source, capability }` |
 | `form_inspect` | `{ ok, result: { formType, sections:[{id}], available:[{name,displayName}] } }` |
 | `form_addField(fieldLogicalName, targetSectionId, force?)` | `{ ok, result }` or `{ ok:false, validation }` (e.g. duplicate-field) |
+| `form_listControls(fieldLogicalName?)` | `{ ok, result: { controls:[{name,displayName,bindingKind,…}] } }` — controls the env offers for a field (read-only) |
+| `form_describeControl(controlId)` | `{ ok, result: { bindingKind, requiredParams, params:[…] } }` — a control's param schema (read-only) |
+| `form_setControl(fieldLogicalName, controlId, params?, formFactors?)` | `{ ok, result }` or `{ ok:false, error:{ code:'needs-facade' \| 'no-cell' \| 'params-unsupported' } }` |
 
 ## Notes & limits
 
-- Only **form field add** is wired today (the proven thin slice). Move /
-  set-props / add tab|section|column / events are the next verbs.
+- **Form field add** and **custom-control discovery** (`form_listControls` /
+  `form_describeControl`) work on any build. **Setting** a control
+  (`form_setControl`) needs the first-party façade build. Move / set-props /
+  add tab|section|column / events are the next verbs.
+- `form_setControl` is **param-free today** — it places controls with manifest
+  defaults; supplying `params` returns `params-unsupported` for now (use
+  `form_describeControl` to see the schema).
 - If `designer_status` reports `source: fiber`, the handle came from the React
   fiber walk (works on the deployed build); `source: export` means the
   first-party `window.__formDesignerApi` is live. See the design spec / POC

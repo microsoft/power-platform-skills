@@ -47,6 +47,35 @@ test('addField() forwards field/section/force to the bridge', async () => {
   ]);
 });
 
+test('listControls() forwards the field to the bridge (read-only)', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.listControls({ fieldLogicalName: 'name' });
+  await h.listControls({});
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'listControls', ['name']],
+    ['call', 'listControls', [undefined]],
+  ]);
+});
+
+test('describeControl() forwards the control id', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.describeControl({ controlId: 'X.Y' });
+  assert.deepStrictEqual(d.calls, [['call', 'describeControl', ['X.Y']]]);
+});
+
+test('setControl() forwards field/control/params/factors (null-normalized)', async () => {
+  const d = mockDriver();
+  const h = makeHandlers(d);
+  await h.setControl({ fieldLogicalName: 'name', controlId: 'X.Y' });
+  await h.setControl({ fieldLogicalName: 'name', controlId: 'X.Y', params: { a: 1 }, formFactors: ['Web'] });
+  assert.deepStrictEqual(d.calls, [
+    ['call', 'setControl', ['name', 'X.Y', null, null]],
+    ['call', 'setControl', ['name', 'X.Y', { a: 1 }, ['Web']]],
+  ]);
+});
+
 test('status() delegates to driver.status()', async () => {
   const d = mockDriver();
   const h = makeHandlers(d);

@@ -10,7 +10,7 @@ in-page `ws://127.0.0.1` socket, so there is no socket). The injected
 [`bridge.js`](./bridge.js) acquires the live `FormDesignerService` (via the
 first-party `window.__formDesignerApi` export if present, else a duck-typed
 React-fiber walk) and exposes `status` / `inspect` / `addField` / `listControls`
-on `window.__mmBridge`.
+/ `describeControl` / `setControl` on `window.__mmBridge`.
 
 ## Tools
 
@@ -20,6 +20,9 @@ on `window.__mmBridge`.
 | `designer_status` | Bridge readiness + how the handle was acquired (`export` vs `fiber`) |
 | `form_inspect` | The open form's sections (with ids) + table fields not yet placed |
 | `form_addField` | Add a table field to a section via the designer's own add-field command (live). Owns the duplicate-field guard. |
+| `form_listControls` | Custom controls (PCF / AI Builder, e.g. Business card reader) the env offers for a field, with `bindingKind`. Omit the field for the unbound/default list. Read-only. |
+| `form_describeControl` | A control's binding kind + parameter schema (name, usage, required, defaults, enum) from its manifest. Read-only. |
+| `form_setControl` | Set a custom control on a field via the designer's command. Generic across controls; needs the first-party façade build (`enableModelMakerBridge`). |
 
 ## Setup (live run)
 
@@ -76,17 +79,21 @@ The MCP relay (`designer_open`/`form_inspect`/`form_addField`) is the shipping
 product path; `smoke.js` is the regression/acceptance harness for the same code.
 
 **3. Read-only control discovery probe (`probe-controls.js`).** Calls only the
-read-only `listControls` bridge method — **mutates nothing**. Lists the custom
-controls (PCF / AI Builder, e.g. *Business card reader*) the env offers for a
-field, with their control ids. This is Phase 2.1 (custom controls; the
-`form_*` MCP tool wiring + the setter are Phase 2.2+ — see the POC plan):
+read-only `listControls` / `describeControl` bridge methods — **mutates
+nothing**. Lists the custom controls (PCF / AI Builder, e.g. *Business card
+reader*) the env offers for a field (with `bindingKind`), and optionally
+describes each control's parameter schema. Phase 2.1 (custom controls):
 
 ```bash
 MM_FORM_URL='https://make.test.powerapps.com/e/.../form/edit/<formId>?...' \
 MM_EDGE_PROFILE="$TEMP/mm-edge-profile" \
 MM_PROBE_FIELD=name,description,none \
+MM_DESCRIBE=all \
 npm run probe
 ```
+
+`MM_DESCRIBE` = comma-separated control ids (or `all` to describe every control
+from the first field's list).
 
 ## Notes
 

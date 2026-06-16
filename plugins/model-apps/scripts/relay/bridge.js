@@ -7,6 +7,8 @@
 //   - inspect()                             -> live form: sections (+ ids) and available unused fields
 //   - addField(fieldName, sectionId, force) -> add a table field to a section via the designer's own command
 //   - listControls(fieldName)               -> (READ-ONLY) custom controls (PCF/AI Builder) the env offers for a field
+//   - describeControl(controlId)            -> (READ-ONLY) a control's binding kind + param schema (from its manifest)
+//   - setControl(field, controlId, p, ff)   -> set a custom control on a field (prefers the first-party facade)
 //
 // It is also `require()`-able so it can be unit-tested with `node --test`
 // (the functions read the ambient `window`/`document` at call time, which tests
@@ -235,6 +237,7 @@
           controls.push({
             name: ccmd.name || key,
             displayName: readLoadable(ccmd.displayName) || ccmd.displayNameKey || ccmd.manifestName || ccmd.name || key,
+            bindingKind: bindingKindFor(ccmd),
             compatibleDataTypes: ccmd.compatibleDataTypes,
             isBound: typeof ccmd.isBound === 'function' ? !!ccmd.isBound() : undefined,
             hasDataset: !!ccmd.hasDatasetConfiguration,
@@ -251,7 +254,96 @@
       .catch(function (e) { return { ok: false, error: { code: 'discovery-error', message: String((e && e.message) || e) } }; });
   }
 
-  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls };
+  // Classify a control from its metadata so callers know HOW it binds (and thus
+  // which intent applies). Derived from compatibleDataTypes / dataset config /
+  // isBound -- generic, no per-control knowledge.
+  function bindingKindFor(md) {
+    if (!md) return 'unknown';
+    var compat = md.compatibleDataTypes || [];
+    var has = function (pred) { for (var i = 0; i < compat.length; i++) { if (pred(String(compat[i]))) return true; } return false; };
+    if (md.hasDatasetConfiguration || has(function (t) { return t === 'Grid'; })) return 'dataset';     // bound to a view/relationship, not a field
+    if (has(function (t) { return t.indexOf('Lookup') === 0; })) return 'lookup';
+    if (typeof md.isBound === 'function' ? md.isBound() : md.isBound) return 'fieldBound';
+    return 'unbound';                                                                                   // standalone widget (often needs config)
+  }
+
+  // READ-ONLY: a control's binding kind + parameter schema, read from its manifest
+  // (CustomControlMetadata.configurations). This is what makes the setter generic:
+  // every control is self-describing, so form_setControl(field, controlId, params)
+  // can validate against the schema instead of hardcoding per control.
+  function describeControl(controlId) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var svc = h.service;
+    var discovery;
+    try { discovery = svc.FormModelService && svc.FormModelService.customControlDiscoveryService; } catch (e) { /* ignore */ }
+    if (!discovery || typeof discovery.getCustomControlMetadata !== 'function') {
+      return Promise.resolve({ ok: false, error: { code: 'no-discovery', message: 'customControlDiscoveryService unavailable' } });
+    }
+
+    return Promise.resolve()
+      .then(function () { return discovery.getCustomControlMetadata(controlId, false); })
+      .then(function (md) {
+        if (!md) return { ok: false, error: { code: 'no-control', message: controlId + ' not found in env' } };
+        var params = [];
+        try {
+          var cfg = md.configurations; // Map<string, CustomControlConfigurationMetadata | CustomControlProperty>
+          if (cfg && typeof cfg.forEach === 'function') {
+            cfg.forEach(function (p, key) {
+              params.push({
+                name: p.name || key,
+                displayName: readLoadable(p.displayName) || p.displayNameKey || p.name || key,
+                usage: p.usage,            // input | bound | output (undefined for non-property configs)
+                ofType: p.ofType,
+                isRequired: !!p.isRequired,
+                isPrimary: !!p.isPrimary,
+                defaultValue: p.defaultValue,
+                enumValues: p.enumValues && p.enumValues.map(function (e) { return { name: e.name, value: e.value, isDefault: e.isDefault }; }),
+              });
+            });
+          }
+        } catch (e) { /* tolerate a manifest we can't fully parse */ }
+
+        return { ok: true, result: {
+          controlId: md.name || controlId,
+          displayName: readLoadable(md.displayName) || md.displayNameKey || md.manifestName || md.name || controlId,
+          bindingKind: bindingKindFor(md),
+          isBound: typeof md.isBound === 'function' ? !!md.isBound() : undefined,
+          hasDataset: !!md.hasDatasetConfiguration,
+          compatibleDataTypes: md.compatibleDataTypes,
+          requiredParams: params.filter(function (p) { return p.isRequired; }).map(function (p) { return p.name; }),
+          params: params,
+        } };
+      })
+      .catch(function (e) { return { ok: false, error: { code: 'describe-error', message: String((e && e.message) || e) } }; });
+  }
+
+  // Set a custom control on a field. The robust path is the first-party intent
+  // facade window.__formDesignerApi.addCustomControl (built in cds-form-designer
+  // where the model classes are in scope -- a minified deployed build can't `new`
+  // CustomControlModel/ControlDescriptionModel from here). The bridge is a thin
+  // pass-through; the facade owns model-building, param policy, and validation.
+  function setControl(fieldName, controlId, params, factors) {
+    var h = getDesignerHandle();
+    if (!h) return Promise.resolve({ ok: false, error: { code: 'not-loaded', message: 'Form designer not ready' } });
+    var w = getWin();
+    var fapi = w.__formDesignerApi;
+    if (fapi && typeof fapi.addCustomControl === 'function') {
+      return Promise.resolve()
+        .then(function () { return fapi.addCustomControl(fieldName, controlId, params || null, factors || null); })
+        .then(function (r) {
+          if (r && r.ok === false) return r;                       // facade reported a problem (e.g. params-unsupported, no-cell)
+          return { ok: true, result: { field: fieldName, controlId: controlId, source: 'facade', facade: r } };
+        })
+        .catch(function (e) { return { ok: false, error: { code: 'facade-error', message: String((e && e.message) || e) } }; });
+    }
+    return Promise.resolve({ ok: false, error: {
+      code: 'needs-facade',
+      message: 'setControl needs the first-party addCustomControl facade. Deploy the cds-form-designer export with the enableModelMakerBridge gate (Phase 2.3), then open the form with the gate on.',
+    } });
+  }
+
+  var api = { status: status, inspect: inspect, addField: addField, listControls: listControls, describeControl: describeControl, setControl: setControl };
 
   var w = getWin();
   if (w && typeof w === 'object') w.__mmBridge = api;

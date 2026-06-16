@@ -16,9 +16,11 @@
 //   MM_EDGE_PROFILE  (required) a signed-in persistent Edge profile dir
 //   MM_PROBE_FIELD   (optional) logical name to probe (default: account primary name 'name');
 //                    comma-separated for several, or 'none' for the unbound/default list
+//   MM_DESCRIBE      (optional) control ids to describe (binding kind + param schema),
+//                    comma-separated; or 'all' to describe every control from the first field's list
 //   MM_HEADLESS=1    (optional) run Edge headless
 //
-// Usage:  MM_FORM_URL=... MM_EDGE_PROFILE=... [MM_PROBE_FIELD=name,description] node probe-controls.js
+// Usage:  MM_FORM_URL=... MM_EDGE_PROFILE=... [MM_PROBE_FIELD=name,description] [MM_DESCRIBE=all] node probe-controls.js
 
 const { createDriver, launchEdge } = require('./driver.js');
 
@@ -52,6 +54,7 @@ async function main() {
     process.exit(1);
   }
 
+  let firstList = [];
   for (const field of fields) {
     log('\n=== listControls(%s) ===', field === null ? '<unbound/default>' : field);
     const r = await driver.call('listControls', [field]);
@@ -59,10 +62,32 @@ async function main() {
       log('  ->', JSON.stringify(r));
       continue;
     }
+    if (!firstList.length) firstList = (r.result.controls || []).map((c) => c.name);
     log('  field=%s dataType=%s count=%d', r.result.field, r.result.dataType, r.result.count);
     for (const c of r.result.controls || []) {
-      log('   - %s  [%s]  bound=%s dataset=%s  types=%j',
-        c.displayName, c.name, c.isBound, c.hasDataset, c.compatibleDataTypes);
+      log('   - %s  [%s]  kind=%s bound=%s dataset=%s  types=%j',
+        c.displayName, c.name, c.bindingKind, c.isBound, c.hasDataset, c.compatibleDataTypes);
+    }
+  }
+
+  // Optional: describe controls (binding kind + parameter schema from the manifest).
+  const describeRaw = process.env.MM_DESCRIBE;
+  if (describeRaw) {
+    const ids = describeRaw.trim().toLowerCase() === 'all'
+      ? firstList
+      : describeRaw.split(',').map((s) => s.trim()).filter(Boolean);
+    for (const id of ids) {
+      log('\n=== describeControl(%s) ===', id);
+      const d = await driver.call('describeControl', [id]);
+      if (!d || !d.ok) { log('  ->', JSON.stringify(d)); continue; }
+      const R = d.result;
+      log('  %s  kind=%s bound=%s dataset=%s  requiredParams=%j',
+        R.displayName, R.bindingKind, R.isBound, R.hasDataset, R.requiredParams);
+      for (const p of R.params || []) {
+        log('    * %s%s  usage=%s ofType=%s default=%j%s',
+          p.name, p.isPrimary ? ' (primary)' : '', p.usage, p.ofType, p.defaultValue,
+          p.enumValues ? '  enum=' + JSON.stringify(p.enumValues.map((e) => e.value)) : '');
+      }
     }
   }
 
