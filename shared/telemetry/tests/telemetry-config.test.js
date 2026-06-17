@@ -15,7 +15,12 @@ function mkTmp() {
 function run(args, configDir, extraEnv = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir, ...extraEnv },
+    env: {
+      ...process.env,
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES: "", // cleared by default; tests opt in via extraEnv
+      POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+      ...extraEnv,
+    },
   });
 }
 
