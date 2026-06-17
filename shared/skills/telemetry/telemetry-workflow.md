@@ -17,8 +17,7 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 
 ## What to know (for answering follow-ups)
 
-- `off` stops transmission to Microsoft. **Nothing leaves the machine.** A local
-  diagnostic log is still written at `~/.power-platform-skills/events.jsonl`.
+- `off` stops transmission to Microsoft. **Nothing leaves the machine.**.
 - `on` re-enables transmission. The choice is **per-user and per-plugin** and
   takes effect on the next event (no restart).
 - **No personal data is ever collected.** Telemetry is anonymous: it records only
