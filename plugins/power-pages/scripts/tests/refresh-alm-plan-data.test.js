@@ -497,6 +497,58 @@ test('refresh deploy-pipeline ingests batchValidation block from last-deploy.jso
   });
 });
 
+test('refresh deploy-pipeline completes the "Activate site" step when the marker evidences activation, but not Test', (t) => {
+  // The PP deploy flow activates the site internally (marker.activationStatus),
+  // so a successful deploy must also complete the matching "Activate site in {stage}"
+  // step — otherwise computeNextStep would redundantly point the user at
+  // /activate-site. Testing remains a separate step (test-site flips it).
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pipeline',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Activate site in Staging', status: 'pending' },
+      { name: 'Test site in Staging', status: 'pending' },
+    ],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded',
+    deployedAt: '2026-06-16T00:00:00.000Z', activationStatus: 'Activated',
+    siteUrl: 'https://contoso.powerappsportals.com',
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+  const byName = (n) => steps.find((s) => s.name === n).status;
+  assert.equal(byName('Deploy via pipeline to Staging'), 'completed');
+  assert.equal(byName('Activate site in Staging'), 'completed', 'deploy activates the site -> Activate step completes too');
+  assert.equal(byName('Test site in Staging'), 'pending', 'Test stays pending — it is the separate test-site step');
+});
+
+test('refresh deploy-pipeline leaves the "Activate site" step pending when the marker has no activationStatus', (t) => {
+  // No activation evidence in the marker -> don't fabricate completion; the user
+  // may still need to run /activate-site explicitly.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    STRATEGY: 'pipeline',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Activate site in Staging', status: 'pending' },
+    ],
+    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z',
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+  assert.equal(steps.find((s) => s.name === 'Activate site in Staging').status, 'pending');
+});
+
 test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchValidation', (t) => {
   // Backward-compatibility: legacy SKILL.md prose (pre-v1.x) used
   // `elapsedSecondsApprox`. Markers written under that schema still in the

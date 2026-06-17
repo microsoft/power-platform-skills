@@ -630,6 +630,17 @@ Build a `planData` object with all gathered strategy inputs:
     { "name": "Activate site in Production", "status": "pending", "skip": false },
     { "name": "Test site in Production", "status": "pending", "skip": false }
   ],
+  // The steps[] above is the PP Pipelines path. For the MANUAL path (STRATEGY = "manual")
+  // emit this shape instead — do NOT include "Setup pipeline"/"Deploy via pipeline":
+  //   { "name": "Setup solution", ... },
+  //   { "name": "Export solution", ... },
+  //   then PER Manual target {targetLabel}:
+  //     { "name": "Import to {targetLabel}", ... },
+  //     { "name": "Activate site in {targetLabel}", ... },   // import-solution does NOT activate
+  //     { "name": "Test site in {targetLabel}", ... }
+  // These names are what refresh-alm-plan-data.js step-sync (export/import/activate/test)
+  // and computeNextStep match on, so the manual checklist and next-step nudges resolve
+  // to /power-pages:export-solution → /power-pages:import-solution → /power-pages:activate-site → /power-pages:test-site.
   "validationRuns": {
     "Staging": null,
     "Production": null
@@ -1022,7 +1033,7 @@ Both spans are guaranteed to exist in the template — there is exactly one of e
 **Next-steps guidance (option 1 — print to the user, do NOT invoke):**
 
 > "Plan approved and saved. **plan-alm doesn't deploy** — run these next, in order. Each detects this plan and proceeds without re-asking, then updates the plan as it completes:
-> - **PP Pipelines path:** `/power-pages:setup-solution` → `/power-pages:setup-pipeline` → `/power-pages:deploy-pipeline` (once per target stage; activation + testing happen inside the deploy flow).
+> - **PP Pipelines path:** `/power-pages:setup-solution` → `/power-pages:setup-pipeline` → `/power-pages:deploy-pipeline` (once per target stage; the deploy flow activates the site) → `/power-pages:test-site` to validate each stage.
 > - **Manual path:** `/power-pages:setup-solution` → `/power-pages:export-solution` → review the zip → `/power-pages:import-solution` (once per target).
 > Skip any step marked *already set up*. You can re-open the plan any time at `docs/alm-plan.html`."
 
@@ -1051,7 +1062,7 @@ Both spans are guaranteed to exist in the template — there is exactly one of e
 
 ## Error Handling
 
-- No `powerpages.config.json`: stop, advise `/power-pages:create-site`
+- No `.powerpages-site/website.yml` **and** no `powerpages.config.json`: stop, advise `/power-pages:create-site` (Phase 1 resolves site identity from either marker — a data-model/EDM site has only `website.yml`, so don't hard-stop on the missing config alone)
 - `pac env list` fails: skip ENV_LIST pre-filling; ask for environment URLs manually
 - `render-alm-plan.js` fails (non-zero exit): report error, show planData JSON as fallback, ask user whether to proceed
 - Discovery/auth failure: set `PLAN_QUALITY = "degraded"`, surface a prominent risk, still produce the plan (the user fixes auth and re-runs to regenerate)

@@ -445,6 +445,21 @@ function refreshDeployPipeline(planData, projectRoot) {
       stage: deployMarker.stageName,
       status: failed ? 'failed' : 'completed',
     });
+    // The PP deploy flow activates the site as part of deployment (deploy-pipeline
+    // Phase 7.7), recording it in the marker's `activationStatus`. When the deploy
+    // succeeded AND the marker evidences activation, complete the matching
+    // "Activate site in {stage}" step too — otherwise computeNextStep would point
+    // the user at /activate-site for work the deploy already did. Testing stays a
+    // separate step (the test-site skill flips it via refreshTestSite). When the
+    // marker carries no activationStatus, leave the Activate step pending — the
+    // user may still need to run /activate-site explicitly.
+    if (!failed && deployMarker.activationStatus) {
+      setStepStatus(planData, {
+        keyword: /\bactivate\b/i,
+        stage: deployMarker.stageName,
+        status: 'completed',
+      });
+    }
   }
   return planData;
 }
