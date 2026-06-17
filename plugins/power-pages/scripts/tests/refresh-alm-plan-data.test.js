@@ -1211,6 +1211,53 @@ test('step-sync: deploy-pipeline flips ONLY the matching stage step to completed
     'Production deploy step must stay pending — stage filter disambiguates "Deploy" steps');
 });
 
+test('step-sync: deploy-pipeline matches the REAL marker stageName "Deploy to {label}" (not just bare "Staging")', (t) => {
+  // Regression for the stage-name mismatch: setup-pipeline names pipeline stages
+  // "Deploy to {targetLabel}", and deploy-pipeline writes that verbatim as
+  // last-deploy.json's stageName ("Deploy to Staging"). The plan step is
+  // "Deploy via pipeline to Staging", so a raw substring match of the marker's
+  // "deploy to staging" against the step name FAILS and the step would never
+  // flip. setStepStatus must strip the leading "Deploy to " to recover "Staging".
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr-real', stageName: 'Deploy to Staging', status: 'Succeeded',
+    deployedAt: '2026-06-16T10:00:00Z', activationStatus: 'Activated',
+    siteUrl: 'https://contoso.powerappsportals.com',
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Activate site in Staging', status: 'pending' },
+      { name: 'Test site in Staging', status: 'pending' },
+      { name: 'Deploy via pipeline to Production', status: 'pending' },
+    ],
+  });
+
+  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+
+  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+  const st = (n) => steps.find((s) => s.name === n).status;
+  assert.equal(st('Deploy via pipeline to Staging'), 'completed', 'real "Deploy to Staging" marker must flip the Staging deploy step');
+  assert.equal(st('Activate site in Staging'), 'completed', 'activation evidence + normalized stage must flip the Activate step');
+  assert.equal(st('Test site in Staging'), 'pending', 'Test stays the separate test-site step');
+  assert.equal(st('Deploy via pipeline to Production'), 'pending', 'Production must NOT be touched by a "Deploy to Staging" marker');
+});
+
+test('setStepStatus: exported helper normalizes a "Deploy to {label}" stage to the bare label', () => {
+  const { setStepStatus } = require('../lib/refresh-alm-plan-data');
+  const planData = {
+    steps: [
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+      { name: 'Deploy via pipeline to Production', status: 'pending' },
+    ],
+  };
+  const flipped = setStepStatus(planData, { keyword: /\bdeploy\b/i, stage: 'Deploy to Staging', status: 'completed' });
+  assert.equal(flipped, 1);
+  assert.equal(planData.steps[0].status, 'completed');
+  assert.equal(planData.steps[1].status, 'pending');
+});
+
 test('step-sync: deploy-pipeline records "failed" status when marker shows failure', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {

@@ -75,11 +75,6 @@ const PHASES = new Set([
   'import-solution',
   'activate-site',
   'test-site',
-  // ensure-pipelines-host: host-only update from docs/alm/last-host-check.json.
-  // Distinct from 'setup-pipeline' (which also ingests last-pipeline.json + flips
-  // the "Setup pipeline" step) — this runs when the host was resolved/provisioned
-  // but the pipeline does not exist yet (e.g. the host install crossed a session
-  // boundary before setup-pipeline ran).
   'ensure-pipelines-host',
   'finalize',
 ]);
@@ -247,7 +242,18 @@ function backfillEnvVarValuesFromSettings(planData, projectRoot) {
 function setStepStatus(planData, { keyword, stage, status }) {
   if (!Array.isArray(planData.steps)) return 0;
   if (!keyword) return 0;
-  const targetStage = (typeof stage === 'string' && stage.length > 0) ? stage.toLowerCase() : null;
+  // The stage filter must match the bare target LABEL embedded in the plan step
+  // names ("Deploy via pipeline to Staging", "Activate site in Staging", "Test
+  // site in Staging" — all carry "Staging"). But the run markers carry the
+  // pipeline STAGE name, which setup-pipeline creates as "Deploy to {label}"
+  // (e.g. last-deploy.json's stageName = SELECTED_STAGE.name = "Deploy to
+  // Staging"). A raw substring match of "deploy to staging" against "deploy via
+  // pipeline to staging" FAILS, so a finished deploy would never flip its step.
+  // Strip a leading "Deploy to " to recover the label before matching. Callers
+  // that already pass the bare label (e.g. test-site --stageName "Staging") are
+  // unaffected — the strip is a no-op when the prefix isn't present.
+  const rawStage = (typeof stage === 'string' && stage.length > 0) ? stage.toLowerCase() : null;
+  const targetStage = rawStage ? rawStage.replace(/^deploy\s+to\s+/, '').trim() : null;
   let flipped = 0;
   for (const step of planData.steps) {
     if (!step || typeof step.name !== 'string') continue;
