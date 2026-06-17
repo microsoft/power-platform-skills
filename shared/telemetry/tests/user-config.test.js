@@ -12,6 +12,7 @@ const {
   isTransmissionOptedOut,
   telemetryEnvVarName,
   readTelemetryEnvChoice,
+  effectiveTelemetryChoice,
   CONFIG_FILE_NAME,
 } = require("../lib/user-config");
 
@@ -117,4 +118,34 @@ test("readTelemetryEnvChoice returns null for unset / garbage / missing plugin",
   assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "maybe" }), null);
   assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "" }), null);
   assert.equal(readTelemetryEnvChoice("", { [name]: "off" }), null);
+});
+
+test("effectiveTelemetryChoice: persisted config choice beats the env var (both directions)", () => {
+  const dir = mkTmp();
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  setTelemetryChoice(dir, "power-pages", "on");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "off" }), "on");
+  setTelemetryChoice(dir, "power-pages", "off");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "on" }), "off");
+});
+
+test("effectiveTelemetryChoice: env var applies only when config has no stored choice", () => {
+  const dir = mkTmp();
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "off" }), "off");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "on" }), "on");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", {}), null);
+});
+
+test("isTransmissionOptedOut: env off opts out when config is unset", () => {
+  const dir = mkTmp();
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  assert.equal(isTransmissionOptedOut(dir, "power-pages", { [name]: "off" }), true);
+});
+
+test("isTransmissionOptedOut: config off wins even when env says on", () => {
+  const dir = mkTmp();
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  setTelemetryChoice(dir, "power-pages", "off");
+  assert.equal(isTransmissionOptedOut(dir, "power-pages", { [name]: "on" }), true);
 });

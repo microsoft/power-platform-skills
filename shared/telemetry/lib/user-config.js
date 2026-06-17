@@ -48,8 +48,20 @@ function readTelemetryEnvChoice(pluginName, env = process.env) {
   return v === "on" || v === "off" ? v : null;
 }
 
-function isTransmissionOptedOut(configDir, pluginName) {
-  return readTelemetryChoice(configDir, pluginName) === "off";
+// Resolves the effective choice by precedence:
+//   1. persisted config.json per-plugin choice (always wins when present)
+//   2. the env-var override (applies only when config has no stored choice)
+//   3. null = default-on
+function effectiveTelemetryChoice(configDir, pluginName, env = process.env) {
+  return (
+    readTelemetryChoice(configDir, pluginName) ??
+    readTelemetryEnvChoice(pluginName, env) ??
+    null
+  );
+}
+
+function isTransmissionOptedOut(configDir, pluginName, env = process.env) {
+  return effectiveTelemetryChoice(configDir, pluginName, env) === "off";
 }
 
 // Merge-writes { telemetry: { [pluginName]: choice } }, preserving every other
@@ -79,5 +91,6 @@ module.exports = {
   isTransmissionOptedOut,
   telemetryEnvVarName,
   readTelemetryEnvChoice,
+  effectiveTelemetryChoice,
   CONFIG_FILE_NAME,
 };
