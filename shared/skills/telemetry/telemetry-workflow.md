@@ -25,7 +25,10 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
   things like skill name, plugin version, OS, and Node version. It never includes
   file paths, prompts, tool inputs, site names, URLs, credentials, usernames, or
   hostnames.
-- **Automation/CI** can set `POWER_PLATFORM_SKILLS_TELEMETRY_<plugin>` (e.g.
-  `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES=off|on`) instead of running this
-  command. A saved choice from this command always wins; the env var applies only
-  when nothing has been stored. It suppresses transmission only, like `off`.
+- **Automation/CI** can disable telemetry by setting the opt-out env var
+  `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
+  `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`) instead of running this
+  command. Set it to `1` or `true` (the dotnet `*_TELEMETRY_OPTOUT` convention).
+  `<PLUGIN>` is the plugin name uppercased with non-alphanumerics collapsed to `_`.
+  This opt-out has the highest precedence — it overrides a saved choice from this
+  command and even `on`. It suppresses transmission only, like `off`.

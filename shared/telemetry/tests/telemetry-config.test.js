@@ -17,7 +17,7 @@ function run(args, configDir, extraEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES: "", // cleared by default; tests opt in via extraEnv
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "", // cleared by default; tests opt in via extraEnv
       POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
       ...extraEnv,
     },
@@ -67,14 +67,14 @@ test("usage error on bad action", () => {
   assert.match(stdout, /Usage:/);
 });
 
-const ENV_NAME = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+const ENV_NAME = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
 
-test("status reflects env-var off when config is unset, with no env-var wording", () => {
+test("status reflects the env opt-out when config is unset, with no env-var wording", () => {
   const dir = mkTmp(); // no slash choice stored
   const { status, stdout } = run(
     ["--action", "status", "--plugin", "power-pages"],
     dir,
-    { [ENV_NAME]: "off" }
+    { [ENV_NAME]: "1" }
   );
   assert.equal(status, 0);
   assert.match(stdout, /Telemetry \(power-pages\): OFF/);
@@ -86,13 +86,13 @@ test("status reflects env-var off when config is unset, with no env-var wording"
   );
 });
 
-test("status: persisted 'on' choice wins over env-var off", () => {
+test("status: env opt-out overrides a persisted 'on' choice → OFF", () => {
   const dir = mkTmp();
   run(["--action", "on", "--plugin", "power-pages"], dir); // store ON via slash skill
   const { stdout } = run(
     ["--action", "status", "--plugin", "power-pages"],
     dir,
-    { [ENV_NAME]: "off" }
+    { [ENV_NAME]: "1" }
   );
-  assert.match(stdout, /Telemetry \(power-pages\): ON/);
+  assert.match(stdout, /Telemetry \(power-pages\): OFF/);
 });

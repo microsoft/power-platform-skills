@@ -50,7 +50,7 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
       POWER_PLATFORM_SKILLS_CLOUD: env.cloud || "",
-      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES: env.envVar || "",
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: env.optOut || "",
     },
   });
 }
@@ -503,7 +503,7 @@ test("dispatcher writes the mirror but does NOT POST when neither resolver nor s
   assert.ok(fs.existsSync(path.join(tmp, "events.jsonl")), "local mirror still written");
 });
 
-test("env-var off (no config choice) suppresses the POST but still writes the mirror", () => {
+test("env opt-out (no config choice) suppresses the POST but still writes the mirror", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   const { status } = runDispatcher({
@@ -513,18 +513,18 @@ test("env-var off (no config choice) suppresses the POST but still writes the mi
       iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
       collectorUrl: "https://example.invalid/OneCollector/1.0/",
       fakeProbe: probePath,
-      envVar: "off",
+      optOut: "1",
     },
   });
   assert.equal(status, 0);
-  assert.ok(!fs.existsSync(probePath), "env-var off must skip the POST");
+  assert.ok(!fs.existsSync(probePath), "env opt-out must skip the POST");
   assert.ok(
     fs.existsSync(path.join(tmp, "events.jsonl")),
-    "env-var off must still write the local mirror"
+    "env opt-out must still write the local mirror"
   );
 });
 
-test("config opt-IN beats env-var off (config wins) — dispatcher still POSTs", () => {
+test("env opt-out overrides a persisted 'on' choice (env wins) — no POST", () => {
   const tmp = mkTmp();
   const probePath = path.join(tmp, "probe.json");
   fs.writeFileSync(
@@ -538,12 +538,16 @@ test("config opt-IN beats env-var off (config wins) — dispatcher still POSTs",
       iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
       collectorUrl: "https://example.invalid/OneCollector/1.0/",
       fakeProbe: probePath,
-      envVar: "off",
+      optOut: "1",
     },
   });
   assert.equal(status, 0);
   assert.ok(
-    fs.existsSync(probePath),
-    "a persisted 'on' choice must win over env-var off → POST happens"
+    !fs.existsSync(probePath),
+    "env opt-out has highest precedence → must skip the POST even with config 'on'"
+  );
+  assert.ok(
+    fs.existsSync(path.join(tmp, "events.jsonl")),
+    "opt-out suppresses transmission only — the local mirror is still written"
   );
 });

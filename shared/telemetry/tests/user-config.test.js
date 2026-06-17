@@ -9,12 +9,20 @@ const path = require("node:path");
 const {
   readTelemetryChoice,
   setTelemetryChoice,
-  isTransmissionOptedOut,
-  telemetryEnvVarName,
-  readTelemetryEnvChoice,
+  isTransmissionOptedOut: _isTransmissionOptedOut,
+  telemetryOptOutEnvVarName,
+  readTelemetryEnvOptOut,
   effectiveTelemetryChoice,
   CONFIG_FILE_NAME,
 } = require("../lib/user-config");
+
+// Wrap so this suite defaults to an EMPTY env instead of process.env. That keeps
+// every pre-existing assertion deterministic regardless of any
+// POWER_PLATFORM_SKILLS_TELEMETRY_*_OPTOUT var set in the CI environment. Tests
+// that exercise the opt-out pass an explicit env object as the third argument.
+function isTransmissionOptedOut(dir, plugin, env = {}) {
+  return _isTransmissionOptedOut(dir, plugin, env);
+}
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cfg-"));
@@ -93,59 +101,65 @@ test("setTelemetryChoice fails safe (returns false) when the dir cannot be creat
   assert.equal(setTelemetryChoice(path.join(blocker, "sub"), "power-pages", "off"), false);
 });
 
-test("telemetryEnvVarName derives an uppercase, underscore-separated name", () => {
+test("telemetryOptOutEnvVarName derives an uppercase, underscore-separated _OPTOUT name", () => {
   assert.equal(
-    telemetryEnvVarName("power-pages"),
-    "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES"
+    telemetryOptOutEnvVarName("power-pages"),
+    "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT"
   );
   // runs of non-alphanumerics collapse to a single underscore
   assert.equal(
-    telemetryEnvVarName("model--apps.v2"),
-    "POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_V2"
+    telemetryOptOutEnvVarName("model--apps.v2"),
+    "POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_V2_OPTOUT"
   );
 });
 
-test("readTelemetryEnvChoice parses on/off case-insensitively from an injected env", () => {
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
-  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "off" }), "off");
-  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: " OFF " }), "off");
-  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "On" }), "on");
+test("readTelemetryEnvOptOut is true only for truthy values (1/true, case-insensitive)", () => {
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "1" }), true);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "true" }), true);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: " TRUE " }), true);
 });
 
-test("readTelemetryEnvChoice returns null for unset / garbage / missing plugin", () => {
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
-  assert.equal(readTelemetryEnvChoice("power-pages", {}), null);
-  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "maybe" }), null);
-  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "" }), null);
-  assert.equal(readTelemetryEnvChoice("", { [name]: "off" }), null);
+test("readTelemetryEnvOptOut is false for unset / falsy / garbage / missing plugin", () => {
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
+  assert.equal(readTelemetryEnvOptOut("power-pages", {}), false);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "0" }), false);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "false" }), false);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "" }), false);
+  assert.equal(readTelemetryEnvOptOut("power-pages", { [name]: "yes" }), false);
+  assert.equal(readTelemetryEnvOptOut("", { [name]: "1" }), false);
 });
 
-test("effectiveTelemetryChoice: persisted config choice beats the env var (both directions)", () => {
+test("effectiveTelemetryChoice: env opt-out wins over a persisted 'on' choice", () => {
   const dir = mkTmp();
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
   setTelemetryChoice(dir, "power-pages", "on");
-  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "off" }), "on");
+  // env var has the highest precedence and forces "off"
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "1" }), "off");
+});
+
+test("effectiveTelemetryChoice: falls back to config / default-on when opt-out is not set", () => {
+  const dir = mkTmp();
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
+  // not set => config choice governs
+  setTelemetryChoice(dir, "power-pages", "on");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "0" }), "on");
+  // a falsy opt-out never re-enables a config opt-out
   setTelemetryChoice(dir, "power-pages", "off");
-  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "on" }), "off");
+  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "false" }), "off");
+  // neither set => default-on (null)
+  assert.equal(effectiveTelemetryChoice(mkTmp(), "power-pages", {}), null);
 });
 
-test("effectiveTelemetryChoice: env var applies only when config has no stored choice", () => {
+test("isTransmissionOptedOut: env opt-out opts out even when config says on", () => {
   const dir = mkTmp();
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
-  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "off" }), "off");
-  assert.equal(effectiveTelemetryChoice(dir, "power-pages", { [name]: "on" }), "on");
-  assert.equal(effectiveTelemetryChoice(dir, "power-pages", {}), null);
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT";
+  setTelemetryChoice(dir, "power-pages", "on");
+  assert.equal(isTransmissionOptedOut(dir, "power-pages", { [name]: "true" }), true);
 });
 
-test("isTransmissionOptedOut: env off opts out when config is unset", () => {
+test("isTransmissionOptedOut: config off still opts out with no env var set", () => {
   const dir = mkTmp();
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
-  assert.equal(isTransmissionOptedOut(dir, "power-pages", { [name]: "off" }), true);
-});
-
-test("isTransmissionOptedOut: config off wins even when env says on", () => {
-  const dir = mkTmp();
-  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
   setTelemetryChoice(dir, "power-pages", "off");
-  assert.equal(isTransmissionOptedOut(dir, "power-pages", { [name]: "on" }), true);
+  assert.equal(isTransmissionOptedOut(dir, "power-pages", {}), true);
 });
