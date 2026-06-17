@@ -136,7 +136,7 @@ Keep workaround comments next to the workaround and link the tracking issue:
 // Workaround: `pac solution export` can exit 0 while the Dataverse async job is still
 // running, so ignore the exit code and poll asyncoperations to a terminal state instead.
 // Remove once the CLI blocks on the job result.
-// Tracking: https://github.com/<org>/<repo>/issues/<id>
+// Tracking: https://github.com/microsoft/power-platform-skills/issues/1234 (use the real issue)
 const status = await pollAsyncOperation(asyncJobId, envUrl, token);
 ```
 
@@ -150,6 +150,9 @@ Parsing comments should show the raw shape and important edge cases:
 // Values can themselves contain ':' (URLs), so match only up to the first colon after
 // the label, then trim. The JSON profile files are intentionally NOT parsed — that
 // format is internal and varies across PAC CLI versions.
+// `label` is a fixed, code-controlled string (e.g. 'Tenant ID'), so it is safe to
+// interpolate into the pattern. If a label ever comes from untrusted input, escape it
+// first to avoid regex injection.
 const re = new RegExp('^\\s*' + label + '\\s*:\\s*(\\S.*?)\\s*$', 'im');
 ```
 
@@ -169,6 +172,8 @@ const intervalMs = 5000;
 
 // Loop over the findings.
 for (const finding of findings) {
+  report(finding);
+}
 ```
 
 ## Maintaining This File
