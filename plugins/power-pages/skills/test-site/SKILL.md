@@ -730,7 +730,7 @@ EOF
 ```
 or — when invoked from `plan-alm`, the orchestrator may supply the JSON inline. Either way, the marker file location is fixed: `docs/alm/last-test-site.json` (sibling to `docs/alm/last-deploy.json` and `docs/alm/last-pipeline.json`).
 
-**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — plan-alm Phase 7's per-target loop, `docs/alm/last-deploy.json`'s `stageName`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
+**Always include `stageName` in the marker when known.** The agent learns the stage label from the upstream context — `docs/alm/last-deploy.json`'s `stageName`, the plan's `stages[]`, or an explicit user mention. If the stage cannot be inferred (e.g. test-site invoked standalone against an arbitrary URL), set `stageName` to `null`; the refresh helper has fallback resolution paths but the explicit field is the most reliable signal.
 
 #### 6.7b Refresh the ALM plan (if one exists)
 
@@ -745,6 +745,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
 `{stageName}` is the stage label this run tested (e.g. `Staging`, `Production`). Pass an empty string when unknown — `refreshTestSite` falls back to (1) the marker's `stageName` field (set in 6.7a above), then (2) the single target stage in `planData.stages` if there's only one. Multi-stage plans with no explicit stageName + no marker stageName won't be captured (the refresh re-renders without a per-stage validationRun update); always pass it explicitly when you can.
 
 The helper reads `docs/alm/last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* (Typically: deploy/activate/test the next stage.) When `null` (this was the last step) or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 #### 6.8 Suggest Next Steps
 

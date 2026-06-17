@@ -256,7 +256,9 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (19 calls; orchestrator)
+### 6.1 `plan-alm` (15 calls; planner)
+
+> `plan-alm` is a **planner** — it produces an approved/draft HTML plan and never executes. The execution gates that used to live in Phases 5–8 (deploy-failure, post-deploy activation, manual export/import checkpoint) now belong to the individual ALM skills the user runs afterward; they are catalogued under those skills' sections, not here.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -273,12 +275,8 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `plan-alm:2.q3-manual` | gate | plan | 2 (Q3 Manual) | *"How many target envs?"* | nothing |
 | `plan-alm:2.q4-manual-target` | gate | plan | 2 (Q4 Manual per stage) | *"URL for target env {N}?"* | nothing |
 | `plan-alm:2.q5-manual-type` | gate | plan | 2 (Q5 Manual) | *"Export managed or unmanaged?"* | nothing |
-| `plan-alm:2.q6-manual-checkpoint` | gate | plan | 2 (Q6 Manual) | *"Pause between export and import?"* | nothing |
-| `plan-alm:4.approve` | gate | plan | 4 | *"Approve and execute / save for later / change something"* | nothing |
-| `plan-alm:4.approver-fallback` | not-a-gate | — | 4 | Free-text "approver name" — pure data-gathering | — |
-| `plan-alm:7.manual-checkpoint` | gate | progress | 7 (Manual path) | `MANUAL_CHECKPOINT=true` — *"Export done; proceed to import?"* | partial-manifest |
-| `plan-alm:7.deploy-failure` | gate | plan | 7 (Step A.1) | deploy-pipeline halted before completing — *"Retry / Skip stage / Exit"*. Fires per failed stage. | nothing |
-| `plan-alm:7.activate-step-b` | gate | plan | 7 (Step B) | Post-deploy activation prompt per stage — *"Activate now / skip"* | nothing |
+| `plan-alm:4.approve` | gate | plan | 4 | *"Save approved / Save draft / Change something"* — saves the plan; never executes | nothing |
+| `plan-alm:4.approver` | not-a-gate | — | 4 | Approver-name capture (option 1 only) — always-on interactive prompt with git/OS-name prefill; data-gathering for the audit trail | — |
 
 ---
 
@@ -724,7 +722,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 These are honest unresolved questions — not necessary to answer before v2 lands, but flagged for future tightening:
 
-- **Does `intent` need a sub-category for plan-alm itself?** plan-alm is the orchestrator; it doesn't have a Phase 0 ALM-plan gate (because it *is* the plan). The closest analogue is `plan-alm:1.deferral` (handle `.alm-deferred` marker) and `plan-alm:1.completeness` (completeness check). Both are tagged `progress` in §6.1 — defensible but worth a second look.
+- **Does `intent` need a sub-category for plan-alm itself?** plan-alm is the front-door planner; it doesn't have a Phase 0 ALM-plan gate (because it *is* the plan). The closest analogue is `plan-alm:1.deferral` (handle `.alm-deferred` marker) and `plan-alm:1.completeness` (completeness check). Both are tagged `progress` in §6.1 — defensible but worth a second look.
 - **Should `pause` gates be allowed to auto-resume?** Currently the lint rule would flag any tooling that auto-responds. But if PP Pipelines exposes a polling endpoint that detects approval state, a deterministic auto-resume becomes possible. Worth a future rule extension.
 - **Telemetry on gate cancellation.** A gate that's cancelled 80% of the time is asking the wrong question. Out of scope for v2; worth instrumenting once §5 lint lands.
 - **Multi-prompt gates.** Some entries in §6 cover multiple `AskUserQuestion` calls under one marker (e.g., `setup-solution:5.5*` is one logical gate but renders three multiSelect prompts). The lint rule says one marker can cover multiple calls if the catalog row documents it. Worth a more precise rule once we see drift.

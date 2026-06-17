@@ -69,7 +69,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -544,9 +544,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-`{targetLabel}` is the Manual-path target stage (e.g. `Staging`, `Production`) the just-completed import was for — usually carried in by the orchestrator (plan-alm Phase 7) or derivable from the target env URL. The helper reads `docs/alm/last-import.json`, captures the import outcome (status, version, component count, component failures) into `planData.manualImports[targetLabel]`, and re-renders `docs/alm-plan.html` so the matching `Import to {targetLabel}` checklist step shows an `IMPORTED` / `FAILED` badge with version + component count inline. Subsequent imports to OTHER targets each get their own entry — the renderer surfaces a per-target history rather than overwriting on each call.
+`{targetLabel}` is the Manual-path target stage (e.g. `Staging`, `Production`) the just-completed import was for — the user states it, or it is derivable from the target env URL. The helper reads `docs/alm/last-import.json`, captures the import outcome (status, version, component count, component failures) into `planData.manualImports[targetLabel]`, and re-renders `docs/alm-plan.html` so the matching `Import to {targetLabel}` checklist step shows an `IMPORTED` / `FAILED` badge with version + component count inline. Subsequent imports to OTHER targets each get their own entry — the renderer surfaces a per-target history rather than overwriting on each call.
 
 If `--stageName` is omitted the helper falls back to matching `docs/alm/last-import.json`'s `targetEnvironment` URL against `planData.stages[].envUrl`. When the match fails (rare — usually a stage-label/env-URL mismatch in planData), the import is captured under a synthetic key so it isn't silently lost; pass `--stageName` explicitly to keep the rendered plan clean. When `docs/.alm-plan-data.json` is absent, the helper returns `ok:false` as a soft no-op.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* (Typically: import to the next target, or activate the site in this target.) When `null` or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 ## Key Decision Points (Wait for User)
 

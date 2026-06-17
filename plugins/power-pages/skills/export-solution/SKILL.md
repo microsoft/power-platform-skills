@@ -73,7 +73,7 @@ The helper returns JSON with `{ exists, deferred, stale, staleness: { reason, de
 |---|---|---|
 | Run `/power-pages:plan-alm` first? | ALM plan gate | Yes — run /power-pages:plan-alm now (Recommended), Continue without a plan (advanced — I know what I'm doing), Cancel |
 
-- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. plan-alm's Phase 7 dispatches back into this skill at the appropriate stage.
+- **Yes (Recommended)** → invoke `/power-pages:plan-alm`. It builds the plan and returns — `plan-alm` is a planner and does not deploy. This skill then re-runs the Phase 0 check (now `exists:true`) and proceeds to Phase 1.
 - **Continue without a plan** → set `BYPASSED_PLAN_GATE = true` and proceed to Phase 1.
 - **Cancel** → exit cleanly.
 
@@ -377,7 +377,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --render
 ```
 
-Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not via plan-alm), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+Re-renders `docs/alm-plan.html` so any step-status updates the agent made during this skill (`Export solution` → `status-completed`) flow through. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* (Typically: review the exported zip, then run `/power-pages:import-solution` for the first target.) When `null` or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 ## Key Decision Points (Wait for User)
 

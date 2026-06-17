@@ -36,6 +36,11 @@
 //   finalize:
 //     - PLAN_STATUS = "Completed"
 //
+// stdout JSON includes `nextStep: { name, skill } | null` — the first
+// still-pending checklist step and the slash command that runs it. Execution
+// skills echo this so the user knows the next step to invoke (user-driven
+// sequencing — never auto-fired). null when every step is complete.
+//
 // Exit 0 on success (including no-op when planData missing — caller decides).
 // Exit 1 on argparse / fatal error.
 
@@ -70,6 +75,12 @@ const PHASES = new Set([
   'import-solution',
   'activate-site',
   'test-site',
+  // ensure-pipelines-host: host-only update from docs/alm/last-host-check.json.
+  // Distinct from 'setup-pipeline' (which also ingests last-pipeline.json + flips
+  // the "Setup pipeline" step) — this runs when the host was resolved/provisioned
+  // but the pipeline does not exist yet (e.g. the host install crossed a session
+  // boundary before setup-pipeline ran).
+  'ensure-pipelines-host',
   'finalize',
 ]);
 
@@ -81,6 +92,7 @@ function parseArgs(argv) {
     render: false,
     rendererPath: null,
     stageName: null,
+    reconcile: false,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
@@ -88,6 +100,7 @@ function parseArgs(argv) {
     else if (args[i] === '--render') out.render = true;
     else if (args[i] === '--rendererPath' && args[i + 1]) out.rendererPath = args[++i];
     else if (args[i] === '--stageName' && args[i + 1]) out.stageName = args[++i];
+    else if (args[i] === '--reconcile') out.reconcile = true;
   }
   return out;
 }
@@ -319,6 +332,25 @@ function refreshSetupPipeline(planData, projectRoot) {
   return planData;
 }
 
+// Host-only refresh from docs/alm/last-host-check.json. Used when the Pipelines
+// host was resolved/provisioned (ensure-pipelines-host) but the pipeline doesn't
+// exist yet — so we update `hostResolution` + drop the NoHost risks WITHOUT
+// flipping the "Setup pipeline" step or touching `pipelineMeta` (those belong to
+// the later setup-pipeline phase). This is what lets a host install that crossed
+// a session boundary still surface in the plan.
+function refreshEnsurePipelinesHost(planData, projectRoot) {
+  const hostCheck = readJson(almPath(projectRoot, 'lastHostCheck'));
+  if (hostCheck) {
+    const next = buildHostResolutionFromCheck(hostCheck);
+    if (next) planData.hostResolution = next;
+    mirrorHostResolutionSnapshot(planData, projectRoot);
+    // Drop the pre-run NoHost / *Unbound* / Platform-Host warnings now that the
+    // host is resolved (same set setup-pipeline clears).
+    planData.risks = dropResolvedRisks(planData.risks, 'setup-pipeline');
+  }
+  return planData;
+}
+
 function refreshDeployPipeline(planData, projectRoot) {
   // Refresh hostResolution from the most recent host-check (and mirror into
   // rawDiscovery.hostResolution if the plan was generated with that envelope).
@@ -419,8 +451,8 @@ function refreshDeployPipeline(planData, projectRoot) {
 
 function refreshTestSite(planData, projectRoot, stageName) {
   // Stage resolution: explicit --stageName arg wins; falls back to the
-  // marker's stageName field (test-site writes it when known, e.g. when
-  // plan-alm orchestrates the call); finally falls back to the FIRST target
+  // marker's stageName field (test-site writes it when known, e.g. from the
+  // upstream deploy context); finally falls back to the FIRST target
   // stage in planData.stages when planData has only one target. Standalone
   // single-stage test-site invocations work without --stageName via the
   // last fallback; multi-stage standalone runs need the explicit arg.
@@ -690,7 +722,7 @@ function refreshImportSolution(planData, projectRoot, stageName) {
   // targetEnvironment, importedAt, status, componentResults }. For Manual
   // path with multiple targets, the file reflects the MOST RECENT import —
   // not a per-stage history. We resolve the stage label from --stageName
-  // (passed by plan-alm Phase 7's per-target loop) or by matching
+  // (passed by import-solution's final-phase refresh) or by matching
   // docs/alm/last-import.json's targetEnvironment URL against planData.stages[].envUrl.
   // The result writes into planData.manualImports[stageName] (parallel to
   // validationRuns[stageName]) so reviewers see per-target outcome on the
@@ -854,6 +886,50 @@ function refreshConfigureEnvVariables(planData, projectRoot) {
   return planData;
 }
 
+// Map a checklist step name (planData.steps[].name) to the slash command that
+// runs it. Single source of truth for the "what runs next" lookup so the 8 ALM
+// execution skills don't each re-derive it in SKILL.md prose. Matched by keyword
+// because step names carry stage suffixes ("Deploy via pipeline to Staging").
+// `finalize` and any unmatched name return null — there is no user-invocable
+// skill for them.
+const STEP_TO_SKILL = [
+  { test: /\bsetup\s+solution\b/i, skill: '/power-pages:setup-solution' },
+  { test: /\bsetup\s+pipeline\b/i, skill: '/power-pages:setup-pipeline' },
+  { test: /\bconfigure\s+env(?:ironment)?\s+var/i, skill: '/power-pages:configure-env-variables' },
+  { test: /\bexport\b/i, skill: '/power-pages:export-solution' },
+  { test: /\bimport\b/i, skill: '/power-pages:import-solution' },
+  { test: /\bdeploy\b/i, skill: '/power-pages:deploy-pipeline' },
+  { test: /\bactivate\b/i, skill: '/power-pages:activate-site' },
+  { test: /\btest\s+site\b/i, skill: '/power-pages:test-site' },
+];
+
+function mapStepToSkill(stepName) {
+  if (typeof stepName !== 'string') return null;
+  for (const entry of STEP_TO_SKILL) {
+    if (entry.test.test(stepName)) return entry.skill;
+  }
+  return null;
+}
+
+// Compute the next recommended step a user should run: the first steps[] entry
+// that is still pending (not completed/failed/in_progress) and not opted-out
+// (skip !== true). Returns { name, skill } or null when nothing remains. The
+// execution skills echo this after their final-phase refresh so the user is
+// pointed at the next skill — without ever auto-firing it (user-driven
+// sequencing). `skill` is null when the pending step has no user-invocable
+// command (e.g. an internal "Finalize" step), so callers still get the name.
+function computeNextStep(planData) {
+  if (!planData || !Array.isArray(planData.steps)) return null;
+  for (const step of planData.steps) {
+    if (!step || typeof step.name !== 'string') continue;
+    if (step.skip === true) continue;
+    const status = step.status || 'pending';
+    if (status !== 'pending') continue;
+    return { name: step.name, skill: mapStepToSkill(step.name) };
+  }
+  return null;
+}
+
 function applyRefresh(planData, phase, projectRoot, stageName) {
   switch (phase) {
     case 'setup-solution':          return refreshSetupSolution(planData, projectRoot);
@@ -864,9 +940,110 @@ function applyRefresh(planData, phase, projectRoot, stageName) {
     case 'import-solution':         return refreshImportSolution(planData, projectRoot, stageName);
     case 'activate-site':           return refreshActivateSite(planData, projectRoot, stageName);
     case 'test-site':               return refreshTestSite(planData, projectRoot, stageName);
+    case 'ensure-pipelines-host':   return refreshEnsurePipelinesHost(planData, projectRoot);
     case 'finalize':                return refreshFinalize(planData);
     default: throw new Error('Unknown phase: ' + phase);
   }
+}
+
+// Marker key (alm-paths FILE_NAMES) -> the refresh phase that ingests it. Used by
+// the reconcile pass. `lastForceLink` is intentionally absent — there is no
+// force-link refresh phase. `lastPipeline` maps to setup-pipeline, which also
+// ingests lastHostCheck, so a present lastPipeline supersedes the host-only phase.
+const MARKER_TO_PHASE = Object.freeze({
+  lastPipeline:  'setup-pipeline',
+  lastHostCheck: 'ensure-pipelines-host',
+  lastDeploy:    'deploy-pipeline',
+  lastExport:    'export-solution',
+  lastImport:    'import-solution',
+  lastActivate:  'activate-site',
+  lastTestSite:  'test-site',
+  // lastEnvVars resolved dynamically (configure-env-variables vs setup-solution).
+});
+
+// Returns the mtime (ms) of a file, or 0 if it doesn't exist / can't be stat'd.
+function mtimeMs(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+// Reconcile: the enforcement backstop. Scans the ALM marker files and, for each
+// one that is NEWER than docs/.alm-plan-data.json (i.e. written by a skill whose
+// refresh step was skipped), applies the corresponding phase refresh against a
+// single loaded planData, writes once, and renders once. Idempotent — a marker
+// the plan already reflects (plan newer than marker) is skipped, so the steady
+// state is a cheap no-op. Honors the .alm-deferred opt-out and soft-no-ops when
+// there is no plan.
+function reconcile({ projectRoot, render, rendererPath }) {
+  if (!projectRoot) throw new Error('--projectRoot is required');
+  const dataPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
+  const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
+
+  // Respect the project-level ALM opt-out.
+  if (fs.existsSync(path.join(projectRoot, '.alm-deferred'))) {
+    return { ok: true, reconciled: [], rendered: false, reason: 'deferred' };
+  }
+  if (!fs.existsSync(dataPath)) {
+    return { ok: false, reconciled: [], rendered: false, reason: 'no-plan' };
+  }
+
+  const planMtime = mtimeMs(dataPath);
+
+  // Decide the env-var marker's phase: configure-env-variables when a
+  // deployment-settings.json is present (its per-stage values), else setup-solution.
+  const envVarPhase = fs.existsSync(path.join(projectRoot, 'deployment-settings.json'))
+    ? 'configure-env-variables'
+    : 'setup-solution';
+
+  // Collect pending phases (marker newer than the plan), deduped, in a stable order.
+  const pending = new Set();
+  for (const [markerKey, phase] of Object.entries(MARKER_TO_PHASE)) {
+    if (mtimeMs(almPath(projectRoot, markerKey)) > planMtime) pending.add(phase);
+  }
+  // lastHostCheck is covered by setup-pipeline when a pipeline marker is also
+  // pending — drop the host-only phase to avoid a redundant ingest.
+  if (pending.has('setup-pipeline')) pending.delete('ensure-pipelines-host');
+  if (mtimeMs(almPath(projectRoot, 'lastEnvVars')) > planMtime) pending.add(envVarPhase);
+
+  if (pending.size === 0) {
+    return { ok: true, reconciled: [], rendered: false };
+  }
+
+  // Deterministic application order (source schema first, host/pipeline, then
+  // per-stage outcomes). Only the phases actually pending are applied.
+  const ORDER = [
+    'setup-solution', 'configure-env-variables', 'ensure-pipelines-host',
+    'setup-pipeline', 'export-solution', 'import-solution',
+    'deploy-pipeline', 'activate-site', 'test-site',
+  ];
+  const phases = ORDER.filter((p) => pending.has(p));
+
+  let planData;
+  try {
+    planData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  } catch (e) {
+    throw new Error('Could not parse docs/.alm-plan-data.json: ' + e.message);
+  }
+
+  for (const phase of phases) {
+    try {
+      applyRefresh(planData, phase, projectRoot, null);
+    } catch {
+      // A single phase failing must not abort the reconcile — keep healing the rest.
+    }
+  }
+  fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
+
+  let rendered = false;
+  if (render) {
+    invokeRenderer(findRendererPath(rendererPath), dataPath, htmlPath);
+    rendered = true;
+  }
+
+  return { ok: true, reconciled: phases, rendered, nextStep: computeNextStep(planData) };
 }
 
 function findRendererPath(rendererPath) {
@@ -916,15 +1093,20 @@ function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
     rendered = true;
   }
 
-  return { ok: true, phase, dataPath, htmlPath, rendered };
+  // nextStep: the first still-pending checklist step + its skill command, so
+  // the calling execution skill can tell the user what to run next (user-driven
+  // sequencing — never auto-fired). null when the plan is fully executed.
+  const nextStep = computeNextStep(planData);
+
+  return { ok: true, phase, dataPath, htmlPath, rendered, nextStep };
 }
 
 if (require.main === module) {
   const args = parseArgs(process.argv);
   try {
-    const result = refresh(args);
+    const result = args.reconcile ? reconcile(args) : refresh(args);
     process.stdout.write(JSON.stringify(result) + '\n');
-    process.exit(result.ok ? 0 : 0);  // ok:false is a soft no-op (missing planData)
+    process.exit(0);  // ok:false (missing planData / deferred) is a soft no-op
   } catch (err) {
     process.stderr.write('refresh-alm-plan-data: ' + err.message + '\n');
     process.exit(1);
@@ -933,10 +1115,15 @@ if (require.main === module) {
 
 module.exports = {
   refresh,
+  reconcile,
   buildHostResolutionFromCheck,
   dropResolvedRisks,
   setStepStatus,
   backfillEnvVarValuesFromSettings,
   extractPerStageValues,
+  computeNextStep,
+  mapStepToSkill,
+  STEP_TO_SKILL,
+  MARKER_TO_PHASE,
   PHASES,
 };

@@ -8,8 +8,11 @@ const os = require('os');
 
 const {
   refresh,
+  reconcile,
   buildHostResolutionFromCheck,
   dropResolvedRisks,
+  computeNextStep,
+  mapStepToSkill,
 } = require('../lib/refresh-alm-plan-data');
 
 function makeProject(t) {
@@ -1592,4 +1595,194 @@ test('extractPerStageValues: defensive against null / wrong-type inputs', () => 
     Staging: { EnvironmentVariables: [null, { SchemaName: 'x' }, { SchemaName: 'y', Value: 'v' }] },
   });
   assert.deepEqual(result, { y: { Staging: 'v' } });
+});
+
+// --- nextStep (DRY next-step lookup for user-driven sequencing) ---------------
+
+test('mapStepToSkill: maps each step-name family to its slash command', () => {
+  assert.equal(mapStepToSkill('Setup solution'), '/power-pages:setup-solution');
+  assert.equal(mapStepToSkill('Setup pipeline'), '/power-pages:setup-pipeline');
+  assert.equal(mapStepToSkill('Export solution'), '/power-pages:export-solution');
+  assert.equal(mapStepToSkill('Import to Production'), '/power-pages:import-solution');
+  assert.equal(mapStepToSkill('Deploy via pipeline to Staging'), '/power-pages:deploy-pipeline');
+  assert.equal(mapStepToSkill('Activate site in Staging'), '/power-pages:activate-site');
+  assert.equal(mapStepToSkill('Test site in Production'), '/power-pages:test-site');
+  assert.equal(mapStepToSkill('Configure environment variables'), '/power-pages:configure-env-variables');
+  // No user-invocable skill → null (e.g. an internal finalize step or junk).
+  assert.equal(mapStepToSkill('Finalize'), null);
+  assert.equal(mapStepToSkill(''), null);
+  assert.equal(mapStepToSkill(undefined), null);
+});
+
+test('computeNextStep: returns the first pending step + its skill', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' });
+});
+
+test('computeNextStep: skips skip:true steps', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending', skip: true },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Deploy via pipeline to Staging', skill: '/power-pages:deploy-pipeline' });
+});
+
+test('computeNextStep: skips non-pending statuses (completed/failed/in_progress)', () => {
+  const next = computeNextStep({
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'failed' },
+      { name: 'Deploy via pipeline to Staging', status: 'in_progress' },
+      { name: 'Activate site in Staging', status: 'pending' },
+    ],
+  });
+  assert.deepEqual(next, { name: 'Activate site in Staging', skill: '/power-pages:activate-site' });
+});
+
+test('computeNextStep: treats a missing status as pending', () => {
+  const next = computeNextStep({ steps: [{ name: 'Setup solution' }] });
+  assert.deepEqual(next, { name: 'Setup solution', skill: '/power-pages:setup-solution' });
+});
+
+test('computeNextStep: returns null when every step is complete or there are no steps', () => {
+  assert.equal(computeNextStep({ steps: [{ name: 'Setup solution', status: 'completed' }] }), null);
+  assert.equal(computeNextStep({ steps: [] }), null);
+  assert.equal(computeNextStep({}), null);
+  assert.equal(computeNextStep(null), null);
+});
+
+test('refresh: surfaces nextStep in its return value after a phase refresh', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'pending' },
+      { name: 'Setup pipeline', status: 'pending' },
+      { name: 'Deploy via pipeline to Staging', status: 'pending' },
+    ],
+  });
+  // setup-solution refresh flips "Setup solution" → completed, so nextStep is Setup pipeline.
+  const result = refresh({ projectRoot: root, phase: 'setup-solution', render: false });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.nextStep, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' });
+});
+
+test('refresh: nextStep is null once the final pending step completes', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+    ],
+  });
+  const result = refresh({ projectRoot: root, phase: 'setup-pipeline', render: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextStep, null, 'all steps complete → nextStep null');
+});
+
+// --- reconcile (the enforcement backstop / auto-heal) ------------------------
+
+// Backdate the plan file so a just-written marker is unambiguously "newer".
+function backdatePlan(root, secondsAgo = 60) {
+  const p = path.join(root, 'docs', '.alm-plan-data.json');
+  const t = (Date.now() - secondsAgo * 1000) / 1000;
+  fs.utimesSync(p, t, t);
+}
+
+test('reconcile: heals a skipped refresh — a newer last-deploy.json is ingested', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T', pipelineMeta: { lastDeploy: null }, steps: [{ name: 'Deploy via pipeline to Staging', status: 'pending' }],
+    stages: [{ label: 'Staging', envUrl: 'https://stg.crm.dynamics.com/', type: 'target' }],
+  });
+  // Marker written AFTER the plan (skill ran but its refresh step was skipped).
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+    stageRunId: 'sr1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z',
+    artifactVersion: '1.0.0.2', componentCount: 118,
+  });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.reconciled, ['deploy-pipeline']);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.pipelineMeta.lastDeploy.status, 'Succeeded');
+  assert.equal(planData.pipelineMeta.lastDeploy.componentCount, 118);
+});
+
+test('reconcile: idempotent no-op when the plan already reflects the markers', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), { stageName: 'Staging', status: 'Succeeded' });
+  // Plan written AFTER the marker -> already reflected -> nothing pending.
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  const future = (Date.now() + 60 * 1000) / 1000;
+  fs.utimesSync(path.join(root, 'docs', '.alm-plan-data.json'), future, future);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.deepEqual(result.reconciled, []);
+});
+
+test('reconcile: host-only phase when only last-host-check.json is pending (no pipeline yet)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T',
+    hostResolution: { status: 'NoHost', hostEnvUrl: null },
+    pipelineMeta: null,
+    steps: [{ name: 'Setup pipeline', status: 'pending' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), {
+    resolutionStatus: 'AvailableUsingCustomHost',
+    finalHostEnvUrl: 'https://host.crm.dynamics.com/',
+    hostType: 'custom',
+  });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.deepEqual(result.reconciled, ['ensure-pipelines-host']);
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.equal(planData.hostResolution.status, 'AvailableUsingCustomHost');
+  assert.equal(planData.hostResolution.hostEnvUrl, 'https://host.crm.dynamics.com/');
+  assert.equal(planData.pipelineMeta, null, 'host-only phase must NOT fabricate pipelineMeta');
+  assert.equal(planData.steps[0].status, 'pending', 'host-only phase must NOT flip the Setup pipeline step');
+});
+
+test('reconcile: a pending last-pipeline.json supersedes the host-only phase', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T', steps: [{ name: 'Setup pipeline', status: 'pending' }] });
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), { resolutionStatus: 'AvailableUsingCustomHost', finalHostEnvUrl: 'https://h/' });
+  writeJson(path.join(root, 'docs', 'alm', 'last-pipeline.json'), { pipelineId: 'p1', pipelineName: 'My Pipeline', stages: [] });
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.ok(result.reconciled.includes('setup-pipeline'));
+  assert.ok(!result.reconciled.includes('ensure-pipelines-host'), 'setup-pipeline covers the host — no redundant host-only phase');
+});
+
+test('reconcile: honors the .alm-deferred opt-out (no-op)', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), { stageName: 'Staging', status: 'Succeeded' });
+  fs.writeFileSync(path.join(root, '.alm-deferred'), 'ni-dev — handled separately');
+  backdatePlan(root);
+
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.reconciled.length, 0);
+  assert.equal(result.reason, 'deferred');
+});
+
+test('reconcile: soft no-op when there is no plan', (t) => {
+  const root = makeProject(t);
+  const result = reconcile({ projectRoot: root, render: false });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'no-plan');
 });
