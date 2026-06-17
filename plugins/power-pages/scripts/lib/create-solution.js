@@ -80,12 +80,19 @@ async function createSolution({ envUrl, token, uniqueName, friendlyName, version
 
   if (res.error) throw new Error(`API request failed: ${res.error}`);
 
-  // 204: created (no body), extract ID from OData-EntityId header
+  // 201/204: created. Try response body first (Prefer: return=representation),
+  // then fall back to OData-EntityId header — Dataverse may return either.
   if (res.statusCode === 204 || res.statusCode === 201) {
-    const entityIdHeader = res.headers && (res.headers['odata-entityid'] || res.headers['OData-EntityId']);
-    const solutionId = extractGuidFromEntityId(entityIdHeader);
+    let solutionId = null;
+    if (res.body) {
+      try { solutionId = JSON.parse(res.body).solutionid || null; } catch { /* ignore parse errors, fall through */ }
+    }
     if (!solutionId) {
-      throw new Error(`Solution created but could not extract solutionId from OData-EntityId header: ${entityIdHeader}`);
+      const entityIdHeader = res.headers && (res.headers['odata-entityid'] || res.headers['OData-EntityId']);
+      solutionId = extractGuidFromEntityId(entityIdHeader);
+    }
+    if (!solutionId) {
+      throw new Error('Solution created but could not extract solutionId from response body or OData-EntityId header.');
     }
     return { solutionId, uniqueName, created: true };
   }

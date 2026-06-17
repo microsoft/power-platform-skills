@@ -1,0 +1,72 @@
+{
+  "skill_name": "git-commit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Commit my changes to git with the message 'Add contact form to home page'.",
+      "expected_output": "The skill verifies PAC CLI auth, probes the `pac pages git` sub-noun, verifies Azure CLI login, confirms the env is connected to Git via the helper script, queries pending changes (>0), uses the user-provided message verbatim (it appears in $ARGUMENTS), runs `pac pages git commit --solutionName <name> --message 'Add contact form to home page' --environment <url>`, then verifies via `pac pages git status` and the helper script that pendingCount dropped to 0. Records skill usage as GitCommit.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified via 'pac help'",
+        "The `pac pages git --help` sub-noun probe runs",
+        "Authentication is verified via 'pac auth who'",
+        "Azure CLI login is verified via 'az account show'",
+        "check-git-connection.js confirms `connected: true`; if false, the skill stops and suggests /git-connect",
+        "check-pending-changes.js is run and `pendingCount > 0` observed",
+        "The user-provided message in $ARGUMENTS is used directly without an additional prompt",
+        "`pac pages git commit` is invoked with --solutionName, --message, --environment",
+        "Bash timeout of at least 120 seconds is used",
+        "Verification runs `pac pages git status` and check-pending-changes.js — `0 pending changes` and `pendingCount: 0` observed",
+        "Skill usage is recorded with --skillName 'GitCommit' --authoringTool 'ClaudeCode'",
+        "Progress is tracked via TaskCreate/TaskUpdate per phase"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Push my latest changes to source control",
+      "expected_output": "The skill recognizes a git-commit intent without a message in $ARGUMENTS, queries pending changes, auto-generates a descriptive message based on the components, presents it via AskUserQuestion with 'Write my own message' as the alternative, and on user confirmation runs `pac pages git commit`.",
+      "files": [],
+      "expectations": [
+        "An auto-generated message is presented (e.g. 'Update Home Page, add Contact Form settings')",
+        "AskUserQuestion presents the auto-suggestion as Recommended and 'Write my own message' as the alternative",
+        "If the user picks the custom-message path, their freeform input becomes --message",
+        "The skill never invents component names not actually in the pending list"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/git-commit and there are no pending changes",
+      "expected_output": "Phase 2 runs check-pending-changes.js and observes pendingCount=0. The skill stops cleanly with the message: 'Everything is up to date with Git. No pending changes to commit.' and suggests /git-pull. It does NOT invoke `pac pages git commit` and does NOT trigger the empty-components NRE.",
+      "files": [],
+      "expectations": [
+        "The skill stops at Phase 2 when pendingCount is 0",
+        "`pac pages git commit` is NOT invoked",
+        "The user is told to consider /git-pull",
+        "Skill tracking is still recorded so the no-op invocation counts in telemetry"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/git-commit — but PAC CLI returns an error code 0x80040216",
+      "expected_output": "The skill catches the 0x80040216 NRE pattern, recognizes it as the empty-components edge case from error-catalog.md Pattern 1, and re-runs the helper script. If pendingCount is now 0, surfaces the friendly 'Nothing to commit yet' message rather than re-throwing the raw HResult. If pendingCount > 0 even after the recheck, instructs the user to file an ICM (real bug).",
+      "files": [],
+      "expectations": [
+        "The skill recognizes 0x80040216 / NullReferenceException as the empty-components NRE",
+        "The skill re-runs check-pending-changes.js to differentiate 'no changes' from 'real bug'",
+        "If recheck shows pendingCount=0, user sees a friendly message, not the raw HResult",
+        "If recheck shows pendingCount>0, the skill captures the response body and recommends filing an ICM"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/git-commit when env is not connected to Git",
+      "expected_output": "Phase 1.5 (Check Git Connection) calls check-git-connection.js, sees `connected: false`, and stops cleanly: 'This environment is not connected to Git. Run /git-connect first to set up source control.' Does NOT proceed to Phase 2.",
+      "files": [],
+      "expectations": [
+        "When connected: false, the skill stops at Phase 1.5",
+        "The skill does NOT call `pac pages git commit`",
+        "The user is directed to run /git-connect"
+      ]
+    }
+  ]
+}

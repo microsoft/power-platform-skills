@@ -1,0 +1,72 @@
+{
+  "skill_name": "git-pull",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Pull the latest from git into this env.",
+      "expected_output": "The skill verifies PAC CLI auth, probes the `pac pages git` sub-noun, verifies Azure CLI login, confirms the env is connected to Git, refreshes via `pac pages git status`, lists available updates via the helper script, checks for conflicts (none here), confirms the pull with the user, runs `pac pages git pull` (no --autoResolve since no conflicts), then verifies via status that availableCount is 0. Records skill usage as GitPull.",
+      "files": [],
+      "expectations": [
+        "PAC CLI is verified via 'pac help'",
+        "The `pac pages git --help` sub-noun probe runs",
+        "Authentication is verified via 'pac auth who'",
+        "Azure CLI login is verified via 'az account show'",
+        "check-git-connection.js confirms `connected: true`; if false, skill stops and suggests /git-connect",
+        "Phase 2.1 runs `pac pages git status` (which internally drives RefreshChangesFromGit)",
+        "Phase 2.2 runs check-available-updates.js and `availableCount > 0` observed",
+        "Phase 3 evaluates conflictCount from the helper; with 0 conflicts, the skill skips the conflict prompt",
+        "The user is asked via AskUserQuestion to confirm before pulling",
+        "`pac pages git pull` is invoked with --solutionName and --environment (no --autoResolve)",
+        "Bash timeout of at least 360 seconds is used",
+        "Verification runs `pac pages git status` and check-available-updates.js — no `available updates` line and `availableCount: 0` observed",
+        "Skill usage is recorded with --skillName 'GitPull' --authoringTool 'ClaudeCode'",
+        "Progress is tracked via TaskCreate/TaskUpdate per phase"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Sync this env from git, even if there are conflicts",
+      "expected_output": "Phase 3 sees conflicts > 0; AskUserQuestion presents three options: 'Accept Git version' (Recommended), 'Keep local version', 'Cancel pull'. User implicitly accepted incoming via the prompt phrasing, so the skill picks 'Accept Git version', then runs `pac pages git pull --autoResolve`. Verification expects all available components to be applied.",
+      "files": [],
+      "expectations": [
+        "AskUserQuestion is presented when conflictCount > 0",
+        "When 'Accept Git version' is chosen, --autoResolve is included",
+        "When 'Keep local version' is chosen, the user is told to manually resolve in the Studio first",
+        "When 'Cancel pull' is chosen, the skill stops cleanly"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/git-pull when there are no available updates",
+      "expected_output": "Phase 2 sees availableCount=0 and conflictCount=0. The skill stops cleanly: 'Your environment is up to date with Git. No changes to pull.' Suggests /git-commit if the user wants to push something.",
+      "files": [],
+      "expectations": [
+        "The skill stops at Phase 2 when availableCount and conflictCount are both 0",
+        "`pac pages git pull` is NOT invoked",
+        "Skill tracking is still recorded for the no-op invocation"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/git-pull but PAC CLI returns '3 conflicts detected' and exits 0",
+      "expected_output": "The skill recognizes Pattern 1 in error-catalog.md: PAC CLI was invoked without --autoResolve and returned a conflict count. The skill re-enters Phase 3 (conflict resolution prompt), and on user choice of 'Accept Git version' re-invokes `pac pages git pull --autoResolve`.",
+      "files": [],
+      "expectations": [
+        "Detecting `{n} conflicts detected` in stdout, the skill re-runs the conflict-resolution prompt without re-listing the components from scratch",
+        "On 'Accept Git version', --autoResolve is added and the pull is retried",
+        "The error catalog Pattern 1 is referenced explicitly in the skill's communication"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/git-pull when env is not connected to Git",
+      "expected_output": "Phase 1.5 sees connected: false and stops cleanly with 'Environment is not connected to Git. Run /git-connect first.' Does NOT proceed to Phase 2.",
+      "files": [],
+      "expectations": [
+        "When connected: false, the skill stops at Phase 1.5",
+        "The skill does NOT call `pac pages git status` or `pac pages git pull`",
+        "The user is directed to run /git-connect"
+      ]
+    }
+  ]
+}
