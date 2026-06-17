@@ -53,7 +53,7 @@ A field-test log of where Dataverse Git integration **does not match** the publi
 
 **Empirical reality** (HAR-confirmed against a development tenant):
 
-1. `POST /ConnectToGit` (`ConnectionType=0`) creates the folder `<rootFolder>/<gitFolder>/` in the ADO repo and writes a single auto-Readme commit, e.g.:
+1. `POST /ConnectToGit` (`ConnectionType=0`) creates the solution folder **at the `GitFolder` value verbatim** (see §3a) in the ADO repo and writes a single auto-Readme commit, e.g.:
    ```
    commit <sha>
    message "Creating new project folder solutions/<solutionUniqueName>"
@@ -70,8 +70,18 @@ A field-test log of where Dataverse Git integration **does not match** the publi
   - Wait for `sourcecontrolsyncstatus` to reach `3` (initial component staging done).
   - Count `sourcecontrolcomponents` with `iscommitted=false` → that's the post-bind pending-push count.
   - Tell the user: *"Folder seeded with SHA `<placeholder>`. N components are now staged as pending Changes. Next step: `/power-pages:git-sync --commit` to push them as the real initial commit."*
-  - Print the full ADO URL with `&path=/<rootFolder>/<gitFolder>` so they can see the (initially empty) folder.
+  - Print the full ADO URL with `&path=/<gitFolder>` (the verbatim solution folder path — see §3a) so they can see the (initially empty) folder.
 - `commit-to-git` must treat *"fresh bind with staged components"* as the normal first-run case, not as an edge case. Phase 1's "nothing to commit" exit must only fire when `iscommitted=false` count is actually 0.
+
+### §3a — Solution `GitFolder` is stored VERBATIM; `RootFolder` is NOT prepended (2026-06-16, live-verified)
+
+> ⚠️ Earlier framing in this doc and `git-integration-api-patterns.md` implied the platform concatenates `<rootFolder>/<gitFolder>` for solution placement. That is FALSE for the solution row.
+
+**Verified live** on sri-alm-dev-2 (orgcab84013), repo `GitIntegration22/srijan-pp-alm/srijan-pp-alm-2`:
+- Bind with `--gitFolder sriSol1 --rootFolder solutions` → the `sourcecontrolbranchconfigurations` **solution row** (`partitionid = <solutionId>`) got `rootfolderpath = "sriSol1"` and content landed at ADO `/sriSol1` (repo root); `/solutions/sriSol1` was 404.
+- Re-bind with `--gitFolder "solutions/sriSol1"` → `rootfolderpath = "solutions/sriSol1"` and content landed at ADO `/solutions/sriSol1`.
+
+**Conclusion:** the **`GitFolder` value alone** determines the solution's repo path (stored verbatim). `--rootFolder` feeds only the **env-level row** (`partitionid = 00000000-0000-0000-0000-000000000000`); it is never prepended to the solution path. To place a solution under `solutions/`, the caller MUST pass `--gitFolder "solutions/<name>"`. The `check-ado-folder-exists.js` occupancy probe accepts these multi-segment forward-slash paths accordingly.
 
 ---
 

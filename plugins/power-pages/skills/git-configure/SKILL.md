@@ -36,7 +36,7 @@ model: opus
 1. **No hidden Dataverse mutations.** Phases 6 and 7 always gate before `ConnectToGit`, `DisconnectFromGit`, `switch-branch.js`, or solution enable/commit follow-ups.
 2. **Never persist ADO JWTs.** ADO helpers acquire an ADO-scoped Entra token in-process via `az` when no explicit token is supplied; the token is never written to disk, printed, or placed on a command line. Require the user's `az login` session to be current. Locked-down or CI environments can set `POWERPAGES_NO_ADO_ACQUIRE=1` so helpers fail instead of attempting interactive acquisition.
 3. **Use deterministic helpers.** Do not inline Dataverse or ADO REST calls when a helper exists.
-4. **Folder values are names, not paths.** Reject `/`, `\`, leading/trailing slash, and whitespace-only. Do not silently sanitize trailing slashes; re-prompt with the helper text.
+4. **Folder values are validated by binding type.** For **env binding** the folder is a single name — reject `/`, `\`, leading/trailing slash, and whitespace-only. For **solution binding** the `gitFolder` is a repo-relative *path* that MAY contain forward-slash segments (e.g. `solutions/<solutionName>`); reject `\`, leading/trailing slash, and empty/`.`/`..`/whitespace-only segments. Solution content lands at `/<gitFolder>/` in the repo and Dataverse stores the value **verbatim** (the `--rootFolder` arg is for the env-level row and is NOT prepended to the solution path), so to place files under `solutions/` the leading segment must be part of `gitFolder`. Do not silently sanitize; re-prompt with the helper text.
 5. **Plan and final consent gates always fire.** Headless mode removes discovery prompts only, never safety prompts.
 6. **Cancel before Phase 7 leaves no Dataverse mutation.** After a Phase 7 mutation failure, clearly report the partial state and recovery route.
 7. **ConnectionType is explicit.** Env binding calls `connect-to-git.js` (`ConnectionType=1`); solution binding calls `connect-solution-to-git.js` (`ConnectionType=0`).
@@ -96,15 +96,38 @@ Steps:
    > Nothing is committed without your explicit consent. You can stop at any prompt.
    Skip the preamble for `switch-branch`, `rebind`, `disconnect`, and re-runs on an already-bound env.
 
-3. **Resolve `<envUrl>` (U1 live picker).** Order: explicit argument → `powerpages.config.json` → `detect-project-context.js`. If still unresolved (the common first-time case), run the live picker instead of demanding the user knows the URL:
+3. **Resolve and CONFIRM `<envUrl>` (U1 live picker — always confirm the active env).** The active PAC environment is the target of every Dataverse mutation in this run, so never assume it silently — confirm it explicitly even when an env URL is resolvable from context. Always, in every mode:
 
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-environments.js"
-   ```
+   1. Read the active PAC env (its friendly name + Org URL):
 
-   - If `ok:true` and `count >= 2`, surface an `AskUserQuestion` listing `friendlyName — url (geo)`, default env first.
-   - If `ok:true` and `count === 1`, auto-select with a progress message.
-   - If `ok:false`, show the helper `hint` and fall back to a free-text `<envUrl>` prompt with validation (`https://*.crm.dynamics.com`). Never hard-fail solely because PAC is unavailable.
+      ```bash
+      pac env who
+      ```
+
+   2. List all available envs:
+
+      ```bash
+      node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/list-environments.js"
+      ```
+
+   3. Fire the env-confirm gate below.
+
+   The *suggested default* is resolved in order — explicit argument → `powerpages.config.json` → `detect-project-context.js` → PAC active env — but the suggestion never bypasses the confirm prompt. Skip the picker (confirm silently) only for `--non-interactive` runs where `--envUrl` is supplied.
+
+<!-- gate: git-configure:1.env-confirm | category=intent | cancel-leaves=nothing -->
+> 🚦 **Gate (intent · git-configure:1.env-confirm):** Fires in every interactive run, before any preflight or mutation, to confirm the target environment. Surface `AskUserQuestion`:
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | PAC is signed into `{activeFriendlyName}` (`{activeUrl}`). Use this environment, or switch? | Target environment | `{activeFriendlyName} — {activeUrl} (active)`, …one option per other env as `{friendlyName} — {url} ({geo})`…, ➕ Connect to a different environment (sign in / enter URL), Cancel |
+>
+> - On the active env, continue with `<envUrl> = activeUrl`.
+> - On a different **listed** env, run `pac org select --environment <url>`, re-run `pac env who`, and continue only once the active env matches the pick.
+> - On **"➕ Connect to a different environment…"**, prompt for an env URL (validate `https://*.crm.dynamics.com`); if PAC is not authenticated to it, guide the user through `pac auth create --environment <url>`, then re-verify with `pac env who`.
+> - If `list-environments.js` returns `ok:true` and `count === 1`, still present that single env as the one explicit choice (plus the ➕ and Cancel options) — never auto-select.
+> - If `list-environments.js` returns `ok:false`, show its `hint` and fall back to a free-text `<envUrl>` prompt with validation (`https://*.crm.dynamics.com`). Never hard-fail solely because PAC is unavailable.
+>
+> Cancellation leaves nothing; no Dataverse or ADO mutation has happened. Once the user confirms here, the explicit-arg mismatch gate (`git-configure:1.envurl-mismatch`) will already agree and won't re-prompt.
 
 <!-- gate: git-configure:1.prereq-fail | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-configure:1.prereq-fail):** Fires when PAC/Az auth is missing, env URL cannot be resolved, required context is malformed, or an explicit mode is impossible in the current binding state. Surface `AskUserQuestion`:
@@ -338,7 +361,16 @@ Steps:
 
    Present `branches[]` as choices (mark the `defaultBranch` row as "(default)"), ending with **"➕ Create new branch…"** and **"Cancel"**. If the repo is empty (`emptyRepo:true`), there are no branches yet — offer only "➕ Create new branch…" (default name `main`) + Cancel. For switch-branch, exclude the current bound branch from the pick list (switching to the same branch is a no-op); if the user wants a brand-new branch, "➕ Create new branch…" prompts for the name. Do not auto-create a branch — creation is an explicit pick.
 
-6. **Folder (choice).** Call `list-ado-folders.js` and present existing top-level folders as a choice list, ending with **"➕ New folder…"** and **"Cancel"**. Never silently default to `solutions` or the solution unique-name — surface those as suggested choices the user picks. "➕ New folder…" prompts for a name with helper text: "Folder name only — no slashes, no path separators." Reject `/`, `\`, leading/trailing slash, and whitespace-only, and re-prompt.
+6. **Folder (choice).** Call `list-ado-folders.js` to enumerate existing top-level folders, then present the destination as a choice list. **The presentation differs by binding type — never conflate the two:**
+
+   - **Env binding** — the folder is a single top-level name. Present existing top-level folders + **"➕ New folder…"** + **"Cancel"**. "➕ New folder…" helper text: *"Folder name only — no slashes, no path separators."* Reject `/`, `\`, leading/trailing slash, and whitespace-only, then re-prompt.
+   - **Solution binding** — the `gitFolder` is the **full repo-relative path** where this solution's files will live (Dataverse stores it verbatim and writes to `/<gitFolder>/`). Present these choices so the user never has to reason about `rootFolder` vs leaf:
+     - **`solutions/{solutionUniqueName}`** (recommended — keeps every solution under a shared `solutions/` parent), shown whether or not `/solutions` exists yet.
+     - **`{solutionUniqueName}`** (repo root — the solution gets its own top-level folder).
+     - One option per existing top-level folder as **`{existingFolder}/{solutionUniqueName}`** (nest under a folder that already exists).
+     - **"➕ Custom path…"** — helper text: *"Repo-relative path, forward slashes only (e.g. `solutions/{solutionUniqueName}`). No backslashes, no leading/trailing slash, no `.`/`..` segments."*
+     - **"Cancel"**.
+     Pass the chosen value through as a single `--gitFolder` (it may contain `/`); validate it with the solution-binding rules in invariant 4 before continuing. Do **not** ask a separate "parent folder" question and do **not** try to split the path into `rootFolder` + leaf for placement — `gitFolder` alone determines where files land.
 
 7. **Env-binding folder coexistence.** If env binding picks an existing non-empty folder, fire the coexistence gate.
 
@@ -351,7 +383,7 @@ Steps:
 >
 > Choosing another loops to folder selection. Cancellation leaves nothing.
 
-8. **Solution-binding folder occupancy.** Run `check-ado-folder-exists.js` on branch/folder; if item count > 0, fire the occupancy gate.
+8. **Solution-binding folder occupancy.** Run `check-ado-folder-exists.js` with `--branch` and the **full** `--gitFolder` path chosen in step 6 (the helper accepts nested paths like `solutions/{name}`); if item count > 0, fire the occupancy gate.
 
 <!-- gate: git-configure:4.folder-occupied | category=consent | cancel-leaves=nothing -->
 > 🚦 **Gate (consent · git-configure:4.folder-occupied):** Solution-binding only. Surface `AskUserQuestion`:
@@ -417,14 +449,16 @@ Steps:
 3. Show reversibility and blast radius alongside the plan text.
 4. Fire ONE gate appropriate to the mode (the gates below are mutually exclusive — exactly one fires per run). On the "Change a field" option, loop back to Phase 3 for binding type or Phase 4 for ADO coordinates, depending on what changed. Cancellation in any of these gates leaves nothing — no Dataverse mutation has happened.
 
+   **Consent-question clarity (required).** Word every Phase 6 question so the user cannot mistake it for an earlier *planning* prompt (e.g. the binding-type or solution pick). The question MUST: (a) name the concrete action as the FINAL step — "bind", "disconnect", "rebind" — not a generic "execute {mode}"; (b) spell out the exact target (solution/env + `org/project/repo@branch` + folder); (c) state that confirming **performs the Dataverse Git change now**; and (d) make the verb on the confirm option match the action ("Bind now" / "Disconnect now" / "Rebind now"), never a bare "Yes". This is the only prompt in the run that mutates Dataverse — say so.
+
 <!-- gate: git-configure:6.consent-setup | category=consent | cancel-leaves=nothing -->
 > 🚦 **Gate (consent · git-configure:6.consent-setup):** Setup and switch-branch modes only. Single consent — combines plan review and execute. Surface `AskUserQuestion`:
 >
 > | Question | Header | Options |
 > |---|---|---|
-> | Execute `{mode}` on `{envHost}` now? Plan above. | Git configure consent | Execute now, Change a field, Cancel |
+> | **Final step — apply this Git binding now?** This performs the Dataverse Git connection (the actual change), not a re-ask of an earlier choice. {For solution binding:} Bind solution `{solutionUniqueName}` to `{org}/{project}/{repo}` branch `{branch}`, folder `/{gitFolder}/`. {For env binding:} Bind environment `{envHost}` to `{org}/{project}/{repo}` branch `{branch}`, folder `/{gitFolder}/`. {For switch-branch:} Move the existing binding to branch `{branch}`. | Apply Git binding | Bind now, Change a field, Cancel |
 >
-> On "Execute now", proceed directly to Phase 7 dispatch (`connect-to-git.js` / `connect-solution-to-git.js` / `switch-branch.js`).
+> The confirm verb must reflect the action ("Bind now" for setup, "Switch branch now" for switch-branch). On confirm, proceed directly to Phase 7 dispatch (`connect-to-git.js` / `connect-solution-to-git.js` / `switch-branch.js`).
 
 <!-- gate: git-configure:6.consent-disconnect | category=consent | cancel-leaves=nothing -->
 > 🚦 **Gate (consent · git-configure:6.consent-disconnect):** Disconnect mode only. Single consent — combines plan review and execute. Surface `AskUserQuestion`:
@@ -455,7 +489,7 @@ Steps:
 Execution details:
 
 1. **Setup/env:** call `connect-to-git.js` with `--envUrl`, `--organization`, `--project`, `--repository`, `--branch`, and `--gitFolder`.
-2. **Setup/solution:** call `connect-solution-to-git.js` with `--envUrl`, `--solutionUniqueName`, ADO fields, `--rootFolder "solutions"`, and `--gitFolder`.
+2. **Setup/solution:** call `connect-solution-to-git.js` with `--envUrl`, `--solutionUniqueName`, ADO fields, `--gitFolder "<fullPath>"` (the full repo-relative path chosen in Phase 4 step 6 — e.g. `solutions/{name}` or `{name}`; this alone determines where files land), and `--rootFolder "<topSegment>"` (the first path segment of `gitFolder`, e.g. `solutions`; for a repo-root single-segment path pass that same name). `--rootFolder` is only required for the FIRST solution binding on the env and feeds the env-level row — it is never prepended to `gitFolder`.
 3. **Switch-branch:** call `switch-branch.js --envUrl <envUrl> --newBranch <newBranch>`.
 4. **Rebind:** call `disconnect-from-git.js`, poll until `detect-git-binding.js` reports unbound, then call the correct connect helper for the approved binding type.
 5. **Disconnect:** call `disconnect-from-git.js` and do not reconnect.
@@ -497,7 +531,7 @@ Steps:
 6. Update the single Git-integration manifest at `docs/inner-loop/.git-integration-manifest.json` through the manifest path helper. Do not write a project-root or env-root duplicate. For bound states, write canonical binding fields. For switch, update branch and `lastVerifiedAt`; leave `lastCommitSha` unchanged. For disconnect, mark the manifest disconnected or remove only the binding fields according to the existing manifest convention; never fabricate a bound state. The `docs/inner-loop/` folder is auto-gitignored fail-closed.
 7. Write the run marker with `gitConfigurePath(root, 'lastGitConfigure')`. Include `skill:"git-configure"`, `mode`, status, envUrl, oldBinding, newBinding, warnings, marker version, and timestamps.
 8. **Write a per-run trace (N5).** Call `write-run-trace.js` with the structured run record (mode, phase timings, gate decisions, mutations, finalState). Traces are append-only history under `docs/inner-loop/git-configure-traces/<UTC-iso>.json` with 30-day / 100-file retention. NEVER pass raw helper stdout or any token value — the helper redacts to an allow-list, but callers must supply structured fields only.
-9. **Final summary (O3 + O6).** For bound states, print the ADO browse URL **inline in the success message** (single clickable line) with `path=/<rootFolder>/<gitFolder>` so the user lands in the Dataverse-managed folder, not repo root. When the manifest's `lastCommitSha === null` (the user is seeing the post-bind state for the first time), also print the 3-commit explainer inline so they don't panic: *"You may see up to 3 commits in ADO — a placeholder commit, a README commit, and your first real commit. This is normal for a fresh binding."*
+9. **Final summary (O3 + O6).** For bound states, print the ADO browse URL **inline in the success message** (single clickable line) with `path=/<gitFolder>` (the full repo-relative solution path, or `/<rootFolder>/<gitFolder>` for env binding) so the user lands in the Dataverse-managed folder, not repo root. When the manifest's `lastCommitSha === null` (the user is seeing the post-bind state for the first time), also print the 3-commit explainer inline so they don't panic: *"You may see up to 3 commits in ADO — a placeholder commit, a README commit, and your first real commit. This is normal for a fresh binding."*
 
 **Output:** Round-trip verified, manifest updated, `last-git-configure.json` written.
 
@@ -655,19 +689,20 @@ Non-gate legacy safety checks also preserved:
 
 ## Key decision points
 
-1. Phase 1: prereq fail or impossible mode (`git-configure:1.prereq-fail`).
-2. Phase 1: explicit env URL differs from PAC target (`git-configure:1.envurl-mismatch`).
-3. Phase 2: Managed Env warning (`git-configure:2.managed-env-warn`).
-4. Phase 2: BYOK/CMK warning (`git-configure:2.byok-cmk-warn`).
-5. Phase 2: license warning (`git-configure:2.license-warn`).
-6. Phase 2: ADO permissions failure (`git-configure:2.ado-perms-fail`).
-7. Phase 2: empty repo initialization (`git-configure:2.repo-init`).
-8. Phase 3: two-layer explainer and binding choice (`git-configure:3.two-layer-explainer`, `git-configure:3.binding-type`).
-9. Phase 4: create project/repo, folder co-existence, folder occupancy, shared-object overlap.
-10. Phase 5: workspace dirty hard stop.
-11. Phase 6: single mode-appropriate consent — `git-configure:6.consent-setup` (setup/switch) OR `git-configure:6.consent-disconnect` OR `git-configure:6.consent-rebind`. Plan-render is rolled into the same prompt; Phase 7 has no gates.
-12. Phase 7: pure execution and partial-failure reporting (no gates).
-13. Phase 9: env-bind solution enable and initial commit loops.
-14. Phase 10: final routing.
+1. Phase 1: confirm/switch target environment (`git-configure:1.env-confirm`).
+2. Phase 1: prereq fail or impossible mode (`git-configure:1.prereq-fail`).
+3. Phase 1: explicit env URL differs from PAC target (`git-configure:1.envurl-mismatch`).
+4. Phase 2: Managed Env warning (`git-configure:2.managed-env-warn`).
+5. Phase 2: BYOK/CMK warning (`git-configure:2.byok-cmk-warn`).
+6. Phase 2: license warning (`git-configure:2.license-warn`).
+7. Phase 2: ADO permissions failure (`git-configure:2.ado-perms-fail`).
+8. Phase 2: empty repo initialization (`git-configure:2.repo-init`).
+9. Phase 3: two-layer explainer and binding choice (`git-configure:3.two-layer-explainer`, `git-configure:3.binding-type`).
+10. Phase 4: create project/repo, folder co-existence, folder occupancy, shared-object overlap.
+11. Phase 5: workspace dirty hard stop.
+12. Phase 6: single mode-appropriate consent — `git-configure:6.consent-setup` (setup/switch) OR `git-configure:6.consent-disconnect` OR `git-configure:6.consent-rebind`. Plan-render is rolled into the same prompt; Phase 7 has no gates.
+13. Phase 7: pure execution and partial-failure reporting (no gates).
+14. Phase 9: env-bind solution enable and initial commit loops.
+15. Phase 10: final routing.
 
 **Begin with Phase 0: Mode Detection.**

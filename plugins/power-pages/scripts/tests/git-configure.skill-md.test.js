@@ -49,6 +49,7 @@ function escapeRegExp(value) {
 }
 
 const expectedGateIds = [
+  '1.env-confirm',
   '1.prereq-fail',
   '1.envurl-mismatch',
   '1.artifact-path',
@@ -68,10 +69,9 @@ const expectedGateIds = [
   '4.folder-occupied',
   '4.shared-object-overlap',
   '5.workspace-dirty',
-  '6.plan',
-  '7.consent',
-  '7.disconnect-consent',
-  '7.rebind-consent',
+  '6.consent-setup',
+  '6.consent-disconnect',
+  '6.consent-rebind',
   '8.recovery',
   '9.enable-approach',
   '9.enable-solution',

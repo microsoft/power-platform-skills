@@ -16,6 +16,7 @@ const {
   isEmptyRepo404,
   normalizeBranch,
   normalizeGitFolder,
+  validateGitFolderPath,
 } = require('../lib/check-ado-folder-exists');
 
 // ===== constants + small helpers =====
@@ -83,26 +84,61 @@ test('required-arg validation: --token missing', async () => {
   assert.equal(r.ok, false); assert.match(r.error, /token/);
 });
 
-test('embedded slash in --gitFolder is rejected before any network call (defensive)', async () => {
+test('validateGitFolderPath: single + nested forward-slash paths are accepted', () => {
+  assert.equal(validateGitFolderPath('solutions').ok, true);
+  assert.equal(validateGitFolderPath('solutions/RetailOS').ok, true);
+  assert.equal(validateGitFolderPath('a/b/c').ok, true);
+});
+
+test('validateGitFolderPath: backslashes, empty, "." and ".." segments are rejected', () => {
+  assert.equal(validateGitFolderPath('solutions\\sub').ok, false);
+  assert.match(validateGitFolderPath('solutions\\sub').error, /backslashes/);
+  assert.equal(validateGitFolderPath('solutions//RetailOS').ok, false);
+  assert.equal(validateGitFolderPath('solutions/./RetailOS').ok, false);
+  assert.equal(validateGitFolderPath('solutions/../secret').ok, false);
+  assert.match(validateGitFolderPath('solutions/../secret').error, /invalid path segment/);
+});
+
+test('nested forward-slash --gitFolder (solution binding) is accepted and probes the full path', async () => {
+  let itemsUrl;
+  let idx = 0;
+  const r = await checkAdoFolderExists({
+    organization: 'o', project: 'p', repository: 'r',
+    gitFolder: 'solutions/RetailOS', branch: 'main', token: 't',
+    _makeRequestImpl: async (opts) => {
+      idx++;
+      if (idx === 1) return { statusCode: 200, body: JSON.stringify({ value: [{ objectId: 'sha' }] }) };
+      itemsUrl = opts.url;
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.gitFolder, 'solutions/RetailOS');
+  assert.match(itemsUrl, /scopePath=%2Fsolutions%2FRetailOS%2F/);
+});
+
+test('embedded backslash in --gitFolder is rejected before any network call (defensive)', async () => {
   let called = false;
   const r = await checkAdoFolderExists({
     organization: 'o', project: 'p', repository: 'r',
-    gitFolder: 'solutions/sub', branch: 'main', token: 't',
+    gitFolder: 'solutions\\sub', branch: 'main', token: 't',
     _makeRequestImpl: async () => { called = true; return { statusCode: 200, body: '{}' }; },
   });
   assert.equal(r.ok, false);
-  assert.match(r.error, /must be a single folder name/);
-  assert.equal(called, false, 'helper must not make any HTTP call when --gitFolder is malformed');
+  assert.match(r.error, /backslashes/);
+  assert.equal(called, false, 'helper must not make any HTTP call when --gitFolder uses backslashes');
 });
 
-test('embedded backslash in --gitFolder is also rejected', async () => {
+test('empty/".." path segment in --gitFolder is rejected before any network call', async () => {
+  let called = false;
   const r = await checkAdoFolderExists({
     organization: 'o', project: 'p', repository: 'r',
-    gitFolder: 'solutions\\sub', branch: 'main', token: 't',
-    _makeRequestImpl: async () => ({ statusCode: 200, body: '{}' }),
+    gitFolder: 'solutions/../secret', branch: 'main', token: 't',
+    _makeRequestImpl: async () => { called = true; return { statusCode: 200, body: '{}' }; },
   });
   assert.equal(r.ok, false);
-  assert.match(r.error, /must be a single folder name/);
+  assert.match(r.error, /invalid path segment/);
+  assert.equal(called, false, 'helper must not make any HTTP call when a path segment is invalid');
 });
 
 // ===== happy paths =====

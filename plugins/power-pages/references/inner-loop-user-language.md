@@ -36,46 +36,45 @@ These can appear when they help the user:
 
 ## 3. Phase / progress numbering
 
-Inner-loop skills have 8–11 internal phases, but a single user request rarely touches all of them (e.g. disconnect skips Phase 3 and 4). The user should see a clean sequential progress count for THEIR run, with the real internal phase in parentheses for traceability.
+Inner-loop skills have 8–11 internal phases, but a single user request rarely touches all of them (e.g. disconnect skips Phase 3 and 4). The user should see a clean sequential progress count for THEIR run — internal phase numbers stay internal.
 
 **Pattern:**
 
 ```
-Phase {visibleN} (internal: {realPhase}) — {plainTitle}
+Phase {N} — {plainTitle}
 ```
 
-- `visibleN` = sequential 1, 2, 3, … counting only phases that actually fire on this run.
-- `realPhase` = the SKILL.md phase number this corresponds to.
+- `N` = sequential 1, 2, 3, … counting only phases that actually fire on this run.
 - `plainTitle` = a 2–4 word user-friendly title (no "Render Plan + Single Consent Gate" — say "Plan & consent" instead).
 
 **Example — disconnect run:**
 
-| Visible | Internal | Title |
-|---|---|---|
-| Phase 1 (internal: 0) | Detecting what to do |
-| Phase 2 (internal: 1) | Discovering current binding |
-| Phase 3 (internal: 2) | Preflight checks |
-| Phase 4 (internal: 5) | Verifying workspace is clean |
-| Phase 5 (internal: 6) | Plan & consent |
-| Phase 6 (internal: 7) | Disconnecting |
-| Phase 7 (internal: 8) | Verifying & saving record |
-| Phase 8 (internal: 10) | Done |
+```
+Phase 1 — Detecting what to do
+Phase 2 — Discovering current binding
+Phase 3 — Preflight checks
+Phase 4 — Verifying workspace is clean
+Phase 5 — Plan & consent
+Phase 6 — Disconnecting
+Phase 7 — Verifying & saving record
+Phase 8 — Done
+```
 
 **Example — setup run:**
 
-| Visible | Internal | Title |
-|---|---|---|
-| Phase 1 (internal: 0) | Detecting what to do |
-| Phase 2 (internal: 1) | Discovering project & environment |
-| Phase 3 (internal: 2) | Preflight checks |
-| Phase 4 (internal: 3) | Choosing binding strategy |
-| Phase 5 (internal: 4) | Choosing ADO coordinates |
-| Phase 6 (internal: 6) | Plan & consent |
-| Phase 7 (internal: 7) | Connecting |
-| Phase 8 (internal: 8) | Verifying & saving record |
-| Phase 9 (internal: 10) | Done |
+```
+Phase 1 — Detecting what to do
+Phase 2 — Discovering project & environment
+Phase 3 — Preflight checks
+Phase 4 — Choosing binding strategy
+Phase 5 — Choosing ADO coordinates
+Phase 6 — Plan & consent
+Phase 7 — Connecting
+Phase 8 — Verifying & saving record
+Phase 9 — Done
+```
 
-The agent should **announce the visible phase title before starting work** in that phase, then **report a one-line outcome** when the phase finishes. No need to announce phases that auto-complete in <1s.
+The agent should **announce the visible phase title before starting work** in that phase, then **report a one-line outcome** when the phase finishes. No need to announce phases that auto-complete in <1s. Never show the internal SKILL.md phase number to the user.
 
 ## 4. The plan-render table — keep as-is
 

@@ -111,17 +111,47 @@ function normalizeBranch(branch) {
   return b || null;
 }
 
-// Strip leading and trailing slashes; the 3e sub-step's prompt forbids
-// trailing slashes but a defensive strip here keeps the helper usable
-// from contexts that haven't been through that validation (tests, ad-hoc
-// CLI use). DOES NOT silently sanitize embedded slashes — those still
-// produce an error.
+// Strip leading and trailing slashes; the folder prompt forbids trailing
+// slashes but a defensive strip here keeps the helper usable from contexts
+// that haven't been through that validation (tests, ad-hoc CLI use). For
+// SOLUTION binding the gitFolder is a repo-relative PATH that may legitimately
+// contain forward-slash segments (e.g. "solutions/RetailOS") — ConnectToGit
+// stores it verbatim and writes content to /<gitFolder>/ in the repo, so the
+// occupancy probe must accept the same nested path. DOES NOT silently sanitize
+// embedded backslashes or empty/dot segments — those still produce an error
+// via validateGitFolderPath.
 function normalizeGitFolder(folder) {
   if (!folder) return null;
   let f = String(folder).trim();
   if (f.startsWith('/')) f = f.slice(1);
   if (f.endsWith('/')) f = f.slice(0, -1);
   return f || null;
+}
+
+// Validates a (possibly multi-segment) repo-relative folder path. Forward
+// slashes ARE allowed so solution bindings can target nested folders like
+// "solutions/RetailOS" — this is the value ConnectToGit stores verbatim. We
+// reject backslashes (Windows separators leaking in) and any empty / "." /
+// ".." / whitespace-only segment. Returns { ok:true } or { ok:false, error, hint }.
+function validateGitFolderPath(gitFolder) {
+  if (/\\/.test(gitFolder)) {
+    return {
+      ok: false,
+      error: `--gitFolder must use forward slashes, not backslashes. Got: "${gitFolder}".`,
+      hint: 'Use a repo-relative path with forward slashes, e.g. "solutions/RetailOS".',
+    };
+  }
+  const segments = gitFolder.split('/');
+  for (const seg of segments) {
+    if (seg.trim() === '' || seg === '.' || seg === '..') {
+      return {
+        ok: false,
+        error: `--gitFolder has an invalid path segment ("${seg}") in "${gitFolder}".`,
+        hint: 'Each path segment must be a real folder name — no empty, "." or ".." segments.',
+      };
+    }
+  }
+  return { ok: true };
 }
 
 /**
@@ -149,12 +179,13 @@ async function checkAdoFolderExists(options = {}) {
   if (!gitFolder) return failure(null, '--gitFolder is required');
   if (!branch) return failure(null, '--branch is required');
 
-  // Reject embedded path separators with a clear error — this helper
-  // checks a single top-level folder, not nested paths.
-  if (/[\/\\]/.test(gitFolder)) {
-    return failure(null,
-      `--gitFolder must be a single folder name (no '/' or '\\'). Got: "${gitFolder}".`,
-      'Pass just the folder name, e.g. "solutions" (NOT "solutions/sub" or "/solutions").');
+  // For solution binding the gitFolder may be a repo-relative PATH (e.g.
+  // "solutions/RetailOS") — ConnectToGit stores it verbatim and writes content
+  // to /<gitFolder>/. Allow forward slashes but reject backslashes and
+  // empty/"."/".." path segments before any network call.
+  const pathCheck = validateGitFolderPath(gitFolder);
+  if (!pathCheck.ok) {
+    return failure(null, pathCheck.error, pathCheck.hint);
   }
 
   const tokenResult = resolveAdoTokenOrAcquire({ token, tokenFile, env: process.env });
@@ -274,4 +305,5 @@ module.exports = {
   isEmptyRepo404,
   normalizeBranch,
   normalizeGitFolder,
+  validateGitFolderPath,
 };
