@@ -53,6 +53,8 @@
 'use strict';
 
 const helpers = require('./validation-helpers');
+const { queryCustomUnmanagedTables } = require('./query-metadata');
+const { collectReferencedEntityNames, scopeCustomTables } = require('./resolve-site-tables');
 
 /** Authoritative picklist labels for powerpagecomponenttype. */
 const PPC_TYPE_LABELS = Object.freeze({
@@ -107,6 +109,8 @@ function parseArgs(argv) {
     siteId: null,
     publisherPrefix: null,
     solutionId: null,
+    projectRoot: null,
+    datamodelManifestPath: null,
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--envUrl' && args[i + 1]) out.envUrl = args[++i];
@@ -114,6 +118,8 @@ function parseArgs(argv) {
     else if (args[i] === '--siteId' && args[i + 1]) out.siteId = args[++i];
     else if (args[i] === '--publisherPrefix' && args[i + 1]) out.publisherPrefix = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
+    else if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
+    else if (args[i] === '--datamodelManifest' && args[i + 1]) out.datamodelManifestPath = args[++i];
   }
   return out;
 }
@@ -166,6 +172,8 @@ async function discoverSiteComponents({
   siteId,
   publisherPrefix = null,
   solutionId = null,
+  projectRoot = null,
+  datamodelManifestPath = null,
   makeRequest = helpers.makeRequest,
 } = {}) {
   if (!envUrl) throw new Error('--envUrl is required');
@@ -232,10 +240,13 @@ async function discoverSiteComponents({
     ? await discoverEnvVars({ baseUrl, token, publisherPrefix, makeRequest })
     : [];
 
-  // 5) Custom tables filtered by publisher prefix (optional)
-  const customTables = publisherPrefix
-    ? await discoverCustomTables({ baseUrl, token, publisherPrefix, makeRequest })
-    : [];
+  // 5) Custom tables the SITE references (table permissions + datamodel manifest),
+  //    intersected with the env's custom-unmanaged tables. NOT a publisher-prefix
+  //    dump — that over-counted unrelated tables sharing the prefix (the
+  //    new_/default-publisher bug). Empty when no local signal is available.
+  const customTables = await discoverCustomTables({
+    baseUrl, token, projectRoot, datamodelManifestPath, makeRequest,
+  });
 
   const result = {
     siteId,
@@ -382,28 +393,27 @@ async function discoverEnvVars({ baseUrl, token, publisherPrefix, makeRequest })
   }));
 }
 
-async function discoverCustomTables({ baseUrl, token, publisherPrefix, makeRequest }) {
-  // The $metadata/EntityDefinitions endpoint doesn't support `startswith` (0x8006088a),
-  // so we fetch all custom tables and filter client-side. Custom-entity sets are small
-  // enough that a single request is fine. MetadataId is included so callers can diff
-  // against solutioncomponents.objectid (componenttype 1 = Entity).
-  // publisherPrefix validated at the entry point of discoverSiteComponents.
-  const prefixLower = String(publisherPrefix).trim().toLowerCase();
-  const url =
-    `${baseUrl}/api/data/v9.2/EntityDefinitions` +
-    `?$filter=IsCustomEntity eq true` +
-    `&$select=LogicalName,SchemaName,DisplayName,MetadataId`;
-  const rows = await odataGetAll(url, token, makeRequest);
-  return rows
-    .filter((r) => (r.LogicalName || '').toLowerCase().startsWith(`${prefixLower}_`))
-    .map((r) => ({
-      id: r.MetadataId,
-      logicalName: r.LogicalName,
-      schemaName: r.SchemaName,
-      displayName:
-        (r.DisplayName && r.DisplayName.UserLocalizedLabel && r.DisplayName.UserLocalizedLabel.Label) ||
-        r.SchemaName,
-    }));
+async function discoverCustomTables({ baseUrl, token, projectRoot, datamodelManifestPath, makeRequest }) {
+  // Scope to the tables the SITE references (its table permissions + datamodel
+  // manifest — SME-confirmed complete), intersected with the env's custom-unmanaged
+  // tables. Replaces the old publisher-prefix dump that returned every table
+  // sharing the prefix (catastrophic with `new_`/default publishers). MetadataId
+  // is returned as `id` so callers can diff against solutioncomponents.objectid
+  // (componenttype 1 = Entity).
+  const { names, available } = collectReferencedEntityNames({ projectRoot, datamodelManifestPath });
+  if (!available) return []; // no local signal — empty, NEVER a prefix dump
+  let customUnmanaged = [];
+  try {
+    customUnmanaged = await queryCustomUnmanagedTables(baseUrl, token, makeRequest);
+  } catch {
+    customUnmanaged = [];
+  }
+  return scopeCustomTables(names, customUnmanaged).map((t) => ({
+    id: t.metadataId,
+    logicalName: t.logicalName,
+    schemaName: t.schemaName,
+    displayName: t.displayName,
+  }));
 }
 
 if (require.main === module) {

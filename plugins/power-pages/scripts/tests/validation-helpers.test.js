@@ -73,3 +73,28 @@ test('findProjectRoot: returns null when neither marker is present', (t) => {
   assert.equal(findProjectRoot(root), null);
 });
 
+// --- odataGet / odataGetAll (shared pagination) ------------------------------
+
+test('odataGetAll follows @odata.nextLink and aggregates all pages', async () => {
+  const { odataGetAll } = require(helpersPath);
+  const pages = {
+    'https://x/api/data/v9.2/things': { value: [{ id: 1 }, { id: 2 }], '@odata.nextLink': 'https://x/page2' },
+    'https://x/page2': { value: [{ id: 3 }] },
+  };
+  const fakeRequest = async ({ url }) => ({ statusCode: 200, body: JSON.stringify(pages[url]) });
+  const rows = await odataGetAll('https://x/api/data/v9.2/things', 'tok', fakeRequest);
+  assert.deepEqual(rows.map((r) => r.id), [1, 2, 3]);
+});
+
+test('odataGet throws on non-2xx', async () => {
+  const { odataGet } = require(helpersPath);
+  const fakeRequest = async () => ({ statusCode: 404, body: 'not found' });
+  await assert.rejects(() => odataGet('https://x/y', 'tok', fakeRequest), /HTTP 404/);
+});
+
+test('odataGet throws on transport error', async () => {
+  const { odataGet } = require(helpersPath);
+  const fakeRequest = async () => ({ error: 'ECONNRESET' });
+  await assert.rejects(() => odataGet('https://x/y', 'tok', fakeRequest), /OData request failed/);
+});
+

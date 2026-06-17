@@ -27,6 +27,9 @@
 
 const helpers = require('./validation-helpers');
 const { getAuthToken } = helpers;
+const { queryCustomUnmanagedTables } = require('./query-metadata');
+const { fetchTableRelationships } = require('./query-table-relationships');
+const { collectReferencedEntityNames, scopeCustomTables } = require('./resolve-site-tables');
 // `makeRequest` is accessed via `helpers.makeRequest` (not destructured) so
 // tests can inject a mock by mutating `helpers.makeRequest` before calling
 // the top-level `estimateSolutionSize`. See estimate-solution-size.test.js for
@@ -285,44 +288,78 @@ async function discoverPowerPageSiteLanguages(envUrl, websiteRecordId, token) {
   }
 }
 
-async function discoverTables(envUrl, publisherPrefix, token, manifestPath) {
-  // Try manifest first
-  const fs = require('fs');
-  let manifestTables = [];
-  if (manifestPath && fs.existsSync(manifestPath)) {
-    try {
-      const man = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const entries = man.entities || man.tables || [];
-      manifestTables = entries.map((e) => ({
-        logicalName: e.logicalName || e.LogicalName || e.name,
-        metadataId: e.metadataId || e.MetadataId,
-      }));
-    } catch {}
+// Discovers the custom tables the SITE actually references — NOT every table
+// sharing the publisher prefix. The old prefix-wide enumeration over-counted
+// catastrophically with a shared/default publisher (`new_`, env default): a
+// 6-table site reported 22 tables, which cascaded into absurd schema splits.
+//
+// Source of truth = the site's table permissions (+ datamodel manifest), per
+// SME: "If a table is used in the site there will be permissions for it."
+// We intersect those referenced names with the env's custom-unmanaged tables so
+// standard tables (contact/annotation) and managed template tables drop out.
+//
+// Returns `{ tables, tableCountScope }` where scope ∈
+//   "site-referenced" | "manifest-only" | "unavailable".
+// On no local signal we return zero tables (NEVER a prefix dump) so a missing
+// `.powerpages-site/` degrades safe instead of inflating the plan.
+async function discoverTables(envUrl, token, { projectRoot, datamodelManifestPath } = {}) {
+  let customUnmanaged = [];
+  try {
+    customUnmanaged = await queryCustomUnmanagedTables(envUrl, token);
+  } catch {
+    customUnmanaged = [];
   }
 
-  // Query EntityDefinitions for custom unmanaged tables.
-  // Verified 2026-04-22 against org1e98cc97 (v9.2): EntityDefinitions does NOT
-  // support `$top` (returns 400 "The query parameter $top is not supported").
-  // We filter server-side to IsCustomEntity=true to keep the payload bounded —
-  // there's still no client-side pagination needed for typical tenants.
-  const path =
-    `EntityDefinitions` +
-    `?$filter=IsCustomEntity eq true` +
-    `&$select=LogicalName,MetadataId,IsManaged,IsCustomEntity`;
-  const all = await collectPaginated(envUrl, path, token, 10);
-  const custom = all.filter((e) => e.IsCustomEntity === true && e.IsManaged === false);
-  const matchingPrefix = publisherPrefix
-    ? custom.filter((e) => (e.LogicalName || '').toLowerCase().startsWith(`${publisherPrefix.toLowerCase()}_`))
-    : custom;
+  const { names, available, sources } = collectReferencedEntityNames({ projectRoot, datamodelManifestPath });
+
+  let scope;
+  let scoped = [];
+  if (!available) {
+    scope = 'unavailable';
+  } else {
+    scoped = scopeCustomTables(names, customUnmanaged);
+    scope = sources.tablePermissions > 0 ? 'site-referenced' : 'manifest-only';
+  }
 
   const byName = new Map();
-  for (const t of [...manifestTables, ...matchingPrefix.map((e) => ({
-    logicalName: e.LogicalName,
-    metadataId: e.MetadataId,
-  }))]) {
-    if (t.logicalName && !byName.has(t.logicalName)) byName.set(t.logicalName, t);
+  for (const t of scoped) {
+    if (t.logicalName && !byName.has(t.logicalName)) {
+      byName.set(t.logicalName, { logicalName: t.logicalName, metadataId: t.metadataId });
+    }
   }
-  return Array.from(byName.values());
+  return { tables: Array.from(byName.values()), tableCountScope: scope };
+}
+
+// Build the deduped, scoped dependency-edge list among the site's tables.
+// Each edge `[a, b]` (lowercased logical names, a<b) means tables a and b are
+// connected by a lookup (OneToMany) or N:N (ManyToMany) — so the schema-split
+// clustering keeps them in the same solution. Only edges where BOTH ends are in
+// the scoped table set are kept. Per-table fetch errors are non-fatal.
+async function discoverTableRelationships(envUrl, tables, token) {
+  if (!Array.isArray(tables) || tables.length < 2) return [];
+  const inSet = new Set(tables.map((t) => (t.logicalName || '').toLowerCase()).filter(Boolean));
+  const seen = new Set();
+  const edges = [];
+  const addEdge = (x, y) => {
+    const a = String(x || '').toLowerCase();
+    const b = String(y || '').toLowerCase();
+    if (!a || !b || a === b || !inSet.has(a) || !inSet.has(b)) return;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push(a < b ? [a, b] : [b, a]);
+  };
+  for (const t of tables) {
+    let rel;
+    try {
+      rel = await fetchTableRelationships(envUrl, t.logicalName, token);
+    } catch {
+      continue; // inaccessible table — skip its edges
+    }
+    for (const e of rel.oneToMany) addEdge(e.referencedEntity, e.referencingEntity);
+    for (const e of rel.manyToMany) addEdge(e.entity1, e.entity2);
+  }
+  return edges;
 }
 
 async function countAttributesForTables(envUrl, tables, token) {
@@ -712,8 +749,14 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // (which includes them under componenttype 10428).
   const siteLanguages = await discoverPowerPageSiteLanguages(envUrl, websiteRecordId, resolved);
 
-  const tables = await discoverTables(envUrl, publisherPrefix, resolved, datamodelManifest);
+  const { tables, tableCountScope } = await discoverTables(envUrl, resolved, {
+    projectRoot,
+    datamodelManifestPath: datamodelManifest,
+  });
   const schemaAttrCount = await countAttributesForTables(envUrl, tables, resolved);
+  // Dependency edges among the scoped tables — drives the schema-split clustering
+  // so related tables ship in the same solution (never split a relationship).
+  const tableRelationships = await discoverTableRelationships(envUrl, tables, resolved);
 
   // Tenant-wide env var defs matching the publisher prefix. This is the
   // fallback used when no solution is set up yet (fresh project); for sites
@@ -1024,6 +1067,10 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
         }
       : null,
     tableCount: tables.length,
+    // How the table set was scoped: "site-referenced" (table permissions),
+    // "manifest-only" (datamodel manifest, no permissions), or "unavailable"
+    // (no local signal — tableCount reflects 0, NOT a publisher-prefix dump).
+    tableCountScope,
     schemaAttrCount,
     webFilesAggregateMB: round1(webFilesAggregateBytes / (1024 * 1024)),
     webFilesIndividual: webMeasure.individual,
@@ -1059,6 +1106,9 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     mediaRatio: Math.round(webMeasure.mediaRatio * 100) / 100,
     siteType: 'code-site',
     tables: tables.map((t) => ({ logicalName: t.logicalName, attributeCount: t.attributeCount || 0 })),
+    // Dependency edges among the scoped tables ([a,b], lowercased, a<b) — consumed
+    // by compute-split-plan.js to cluster related tables into the same solution.
+    tableRelationships,
     breakdown: {
       tables: round1((tables.length * BYTES_PER.table + schemaAttrCount * BYTES_PER.attribute) / (1024 * 1024)),
       webFiles: round1(webFilesAggregateBytes / (1024 * 1024)),

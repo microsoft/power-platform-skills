@@ -21,6 +21,12 @@ const DEFAULTS = Object.freeze({
   hardFlagComponentCount: 10000,
   maxSchemaAttrs: 15000,
   maxTableCount: 20,
+  // Safety ceiling on the number of auto-derived schema-split solutions. The
+  // schema-segmentation packing keeps each solution under maxTableCount /
+  // maxSchemaAttrs, but caps the COUNT here so a pathological schema can't
+  // explode into dozens of solutions — beyond this, the hardFlagComponentCount
+  // recommendation tells the user to archive/consolidate instead.
+  maxSchemaSplitSolutions: 8,
   maxAggregateWebFilesMB: 40,
   maxSingleFileMB: 2,
   maxEnvVarCount: 500,

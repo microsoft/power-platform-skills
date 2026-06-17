@@ -705,3 +705,87 @@ test('disk-measurement gracefully no-ops when projectRoot has no build-output di
     'disk-vs-dataverse canary must not fire when no build dir found',
   );
 });
+
+// --- site-referenced table scoping + dependency edges (the prefix-overcount fix) ---
+
+test('estimateSolutionSize scopes tables to site references (not publisher prefix) + emits relationships', async (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+
+  // Temp site root with table permissions referencing only bp_permit + bp_permitstep.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'est-scope-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const tpDir = path.join(root, '.powerpages-site', 'table-permissions');
+  fs.mkdirSync(tpDir, { recursive: true });
+  for (const [base, entity] of [['Permit', 'bp_permit'], ['Step', 'bp_permitstep'], ['Notes', 'annotation']]) {
+    fs.writeFileSync(path.join(tpDir, `${base}.tablepermission.yml`),
+      `adx_entitypermission_webrole:\n- ad89f5ee-8665-f111-a826-6045bd00fdda\nentitylogicalname: ${entity}\nentityname: ${base}\nid: f03fefed-8665-f111-a826-000d3a597e6a\nscope: 756150000\n`);
+  }
+
+  withMockedMakeRequest(t, async ({ url }) => {
+    if (url.includes('OneToManyRelationships')) {
+      // bp_permit has a lookup to bp_permitstep (both in scope) + one to contact (out of scope).
+      if (url.includes("LogicalName='bp_permit'")) {
+        return { statusCode: 200, body: JSON.stringify({ value: [
+          { SchemaName: 'bp_permit_step', ReferencedEntity: 'bp_permit', ReferencingEntity: 'bp_permitstep', ReferencingAttribute: 'bp_permitid' },
+          { SchemaName: 'contact_permit', ReferencedEntity: 'contact', ReferencingEntity: 'bp_permit', ReferencingAttribute: 'bp_contactid' },
+        ] }) };
+      }
+      return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    }
+    if (url.includes('ManyToManyRelationships')) return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+    if (url.includes('/Attributes')) return { statusCode: 200, body: JSON.stringify({ value: [{ LogicalName: 'c1' }, { LogicalName: 'c2' }] }) };
+    if (url.includes('EntityDefinitions') && url.includes('IsCustomEntity')) {
+      // Env has 4 custom tables; only bp_* are referenced. new_* are the prefix-noise.
+      return { statusCode: 200, body: JSON.stringify({ value: [
+        { LogicalName: 'bp_permit', MetadataId: 'm1', IsCustomEntity: true, IsManaged: false },
+        { LogicalName: 'bp_permitstep', MetadataId: 'm2', IsCustomEntity: true, IsManaged: false },
+        { LogicalName: 'new_unrelated1', MetadataId: 'm3', IsCustomEntity: true, IsManaged: false },
+        { LogicalName: 'new_unrelated2', MetadataId: 'm4', IsCustomEntity: true, IsManaged: false },
+      ] }) };
+    }
+    if (url.includes('powerpagecomponents') && url.includes('$count')) {
+      return { statusCode: 200, body: JSON.stringify({ '@odata.count': 0, value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    publisherPrefix: 'new',           // the (now-irrelevant for tables) shared prefix
+    projectRoot: root,
+    token: 'fake-token',
+  });
+
+  assert.equal(result.tableCount, 2, 'only the 2 site-referenced bp_* tables — NOT the 2 new_* prefix matches');
+  assert.equal(result.tableCountScope, 'site-referenced');
+  assert.deepEqual(result.tables.map((x) => x.logicalName).sort(), ['bp_permit', 'bp_permitstep']);
+  // Edge between the two scoped tables; the contact edge is dropped (out of scope).
+  assert.deepEqual(result.tableRelationships, [['bp_permit', 'bp_permitstep']]);
+});
+
+test('estimateSolutionSize tableCountScope is "unavailable" with no local signal (never a prefix dump)', async (t) => {
+  withMockedMakeRequest(t, async ({ url }) => {
+    if (url.includes('EntityDefinitions') && url.includes('IsCustomEntity')) {
+      return { statusCode: 200, body: JSON.stringify({ value: [
+        { LogicalName: 'new_a', MetadataId: 'm1', IsCustomEntity: true, IsManaged: false },
+        { LogicalName: 'new_b', MetadataId: 'm2', IsCustomEntity: true, IsManaged: false },
+      ] }) };
+    }
+    if (url.includes('powerpagecomponents') && url.includes('$count')) {
+      return { statusCode: 200, body: JSON.stringify({ '@odata.count': 0, value: [] }) };
+    }
+    return { statusCode: 200, body: JSON.stringify({ value: [] }) };
+  });
+  const result = await estimateSolutionSize({
+    envUrl: 'https://test.crm.dynamics.com',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+    publisherPrefix: 'new',
+    token: 'fake-token',          // no projectRoot
+  });
+  assert.equal(result.tableCount, 0, 'no .powerpages-site signal -> zero tables, NOT the env-wide prefix dump');
+  assert.equal(result.tableCountScope, 'unavailable');
+  assert.deepEqual(result.tableRelationships, []);
+});

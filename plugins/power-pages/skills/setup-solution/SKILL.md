@@ -304,14 +304,18 @@ GET {envUrl}/api/data/v9.2/powerpagesitelanguages?$filter=_powerpagesiteid_value
 ```
 Store all language IDs.
 
-**D. Dataverse tables** — always discover from the environment, don't rely on a manifest file alone:
+**D. Dataverse tables** — discover the tables the **site actually references**, NOT every table sharing the publisher prefix.
 
-1. Read `.datamodel-manifest.json` if present (for the known list of tables created by `setup-datamodel`)
-2. **Also** query the environment directly for all custom unmanaged tables, filtering by the publisher prefix:
+> **Why not publisher prefix:** prefix-matching over-counts catastrophically with a shared/default publisher (`new_`, env default) — a 6-table site can match 22 unrelated tables — and it also *misses* the site's real tables when they come from a different prefix (e.g. a `bp_*` template under an `edm` publisher). The authoritative signal (SME-confirmed) is the site's **table permissions**: "If a table is used in the site there will be permissions for it."
+
+Run the shared discovery helper, which scopes custom tables to the site's table permissions (+ datamodel manifest) intersected with the env's custom-unmanaged tables:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
+  --envUrl "{envUrl}" --token "{token}" --siteId "{websiteRecordId}" \
+  --projectRoot "." \
+  {if .datamodel-manifest.json elsewhere: --datamodelManifest "<path>"}
 ```
-GET {envUrl}/api/data/v9.2/EntityDefinitions?$select=LogicalName,MetadataId,IsManaged,IsCustomEntity
-```
-Filter client-side: `IsCustomEntity === true && IsManaged === false`. Group by publisher prefix (characters before first `_`). Present only tables whose prefix matches the site publisher — or if no prefix match, present all custom unmanaged tables and let the user decide.
+Use the returned `customTables[]` (each `{ id, logicalName, schemaName, displayName }` — `id` is the MetadataId for the `AddSolutionComponent` call). This is already the correct, site-scoped list — do **not** re-filter by prefix.
 
 > **Important note on tables**: Dataverse solutions carry **schema only** — entity definitions, columns, relationships, forms, and views. Table **data/records** do NOT travel with the solution. If the target environment needs seed/reference data, that requires a separate data migration step.
 
@@ -628,10 +632,12 @@ If both `missing.powerpagecomponents` (after filtering) and `missing.siteLanguag
 
 **This is the key decision point.** Build a full manifest of everything that will be added and present it to the user before writing anything.
 
-If custom tables were discovered, ask via `AskUserQuestion` with `multiSelect: true` **before** showing the final manifest:
-- First option: **"Include all N tables (Recommended)"** — pre-selected default
+If custom tables were discovered (the site-referenced set from step D), ask via `AskUserQuestion` with `multiSelect: true` **before** showing the final manifest:
+- First option: **"Include all N referenced tables (Recommended)"** — pre-selected default. N is the count of tables the site actually references (not an env-wide prefix list).
 - Then one option per table: `{logicalName} ({DisplayName})`
 - Last option: **"Exclude all tables"**
+
+> The default list is already scoped to the site's real tables (step D). If the user knows of an additional table the site needs that has no permission yet, they can add it manually — but the default must never be a publisher-prefix dump.
 
 Present as a structured summary:
 
