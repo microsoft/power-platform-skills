@@ -5,9 +5,11 @@ const path = require('path');
 
 const {
   TRACKED_SKILLS,
+  ALM_PLAN_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  isAlmPlanSkill,
 } = require('../lib/powerpages-hook-utils');
 
 const SKILLS_DIR = path.join(__dirname, '..', '..', 'skills');
@@ -147,4 +149,28 @@ test('Object.prototype keys are not mistaken for tracked skills', () => {
   assert.equal(detectTrackedSkill('hasOwnProperty'), null);
   assert.equal(detectTrackedSkill('__proto__'), null);
   assert.equal(getTrackedSkillFromToolInput({ skill: 'toString' }), null);
+});
+
+// --- ALM_PLAN_SKILLS / isAlmPlanSkill (reconcile-trigger gating) -------------
+
+test('isAlmPlanSkill: true for ALM plan skills, normalizing prefixes', () => {
+  assert.equal(isAlmPlanSkill('activate-site'), true);
+  assert.equal(isAlmPlanSkill('/power-pages:activate-site'), true);
+  assert.equal(isAlmPlanSkill('/activate-site'), true);
+  assert.equal(isAlmPlanSkill('ensure-pipelines-host'), true);
+  assert.equal(isAlmPlanSkill('setup-pipeline'), true);
+});
+
+test('isAlmPlanSkill: false for non-ALM skills and junk', () => {
+  assert.equal(isAlmPlanSkill('create-site'), false);
+  assert.equal(isAlmPlanSkill('add-seo'), false);
+  assert.equal(isAlmPlanSkill('not-a-real-skill'), false);
+  assert.equal(isAlmPlanSkill(null), false);
+  assert.equal(isAlmPlanSkill(undefined), false);
+});
+
+test('ALM_PLAN_SKILLS members are all real tracked skills', () => {
+  for (const name of ALM_PLAN_SKILLS) {
+    assert.ok(TRACKED_SKILLS[name], `ALM_PLAN_SKILLS member "${name}" must be a tracked skill (have a SKILL.md)`);
+  }
 });
