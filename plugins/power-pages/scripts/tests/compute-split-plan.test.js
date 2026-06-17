@@ -205,6 +205,39 @@ test('computeSplitPlan Strategy 3 packs tables by capacity (no domains configure
   assert.equal(tableSolutions.length, 2, '16000 attrs / 15000 cap -> 2 Table solutions, not one-per-table');
 });
 
+test('computeSplitPlan Strategy 3 never overflows the attr cap when independent clusters fragment', () => {
+  // Regression for the FFD under-allocation bug: 4 INDEPENDENT (no-edge) tables of
+  // 8000 attrs each = 32000 total. Seeding the packer from the lower bound
+  // ceil(32000/15000)=3 gave only 3 bins, so the 4th cluster fell into the
+  // least-loaded bucket -> 16000 attrs (> 15000 cap), unwarned. The packer must
+  // instead open a 4th bin (clusters.length permits it) so no bucket busts the cap.
+  const result = computeSplitPlan({
+    estimate: baseEstimate({
+      tableCount: 4,
+      schemaAttrCount: 32000,
+      tables: [
+        { logicalName: 'tst_alpha', attributeCount: 8000 },
+        { logicalName: 'tst_beta', attributeCount: 8000 },
+        { logicalName: 'tst_gamma', attributeCount: 8000 },
+        { logicalName: 'tst_delta', attributeCount: 8000 },
+      ],
+      tableRelationships: [], // no edges -> 4 singleton clusters
+    }),
+    config: baseConfig(),
+    meta: { baseName: 'Test', siteName: 'Test Site' },
+  });
+  assert.equal(result.splitStrategy, 'strategy-3-schema-segmentation');
+  const tableSolutions = result.proposedSolutions.filter(
+    (s) => Array.isArray(s.componentTypes) && s.componentTypes.length === 1 && s.componentTypes[0] === 'Table',
+  );
+  // 4 independent 8000-attr tables -> 4 single-table solutions (each 8000 < 15000),
+  // NOT 3 with one 16000-attr overflow bucket.
+  assert.equal(tableSolutions.length, 4, '4 independent 8000-attr tables -> 4 Table solutions (no attr-cap overflow)');
+  for (const s of tableSolutions) {
+    assert.equal(s.tableLogicalNames.length, 1, `${s.uniqueName} must hold exactly one table — no bucket over the attr cap`);
+  }
+});
+
 test('computeSplitPlan additive Strategy 4 prepends EnvVars solution', () => {
   const result = computeSplitPlan({
     estimate: baseEstimate({ totalSizeMB: 142, webFilesAggregateMB: 110, envVarCount: 800 }),
