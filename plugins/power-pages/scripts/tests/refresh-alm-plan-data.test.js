@@ -468,7 +468,7 @@ test('refresh deploy-pipeline ingests batchValidation block from last-deploy.jso
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
@@ -526,7 +526,7 @@ test('refresh deploy-pipeline completes the "Activate site" step when the marker
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [
       { name: 'Deploy via pipeline to Staging', status: 'pending' },
       { name: 'Activate site in Staging', status: 'pending' },
@@ -557,7 +557,7 @@ test('refresh deploy-pipeline leaves the "Activate site" step pending when activ
     const root = makeProject(t);
     writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
       SITE_NAME: 'TestSite',
-      STRATEGY: 'pipeline',
+      STRATEGY: 'pp-pipelines',
       steps: [
         { name: 'Deploy via pipeline to Staging', status: 'pending' },
         { name: 'Activate site in Staging', status: 'pending' },
@@ -586,7 +586,7 @@ test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchV
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });
@@ -623,7 +623,7 @@ test('refresh deploy-pipeline sets batchValidation to null when marker omits the
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
+    STRATEGY: 'pp-pipelines',
     steps: [{ name: 'Deploy via pipeline to Staging', status: 'in_progress' }],
     stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
   });

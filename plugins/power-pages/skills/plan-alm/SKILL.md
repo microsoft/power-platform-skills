@@ -1033,7 +1033,7 @@ Both spans are guaranteed to exist in the template — there is exactly one of e
 **Next-steps guidance (option 1 — print to the user, do NOT invoke):**
 
 > "Plan approved and saved. **plan-alm doesn't deploy** — run these next, in order. Each detects this plan and proceeds without re-asking, then updates the plan as it completes:
-> - **PP Pipelines path:** `/power-pages:setup-solution` → `/power-pages:setup-pipeline` → `/power-pages:deploy-pipeline` (once per target stage; the deploy flow activates the site) → `/power-pages:test-site` to validate each stage.
+> - **PP Pipelines path:** `/power-pages:setup-solution` → `/power-pages:setup-pipeline` → `/power-pages:deploy-pipeline` (once per target stage; the deploy flow activates the site for you — but if you defer activation, run `/power-pages:activate-site`) → `/power-pages:test-site` to validate each stage.
 > - **Manual path:** `/power-pages:setup-solution` → `/power-pages:export-solution` → review the zip → `/power-pages:import-solution` (once per target).
 > Skip any step marked *already set up*. You can re-open the plan any time at `docs/alm-plan.html`."
 
