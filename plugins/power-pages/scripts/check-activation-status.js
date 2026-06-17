@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { findPath, getPacAuthInfo, getAuthToken, makeRequest, CLOUD_TO_API } = require('./lib/validation-helpers');
+const { readWebsiteYml } = require('./lib/detect-project-context');
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj));
@@ -27,26 +28,36 @@ const args = process.argv.slice(2);
 const rootIdx = args.indexOf('--projectRoot');
 const projectRoot = rootIdx !== -1 ? args[rootIdx + 1] : process.cwd();
 
-// --- Read siteName from powerpages.config.json ---
-const configPath = findPath(projectRoot, 'powerpages.config.json');
-if (!configPath) {
-  output({ error: 'powerpages.config.json not found' });
-}
-
+// --- Read site identity from powerpages.config.json (code/SPA sites) OR
+//     .powerpages-site/website.yml (data-model / enhanced data model "EDM" sites,
+//     which have no powerpages.config.json). website.yml carries both the site
+//     name and the website GUID, so EDM sites skip the pac-pages-list lookup below. ---
 let siteName;
-try {
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  siteName = config.siteName;
-} catch {
-  output({ error: 'Failed to parse powerpages.config.json' });
+let websiteRecordId = null;
+const configPath = findPath(projectRoot, 'powerpages.config.json');
+if (configPath) {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    siteName = config.siteName;
+    websiteRecordId = config.websiteRecordId || null;
+  } catch {
+    output({ error: 'Failed to parse powerpages.config.json' });
+  }
+} else {
+  const websiteYmlPath = findPath(projectRoot, path.join('.powerpages-site', 'website.yml'));
+  const site = websiteYmlPath ? readWebsiteYml(websiteYmlPath) : null;
+  if (site) {
+    siteName = site.name;
+    websiteRecordId = site.id || null;
+  }
 }
 if (!siteName) {
-  output({ error: 'siteName not found in powerpages.config.json' });
+  output({ error: 'Site name not found — looked in powerpages.config.json and .powerpages-site/website.yml' });
 }
 
-// --- Get websiteRecordId from pac pages list ---
-let websiteRecordId = null;
-try {
+// --- Get websiteRecordId from pac pages list (only when not already known,
+//     e.g. a code site whose config omitted it). EDM sites already have it from website.yml. ---
+if (!websiteRecordId) try {
   const pacOutput = execSync('pac pages list', { encoding: 'utf8', timeout: 15000 });
   // pac pages list outputs a table with columns. Find the row matching siteName.
   // Column headers vary but Website Record ID is always a GUID column.

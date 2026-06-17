@@ -89,14 +89,23 @@ function findPath(dir, target) {
 }
 
 /**
- * Finds the project root directory (containing powerpages.config.json).
+ * Finds the project root directory of a Power Pages site.
+ *
+ * A project root is marked by EITHER:
+ *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
+ *   - a `.powerpages-site/` directory — data-model config sites (`pac pages download`,
+ *     standard or enhanced data model). These have NO `powerpages.config.json`.
+ *
+ * Code sites have both markers; data-model (e.g. enhanced data model) sites have only
+ * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
+ *
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
   let current = path.resolve(dir);
   while (true) {
-    const configPath = path.join(current, 'powerpages.config.json');
-    if (fs.existsSync(configPath)) {
+    if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
+        fs.existsSync(path.join(current, '.powerpages-site'))) {
       return current;
     }
 
@@ -107,8 +116,11 @@ function findProjectRoot(dir) {
     current = parent;
   }
 
+  // Fallback: search subdirectories for either marker (config first, then .powerpages-site/).
   const fallbackConfigPath = findPath(dir, 'powerpages.config.json');
-  return fallbackConfigPath ? path.dirname(fallbackConfigPath) : null;
+  if (fallbackConfigPath) return path.dirname(fallbackConfigPath);
+  const fallbackSiteDir = findPath(dir, '.powerpages-site');
+  return fallbackSiteDir ? path.dirname(fallbackSiteDir) : null;
 }
 
 /**
