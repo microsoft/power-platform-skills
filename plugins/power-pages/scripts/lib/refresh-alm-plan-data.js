@@ -445,15 +445,17 @@ function refreshDeployPipeline(planData, projectRoot) {
       stage: deployMarker.stageName,
       status: failed ? 'failed' : 'completed',
     });
-    // The PP deploy flow activates the site as part of deployment (deploy-pipeline
-    // Phase 7.7), recording it in the marker's `activationStatus`. When the deploy
-    // succeeded AND the marker evidences activation, complete the matching
-    // "Activate site in {stage}" step too — otherwise computeNextStep would point
-    // the user at /activate-site for work the deploy already did. Testing stays a
-    // separate step (the test-site skill flips it via refreshTestSite). When the
-    // marker carries no activationStatus, leave the Activate step pending — the
-    // user may still need to run /activate-site explicitly.
-    if (!failed && deployMarker.activationStatus) {
+    // The PP deploy flow can activate the site as part of deployment (deploy-pipeline
+    // Phase 7.7), recording the outcome in the marker's `activationStatus`. When the
+    // deploy succeeded AND the marker shows the site was actually activated, complete
+    // the matching "Activate site in {stage}" step too — otherwise computeNextStep
+    // would point the user at /activate-site for work the deploy already did. Gate on
+    // the explicit "Activated" outcome, NOT mere truthiness: deploy-pipeline writes
+    // activationStatus: "Pending" when the user DEFERS activation, which is truthy but
+    // means the Activate step is still REQUIRED. Any non-"Activated" value (Pending,
+    // null, a failure note) leaves the Activate step pending. Testing stays a separate
+    // step (the test-site skill flips it via refreshTestSite).
+    if (!failed && /^activated$/i.test(String(deployMarker.activationStatus || ''))) {
       setStepStatus(planData, {
         keyword: /\bactivate\b/i,
         stage: deployMarker.stageName,

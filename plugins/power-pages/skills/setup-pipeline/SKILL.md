@@ -531,7 +531,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
 
 The helper reads `docs/alm/last-host-check.json` + `docs/alm/last-pipeline.json`, refreshes `planData.hostResolution` and `planData.pipelineMeta`, drops pre-setup "no host detected" risks, and re-renders `docs/alm-plan.html`. When `docs/.alm-plan-data.json` is absent (standalone invocation, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
-**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* When `null` (all steps done) or the helper returned `ok:false` (no plan), say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. When `null` (all steps done) or the helper returned `ok:false` (no plan), say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 **7.6 Present summary:**
 

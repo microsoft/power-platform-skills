@@ -946,7 +946,7 @@ The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into
 
 This step is what keeps the rendered plan current — `plan-alm` is a planner and does not refresh the plan itself, so each execution skill owns its own post-run refresh. Running it more than once is idempotent (same input → same output).
 
-**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* (For a multi-stage pipeline this is typically the next stage's deploy, or the next stage's activate/test if those are separate steps.) When `null` (all steps done) or the helper returned `ok:false` (no plan), say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. (For a multi-stage pipeline this is typically the next stage's deploy, or the next stage's activate/test if those are separate steps.) When `null` (all steps done) or the helper returned `ok:false` (no plan), say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 **7.6 Present summary:**
 

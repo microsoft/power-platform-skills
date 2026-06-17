@@ -746,7 +746,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
 
 The helper reads `docs/alm/last-test-site.json`, populates `planData.validationRuns[{resolvedStage}]` with the categorized test outcome, and re-renders `docs/alm-plan.html` so the Validation tab updates immediately. When `docs/.alm-plan-data.json` is absent (standalone invocation, no plan in the project), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
-**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill } | null`. When non-null, tell the user: *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."* (Typically: deploy/activate/test the next stage.) When `null` (this was the last step) or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
+**Point the user at the next step (user-driven sequencing).** The helper's stdout JSON includes `nextStep: { name, skill: string | null } | null`. When non-null, branch on `skill`: when `skill` is non-null, tell the user *"Plan updated. Next in your plan: **{nextStep.name}** → run `{nextStep.skill}` when you're ready."*; when `skill` is `null` (an internal step such as Finalize, no user command), name the step only — *"Plan updated. Next in your plan: **{nextStep.name}**."* — and never print `run null`. (Typically: deploy/activate/test the next stage.) When `null` (this was the last step) or the helper returned `ok:false`, say nothing about a next step. **Never auto-invoke the next skill** — the user drives execution.
 
 #### 6.8 Suggest Next Steps
 

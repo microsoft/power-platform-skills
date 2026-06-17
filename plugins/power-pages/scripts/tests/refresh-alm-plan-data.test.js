@@ -527,26 +527,34 @@ test('refresh deploy-pipeline completes the "Activate site" step when the marker
   assert.equal(byName('Test site in Staging'), 'pending', 'Test stays pending — it is the separate test-site step');
 });
 
-test('refresh deploy-pipeline leaves the "Activate site" step pending when the marker has no activationStatus', (t) => {
-  // No activation evidence in the marker -> don't fabricate completion; the user
-  // may still need to run /activate-site explicitly.
-  const root = makeProject(t);
-  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
-    SITE_NAME: 'TestSite',
-    STRATEGY: 'pipeline',
-    steps: [
-      { name: 'Deploy via pipeline to Staging', status: 'pending' },
-      { name: 'Activate site in Staging', status: 'pending' },
-    ],
-    stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
-  });
-  writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
-    stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z',
-  });
+test('refresh deploy-pipeline leaves the "Activate site" step pending when activation was not done (null or deferred "Pending")', (t) => {
+  // Only an explicit "Activated" outcome completes the Activate step. A missing
+  // activationStatus (null) OR a deferred activation (deploy-pipeline writes
+  // "Pending" when the user defers) must leave the step pending — the user still
+  // needs to run /activate-site, and nextStep must keep surfacing it.
+  for (const activationStatus of [undefined, null, 'Pending', 'Failed']) {
+    const root = makeProject(t);
+    writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+      SITE_NAME: 'TestSite',
+      STRATEGY: 'pipeline',
+      steps: [
+        { name: 'Deploy via pipeline to Staging', status: 'pending' },
+        { name: 'Activate site in Staging', status: 'pending' },
+      ],
+      stages: [{ label: 'Staging', envUrl: 'https://staging.crm.dynamics.com' }],
+    });
+    const marker = { stageRunId: 'srun-1', stageName: 'Staging', status: 'Succeeded', deployedAt: '2026-06-16T00:00:00.000Z' };
+    if (activationStatus !== undefined) marker.activationStatus = activationStatus;
+    writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), marker);
 
-  refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
-  const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
-  assert.equal(steps.find((s) => s.name === 'Activate site in Staging').status, 'pending');
+    refresh({ projectRoot: root, phase: 'deploy-pipeline', render: false });
+    const steps = readJson(path.join(root, 'docs', '.alm-plan-data.json')).steps;
+    assert.equal(
+      steps.find((s) => s.name === 'Activate site in Staging').status,
+      'pending',
+      `activationStatus=${JSON.stringify(activationStatus)} must NOT complete the Activate step`,
+    );
+  }
 });
 
 test('refresh deploy-pipeline accepts legacy elapsedSecondsApprox name in batchValidation', (t) => {
