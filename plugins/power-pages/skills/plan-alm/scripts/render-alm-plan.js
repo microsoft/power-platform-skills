@@ -6,7 +6,7 @@
  *   node render-alm-plan.js --output <path> --data <json-file>
  *
  * Required top-level keys in the JSON data file:
- *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE,
+ *   SITE_NAME, GENERATED_AT, STRATEGY, PLAN_STATUS, APPROVED_BY, APPROVAL_DATE, COMPLETED_AT,
  *   stages, steps, risks
  *
  * Optional v2 keys (added for split-solutions support):
@@ -1448,6 +1448,12 @@ const replacements = {
   PLAN_STATUS: escapeHtml(data.PLAN_STATUS || 'Draft'),
   APPROVED_BY: escapeHtml(data.APPROVED_BY || ''),
   APPROVAL_DATE: escapeHtml(data.APPROVAL_DATE || ''),
+  // Completion footer line — only rendered once the plan reaches "Completed"
+  // (refresh-alm-plan-data.js stamps COMPLETED_AT when every step is done).
+  // Empty string otherwise, so the placeholder is always replaced (no orphan token).
+  COMPLETED_LINE: data.COMPLETED_AT
+    ? `<br><strong>Completed:</strong> <span id="completed-at">${escapeHtml(data.COMPLETED_AT)}</span>`
+    : '',
   OVERVIEW_SUMMARY: buildOverviewSummary(),
   STAT_COMPONENTS: (componentCount || 0).toLocaleString(),
   STAT_ENVVARS: envVarStatDisplay(),
