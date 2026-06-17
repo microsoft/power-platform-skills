@@ -25,3 +25,7 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
   things like skill name, plugin version, OS, and Node version. It never includes
   file paths, prompts, tool inputs, site names, URLs, credentials, usernames, or
   hostnames.
+- **Automation/CI** can set `POWER_PLATFORM_SKILLS_TELEMETRY_<plugin>` (e.g.
+  `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES=off|on`) instead of running this
+  command. A saved choice from this command always wins; the env var applies only
+  when nothing has been stored. It suppresses transmission only, like `off`.

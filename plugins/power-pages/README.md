@@ -399,6 +399,7 @@ Enables, disables, or checks the status of anonymous usage telemetry. Per-user a
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
 - No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES=off` (a saved choice wins over the env var)
 
 ## Agents
 
@@ -524,8 +525,20 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 When **off**, nothing leaves your machine. A local diagnostic copy of each event
 is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
 what would have been sent; delete it anytime. The setting is stored at
-`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
-so CI/headless environments can opt out by writing that file directly.
+`~/.power-platform-skills/config.json`
+(`{ "telemetry": { "power-pages": "off" } }`).
+
+For automation / CI, set the per-plugin environment variable instead of editing
+that file:
+
+```bash
+POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES=off   # stop sending telemetry
+POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES=on    # force sending telemetry
+```
+
+A saved `/power-pages:telemetry` choice always takes precedence; the env var
+applies only when no choice has been stored. Like `off` from the command, the env
+var suppresses transmission only — the local `events.jsonl` mirror is still written.
 
 ## License
 

@@ -69,7 +69,7 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 
 Edit `shared/telemetry/` directly — the symlink makes changes live for every adopting plugin immediately; there is nothing to re-sync.
 
-Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic.
+Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`) provides the same transmission toggle for automation, ranked below the persisted `config.json` choice.
 
 Current adopters: `power-pages`. Others adopt on demand.
 
