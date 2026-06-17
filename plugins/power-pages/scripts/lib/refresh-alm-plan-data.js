@@ -239,21 +239,29 @@ function backfillEnvVarValuesFromSettings(planData, projectRoot) {
 //   - Skip steps already in a terminal state UNLESS we're setting `failed`
 //     (a retry that succeeded after a failure is recorded as completed by a
 //     subsequent invocation; a fresh failure overrides any prior status).
+// Recover the bare target label from a pipeline stage name. setup-pipeline names
+// pipeline stages "Deploy to {targetLabel}" and the deploy marker carries that
+// verbatim (last-deploy.json's stageName = SELECTED_STAGE.name = "Deploy to
+// Staging"), but plan step names ("Deploy via pipeline to Staging", "Activate site
+// in Staging") AND the per-stage object keys (validationRuns/manualImports/
+// activations, which the renderer looks up by the bare label) all use just
+// "Staging". Strip a leading "Deploy to " so the step matcher and the keys line up.
+// Case-preserving + trimmed (callers lowercase if they need a case-insensitive
+// compare); a no-op when the prefix isn't present (a caller already passing the
+// bare label, e.g. test-site --stageName "Staging"). Centralizing this here keeps
+// every stage consumer consistent so the "Deploy to {label}" mismatch can't recur
+// in just one code path.
+function normalizeStageLabel(stage) {
+  if (typeof stage !== 'string') return stage;
+  return stage.replace(/^\s*deploy\s+to\s+/i, '').trim();
+}
+
 function setStepStatus(planData, { keyword, stage, status }) {
   if (!Array.isArray(planData.steps)) return 0;
   if (!keyword) return 0;
-  // The stage filter must match the bare target LABEL embedded in the plan step
-  // names ("Deploy via pipeline to Staging", "Activate site in Staging", "Test
-  // site in Staging" — all carry "Staging"). But the run markers carry the
-  // pipeline STAGE name, which setup-pipeline creates as "Deploy to {label}"
-  // (e.g. last-deploy.json's stageName = SELECTED_STAGE.name = "Deploy to
-  // Staging"). A raw substring match of "deploy to staging" against "deploy via
-  // pipeline to staging" FAILS, so a finished deploy would never flip its step.
-  // Strip a leading "Deploy to " to recover the label before matching. Callers
-  // that already pass the bare label (e.g. test-site --stageName "Staging") are
-  // unaffected — the strip is a no-op when the prefix isn't present.
-  const rawStage = (typeof stage === 'string' && stage.length > 0) ? stage.toLowerCase() : null;
-  const targetStage = rawStage ? rawStage.replace(/^deploy\s+to\s+/, '').trim() : null;
+  const targetStage = (typeof stage === 'string' && stage.length > 0)
+    ? normalizeStageLabel(stage).toLowerCase()
+    : null;
   let flipped = 0;
   for (const step of planData.steps) {
     if (!step || typeof step.name !== 'string') continue;
@@ -489,6 +497,7 @@ function refreshTestSite(planData, projectRoot, stageName) {
     if (targets.length === 1 && targets[0].label) resolvedStage = targets[0].label;
   }
   if (!resolvedStage) return planData;
+  resolvedStage = normalizeStageLabel(resolvedStage);
 
   planData.validationRuns = planData.validationRuns || {};
   planData.validationRuns[resolvedStage] = {
@@ -768,6 +777,7 @@ function refreshImportSolution(planData, projectRoot, stageName) {
       if (hit && hit.label) resolvedStage = hit.label;
     }
   }
+  if (resolvedStage) resolvedStage = normalizeStageLabel(resolvedStage);
   if (!resolvedStage) {
     // Defensive — write to a synthetic key so subsequent imports for resolvable
     // stages don't clobber it. Caller should pass --stageName explicitly.
@@ -830,6 +840,7 @@ function refreshActivateSite(planData, projectRoot, stageName) {
       if (hit && hit.label) resolvedStage = hit.label;
     }
   }
+  if (resolvedStage) resolvedStage = normalizeStageLabel(resolvedStage);
   if (!resolvedStage) {
     resolvedStage = `unresolved-${marker.environmentUrl || 'unknown'}`;
   }

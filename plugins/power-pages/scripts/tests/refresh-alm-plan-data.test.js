@@ -234,6 +234,27 @@ test('refresh test-site populates validationRuns[stage] from docs/alm/last-test-
   assert.equal(planData.validationRuns.Staging.summary.total, 12);
 });
 
+test('refresh test-site keys validationRuns by the BARE label even if given a "Deploy to {label}" stage', (t) => {
+  // Hardening (defense against the "Deploy to {label}" mismatch class): if a caller
+  // ever passes the pipeline stage NAME ("Deploy to Staging") instead of the bare
+  // label, the per-stage object key must still be "Staging" so the renderer (which
+  // looks up validationRuns by the bare label from the step name) finds it.
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    validationRuns: { Staging: null },
+    steps: [{ name: 'Test site in Staging', status: 'pending' }],
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-test-site.json'), { runOutcome: 'passed', runAt: '2026-06-16T00:00:00.000Z' });
+
+  refresh({ projectRoot: root, phase: 'test-site', render: false, stageName: 'Deploy to Staging' });
+
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.ok(planData.validationRuns.Staging, 'keyed by bare "Staging"');
+  assert.equal(planData.validationRuns['Deploy to Staging'], undefined, 'must NOT key by the "Deploy to" stage name');
+  assert.equal(planData.steps[0].status, 'completed', 'and the matching Test step still flips');
+});
+
 test('refresh test-site is a no-op when stageName is omitted', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
