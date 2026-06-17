@@ -233,7 +233,22 @@ async function checkAlmPlan({ projectRoot, envUrl, token, solutionId, makeReques
   // way each in-chain skill's Phase 0 call both observes the prior heartbeat
   // (for its own decision) AND keeps the chain alive for the next skill.
   const priorLastInvocationAt = planData.LAST_INVOCATION_AT || null;
-  const planStatus = planData.PLAN_STATUS || null;
+  let planStatus = planData.PLAN_STATUS || null;
+
+  // Promote Approved -> In Execution on the FIRST execution-skill Phase 0 entry.
+  // plan-alm is plan-only: it leaves the plan "Approved" and the user runs the
+  // execution skills themselves. The first execution skill to reach its Phase 0
+  // gate is what actually starts execution, so flip the plan to "In Execution"
+  // here — this is the transition that activates the heartbeat/active-chain
+  // machinery (nothing else sets it). The heartbeat write below then persists
+  // both the new status AND the first heartbeat in one atomic write. Gated on
+  // `writeHeartbeat` so read-only callers (--no-heartbeat: audits, tests, and
+  // plan-alm's own deferral check) never mutate the plan's status.
+  if (writeHeartbeat && planStatus === 'Approved') {
+    planStatus = 'In Execution';
+    planData.PLAN_STATUS = 'In Execution';
+  }
+
   const inExecution = computeInExecution(planStatus, priorLastInvocationAt, nowMs);
 
   if (writeHeartbeat && planStatus === 'In Execution') {

@@ -36,6 +36,13 @@
 //   finalize:
 //     - PLAN_STATUS = "Completed"
 //
+// After every phase's step-sync, a completion evaluator flips PLAN_STATUS to
+// "Completed" (+ COMPLETED_AT) once all non-skip steps are completed and none
+// failed — so the last execution skill terminates the plan automatically,
+// without any skill needing to call the explicit "finalize" phase. The
+// Approved -> In Execution promotion that starts the lifecycle lives in
+// check-alm-plan.js (first execution-skill Phase 0).
+//
 // stdout JSON includes `nextStep: { name, skill: string | null } | null` (when ok:true) — the first
 // still-pending checklist step and the slash command that runs it. Execution
 // skills echo this so the user knows the next step to invoke (user-driven
@@ -525,6 +532,33 @@ function refreshFinalize(planData) {
   // Step-sync: complete the "Finalize" checklist entry.
   setStepStatus(planData, { keyword: /\bfinalize\b/i, status: 'completed' });
   return planData;
+}
+
+// Completion evaluator. Once every non-skipped checklist step is `completed`
+// (and none `failed`), the plan has been fully executed — transition it to
+// "Completed" + stamp COMPLETED_AT. Runs after each phase's step-sync (in both
+// refresh() and reconcile()), so the LAST execution skill to finish flips the
+// plan terminal automatically — no skill has to call `--phase finalize`
+// explicitly (nothing did, so the lifecycle previously never completed). Only
+// advances from a pre-terminal, non-draft state: "In Execution" (the normal
+// case after check-alm-plan.js promoted it on the first execution skill) or
+// "Approved" (defensive fallback if that promotion didn't run). Never regresses
+// a Draft or an already-Completed plan, and a `failed` step blocks completion
+// (e.g. a failed deploy must not look "done" just because later steps are
+// pending-skipped).
+function evaluatePlanCompletion(planData) {
+  if (!planData) return;
+  const status = planData.PLAN_STATUS;
+  if (status !== 'In Execution' && status !== 'Approved') return;
+  if (!Array.isArray(planData.steps)) return;
+  const live = planData.steps.filter((s) => s && s.skip !== true && typeof s.name === 'string');
+  if (live.length === 0) return;
+  const anyFailed = live.some((s) => s.status === 'failed');
+  const allCompleted = live.every((s) => s.status === 'completed');
+  if (!anyFailed && allCompleted) {
+    planData.PLAN_STATUS = 'Completed';
+    planData.COMPLETED_AT = new Date().toISOString();
+  }
 }
 
 // Refresh-phase helper: stamp `LAST_SYNC_AT` on planData so check-alm-plan.js's
@@ -1085,6 +1119,7 @@ function reconcile({ projectRoot, render, rendererPath }) {
       process.stderr.write(`[refresh-alm-plan-data] reconcile phase "${phase}" failed: ${e.message}\n`);
     }
   }
+  evaluatePlanCompletion(planData);
   fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
 
   let rendered = false;
@@ -1135,6 +1170,7 @@ function refresh({ projectRoot, phase, render, rendererPath, stageName }) {
   }
 
   applyRefresh(planData, phase, projectRoot, stageName);
+  evaluatePlanCompletion(planData);
   fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
 
   let rendered = false;

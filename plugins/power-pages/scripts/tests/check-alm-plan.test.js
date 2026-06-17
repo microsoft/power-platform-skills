@@ -54,7 +54,8 @@ test('returns exists:true / stale:false when plan exists and no env credentials'
     PLAN_STATUS: 'Approved',
   });
   try {
-    const r = await checkAlmPlan({ projectRoot: dir });
+    // writeHeartbeat:false → read-only check; an Approved plan is NOT promoted.
+    const r = await checkAlmPlan({ projectRoot: dir, writeHeartbeat: false });
     assert.equal(r.exists, true);
     assert.equal(r.stale, false);
     assert.equal(r.generatedAt, '2026-04-01T00:00:00.000Z');
@@ -511,6 +512,47 @@ test('Unparseable LAST_SYNC_AT falls back to GENERATED_AT (defensive)', async ()
       }),
     });
     assert.equal(r.stale, true, 'unparseable LAST_SYNC_AT must not silently mask staleness');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- Approved -> In Execution promotion (lifecycle activation) ---------------
+
+test('promotes Approved -> In Execution on the first execution-skill Phase 0 (writeHeartbeat default)', async () => {
+  const dir = tempProject({ SITE_NAME: 'T', PLAN_STATUS: 'Approved' });
+  try {
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.planStatus, 'In Execution', 'returned status reflects the promotion');
+    assert.equal(r.inExecution.status, 'active', 'newly In Execution with first heartbeat is active');
+    // Promotion + heartbeat are persisted to disk for the next in-chain skill.
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.equal(onDisk.PLAN_STATUS, 'In Execution');
+    assert.ok(onDisk.LAST_INVOCATION_AT, 'first heartbeat written');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('does NOT promote Approved when writeHeartbeat is false (read-only callers: plan-alm, audits, tests)', async () => {
+  const dir = tempProject({ SITE_NAME: 'T', PLAN_STATUS: 'Approved' });
+  try {
+    const r = await checkAlmPlan({ projectRoot: dir, writeHeartbeat: false });
+    assert.equal(r.planStatus, 'Approved', 'read-only check leaves the plan Approved');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'docs', '.alm-plan-data.json'), 'utf8'));
+    assert.equal(onDisk.PLAN_STATUS, 'Approved', 'disk untouched');
+    assert.equal(onDisk.LAST_INVOCATION_AT, undefined, 'no heartbeat written');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('does NOT promote a Draft plan (only Approved is promotable)', async () => {
+  const dir = tempProject({ SITE_NAME: 'T', PLAN_STATUS: 'Draft' });
+  try {
+    const r = await checkAlmPlan({ projectRoot: dir });
+    assert.equal(r.planStatus, 'Draft');
+    assert.equal(r.inExecution.status, 'not-running');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
