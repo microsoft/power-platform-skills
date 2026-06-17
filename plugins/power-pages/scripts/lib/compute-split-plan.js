@@ -427,14 +427,16 @@ function deriveDomainsByCapacity(estimate, thresholds) {
   if (tables.length === 0) return [{ name: 'Tables', tableLogicalNames: [] }];
 
   const clusters = buildTableClusters(tables, estimate.tableRelationships || []);
-  const totalAttrs = tables.reduce((s, t) => s + t.attributeCount, 0);
   const ceiling = (thresholds && thresholds.maxSchemaSplitSolutions) || 8;
-  let n = Math.max(
-    1,
-    Math.ceil(tables.length / thresholds.maxTableCount),
-    Math.ceil(totalAttrs / Math.max(thresholds.maxSchemaAttrs, 1)),
-  );
-  n = Math.min(n, ceiling, clusters.length);
+  // Seed the packer with the maximum permitted bins (one per cluster, capped at
+  // maxSchemaSplitSolutions). First-fit-decreasing still consolidates — clusters
+  // that fit together share a bin and the empty bins are dropped, so the final
+  // count stays minimal — but a cluster that fits nowhere lands in a NEW bin
+  // instead of overflowing an existing one. Seeding from a lower bound
+  // (ceil(tables/maxTable), ceil(attrs/maxAttr)) under-allocated bins and let
+  // independent attr-heavy clusters bust maxSchemaAttrs in the least-loaded
+  // bucket, unwarned (the oversized guard only catches per-cluster table count).
+  const n = Math.min(clusters.length, ceiling);
 
   const buckets = packClusters(clusters, n, thresholds);
   const multi = buckets.length > 1;
