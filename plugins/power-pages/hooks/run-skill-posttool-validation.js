@@ -71,13 +71,25 @@ process.stdin.on('end', () => {
           timeout: 20000,
         });
         let reconciled = [];
-        try { reconciled = (JSON.parse((rec.stdout || '').trim()).reconciled) || []; } catch {}
+        let failed = [];
+        try {
+          const out = JSON.parse((rec.stdout || '').trim());
+          reconciled = out.reconciled || [];
+          failed = out.failed || [];
+        } catch {}
         if (reconciled.length > 0) {
           process.stdout.write(
             `[power-pages] ALM plan was out of sync with ${reconciled.length} run marker(s) — refreshed automatically (${reconciled.join(', ')}).\n`,
           );
         }
-        debug(`[power-pages hook] reconcile reconciled=${JSON.stringify(reconciled)}\n`);
+        if (failed.length > 0) {
+          // Non-blocking, but surfaced — a swallowed reconcile failure is exactly
+          // what makes a stale plan impossible to diagnose.
+          process.stdout.write(
+            `[power-pages] ALM plan reconcile could not heal ${failed.length} phase(s): ${failed.map((f) => f.phase).join(', ')}. See stderr for details.\n`,
+          );
+        }
+        debug(`[power-pages hook] reconcile reconciled=${JSON.stringify(reconciled)} failed=${JSON.stringify(failed)}\n`);
       } catch (e) {
         // Best-effort — a reconcile failure must never break the skill or the hook.
         debug(`[power-pages hook] reconcile error (ignored): ${e.message}\n`);
