@@ -268,6 +268,25 @@ async function switchBranch({
   const previousBranch = effective.branch;
   const { organization, project, repository, gitFolder, rootFolder } = effective;
 
+  // SOLUTION-PATH PRESERVATION (regression guard):
+  //   detect-git-binding DECOMPOSES the solution's stored `rootfolderpath`
+  //   (e.g. "solutions/RetailOS") into gitFolder="RetailOS" (leaf) +
+  //   rootFolder="solutions" (parent). connect-solution-to-git, however, treats
+  //   its `--gitFolder` as the FULL verbatim repo-relative path and writes the
+  //   solution to /<gitFolder>/ — the `--rootFolder` arg only seeds the
+  //   env-level row and is NOT prepended. Feeding the decomposed LEAF straight
+  //   back into the reconnect would re-bind the solution at /RetailOS/ instead
+  //   of /solutions/RetailOS/, scattering it across two repo paths on every
+  //   branch switch. Reconstruct the full verbatim path (lossless: parent +
+  //   '/' + leaf === original rootfolderpath) and derive the top segment for
+  //   --rootFolder so the switch lands the solution exactly where it lives.
+  let reconnectGitFolder = gitFolder;
+  let reconnectRootFolder = rootFolder;
+  if (bindingType === 'solution') {
+    reconnectGitFolder = rootFolder ? `${rootFolder}/${gitFolder}` : gitFolder;
+    reconnectRootFolder = reconnectGitFolder.split('/')[0];
+  }
+
   // Step 2 — disconnect.
   const disArgs = { envUrl, token: tok };
   if (bindingType === 'solution') disArgs.solutionUniqueName = resolvedSolution;
@@ -302,8 +321,8 @@ async function switchBranch({
         envUrl, token: tok,
         solutionUniqueName: resolvedSolution,
         branch: branchName,
-        gitFolder,
-        organization, project, repository, rootFolder,
+        gitFolder: reconnectGitFolder,
+        organization, project, repository, rootFolder: reconnectRootFolder,
       });
     }
     return () => connectToGit({

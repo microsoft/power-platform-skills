@@ -252,7 +252,56 @@ test('solution binding happy path (single solution): auto-picks solution, switch
     const reconnectBody = JSON.parse(received[5].body);
     assert.equal(reconnectBody.SolutionUniqueName, 'SolutionA');
     assert.equal(reconnectBody.Branch, 'feature/intern-learning-data-model');
-    assert.equal(reconnectBody.GitFolder, 'SolutionA');
+    // Regression: the reconnect must rebind at the FULL verbatim path
+    // (rootFolder + '/' + gitFolder), NOT the bare leaf — otherwise the branch
+    // switch scatters the solution to repo root (/SolutionA/) instead of
+    // keeping it at /solutions/SolutionA/.
+    assert.equal(reconnectBody.GitFolder, 'solutions/SolutionA');
+    assert.equal(reconnectBody.RootFolder, 'solutions');
+  } finally { server.close(); }
+});
+
+test('solution binding reconnect preserves a NESTED custom gitFolder path (regression: no move to repo root)', async () => {
+  const nested = (branch) => solutionBindingRow('RetailOS', branch, { rootfolder: 'teams/retail' });
+  const { server, received } = await createQueuedServer([
+    { statusCode: 200, body: { value: [nested('main')] } },   // 1. detect env-scoped
+    { statusCode: 200, body: { value: [nested('main')] } },   // 2. detect solution-scoped
+    { statusCode: 204, body: '' },                            // 3. disconnect
+    { statusCode: 200, body: { value: [] } },                 // 4. poll-clear
+    { statusCode: 200, body: { value: [] } },                 // 5. connect internal detect → first-binding shape
+    { statusCode: 204, body: '' },                            // 6. connect POST
+  ]);
+  try {
+    const r = await switchBranch({ envUrl: url(server), token: 'tok', newBranch: 'dev', ...FAST });
+    assert.equal(r.switched, true, `expected switched:true, got ${JSON.stringify(r)}`);
+    const reconnectBody = JSON.parse(received[5].body);
+    // Full verbatim path reconstructed from parent + leaf; top segment feeds RootFolder.
+    assert.equal(reconnectBody.GitFolder, 'teams/retail/RetailOS');
+    assert.equal(reconnectBody.RootFolder, 'teams');
+    // Reported fields stay in detect-git-binding's decomposed vocabulary.
+    assert.equal(r.gitFolder, 'RetailOS');
+    assert.equal(r.rootFolder, 'teams/retail');
+  } finally { server.close(); }
+});
+
+test('solution binding reconnect at repo root keeps the bare gitFolder (regression: no leading slash, rootFolder = self)', async () => {
+  // rootfolder:'' → detect reports rootFolder:null (solution sits at repo root).
+  const rootRow = (branch) => solutionBindingRow('RetailOS', branch, { rootfolder: '' });
+  const { server, received } = await createQueuedServer([
+    { statusCode: 200, body: { value: [rootRow('main')] } },
+    { statusCode: 200, body: { value: [rootRow('main')] } },
+    { statusCode: 204, body: '' },
+    { statusCode: 200, body: { value: [] } },
+    { statusCode: 200, body: { value: [] } },
+    { statusCode: 204, body: '' },
+  ]);
+  try {
+    const r = await switchBranch({ envUrl: url(server), token: 'tok', newBranch: 'dev', ...FAST });
+    assert.equal(r.switched, true, `expected switched:true, got ${JSON.stringify(r)}`);
+    const reconnectBody = JSON.parse(received[5].body);
+    assert.equal(reconnectBody.GitFolder, 'RetailOS');     // no leading slash introduced
+    assert.equal(reconnectBody.RootFolder, 'RetailOS');    // single-segment path → top segment is itself
+    assert.equal(r.rootFolder, null);
   } finally { server.close(); }
 });
 

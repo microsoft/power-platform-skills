@@ -65,6 +65,7 @@ const expectedGateIds = [
   '3.binding-type',
   '4.create-project',
   '4.create-repo',
+  '4.create-branch',
   '4.folder-coexists',
   '4.folder-occupied',
   '4.shared-object-overlap',
@@ -96,7 +97,7 @@ test('frontmatter parses cleanly', () => {
   );
 });
 
-test('all 29 gate IDs are present with git-configure prefix', () => {
+test('all 30 gate IDs are present with git-configure prefix', () => {
   const prose = readSkill();
 
   for (const id of expectedGateIds) {

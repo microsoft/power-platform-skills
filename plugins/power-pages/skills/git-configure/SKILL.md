@@ -127,7 +127,7 @@ Steps:
 > - If `list-environments.js` returns `ok:true` and `count === 1`, still present that single env as the one explicit choice (plus the ➕ and Cancel options) — never auto-select.
 > - If `list-environments.js` returns `ok:false`, show its `hint` and fall back to a free-text `<envUrl>` prompt with validation (`https://*.crm.dynamics.com`). Never hard-fail solely because PAC is unavailable.
 >
-> Cancellation leaves nothing; no Dataverse or ADO mutation has happened. Once the user confirms here, the explicit-arg mismatch gate (`git-configure:1.envurl-mismatch`) will already agree and won't re-prompt.
+> Cancellation leaves nothing; no Dataverse or ADO mutation has happened.
 
 <!-- gate: git-configure:1.prereq-fail | category=intent | cancel-leaves=nothing -->
 > 🚦 **Gate (intent · git-configure:1.prereq-fail):** Fires when PAC/Az auth is missing, env URL cannot be resolved, required context is malformed, or an explicit mode is impossible in the current binding state. Surface `AskUserQuestion`:
@@ -359,7 +359,18 @@ Steps:
         --organization "<org>" --project "<project>" --repository "<repo>" --default-branch "<repoDefaultBranch>"
    ```
 
-   Present `branches[]` as choices (mark the `defaultBranch` row as "(default)"), ending with **"➕ Create new branch…"** and **"Cancel"**. If the repo is empty (`emptyRepo:true`), there are no branches yet — offer only "➕ Create new branch…" (default name `main`) + Cancel. For switch-branch, exclude the current bound branch from the pick list (switching to the same branch is a no-op); if the user wants a brand-new branch, "➕ Create new branch…" prompts for the name. Do not auto-create a branch — creation is an explicit pick.
+   Present `branches[]` as choices (mark the `defaultBranch` row as "(default)"), ending with **"➕ Create new branch…"** and **"Cancel"**. For switch-branch, exclude the current bound branch from the pick list (switching to the same branch is a no-op). Do not auto-create a branch — creation is an explicit pick. When the user picks **"➕ Create new branch…"**, prompt for the new name (validate as a git branch name — forward slashes allowed, e.g. `feature/dev-a`), then branch on repo state:
+   - **Empty repo (`emptyRepo:true`)** — there is no base commit yet; the only branch that can be made is the repo's first one (default name `main`), seeded by `init-ado-repo.js` in step 4. No base-branch pick.
+   - **Populated repo** — also prompt for the **base branch** to fork from (choice list of existing branches, default = the repo's default/bound branch), then fire the create-branch gate below. This is the path that lets switch-branch move onto a brand-new feature branch without leaving the tool.
+
+<!-- gate: git-configure:4.create-branch | category=consent | cancel-leaves=nothing -->
+> 🚦 **Gate (consent · git-configure:4.create-branch):** Fires when the user picks "➕ Create new branch…" on a NON-empty repo. Surface `AskUserQuestion`:
+>
+> | Question | Header | Options |
+> |---|---|---|
+> | Create new branch `{newBranch}` from `{baseBranch}` in `{org}/{project}/{repo}`? It starts as an exact copy of `{baseBranch}`, so your bound content carries over. | Create branch | Create now, Cancel and choose another branch |
+>
+> On "Create now", call `create-ado-branch.js --organization <org> --project <project> --repository <repo> --newBranch <newBranch> --baseBranch <baseBranch>`. Treat `alreadyExists:true` as success (select the existing branch); `403` is a permission failure (needs Create Branch / Contribute), `404` means the base branch is gone (re-pick a base), other failures surface verbatim. On success, select `{newBranch}` and continue. Cancellation loops back to the branch choice list — no ADO mutation has happened.
 
 6. **Folder (choice).** Call `list-ado-folders.js` to enumerate existing top-level folders, then present the destination as a choice list. **The presentation differs by binding type — never conflate the two:**
 
@@ -370,7 +381,7 @@ Steps:
      - One option per existing top-level folder as **`{existingFolder}/{solutionUniqueName}`** (nest under a folder that already exists).
      - **"➕ Custom path…"** — helper text: *"Repo-relative path, forward slashes only (e.g. `solutions/{solutionUniqueName}`). No backslashes, no leading/trailing slash, no `.`/`..` segments."*
      - **"Cancel"**.
-     Pass the chosen value through as a single `--gitFolder` (it may contain `/`); validate it with the solution-binding rules in invariant 4 before continuing. Do **not** ask a separate "parent folder" question and do **not** try to split the path into `rootFolder` + leaf for placement — `gitFolder` alone determines where files land.
+     Pass the chosen value through as a single `--gitFolder` (it may contain `/`); validate it with the solution-binding rules in invariant 4 before continuing. Do **not** split the path into `rootFolder` + leaf for placement — `gitFolder` alone determines where files land.
 
 7. **Env-binding folder coexistence.** If env binding picks an existing non-empty folder, fire the coexistence gate.
 
@@ -698,7 +709,7 @@ Non-gate legacy safety checks also preserved:
 7. Phase 2: ADO permissions failure (`git-configure:2.ado-perms-fail`).
 8. Phase 2: empty repo initialization (`git-configure:2.repo-init`).
 9. Phase 3: two-layer explainer and binding choice (`git-configure:3.two-layer-explainer`, `git-configure:3.binding-type`).
-10. Phase 4: create project/repo, folder co-existence, folder occupancy, shared-object overlap.
+10. Phase 4: create project/repo/branch, folder co-existence, folder occupancy, shared-object overlap.
 11. Phase 5: workspace dirty hard stop.
 12. Phase 6: single mode-appropriate consent — `git-configure:6.consent-setup` (setup/switch) OR `git-configure:6.consent-disconnect` OR `git-configure:6.consent-rebind`. Plan-render is rolled into the same prompt; Phase 7 has no gates.
 13. Phase 7: pure execution and partial-failure reporting (no gates).
