@@ -236,6 +236,53 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
   });
 }
 
+/**
+ * Single Dataverse OData GET (v9.2 headers, `Prefer: odata.maxpagesize=5000`),
+ * throws on non-2xx. `url` is absolute — pass an `@odata.nextLink` straight back in.
+ * @param {string} url - absolute URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @returns {Promise<object>} parsed JSON body
+ */
+async function odataGet(url, token, request = makeRequest) {
+  const res = await request({
+    url,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      Prefer: 'odata.maxpagesize=5000',
+    },
+    timeout: 30000,
+  });
+  if (res.error) throw new Error(`OData request failed: ${res.error}`);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`HTTP ${res.statusCode} from ${url}: ${(res.body || '').slice(0, 400)}`);
+  }
+  return JSON.parse(res.body);
+}
+
+/**
+ * Follows `@odata.nextLink`, aggregating every page's `value[]` into one array.
+ * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows).
+ * @param {string} url - absolute starting URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @param {number} [maxPages=100]
+ * @returns {Promise<object[]>}
+ */
+async function odataGetAll(url, token, request = makeRequest, maxPages = 100) {
+  const out = [];
+  let next = url;
+  for (let p = 0; p < maxPages && next; p++) {
+    const page = await odataGet(next, token, request);
+    if (Array.isArray(page.value)) out.push(...page.value);
+    next = page['@odata.nextLink'] || null;
+  }
+  return out;
+}
+
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
@@ -265,6 +312,8 @@ module.exports = {
   UUID_REGEX,
   getAuthToken,
   makeRequest,
+  odataGet,
+  odataGetAll,
   getEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,

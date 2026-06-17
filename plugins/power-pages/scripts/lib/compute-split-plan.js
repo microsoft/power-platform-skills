@@ -299,7 +299,7 @@ function partitionByChangeFrequency(estimate, meta) {
 function partitionBySchema(estimate, meta, config) {
   const explicitDomains = Array.isArray(config.domains) && config.domains.length > 0
     ? config.domains
-    : deriveDomainsFromPrefix(estimate);
+    : deriveDomainsByCapacity(estimate, config.thresholds);
 
   // Derive domain vs site size shares from the estimator's breakdown when available,
   // falling back to a 50/50 heuristic only if breakdown is absent.
@@ -319,9 +319,12 @@ function partitionBySchema(estimate, meta, config) {
     componentTypes: ['Table'],
     description: `Schema domain: ${dom.name}. Tables: ${(dom.tableLogicalNames || []).join(', ') || '(derived)'}${domainDescSuffix}`,
     sizeMB: round(sizePerDomain),
-    componentCount: Math.ceil(
-      (estimate.schemaAttrCount || 0) / domainCount,
-    ),
+    // A Table domain's component count IS its table count when known (each table
+    // is one Entity solution component). Falls back to an even attr-share split
+    // only for explicit domains that didn't list their tables.
+    componentCount: (dom.tableLogicalNames && dom.tableLogicalNames.length > 0)
+      ? dom.tableLogicalNames.length
+      : Math.ceil((estimate.schemaAttrCount || 0) / domainCount),
     components: [],
     tableLogicalNames: dom.tableLogicalNames || [],
   }));
@@ -345,23 +348,99 @@ function partitionBySchema(estimate, meta, config) {
   return [...domainSolutions, siteSolution];
 }
 
-function deriveDomainsFromPrefix(estimate) {
-  const tables = estimate.tables || [];
-  if (tables.length === 0) return [{ name: 'All', tableLogicalNames: [] }];
+// --- Dependency-aware schema packing ---------------------------------------
+//
+// Replaces the old "one solution per table-name stem" heuristic (which produced
+// ~one solution per table for any distinctly-named schema). Tables connected by
+// a relationship MUST ship together, so we:
+//   1. Group tables into connected components (union-find over the estimator's
+//      `tableRelationships` edges). Because components have no edges between
+//      them, packing whole components into separate solutions never cuts a
+//      relationship — so there are no cross-/circular-solution table deps and
+//      import order among the table solutions is irrelevant.
+//   2. Bin-pack the components into the FEWEST solutions that keep each under the
+//      per-solution caps (maxTableCount tables AND maxSchemaAttrs columns),
+//      capped at maxSchemaSplitSolutions.
 
-  const groups = new Map();
-  for (const t of tables) {
-    const name = (t.logicalName || t).toString();
-    const afterPrefix = name.includes('_') ? name.split('_').slice(1).join('_') : name;
-    const stem = afterPrefix.split(/[_]/)[0] || 'misc';
-    const key = stem.charAt(0).toUpperCase() + stem.slice(1);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(name);
+function normalizeTables(estimate) {
+  return (estimate.tables || [])
+    .map((t) => ({
+      logicalName: (t && (t.logicalName || t)).toString(),
+      attributeCount: (t && t.attributeCount) || 0,
+    }))
+    .filter((t) => t.logicalName);
+}
+
+// Union-find over tables + relationship edges -> array of clusters (each a list
+// of table objects). A table with no edges is its own singleton cluster.
+function buildTableClusters(tables, edges) {
+  const idx = new Map();
+  tables.forEach((t, i) => idx.set(t.logicalName.toLowerCase(), i));
+  const parent = tables.map((_, i) => i);
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (const e of edges || []) {
+    if (!Array.isArray(e) || e.length < 2) continue;
+    const ia = idx.get(String(e[0]).toLowerCase());
+    const ib = idx.get(String(e[1]).toLowerCase());
+    if (ia != null && ib != null) union(ia, ib);
   }
+  const groups = new Map();
+  tables.forEach((t, i) => {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(t);
+  });
+  return [...groups.values()];
+}
 
-  return Array.from(groups.entries()).map(([name, tableLogicalNames]) => ({
-    name,
-    tableLogicalNames,
+function clusterAttrs(cluster) {
+  return cluster.reduce((s, t) => s + (t.attributeCount || 0), 0);
+}
+
+// First-fit-decreasing pack of whole clusters into `n` buckets, respecting the
+// per-solution table + attribute caps. A cluster that fits nowhere under the
+// caps (oversized, or n too small) goes to the least-loaded bucket — that bucket
+// then exceeds a cap and is surfaced by the oversized-cluster recommendation.
+function packClusters(clusters, n, thresholds) {
+  const sorted = [...clusters].sort((a, b) => (clusterAttrs(b) - clusterAttrs(a)) || (b.length - a.length));
+  const buckets = Array.from({ length: Math.max(n, 1) }, () => ({ tables: [], attrs: 0 }));
+  for (const cluster of sorted) {
+    const cAttrs = clusterAttrs(cluster);
+    let target = buckets.findIndex(
+      (b) => b.tables.length + cluster.length <= thresholds.maxTableCount &&
+             b.attrs + cAttrs <= thresholds.maxSchemaAttrs,
+    );
+    if (target === -1) {
+      target = buckets.reduce((best, b, i) => (b.attrs < buckets[best].attrs ? i : best), 0);
+    }
+    buckets[target].tables.push(...cluster);
+    buckets[target].attrs += cAttrs;
+  }
+  return buckets.filter((b) => b.tables.length > 0);
+}
+
+// Returns capacity-bounded "domains" (one per packed bucket) in the same shape
+// the schema partitioner consumes: { name, tableLogicalNames }.
+function deriveDomainsByCapacity(estimate, thresholds) {
+  const tables = normalizeTables(estimate);
+  if (tables.length === 0) return [{ name: 'Tables', tableLogicalNames: [] }];
+
+  const clusters = buildTableClusters(tables, estimate.tableRelationships || []);
+  const totalAttrs = tables.reduce((s, t) => s + t.attributeCount, 0);
+  const ceiling = (thresholds && thresholds.maxSchemaSplitSolutions) || 8;
+  let n = Math.max(
+    1,
+    Math.ceil(tables.length / thresholds.maxTableCount),
+    Math.ceil(totalAttrs / Math.max(thresholds.maxSchemaAttrs, 1)),
+  );
+  n = Math.min(n, ceiling, clusters.length);
+
+  const buckets = packClusters(clusters, n, thresholds);
+  const multi = buckets.length > 1;
+  return buckets.map((b, i) => ({
+    name: multi ? `Tables ${i + 1}` : 'Tables',
+    tableLogicalNames: b.tables.map((t) => t.logicalName),
   }));
 }
 
@@ -704,6 +783,17 @@ function computeSplitPlan({ estimate, config, meta }) {
   proposedSolutions = appendFutureBuffer(proposedSolutions, meta);
 
   const splitWarnings = validateSplits(proposedSolutions, config.thresholds);
+  // Oversized-cluster guard: a Table solution holding more tables than the
+  // per-solution cap means a single connected dependency cluster couldn't be
+  // split without cutting a relationship. Name it so the user can decide whether
+  // to denormalize the schema or raise the cap — we never silently split a cluster.
+  const oversizedClusterWarnings = proposedSolutions
+    .filter((s) => Array.isArray(s.tableLogicalNames) &&
+      s.tableLogicalNames.length > config.thresholds.maxTableCount)
+    .map((s) => ({
+      type: 'warning',
+      message: `Solution ${s.uniqueName} holds ${s.tableLogicalNames.length} related tables — above the ${config.thresholds.maxTableCount}-per-solution cap — because they form one dependency cluster that cannot be split without breaking a relationship. Consider denormalizing the schema or raising maxTableCount in .alm-config.json.`,
+    }));
   // Surface estimator-side truncation warnings as `recommendations[]` entries
   // so the rendered plan shows them inline. These get the `error` type because
   // a truncated input is more dangerous than a normal split-decision warning
@@ -715,7 +805,8 @@ function computeSplitPlan({ estimate, config, meta }) {
     }));
   const recommendations = truncationRecs
     .concat(buildRecommendations(estimate, strategy, config))
-    .concat(splitWarnings);
+    .concat(splitWarnings)
+    .concat(oversizedClusterWarnings);
 
   const appliedStrategies = [strategy.primary];
   if (strategy.additive) appliedStrategies.push('strategy-4-config-isolation');
