@@ -976,7 +976,9 @@ function mtimeMs(filePath) {
 // single loaded planData, writes once, and renders once. Idempotent — a marker
 // the plan already reflects (plan newer than marker) is skipped, so the steady
 // state is a cheap no-op. Honors the .alm-deferred opt-out and soft-no-ops when
-// there is no plan.
+// there is no plan. Returns { ok, reconciled:[phases healed], failed:[{phase,error}],
+// rendered, nextStep } — `failed` is non-empty when a phase's refresh threw (e.g. a
+// marker schema the refresh can't parse); the reconcile still heals the other phases.
 function reconcile({ projectRoot, render, rendererPath }) {
   if (!projectRoot) throw new Error('--projectRoot is required');
   const dataPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
@@ -984,10 +986,10 @@ function reconcile({ projectRoot, render, rendererPath }) {
 
   // Respect the project-level ALM opt-out.
   if (fs.existsSync(path.join(projectRoot, '.alm-deferred'))) {
-    return { ok: true, reconciled: [], rendered: false, reason: 'deferred' };
+    return { ok: true, reconciled: [], failed: [], rendered: false, reason: 'deferred' };
   }
   if (!fs.existsSync(dataPath)) {
-    return { ok: false, reconciled: [], rendered: false, reason: 'no-plan' };
+    return { ok: false, reconciled: [], failed: [], rendered: false, reason: 'no-plan' };
   }
 
   const planMtime = mtimeMs(dataPath);
@@ -1009,7 +1011,7 @@ function reconcile({ projectRoot, render, rendererPath }) {
   if (mtimeMs(almPath(projectRoot, 'lastEnvVars')) > planMtime) pending.add(envVarPhase);
 
   if (pending.size === 0) {
-    return { ok: true, reconciled: [], rendered: false };
+    return { ok: true, reconciled: [], failed: [], rendered: false };
   }
 
   // Deterministic application order (source schema first, host/pipeline, then
@@ -1028,11 +1030,19 @@ function reconcile({ projectRoot, render, rendererPath }) {
     throw new Error('Could not parse docs/.alm-plan-data.json: ' + e.message);
   }
 
+  // A single phase failing must not abort the reconcile — keep healing the rest —
+  // but the failure must be visible (an empty catch makes a broken marker schema
+  // impossible to diagnose: reconcile would report success while silently skipping
+  // the phase). Collect failures and surface them in the result + on stderr.
+  const reconciled = [];
+  const failed = [];
   for (const phase of phases) {
     try {
       applyRefresh(planData, phase, projectRoot, null);
-    } catch {
-      // A single phase failing must not abort the reconcile — keep healing the rest.
+      reconciled.push(phase);
+    } catch (e) {
+      failed.push({ phase, error: e.message });
+      process.stderr.write(`[refresh-alm-plan-data] reconcile phase "${phase}" failed: ${e.message}\n`);
     }
   }
   fs.writeFileSync(dataPath, JSON.stringify(planData, null, 2), 'utf8');
@@ -1043,7 +1053,7 @@ function reconcile({ projectRoot, render, rendererPath }) {
     rendered = true;
   }
 
-  return { ok: true, reconciled: phases, rendered, nextStep: computeNextStep(planData) };
+  return { ok: true, reconciled, failed, rendered, nextStep: computeNextStep(planData) };
 }
 
 function findRendererPath(rendererPath) {

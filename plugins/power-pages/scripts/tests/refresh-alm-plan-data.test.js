@@ -1715,9 +1715,35 @@ test('reconcile: heals a skipped refresh — a newer last-deploy.json is ingeste
   const result = reconcile({ projectRoot: root, render: false });
   assert.equal(result.ok, true);
   assert.deepEqual(result.reconciled, ['deploy-pipeline']);
+  // failed[] is part of the contract — empty when every phase heals cleanly.
+  assert.deepEqual(result.failed, []);
   const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
   assert.equal(planData.pipelineMeta.lastDeploy.status, 'Succeeded');
   assert.equal(planData.pipelineMeta.lastDeploy.componentCount, 118);
+});
+
+test('reconcile: failed[] is always present and is an array on every return path', (t) => {
+  // Contract guard for the per-phase error capture (Copilot review on #191): a
+  // phase whose refresh throws must NOT be swallowed silently — it lands in
+  // result.failed = [{ phase, error }] while the other phases still heal, and
+  // failed[] is present (empty) on the no-op / deferred / no-plan paths too.
+  // (A phase only throws on a genuine marker-schema break — readJson is
+  // defensive — so we assert the contract shape rather than fabricate a throw.)
+  const noPlan = reconcile({ projectRoot: makeProject(t), render: false });
+  assert.ok(Array.isArray(noPlan.failed), 'no-plan path carries failed:[]');
+
+  const deferredRoot = makeProject(t);
+  writeJson(path.join(deferredRoot, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  fs.writeFileSync(path.join(deferredRoot, '.alm-deferred'), 'deferred');
+  const deferred = reconcile({ projectRoot: deferredRoot, render: false });
+  assert.deepEqual(deferred.failed, [], 'deferred path carries failed:[]');
+
+  const idleRoot = makeProject(t);
+  writeJson(path.join(idleRoot, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  const future = (Date.now() + 60 * 1000) / 1000;
+  fs.utimesSync(path.join(idleRoot, 'docs', '.alm-plan-data.json'), future, future);
+  const idle = reconcile({ projectRoot: idleRoot, render: false });
+  assert.deepEqual(idle.failed, [], 'nothing-pending path carries failed:[]');
 });
 
 test('reconcile: idempotent no-op when the plan already reflects the markers', (t) => {

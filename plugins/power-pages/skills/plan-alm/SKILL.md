@@ -1008,11 +1008,16 @@ Both spans are guaranteed to exist in the template — there is exactly one of e
    node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" \
      --projectRoot "." --skillName "PlanAlm" --authoringTool "ClaudeCode"
    ```
-2. **Commit the plan:**
-   ```bash
-   git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName}"
-   ```
-   (Use the `(draft)` suffix for option 2.) `docs/.alm-plan-data.json` stays on disk — it is read by `check-alm-plan.js` for every downstream skill's Phase 0 gate and refreshed by those skills as they run. **Never delete it.**
+2. **Commit the plan** — pick the commit message for the save option the user chose:
+   - **Option 1 (Approved):**
+     ```bash
+     git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName}"
+     ```
+   - **Option 2 (Draft):**
+     ```bash
+     git add docs/alm-plan.html && git commit -m "Add ALM plan for {siteName} (draft)"
+     ```
+   `docs/.alm-plan-data.json` stays on disk — it is read by `check-alm-plan.js` for every downstream skill's Phase 0 gate and refreshed by those skills as they run. **Never delete it.**
 
 **Next-steps guidance (option 1 — print to the user, do NOT invoke):**
 
