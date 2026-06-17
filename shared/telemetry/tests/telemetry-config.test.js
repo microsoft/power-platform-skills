@@ -12,10 +12,10 @@ const CLI = path.resolve(__dirname, "../lib/telemetry-config.js");
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-cli-"));
 }
-function run(args, configDir) {
+function run(args, configDir, extraEnv = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir },
+    env: { ...process.env, POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir, ...extraEnv },
   });
 }
 
@@ -60,4 +60,34 @@ test("usage error on bad action", () => {
   const { status, stdout } = run(["--action", "bogus", "--plugin", "power-pages"], dir);
   assert.equal(status, 2);
   assert.match(stdout, /Usage:/);
+});
+
+const ENV_NAME = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+
+test("status reflects env-var off when config is unset, with no env-var wording", () => {
+  const dir = mkTmp(); // no slash choice stored
+  const { status, stdout } = run(
+    ["--action", "status", "--plugin", "power-pages"],
+    dir,
+    { [ENV_NAME]: "off" }
+  );
+  assert.equal(status, 0);
+  assert.match(stdout, /Telemetry \(power-pages\): OFF/);
+  assert.match(stdout, /local diagnostic log is still kept/i);
+  // truthful-but-quiet: status must NOT name or explain the env var
+  assert.ok(
+    !/POWER_PLATFORM_SKILLS_TELEMETRY/.test(stdout),
+    "status message must not mention the env var"
+  );
+});
+
+test("status: persisted 'on' choice wins over env-var off", () => {
+  const dir = mkTmp();
+  run(["--action", "on", "--plugin", "power-pages"], dir); // store ON via slash skill
+  const { stdout } = run(
+    ["--action", "status", "--plugin", "power-pages"],
+    dir,
+    { [ENV_NAME]: "off" }
+  );
+  assert.match(stdout, /Telemetry \(power-pages\): ON/);
 });
