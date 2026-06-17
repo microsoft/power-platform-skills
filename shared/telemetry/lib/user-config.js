@@ -31,6 +31,23 @@ function readTelemetryChoice(configDir, pluginName) {
   return v === "on" || v === "off" ? v : null;
 }
 
+// Builds the per-plugin override var name: POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>
+// where <PLUGIN> is the plugin name uppercased with non-alphanumeric runs -> "_".
+function telemetryEnvVarName(pluginName) {
+  return (
+    "POWER_PLATFORM_SKILLS_TELEMETRY_" +
+    String(pluginName).toUpperCase().replace(/[^A-Z0-9]+/g, "_")
+  );
+}
+
+// Reads the env-var override: "on" | "off" | null (null = unset/unrecognized).
+// `env` is injectable so tests never mutate the real process.env.
+function readTelemetryEnvChoice(pluginName, env = process.env) {
+  if (!pluginName) return null;
+  const v = String(env[telemetryEnvVarName(pluginName)] || "").trim().toLowerCase();
+  return v === "on" || v === "off" ? v : null;
+}
+
 function isTransmissionOptedOut(configDir, pluginName) {
   return readTelemetryChoice(configDir, pluginName) === "off";
 }
@@ -60,5 +77,7 @@ module.exports = {
   readTelemetryChoice,
   setTelemetryChoice,
   isTransmissionOptedOut,
+  telemetryEnvVarName,
+  readTelemetryEnvChoice,
   CONFIG_FILE_NAME,
 };

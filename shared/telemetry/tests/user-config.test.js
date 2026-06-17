@@ -10,6 +10,8 @@ const {
   readTelemetryChoice,
   setTelemetryChoice,
   isTransmissionOptedOut,
+  telemetryEnvVarName,
+  readTelemetryEnvChoice,
   CONFIG_FILE_NAME,
 } = require("../lib/user-config");
 
@@ -88,4 +90,31 @@ test("setTelemetryChoice fails safe (returns false) when the dir cannot be creat
   fs.writeFileSync(blocker, "i am a file");
   // configDir is a path *under* a file, so mkdir must fail
   assert.equal(setTelemetryChoice(path.join(blocker, "sub"), "power-pages", "off"), false);
+});
+
+test("telemetryEnvVarName derives an uppercase, underscore-separated name", () => {
+  assert.equal(
+    telemetryEnvVarName("power-pages"),
+    "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES"
+  );
+  // runs of non-alphanumerics collapse to a single underscore
+  assert.equal(
+    telemetryEnvVarName("model--apps.v2"),
+    "POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_V2"
+  );
+});
+
+test("readTelemetryEnvChoice parses on/off case-insensitively from an injected env", () => {
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "off" }), "off");
+  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: " OFF " }), "off");
+  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "On" }), "on");
+});
+
+test("readTelemetryEnvChoice returns null for unset / garbage / missing plugin", () => {
+  const name = "POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES";
+  assert.equal(readTelemetryEnvChoice("power-pages", {}), null);
+  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "maybe" }), null);
+  assert.equal(readTelemetryEnvChoice("power-pages", { [name]: "" }), null);
+  assert.equal(readTelemetryEnvChoice("", { [name]: "off" }), null);
 });
