@@ -158,7 +158,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --envUrl "{envUrl}" --token "{token}" \
   --siteId "{websiteRecordId}" \
   --publisherPrefix "{publisherPrefix from .solution-manifest.json}" \
-  --solutionId "{solutionId}"
+  --solutionId "{solutionId}" \
+  --projectRoot "."
 ```
 
 Parse stdout and evaluate `missing`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
