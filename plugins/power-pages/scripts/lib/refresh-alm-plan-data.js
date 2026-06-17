@@ -1007,12 +1007,14 @@ function reconcile({ projectRoot, render, rendererPath }) {
   const dataPath = path.join(projectRoot, 'docs', '.alm-plan-data.json');
   const htmlPath = path.join(projectRoot, 'docs', 'alm-plan.html');
 
-  // Respect the project-level ALM opt-out.
+  // Respect the project-level ALM opt-out. nextStep is null on these early paths
+  // (there's nothing to guide toward), kept on the return for a stable contract so
+  // callers never have to special-case a missing property.
   if (fs.existsSync(path.join(projectRoot, '.alm-deferred'))) {
-    return { ok: true, reconciled: [], failed: [], rendered: false, reason: 'deferred' };
+    return { ok: true, reconciled: [], failed: [], rendered: false, nextStep: null, reason: 'deferred' };
   }
   if (!fs.existsSync(dataPath)) {
-    return { ok: false, reconciled: [], failed: [], rendered: false, reason: 'no-plan' };
+    return { ok: false, reconciled: [], failed: [], rendered: false, nextStep: null, reason: 'no-plan' };
   }
 
   const planMtime = mtimeMs(dataPath);
@@ -1033,8 +1035,19 @@ function reconcile({ projectRoot, render, rendererPath }) {
   if (pending.has('setup-pipeline')) pending.delete('ensure-pipelines-host');
   if (mtimeMs(almPath(projectRoot, 'lastEnvVars')) > planMtime) pending.add(envVarPhase);
 
+  // Load the plan once. We parse it even when nothing is pending so the return
+  // can still carry nextStep — the plan may be current with all markers yet have
+  // unfinished checklist steps, and callers shouldn't lose "what to run next" (or
+  // have to special-case a missing property) just because no heal was needed.
+  let planData;
+  try {
+    planData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  } catch (e) {
+    throw new Error('Could not parse docs/.alm-plan-data.json: ' + e.message);
+  }
+
   if (pending.size === 0) {
-    return { ok: true, reconciled: [], failed: [], rendered: false };
+    return { ok: true, reconciled: [], failed: [], rendered: false, nextStep: computeNextStep(planData) };
   }
 
   // Deterministic application order (source schema first, host/pipeline, then
@@ -1045,13 +1058,6 @@ function reconcile({ projectRoot, render, rendererPath }) {
     'deploy-pipeline', 'activate-site', 'test-site',
   ];
   const phases = ORDER.filter((p) => pending.has(p));
-
-  let planData;
-  try {
-    planData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-  } catch (e) {
-    throw new Error('Could not parse docs/.alm-plan-data.json: ' + e.message);
-  }
 
   // A single phase failing must not abort the reconcile — keep healing the rest —
   // but the failure must be visible (an empty catch makes a broken marker schema

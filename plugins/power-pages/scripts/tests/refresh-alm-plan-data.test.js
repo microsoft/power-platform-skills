@@ -1829,28 +1829,40 @@ test('reconcile: heals a skipped refresh — a newer last-deploy.json is ingeste
   assert.equal(planData.pipelineMeta.lastDeploy.componentCount, 118);
 });
 
-test('reconcile: failed[] is always present and is an array on every return path', (t) => {
-  // Contract guard for the per-phase error capture (Copilot review on #191): a
-  // phase whose refresh throws must NOT be swallowed silently — it lands in
-  // result.failed = [{ phase, error }] while the other phases still heal, and
-  // failed[] is present (empty) on the no-op / deferred / no-plan paths too.
-  // (A phase only throws on a genuine marker-schema break — readJson is
+test('reconcile: failed[] and nextStep are present on EVERY return path (stable contract)', (t) => {
+  // Contract guard (Copilot review on #191): a phase whose refresh throws must NOT
+  // be swallowed silently — it lands in result.failed = [{ phase, error }] while the
+  // other phases still heal, and BOTH failed[] and nextStep are present on the
+  // no-op / deferred / no-plan paths too so callers never special-case a missing
+  // property. (A phase only throws on a genuine marker-schema break — readJson is
   // defensive — so we assert the contract shape rather than fabricate a throw.)
   const noPlan = reconcile({ projectRoot: makeProject(t), render: false });
   assert.ok(Array.isArray(noPlan.failed), 'no-plan path carries failed:[]');
+  assert.ok('nextStep' in noPlan && noPlan.nextStep === null, 'no-plan path carries nextStep:null');
 
   const deferredRoot = makeProject(t);
   writeJson(path.join(deferredRoot, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
   fs.writeFileSync(path.join(deferredRoot, '.alm-deferred'), 'deferred');
   const deferred = reconcile({ projectRoot: deferredRoot, render: false });
   assert.deepEqual(deferred.failed, [], 'deferred path carries failed:[]');
+  assert.ok('nextStep' in deferred && deferred.nextStep === null, 'deferred path carries nextStep:null');
 
+  // Nothing-pending but the plan still has an unfinished step -> reconcile must
+  // compute and return that step (not omit nextStep just because no heal ran).
   const idleRoot = makeProject(t);
-  writeJson(path.join(idleRoot, 'docs', '.alm-plan-data.json'), { SITE_NAME: 'T' });
+  writeJson(path.join(idleRoot, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'T',
+    steps: [
+      { name: 'Setup solution', status: 'completed' },
+      { name: 'Setup pipeline', status: 'pending' },
+    ],
+  });
   const future = (Date.now() + 60 * 1000) / 1000;
   fs.utimesSync(path.join(idleRoot, 'docs', '.alm-plan-data.json'), future, future);
   const idle = reconcile({ projectRoot: idleRoot, render: false });
   assert.deepEqual(idle.failed, [], 'nothing-pending path carries failed:[]');
+  assert.deepEqual(idle.nextStep, { name: 'Setup pipeline', skill: '/power-pages:setup-pipeline' },
+    'nothing-pending path still surfaces the next unfinished step');
 });
 
 test('reconcile: idempotent no-op when the plan already reflects the markers', (t) => {
