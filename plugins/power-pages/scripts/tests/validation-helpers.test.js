@@ -33,3 +33,43 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
   );
   assert.match(capturedCommand, /--resource "https:\/\/example\.crm\.dynamics\.com"/);
 });
+
+// --- findProjectRoot: EDM / data-model site awareness ------------------------
+
+test('findProjectRoot: recognizes a .powerpages-site/ directory as a project root (data-model/EDM sites)', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  // EDM/data-model site: .powerpages-site/ present, NO powerpages.config.json.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-edm-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.powerpages-site'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.powerpages-site', 'website.yml'), 'id: x\nname: y\n');
+
+  assert.equal(findProjectRoot(root), path.resolve(root));
+});
+
+test('findProjectRoot: still recognizes powerpages.config.json (code sites)', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-code-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'powerpages.config.json'), '{}');
+
+  assert.equal(findProjectRoot(root), path.resolve(root));
+});
+
+test('findProjectRoot: returns null when neither marker is present', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-none-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.equal(findProjectRoot(root), null);
+});
+
