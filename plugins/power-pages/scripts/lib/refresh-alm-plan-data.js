@@ -36,7 +36,7 @@
 //   finalize:
 //     - PLAN_STATUS = "Completed"
 //
-// stdout JSON includes `nextStep: { name, skill } | null` — the first
+// stdout JSON includes `nextStep: { name, skill: string | null } | null` (when ok:true) — the first
 // still-pending checklist step and the slash command that runs it. Execution
 // skills echo this so the user knows the next step to invoke (user-driven
 // sequencing — never auto-fired). null when every step is complete.
