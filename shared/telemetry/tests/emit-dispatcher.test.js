@@ -50,6 +50,7 @@ function runDispatcher({ event, env }) {
       POWER_PLATFORM_SKILLS_FAKE_HTTPS: env.fakeProbe || "",
       POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyJsonPath,
       POWER_PLATFORM_SKILLS_CLOUD: env.cloud || "",
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES: env.envVar || "",
     },
   });
 }
@@ -500,4 +501,49 @@ test("dispatcher writes the mirror but does NOT POST when neither resolver nor s
   assert.equal(status, 0);
   assert.ok(!fs.existsSync(probePath), "no key resolved → no POST");
   assert.ok(fs.existsSync(path.join(tmp, "events.jsonl")), "local mirror still written");
+});
+
+test("env-var off (no config choice) suppresses the POST but still writes the mirror", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      envVar: "off",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(!fs.existsSync(probePath), "env-var off must skip the POST");
+  assert.ok(
+    fs.existsSync(path.join(tmp, "events.jsonl")),
+    "env-var off must still write the local mirror"
+  );
+});
+
+test("config opt-IN beats env-var off (config wins) — dispatcher still POSTs", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  fs.writeFileSync(
+    path.join(tmp, "config.json"),
+    JSON.stringify({ telemetry: { "power-pages": "on" } })
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: {
+      configDir: tmp,
+      iKey: "real-ikey-32-chars-minimum-aaaaaaaaaaaaaa",
+      collectorUrl: "https://example.invalid/OneCollector/1.0/",
+      fakeProbe: probePath,
+      envVar: "off",
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(
+    fs.existsSync(probePath),
+    "a persisted 'on' choice must win over env-var off → POST happens"
+  );
 });
