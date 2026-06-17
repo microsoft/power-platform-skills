@@ -242,7 +242,8 @@ Steps:
       --envUrl "{envUrl}" --token "{token}" \
       --siteId "{websiteRecordId from powerpages.config.json}" \
       --publisherPrefix "{solutionManifest.publisher.prefix}" \
-      --solutionId "{solutionManifest.solution.solutionId}"
+      --solutionId "{solutionManifest.solution.solutionId}" \
+      --projectRoot "."
     ```
 
     Parse stdout and evaluate `missing.*`:
