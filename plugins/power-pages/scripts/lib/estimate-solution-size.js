@@ -91,7 +91,11 @@ const ODATA_MAX_PAGE_SIZE = 5000;
 // not a normal-case truncation.
 const PAGINATION_SAFETY_CAP = 100;
 
-async function odataGet(envUrl, path, token) {
+// NB: this is the local path-based helper `odataGetPath(envUrl, path, token)` — it
+// builds the v9.2 URL from a relative path. Distinct from validation-helpers.js's
+// shared `odataGet(url, token, request)` (absolute URL, different arg order); the
+// rename avoids a silent breakage if a future edit destructures the shared one here.
+async function odataGetPath(envUrl, path, token) {
   const url = path.startsWith('http') ? path : `${envUrl}/api/data/v9.2/${path.replace(/^\//, '')}`;
   const res = await helpers.makeRequest({
     url,
@@ -129,7 +133,7 @@ async function collectPaginated(envUrl, path, token, maxPages = PAGINATION_SAFET
   const items = [];
   let pagesFetched = 0;
   for (let p = 0; p < maxPages && next; p++) {
-    const page = await odataGet(envUrl, next, token);
+    const page = await odataGetPath(envUrl, next, token);
     if (Array.isArray(page.value)) items.push(...page.value);
     next = page['@odata.nextLink'] || null;
     pagesFetched += 1;
@@ -259,7 +263,7 @@ async function countOData(envUrl, entity, filter, token) {
   try {
     const filterPart = filter ? `&$filter=${filter}` : '';
     const countPath = `${entity}?$count=true&$top=1${filterPart}`;
-    const page = await odataGet(envUrl, countPath, token);
+    const page = await odataGetPath(envUrl, countPath, token);
     const n = page['@odata.count'];
     return typeof n === 'number' ? n : null;
   } catch {
@@ -349,13 +353,27 @@ async function discoverTableRelationships(envUrl, tables, token) {
     seen.add(key);
     edges.push(a < b ? [a, b] : [b, a]);
   };
-  for (const t of tables) {
-    let rel;
-    try {
-      rel = await fetchTableRelationships(envUrl, t.logicalName, token);
-    } catch {
-      continue; // inaccessible table — skip its edges
+  // Fetch each table's relationships with BOUNDED CONCURRENCY (~2 OData calls per
+  // table; a 34-table site is 68 round-trips — serial is slow at plan time). Edge
+  // assembly stays sequential, in table order, so dedup is deterministic.
+  const CONCURRENCY = 5;
+  const results = new Array(tables.length).fill(null);
+  let nextIdx = 0;
+  async function worker() {
+    while (nextIdx < tables.length) {
+      const i = nextIdx++;
+      try {
+        results[i] = await fetchTableRelationships(envUrl, tables[i].logicalName, token);
+      } catch {
+        results[i] = null; // inaccessible table — skip its edges
+      }
     }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, tables.length) }, () => worker()),
+  );
+  for (const rel of results) {
+    if (!rel) continue;
     for (const e of rel.oneToMany) addEdge(e.referencedEntity, e.referencingEntity);
     for (const e of rel.manyToMany) addEdge(e.entity1, e.entity2);
   }
@@ -366,7 +384,7 @@ async function countAttributesForTables(envUrl, tables, token) {
   let total = 0;
   for (const t of tables) {
     try {
-      const page = await odataGet(
+      const page = await odataGetPath(
         envUrl,
         `EntityDefinitions(LogicalName='${t.logicalName}')/Attributes?$select=LogicalName&$top=1000`,
         token,
@@ -473,7 +491,7 @@ function classifyPPCs(ppcs) {
 }
 
 async function measureWebFiles(envUrl, webFiles, token) {
-  // Uses odataGet directly (single-row fetch each, no pagination needed).
+  // Uses odataGetPath directly (single-row fetch each, no pagination needed).
   const individual = [];
   let aggregateBytes = 0;
   let imgOrFontBytes = 0;
@@ -481,7 +499,7 @@ async function measureWebFiles(envUrl, webFiles, token) {
   for (const wf of webFiles) {
     const id = wf.powerpagecomponentid;
     try {
-      const rec = await odataGet(
+      const rec = await odataGetPath(
         envUrl,
         `powerpagecomponents(${id})?$select=name,powerpagecomponentid,content`,
         token,
@@ -978,7 +996,7 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   const LEGACY_BOUNDARIES = [500, 1000, 2000];
   if (LEGACY_BOUNDARIES.includes(ppcs.length)) {
     truncationWarnings.push(
-      `ppcs.length is exactly ${ppcs.length} — a historical paging boundary from an older $top value. Suggests the \`Prefer: odata.maxpagesize\` header has regressed; verify odataGet still sends it.`,
+      `ppcs.length is exactly ${ppcs.length} — a historical paging boundary from an older $top value. Suggests the \`Prefer: odata.maxpagesize\` header has regressed; verify odataGetPath still sends it.`,
     );
   }
 

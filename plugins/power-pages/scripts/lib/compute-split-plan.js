@@ -312,6 +312,19 @@ function partitionBySchema(estimate, meta, config) {
   const breakdownAvailable = estimate.breakdown && Number.isFinite(Number(estimate.breakdown.tables));
   const domainDescSuffix = breakdownAvailable ? '' : ' (rough estimate — breakdown unavailable)';
 
+  // Per-table attribute counts → a schema-component PROXY. A table contributes far
+  // more than one solution component (the entity + every column/relationship), so
+  // counting 1-per-table severely undercounts and lets an over-cap Table solution
+  // slip past validateSplits' maxComponentCount check (and distorts the Site
+  // solution's count, which subtracts the domain counts). Proxy = sum(attributeCount)
+  // + 1 per table (the entity component). attributeCount comes from estimate.tables[].
+  const attrByTable = new Map(
+    (Array.isArray(estimate.tables) ? estimate.tables : [])
+      .map((t) => [t && t.logicalName, (t && t.attributeCount) || 0]),
+  );
+  const schemaComponentProxy = (names) =>
+    (names || []).reduce((sum, n) => sum + (attrByTable.get(n) || 0), 0) + (names ? names.length : 0);
+
   const domainSolutions = explicitDomains.map((dom, i) => ({
     uniqueName: `${meta.baseName}_${sanitizeDomainName(dom.name)}`,
     displayName: `${meta.siteName} — ${dom.name}`,
@@ -319,11 +332,11 @@ function partitionBySchema(estimate, meta, config) {
     componentTypes: ['Table'],
     description: `Schema domain: ${dom.name}. Tables: ${(dom.tableLogicalNames || []).join(', ') || '(derived)'}${domainDescSuffix}`,
     sizeMB: round(sizePerDomain),
-    // A Table domain's component count IS its table count when known (each table
-    // is one Entity solution component). Falls back to an even attr-share split
-    // only for explicit domains that didn't list their tables.
+    // Schema-component proxy when the domain's tables are known (sum of columns +
+    // 1/table); falls back to an even attr-share split only for explicit domains
+    // that didn't list their tables.
     componentCount: (dom.tableLogicalNames && dom.tableLogicalNames.length > 0)
-      ? dom.tableLogicalNames.length
+      ? schemaComponentProxy(dom.tableLogicalNames)
       : Math.ceil((estimate.schemaAttrCount || 0) / domainCount),
     components: [],
     tableLogicalNames: dom.tableLogicalNames || [],
@@ -796,6 +809,26 @@ function computeSplitPlan({ estimate, config, meta }) {
       type: 'warning',
       message: `Solution ${s.uniqueName} holds ${s.tableLogicalNames.length} related tables — above the ${config.thresholds.maxTableCount}-per-solution cap — because they form one dependency cluster that cannot be split without breaking a relationship. Consider denormalizing the schema or raising maxTableCount in .alm-config.json.`,
     }));
+  // Oversized-SCHEMA guard (companion to the table-count guard above): a Table
+  // solution whose summed column count exceeds maxSchemaAttrs. This fires at the
+  // `maxSchemaSplitSolutions` ceiling — when MORE than that many independent
+  // attr-heavy table clusters must share the capped number of split solutions, the
+  // FFD packer's least-loaded fallback co-locates clusters and a bucket busts the
+  // column cap. Without this, the overflow is silent (the table-count guard alone
+  // misses it). attributeCount comes from estimate.tables[].
+  const attrByTable = new Map(
+    (Array.isArray(estimate.tables) ? estimate.tables : [])
+      .map((t) => [t && t.logicalName, (t && t.attributeCount) || 0]),
+  );
+  const solutionSchemaAttrs = (s) =>
+    (s.tableLogicalNames || []).reduce((sum, n) => sum + (attrByTable.get(n) || 0), 0);
+  const oversizedAttrWarnings = proposedSolutions
+    .filter((s) => Array.isArray(s.tableLogicalNames) && s.tableLogicalNames.length > 0 &&
+      solutionSchemaAttrs(s) > config.thresholds.maxSchemaAttrs)
+    .map((s) => ({
+      type: 'warning',
+      message: `Solution ${s.uniqueName} holds tables totaling ${solutionSchemaAttrs(s)} columns — above the ${config.thresholds.maxSchemaAttrs}-column per-solution cap. This happens when more than ${config.thresholds.maxSchemaSplitSolutions} independent attr-heavy table clusters must share the capped number of schema-split solutions. Consider raising maxSchemaSplitSolutions (or maxSchemaAttrs) in .alm-config.json, or denormalizing the widest tables.`,
+    }));
   // Surface estimator-side truncation warnings as `recommendations[]` entries
   // so the rendered plan shows them inline. These get the `error` type because
   // a truncated input is more dangerous than a normal split-decision warning
@@ -808,7 +841,8 @@ function computeSplitPlan({ estimate, config, meta }) {
   const recommendations = truncationRecs
     .concat(buildRecommendations(estimate, strategy, config))
     .concat(splitWarnings)
-    .concat(oversizedClusterWarnings);
+    .concat(oversizedClusterWarnings)
+    .concat(oversizedAttrWarnings);
 
   const appliedStrategies = [strategy.primary];
   if (strategy.additive) appliedStrategies.push('strategy-4-config-isolation');

@@ -265,7 +265,11 @@ async function odataGet(url, token, request = makeRequest) {
 
 /**
  * Follows `@odata.nextLink`, aggregating every page's `value[]` into one array.
- * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows).
+ * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows). FAILS CLOSED:
+ * if the cap is reached while `@odata.nextLink` is still present, throws rather than
+ * silently returning a truncated set — a partial result would produce wrong
+ * table/env-var counts for ALM sizing/splitting with no signal. Callers that want
+ * partial results must catch and downgrade accuracy intentionally.
  * @param {string} url - absolute starting URL
  * @param {string} token - bearer token
  * @param {Function} [request=makeRequest] - injectable for tests
@@ -275,10 +279,17 @@ async function odataGet(url, token, request = makeRequest) {
 async function odataGetAll(url, token, request = makeRequest, maxPages = 100) {
   const out = [];
   let next = url;
-  for (let p = 0; p < maxPages && next; p++) {
+  let p = 0;
+  for (; p < maxPages && next; p++) {
     const page = await odataGet(next, token, request);
     if (Array.isArray(page.value)) out.push(...page.value);
     next = page['@odata.nextLink'] || null;
+  }
+  if (next) {
+    throw new Error(
+      `odataGetAll hit the ${maxPages}-page cap with @odata.nextLink still present ` +
+      `(${out.length} rows so far) — result would be truncated. Raise maxPages or narrow the query.`,
+    );
   }
   return out;
 }
