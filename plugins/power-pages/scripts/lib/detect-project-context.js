@@ -1,17 +1,27 @@
 #!/usr/bin/env node
 
 // Reads Power Pages project context files from the project root.
-// Locates powerpages.config.json (code/SPA sites) OR .powerpages-site/website.yml
-// (enhanced data-model "EDM" config sites), plus
+// Locates powerpages.config.json (code/SPA sites) OR a .powerpages-site/ config tree
+// (declarative "data-model" sites — Power Pages design-studio sites), plus
 // .solution-manifest.json and .datamodel-manifest.json.
 //
+// NOTE on terminology: the discriminator here is the BUILD axis — code/SPA site vs
+// declarative (design-studio) site — NOT the Dataverse data-model axis. A declarative
+// site can be on the standard OR the enhanced data model ("EDM"); both download to a
+// .powerpages-site/ tree via `pac pages download`. siteType "data-model" names that
+// declarative bucket (kept for compatibility with plan-alm); a future pass may rename
+// it to "declarative".
+//
 // Site identity resolution order (first match wins):
-//   1. powerpages.config.json  -> siteType "code"  (SPA sites; has siteName,
+//   1. powerpages.config.json  -> siteType "code"  (code/SPA sites; has siteName,
 //                                  websiteRecordId, environmentUrl)
-//   2. .powerpages-site/website.yml -> siteType "data-model"  (enhanced data-model
-//                                  "EDM" sites from `pac pages download`; the
-//                                  YAML carries `id` and `name`, but no environment URL —
-//                                  callers re-confirm the env via `pac env who`)
+//   2. .powerpages-site/ (.portalconfig/ + website.yml) -> siteType "data-model"
+//                                  (declarative design-studio sites; standard or
+//                                  enhanced data model. website.yml carries `id` and
+//                                  `name` but no environment URL — callers re-confirm
+//                                  via `pac env who`. `.portalconfig/` is the positive
+//                                  declarative marker; BOTH site types carry website.yml,
+//                                  so it isn't a reliable "declarative" signal alone.)
 //
 // Usage: node detect-project-context.js [--projectRoot <path>]
 //
@@ -93,6 +103,14 @@ function readWebsiteYml(filePath) {
   return (out.id || out.name) ? out : null;
 }
 
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function detectProjectContext(options = {}) {
   const startDir = options.projectRoot || process.cwd();
   const projectRoot = options.projectRoot
@@ -128,20 +146,30 @@ function detectProjectContext(options = {}) {
     };
   }
 
-  // 2. Enhanced data-model ("EDM") site — identity comes from
-  //    .powerpages-site/website.yml (`id` -> websiteRecordId, `name` -> siteName).
-  //    There is no environment URL in the local files; callers re-confirm via `pac env who`.
+  // 2. Declarative ("data-model") site — a Power Pages design-studio site
+  //    (`pac pages download`; standard or enhanced data model), as opposed to a
+  //    code/SPA site. The authoritative positive marker is the
+  //    `.powerpages-site/.portalconfig/` directory (only declarative sites have it).
+  //    Identity (`id` -> websiteRecordId, `name` -> siteName) is read from website.yml —
+  //    but BOTH site types carry website.yml, so it's an identity source, not proof of
+  //    "declarative" on its own (a `.portalconfig/` site with no website.yml is still
+  //    declarative; its identity resolves at runtime). No environment URL in the local
+  //    files — callers re-confirm via `pac env who`.
+  const portalConfigDir = path.join(projectRoot, '.powerpages-site', '.portalconfig');
   const websiteYmlPath = path.join(projectRoot, '.powerpages-site', 'website.yml');
-  if (fs.existsSync(websiteYmlPath)) {
-    const site = readWebsiteYml(websiteYmlPath);
-    if (!site) {
-      throw new Error(`Could not read site id/name from: ${websiteYmlPath}`);
+  if (isDirectory(portalConfigDir) || fs.existsSync(websiteYmlPath)) {
+    let site = null;
+    if (fs.existsSync(websiteYmlPath)) {
+      site = readWebsiteYml(websiteYmlPath);
+      if (!site) {
+        throw new Error(`Could not read site id/name from: ${websiteYmlPath}`);
+      }
     }
     return {
       projectRoot,
       siteType: 'data-model',
-      siteName: site.name || null,
-      websiteRecordId: site.id || null,
+      siteName: site ? (site.name || null) : null,
+      websiteRecordId: site ? (site.id || null) : null,
       environmentUrl: null,
       solutionManifest,
       datamodelManifest,

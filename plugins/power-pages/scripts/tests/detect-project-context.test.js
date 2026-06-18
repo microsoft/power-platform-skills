@@ -30,9 +30,9 @@ test('detectProjectContext: code site (powerpages.config.json) reports siteType 
   assert.equal(result.siteName, 'Code Site');
 });
 
-test('detectProjectContext: enhanced data-model site resolves identity from .powerpages-site/website.yml', (t) => {
+test('detectProjectContext: declarative (data-model) site resolves identity from .powerpages-site/website.yml', (t) => {
   const projectRoot = createTempProject(t);
-  // No powerpages.config.json — this is an EDM / data-model config site.
+  // No powerpages.config.json — this is a declarative ("data-model") design-studio site.
   writeProjectFile(
     projectRoot,
     '.powerpages-site/website.yml',
@@ -50,6 +50,19 @@ test('detectProjectContext: enhanced data-model site resolves identity from .pow
   assert.equal(result.websiteRecordId, '2ecc32f6-8665-f111-a826-000d3a5a7777');
   assert.equal(result.siteName, 'Application processing EDM site - permitapplication-elyyn');
   // Data-model sites carry no environment URL locally — callers re-confirm via `pac env who`.
+  assert.equal(result.environmentUrl, null);
+});
+
+test('detectProjectContext: .powerpages-site/.portalconfig/ is the positive declarative signal (even without website.yml)', (t) => {
+  const projectRoot = createTempProject(t);
+  // A declarative site identified by its .portalconfig/ marker, with no website.yml
+  // (rare, but .portalconfig is the authoritative signal — identity resolves at runtime).
+  writeProjectFile(projectRoot, '.powerpages-site/.portalconfig/manifest.yml', 'foo: bar\n');
+
+  const result = detectProjectContext({ projectRoot });
+  assert.equal(result.siteType, 'data-model', '.portalconfig/ marks a declarative site');
+  assert.equal(result.siteName, null);
+  assert.equal(result.websiteRecordId, null);
   assert.equal(result.environmentUrl, null);
 });
 
