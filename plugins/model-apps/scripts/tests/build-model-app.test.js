@@ -85,13 +85,26 @@ test('apply builds + creates a savedquery view for the entity', async () => {
   assert.ok(String(sq[3].fetchxml).length > 0);
 });
 
-test('apply + publish builds sitemap, creates appmodule, and publishes', async () => {
+test('apply publishes entities BEFORE building the form (so cells are not stripped)', async () => {
+  const deps = recordingDeps();
+  await buildModelApp(sample, { apply: true, env: 'https://x' }, deps);
+  const pubIdx = deps.calls.findIndex((c) => c[0] === 'dv' && c[1] === 'POST' && c[2] === 'PublishXml');
+  const formIdx = deps.calls.findIndex((c) => c[0] === 'kernel' && c[1] === 'buildForm');
+  assert.ok(pubIdx >= 0, 'PublishXml (entity publish) issued');
+  assert.ok(pubIdx < formIdx, 'entity publish happens before buildForm');
+});
+
+test('apply + publish builds sitemap, creates appmodule, wires components, and publishes', async () => {
   const deps = recordingDeps();
   await buildModelApp(sample, { apply: true, publish: true, env: 'https://x' }, deps);
   assert.ok(kernelKinds(deps).includes('buildSitemap'));
   const app = dvCalls(deps).find((c) => c[1] === 'POST' && c[2] === 'appmodules');
   assert.ok(app && app[3].uniquename, 'appmodule POST with uniquename');
-  assert.ok(dvCalls(deps).some((c) => c[1] === 'POST' && c[2] === 'sitemaps'));
+  assert.ok(dvCalls(deps).some((c) => c[1] === 'POST' && c[2] === 'sitemaps' && c[3].sitemapnameunique));
+  // AddAppComponents is the UNBOUND action with an AppId + sitemap/form/view (no entity).
+  const add = dvCalls(deps).find((c) => c[1] === 'POST' && c[2] === 'AddAppComponents');
+  assert.ok(add && add[3].AppId, 'AddAppComponents called with AppId');
+  assert.ok(!add[3].Components.some((x) => x['@odata.type'] === 'Microsoft.Dynamics.CRM.entity'), 'no explicit entity component');
   assert.ok(dvCalls(deps).some((c) => c[1] === 'POST' && c[2] === 'PublishAllXml'));
 });
 

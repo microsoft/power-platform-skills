@@ -9,7 +9,25 @@ async function dataModel(spec, opts, deps, result) {
   const env = opts.env;
   const sol = spec.solution;
   deps.log(`solution ${sol.uniqueName}`);
-  deps.runScript('create-solution.js', [env, sol.uniqueName, sol.displayName || sol.uniqueName, sol.publisherPrefix]);
+  // Resolve the publisher whose customization prefix matches the spec, so the
+  // entity/column schema names (e.g. new_project) are accepted. Falls back to the
+  // env's default publisher if none is found.
+  let publisherUnique = null;
+  try {
+    const pubRes = await deps.dv(
+      'GET',
+      `publishers?$select=uniquename&$filter=customizationprefix eq '${sol.publisherPrefix}'`
+    );
+    const pubs = (pubRes && pubRes.data && pubRes.data.value) || [];
+    publisherUnique = pubs[0] && pubs[0].uniquename;
+  } catch (e) {
+    /* fall back to the env's default publisher */
+  }
+  const solArgs = [env, sol.uniqueName, sol.displayName || sol.uniqueName];
+  if (publisherUnique) {
+    solArgs.push('--publisher', publisherUnique);
+  }
+  deps.runScript('create-solution.js', solArgs);
 
   result.created.entities = {};
   for (const e of spec.entities) {
@@ -156,22 +174,27 @@ async function appShell(spec, opts, deps, result) {
     throw new Error(`kernel buildSitemap failed: ${sm.error && sm.error.message}`);
   }
 
-  const uniqueName = (spec.solution.publisherPrefix + '_' + spec.app.name).replace(/\s+/g, '').toLowerCase();
-  const appRes = await recs.createAppModule(deps.dv, { name: spec.app.name, uniqueName, description: spec.app.description });
+  const uniqueName = (spec.solution.publisherPrefix + '_' + spec.app.name).replace(/[^a-z0-9_]/gi, '').toLowerCase();
+  const webresourceid = await recs.resolveAppIcon(deps.dv); // appmodule.webresourceid is required
+  const appRes = await recs.createAppModule(deps.dv, {
+    name: spec.app.name,
+    uniqueName,
+    description: spec.app.description,
+    webresourceid,
+  });
   const appId = recs.extractId(appRes);
-  const smRes = await recs.createSitemap(deps.dv, { sitemapname: spec.app.name, sitemapxml: sm.sitemapxml });
+  const smRes = await recs.createSitemap(deps.dv, {
+    sitemapname: spec.app.name,
+    sitemapnameunique: uniqueName,
+    sitemapxml: sm.sitemapxml,
+  });
   const smId = recs.extractId(smRes);
   result.created.app = { appModuleId: appId, sitemapId: smId };
 
+  // Components = sitemap + forms + views (the entity is implied by its form/view).
   const components = [];
   if (smId) {
     components.push({ '@odata.type': 'Microsoft.Dynamics.CRM.sitemap', sitemapid: smId });
-  }
-  for (const e of spec.entities) {
-    const meta = (result.created.entities || {})[e.schemaName];
-    if (meta && meta.metadataId) {
-      components.push({ '@odata.type': 'Microsoft.Dynamics.CRM.entity', MetadataId: meta.metadataId });
-    }
   }
   for (const formId of Object.values(result.created.forms || {})) {
     components.push({ '@odata.type': 'Microsoft.Dynamics.CRM.systemform', formid: formId });
@@ -196,6 +219,13 @@ async function appShell(spec, opts, deps, result) {
 
 async function runAll(spec, opts, deps, result) {
   await dataModel(spec, opts, deps, result);
+  // Publish the new entities BEFORE building forms/views — Dataverse silently
+  // strips form cells that reference unpublished attributes on save.
+  deps.log('publish entities');
+  await recs.publishEntities(
+    deps.dv,
+    spec.entities.map((e) => e.schemaName.toLowerCase())
+  );
   await forms(spec, opts, deps, result);
   await views(spec, opts, deps, result);
   await appShell(spec, opts, deps, result);

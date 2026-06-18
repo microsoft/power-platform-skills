@@ -1,6 +1,7 @@
 // Thin Web-API record helpers used by the model-app builder. `dv` is a function
 // (method, apiPath, body, opts) -> { status, data, headers } (a thin wrapper over
-// dataverseRequest bound to the target env).
+// dataverseRequest bound to the target env). The exact shapes here were validated
+// live on a test env (model-app-maker-plan Task 9).
 
 function extractId(res) {
   const h = (res && res.headers) || {};
@@ -30,23 +31,37 @@ async function createSavedQuery(dv, { name, entityLogical, fetchxml, layoutxml }
   );
 }
 
-async function createAppModule(dv, { name, uniqueName, description }) {
-  return dv(
-    'POST',
-    'appmodules',
-    { name, uniquename: uniqueName, description: description || '', formfactor: 1, clienttype: 4 },
-    { includeHeaders: true }
-  );
+// Publish the given entities so their new attributes resolve when forms/views are
+// saved (an unpublished column is silently stripped from a form on save).
+async function publishEntities(dv, entityLogicalNames) {
+  const entities = (entityLogicalNames || []).map((n) => `<entity>${n}</entity>`).join('');
+  const ParameterXml = `<importexportxml><entities>${entities}</entities></importexportxml>`;
+  return dv('POST', 'PublishXml', { ParameterXml });
 }
 
-async function createSitemap(dv, { sitemapname, sitemapxml }) {
-  return dv('POST', 'sitemaps', { sitemapname, sitemapxml }, { includeHeaders: true });
+// Resolve any PNG web resource to satisfy appmodule.webresourceid (a required FK).
+async function resolveAppIcon(dv) {
+  const r = await dv('GET', 'webresourceset?$select=webresourceid&$filter=webresourcetype eq 5&$top=1');
+  const w = ((r.data && r.data.value) || [])[0];
+  return w && w.webresourceid;
 }
 
-// Attach components (sitemap / entities / forms / views) to the app via the
-// AddAppComponents bound action. `components` are OData entity references.
-async function addAppComponents(dv, appModuleId, components) {
-  return dv('POST', `appmodules(${appModuleId})/Microsoft.Dynamics.CRM.AddAppComponents`, { Components: components });
+async function createAppModule(dv, { name, uniqueName, description, webresourceid }) {
+  const body = { name, uniquename: uniqueName, description: description || '', formfactor: 1, clienttype: 4 };
+  if (webresourceid) {
+    body.webresourceid = webresourceid; // primitive Guid, NOT an @odata.bind
+  }
+  return dv('POST', 'appmodules', body, { includeHeaders: true });
+}
+
+async function createSitemap(dv, { sitemapname, sitemapnameunique, sitemapxml }) {
+  return dv('POST', 'sitemaps', { sitemapname, sitemapnameunique, sitemapxml }, { includeHeaders: true });
+}
+
+// Attach components to the app via the UNBOUND AddAppComponents action. The entity
+// is implied by its form/view, so components = sitemap + forms + views (no entity).
+async function addAppComponents(dv, appId, components) {
+  return dv('POST', 'AddAppComponents', { AppId: appId, Components: components });
 }
 
 async function publishAll(dv) {
@@ -58,6 +73,8 @@ module.exports = {
   findMainForm,
   patchFormXml,
   createSavedQuery,
+  publishEntities,
+  resolveAppIcon,
   createAppModule,
   createSitemap,
   addAppComponents,

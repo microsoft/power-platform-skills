@@ -5091,7 +5091,7 @@ var init_blankForm = __esm({
       boolean: "{67FAC785-CD58-4f9f-ABB3-4B7DDC6ED5ED}",
       money: "{533B9E00-756B-4312-95A0-DC888637AC78}",
       datetime: "{5B773807-9FB2-42db-97C3-7A91EFF8ADFF}",
-      integer: "{C6D124CA-7EDA-4a60-AAE9-7FBE3FF10B97}",
+      integer: "{C6D124CA-7EDA-4A60-AEA9-7FB8D318B68F}",
       decimal: "{0D2C745A-E5A8-4c8f-BA63-C6D3BB604660}",
       lookup: "{270BD3DB-D9AF-4782-9025-509E298DEC0A}"
     };
